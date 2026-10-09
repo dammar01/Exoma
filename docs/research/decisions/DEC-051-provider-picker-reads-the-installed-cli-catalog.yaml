@@ -62,7 +62,7 @@ evidence_notes: |
   The existing shortlist assertions run with the live catalog switched off.
 implementation:
   version: 3.8.3
-  commits: [uncommitted]
+  commits: [ce97c4f]
   components:
     - core/provider/model_catalog.py (new; live readers, ordering, cache, fallback)
     - core/provider/provider_select.py (catalog newest/models_source, live validation, agy variant composition, whitespace payload)
@@ -75,8 +75,8 @@ disposition:
 validation:
   summary: |
     Unit assertions with fixed readers, and one smoke read against the three real CLIs on
-    the maintainer machine. No end-to-end `/.provider` session in another project yet, and
-    the full suite has not passed on this tree (PyYAML missing on Python 3.14).
+    the maintainer machine. The full suite (`tests/run.py`) passed on this tree. No
+    end-to-end `/.provider` session in another project yet.
   runs: []
 trade_offs:
   better:
