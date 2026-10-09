@@ -1,11 +1,11 @@
 # Skill: help
-description: Command reference v3.8.2
+description: Command reference v3.8.3
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.8.2]
+[COMMAND GUIDE — v3.8.3]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)
@@ -21,7 +21,8 @@ LOCAL (main_agent langsung):
   /.promote <subj>  evidence terverifikasi → project knowledge ter-Git (plan dulu, approve)
   /.caveman [lite|full|ultra]  toggle compression
   /.local [on|off|status]      toggle no-proxy
-  /.provider        ganti second_agent / model / reasoning effort
+  /.provider [<p> <model> [effort]]  ganti second_agent / model / effort — tanpa arg = picker,
+                    dengan arg = langsung (mis. /.provider codex gpt-6-luna low)
   /.help            panduan ini
 
 DELEGATED (1-call .workflow/run script → second_agent):

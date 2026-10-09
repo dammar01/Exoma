@@ -9,6 +9,7 @@ Two modes, told apart by whether a payload was given:
 
     provider ""                            -> the catalog plus what is selected now
     provider "codex|gpt-5.6-luna|high"     -> validate, then write
+    provider "codex gpt-5.6-luna high"     -> the same, as typed after `/.provider`
     provider "codex|gpt-5.6-luna|high|explore=gpt-5.5,plan=gpt-5.6-luna"
                                            -> the same, with per-route models
 
@@ -39,16 +40,14 @@ from pathlib import Path
 
 from config.providers import (
     bundled_providers,
-    model_efforts,
-    model_is_listed,
     opt_in_granted,
     provider_agent_default,
     provider_command_default,
-    provider_models,
     provider_opt_in_env,
     provider_requires_opt_in,
 )
 from config.routing import COMMAND_ROUTES
+from core.provider import model_catalog
 from config.settings import (
     DEFAULT_PROVIDER,
     foreign_provider_values,
@@ -96,6 +95,14 @@ def _catalog(project_root: Path) -> dict:
     for name in bundled_providers():
         command = provider_command_default(name, os.getenv)
         installed, detail = osutil.provider_callable(command)
+        # The model in use anchors "newest": opencode and agy rank within its family, so
+        # a user on one vendor is not offered another vendor's latest release as theirs.
+        # Only listing a CLI that is there: a missing one would cost a timeout per row.
+        current_model = config.get("default_model") if config.get("provider") == name else None
+        if installed:
+            listing = model_catalog.catalog(name, current_model)
+        else:
+            listing = model_catalog.catalog_static(name)
         providers.append(
             {
                 "name": name,
@@ -111,10 +118,12 @@ def _catalog(project_root: Path) -> dict:
                 # the write a second later would be the picker lying about its own menu.
                 "requires_opt_in": provider_requires_opt_in(name),
                 "opt_in_granted": opt_in_granted(name),
-                "models": [
-                    {"id": entry["id"], "efforts": list(entry.get("efforts") or ())}
-                    for entry in provider_models(name)
-                ],
+                # Newest first, so the picker's first option is the one to recommend.
+                "models": listing["models"],
+                "newest": listing["newest"],
+                # `live`/`cache` = what the installed CLI reports; `static` = the bundled
+                # shortlist, used when no live reading was possible.
+                "models_source": listing["source"],
             }
         )
 
@@ -220,8 +229,20 @@ def _parse_routes(spec: str, default_model: str | None) -> tuple[dict, str | Non
     return models, None
 
 
+def _split_payload(payload: str) -> list[str]:
+    """Fields of an apply payload: `|`-separated, or whitespace-separated when there is no `|`.
+
+    The whitespace form is what a user types (`/.provider codex gpt-6-luna low`). It is
+    unambiguous because no provider, model id or effort contains a space — opencode ids
+    contain `/`, which is why `|` exists, not whitespace.
+    """
+    if FIELD_SEPARATOR in payload:
+        return [part.strip() for part in payload.split(FIELD_SEPARATOR)]
+    return payload.split()
+
+
 def _apply(project_root: Path, payload: str) -> dict:
-    parts = [part.strip() for part in payload.split(FIELD_SEPARATOR)]
+    parts = _split_payload(payload)
     if len(parts) > 4:
         return _refuse(
             f"expected at most 4 fields separated by {FIELD_SEPARATOR!r}, "
@@ -260,10 +281,34 @@ def _apply(project_root: Path, payload: str) -> dict:
         )
 
     warnings: list[str] = []
-    on_menu = model_is_listed(provider, model)
-    allowed = model_efforts(provider, model)
+    # Checked against what the CLI lists now, falling back to the shortlist: a model the
+    # picker offered from the live catalog must not be refused for being newer than it.
+    entry = model_catalog.lookup(provider, model)
+    on_menu = entry is not None
+    allowed = tuple(entry["efforts"]) if entry else ()
+    has_menu = bool(model_catalog.catalog_static(provider)["models"])
 
-    if model and not on_menu and provider_models(provider):
+    # agy carries effort in the id (`claude-opus-5-5-high`), and `--effort` on top of
+    # it has never been verified. The picker asks model then effort like any provider;
+    # the two are joined here into the id the CLI lists, and no effort flag is written.
+    effort_in_id = bool(entry and entry.get("effort_in_id"))
+    variant_effort = effort if effort_in_id else None
+    if effort_in_id:
+        if not effort:
+            return _refuse(
+                f"{model} is offered in variants; an effort picks one",
+                next_action=f"{model} takes: {', '.join(allowed)}",
+            )
+        if effort not in allowed:
+            return _refuse(
+                f"{effort!r} is not accepted by {model}",
+                next_action=f"{model} takes: {', '.join(allowed)}",
+            )
+        model = model_catalog.compose_model_id(model, effort)
+        effort = None
+        allowed = ()
+
+    if model and not on_menu and has_menu:
         # Not an error. The shortlist is a menu, not the set of models that exist, and
         # pinning something off-menu is a supported choice — it just means the effort
         # below cannot be checked against anything.
@@ -302,14 +347,26 @@ def _apply(project_root: Path, payload: str) -> dict:
             ),
         )
     for name, route_model in route_models.items():
+        if not route_model or route_model == model:
+            continue
+        route_entry = model_catalog.lookup(provider, route_model)
+        if route_entry and route_entry.get("effort_in_id"):
+            # A route names an agy base model; it runs on the variant matching the effort
+            # chosen above, or is refused when that variant does not exist.
+            if variant_effort not in route_entry["efforts"]:
+                return _refuse(
+                    f"routes.{name}: {route_model} has no {variant_effort or 'default'!r} variant",
+                    next_action=f"{route_model} takes: {', '.join(route_entry['efforts'])}",
+                )
+            route_models[name] = model_catalog.compose_model_id(route_model, variant_effort)
+            continue
         # Same standard the default model is held to: the shortlist is a menu, so an
         # off-menu pin is reported and kept. Effort is global (`Router._effort_for`), so
         # there is nothing per-route to check it against.
-        if route_model and route_model != model and not model_is_listed(provider, route_model):
-            if provider_models(provider):
-                warnings.append(
-                    f"routes.{name}: {route_model!r} is not in the shortlist for {provider}"
-                )
+        if route_entry is None and has_menu:
+            warnings.append(
+                f"routes.{name}: {route_model!r} is not in the catalog for {provider}"
+            )
 
     command = provider_command_default(provider, os.getenv)
     agent = provider_agent_default(provider, os.getenv)

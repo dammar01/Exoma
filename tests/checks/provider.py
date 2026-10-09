@@ -429,16 +429,152 @@ def _test_provider_selection() -> None:
     Asserted on the FILE, not just the return value: a refusal that still wrote is the
     failure mode worth catching, and it looks identical from the outside.
     """
-    from config.providers import effort_args, model_efforts, provider_models
-    from config.settings import validate_provider_config
-    from core.provider import provider_select
-    from core.evidence.result_shaping import _verify_exit_code
-    from core.workspace.workspace_paths import atomic_write_json, read_json_file
+    from core.provider import model_catalog
 
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-provider-"))
     workflow_dir = temp_root / ".workflow"
     workflow_dir.mkdir(parents=True, exist_ok=True)
     config_file = workflow_dir / "second_agent.json"
+
+    # The assertions below are about the bundled shortlist, so the live catalog (whatever
+    # CLIs this machine has installed) is switched off for them; it is asserted on its own
+    # with fixed readers in `_assert_live_model_catalog`.
+    live_before = model_catalog.LIVE_ENABLED
+    model_catalog.LIVE_ENABLED = False
+    try:
+        _provider_selection_static(temp_root, workflow_dir, config_file)
+        _assert_live_model_catalog(temp_root, config_file)
+    finally:
+        model_catalog.LIVE_ENABLED = live_before
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def _assert_live_model_catalog(temp_root: Path, config_file: Path) -> None:
+    """The picker offers what the CLI lists now, newest first, and applies it.
+
+    Readers are replaced with fixed lists: the point is the ordering and the write, not
+    whichever models this machine's CLIs happen to know today.
+    """
+    from core.provider import model_catalog, provider_select
+    from core.workspace.workspace_paths import read_json_file
+
+    readers = dict(model_catalog._READERS)
+    saved = (model_catalog.LIVE_ENABLED, model_catalog.CACHE_TTL_SECONDS)
+    opt_in = os.environ.get("AI_PROXY_AGY_OPT_IN")
+    os.environ["AI_PROXY_AGY_OPT_IN"] = "1"
+    model_catalog.LIVE_ENABLED = True
+    model_catalog.CACHE_TTL_SECONDS = 0
+    model_catalog._READERS.update(
+        {
+            "codex": lambda: [
+                {"id": "gpt-old", "efforts": ("low", "high"), "priority": 5},
+                {"id": "gpt-new", "efforts": ("low", "high", "max"), "priority": 0},
+            ],
+            "opencode": lambda: [
+                {"id": "x/alpha-1", "efforts": (), "family": "alpha", "released": "2026-01-01"},
+                {"id": "x/beta-9", "efforts": ("high",), "family": "beta", "released": "2026-09-01"},
+                {"id": "x/alpha-2", "efforts": ("low",), "family": "alpha", "released": "2026-06-01"},
+            ]
+            + [
+                {"id": f"x/filler-{n}", "efforts": (), "family": "f", "released": "2025-01-01"}
+                for n in range(30)
+            ],
+            "agy": lambda: [
+                {
+                    "id": "gem-3.8-flash",
+                    "efforts": ("low", "high"),
+                    "variants": ["gem-3.8-flash-low", "gem-3.8-flash-high"],
+                    "family": "gem-flash",
+                    "effort_in_id": True,
+                },
+                {"id": "oss-120b", "efforts": (), "variants": [], "family": "oss"},
+            ],
+        }
+    )
+    try:
+        codex = model_catalog.catalog("codex")
+        assert_true(
+            codex["newest"] == "gpt-new" and codex["source"] == "live",
+            f"codex newest must be the lowest priority, read live: {codex}",
+        )
+
+        family = model_catalog.catalog("opencode", "x/alpha-1")
+        assert_true(
+            family["newest"] == "x/alpha-2",
+            "opencode newest must stay within the family of the model in use, even when "
+            f"another family released later: {family['models'][:3]}",
+        )
+        assert_true(
+            model_catalog.catalog("opencode")["newest"] == "x/beta-9",
+            "with no model in use, opencode newest is the latest release overall",
+        )
+        assert_true(
+            len(family["models"]) == model_catalog.MODEL_CATALOG_LIMIT == 20,
+            f"the picker must receive at most 20 models: {len(family['models'])}",
+        )
+        assert_true(
+            model_catalog.lookup("opencode", "x/filler-29") is not None,
+            "a model cut from the picker's list must still apply (typed via Other)",
+        )
+
+        newer = provider_select.run(temp_root, "codex|gpt-new|max")
+        assert_true(
+            newer["ok"] and not newer["meta"]["warnings"],
+            f"a live model newer than the shortlist must apply without a warning: {newer}",
+        )
+        typed = provider_select.run(temp_root, "codex gpt-old low")
+        assert_true(
+            typed["ok"]
+            and read_json_file(config_file)["default_model"] == "gpt-old"
+            and read_json_file(config_file)["effort"] == "low",
+            f"the typed form `/.provider codex gpt-old low` must apply like `|`: {typed}",
+        )
+        refused = provider_select.run(temp_root, "codex|gpt-old|max")
+        assert_true(
+            not refused["ok"],
+            f"live efforts must be enforced like shortlist ones: {refused}",
+        )
+
+        variant = provider_select.run(temp_root, "agy|gem-3.8-flash|high")
+        written = read_json_file(config_file)
+        assert_true(
+            variant["ok"]
+            and written["default_model"] == "gem-3.8-flash-high"
+            and written["effort"] is None,
+            "agy effort must be folded into the variant id, with no effort flag written: "
+            f"{written}",
+        )
+        assert_true(
+            not provider_select.run(temp_root, "agy|gem-3.8-flash")["ok"],
+            "an agy base model with variants needs an effort to pick one",
+        )
+        assert_true(
+            provider_select.run(temp_root, "agy|oss-120b")["ok"],
+            "an agy model without variants applies as-is",
+        )
+
+        model_catalog._READERS["codex"] = lambda: []
+        fallback = model_catalog.catalog("codex")
+        assert_true(
+            fallback["source"] == "static" and fallback["models"],
+            f"no live reading must fall back to the shortlist: {fallback}",
+        )
+    finally:
+        model_catalog._READERS.clear()
+        model_catalog._READERS.update(readers)
+        model_catalog.LIVE_ENABLED, model_catalog.CACHE_TTL_SECONDS = saved
+        if opt_in is None:
+            os.environ.pop("AI_PROXY_AGY_OPT_IN", None)
+        else:
+            os.environ["AI_PROXY_AGY_OPT_IN"] = opt_in
+
+
+def _provider_selection_static(temp_root: Path, workflow_dir: Path, config_file: Path) -> None:
+    from config.providers import effort_args, model_efforts, provider_models
+    from config.settings import validate_provider_config
+    from core.provider import provider_select
+    from core.evidence.result_shaping import _verify_exit_code
+    from core.workspace.workspace_paths import atomic_write_json, read_json_file
 
     catalog = provider_select.run(temp_root, "")
     listed = {entry["name"]: entry for entry in catalog["meta"]["providers"]}
@@ -649,8 +785,6 @@ def _test_provider_selection() -> None:
         read_json_file(config_file)["timeout_seconds"] == 1800,
         "backfill must not touch a value the user already tuned",
     )
-
-    shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def _test_doctor_read_boundary_warning() -> None:

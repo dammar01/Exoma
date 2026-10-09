@@ -307,7 +307,13 @@ def opt_in_granted(provider: str, getenv=os.getenv) -> bool:
 
 
 def provider_models(provider: str) -> tuple[dict, ...]:
-    """The shortlist of models offered for `provider`, each with its own `efforts`."""
+    """The shortlist of models offered for `provider`, each with its own `efforts`.
+
+    The `provider` picker offers what the installed CLI lists now
+    (`core/provider/model_catalog.py`) and falls back to this when no live reading is
+    possible. Router and settings validation stay on this list: they run on every
+    delegated call, where asking the CLI would cost a spawn.
+    """
     return tuple(bundle_for(provider).get("models") or ())
 
 

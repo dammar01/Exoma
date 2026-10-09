@@ -2,7 +2,17 @@
 description: Pilih second_agent (provider → model → effort → model per route) lewat pertanyaan interaktif, lalu terapkan.
 
 ## Trigger
-/.provider
+/.provider                                  → picker interaktif (STEP 1-3)
+/.provider <provider> <model> [effort] [routes]  → mode langsung
+
+## Mode langsung (ada argumen)
+Contoh: `/.provider codex gpt-6-luna low`. LEWATI STEP 1-2 — nol katalog, nol pertanyaan.
+Teruskan argumen apa adanya (dipisah spasi) sebagai payload STEP 3:
+    & "<work_dir>\.workflow\run.ps1" provider "codex gpt-6-luna low" "<MAIN_SESSION_ID>"
+Runtime yang memecah dan memvalidasi (provider dikenal, opt-in agy, effort milik model,
+varian agy disusun dari effort). `<routes>` opsional: `same` atau `explore=A,plan=B`.
+`ok:false` → relay `content` + `meta.next_action`, status REFUSED; JANGAN jatuh ke picker
+diam-diam. Output tetap blok [PROVIDER] di bawah.
 
 ## Batas
 LOCAL. Nol second_agent, nol job, nol lock. Runtime yang menulis config — kamu TIDAK pernah menulis
@@ -12,7 +22,8 @@ LOCAL. Nol second_agent, nol job, nol lock. Runtime yang menulis config — kamu
     Windows:   & "<work_dir>\.workflow\run.ps1" provider "" "<MAIN_SESSION_ID>"
     mac/linux: "<work_dir>/.workflow/run.sh" provider "" "<MAIN_SESSION_ID>"
 
-Balasannya `meta.providers[]` (`name`, `installed`, `detail`, `models[] {id, efforts}`) plus
+Balasannya `meta.providers[]` (`name`, `installed`, `detail`, `models[] {id, efforts, effort_in_id?}`,
+`newest`, `models_source`) plus
 `meta.current` (provider/model/effort yang aktif, dan `routes` = model tiap route sekarang),
 `meta.selectable_routes` (route yang boleh dipilih) dan `meta.source`.
 
@@ -26,10 +37,19 @@ Renderer = AskUserQuestion, satu pertanyaan per call, jawaban sebelumnya memoton
    `codex` dan `agy` → `description` WAJIB menyebut: tanpa batas baca (bisa membaca semua file
    project, `.env` termasuk) dan menerima seluruh environment — dianggap trusted provider. Batas
    baca yang ditegakkan hanya milik `opencode`. Ini peringatan, bukan penolakan: pilihannya milik user.
-2. **Model** — opsi dari `models[]` provider terpilih. Lebih dari 4 → tampilkan 4 paling relevan;
-   user selalu punya "Other" untuk mengetik id lain.
+2. **Model** — opsi dari `models[]` provider terpilih (maks 20, sudah urut terbaru dulu).
+   Opsi PERTAMA = `newest`, label diakhiri " (Recommended)" — itu model terbaru yang CLI
+   provider tawarkan sekarang (opencode/agy: terbaru dalam keluarga model yang sedang
+   dipakai). Tetap ditanyakan, jangan langsung ditulis.
+   Tool cuma muat 4 opsi, jadi SEBELUM pertanyaan ini tulis daftar bernomor sampai 10 model
+   pertama dari `models[]` (id + efforts, `newest` ditandai Recommended). Opsi pertanyaan =
+   `newest` + 3 berikutnya; `question` menyebut bahwa "Other" menerima NOMOR dari daftar
+   atau id lain. Jawaban berupa nomor → petakan ke id di daftar itu sebelum STEP 3.
+   `models_source: static` → CLI tak terbaca, daftar dari shortlist bawaan; sebut di `description`.
 3. **Effort** — opsi dari `efforts` MILIK MODEL yang barusan dipilih, bukan milik provider.
    Nilai berbeda per model, jadi memakai daftar provider akan menawarkan yang upstream tolak.
+   - `effort_in_id: true` (agy) → effort = varian model (`-low/-medium/-high`). Pertanyaan ini
+     WAJIB dijawab; runtime menyusun id varian dan tak menulis flag effort.
    - `efforts` KOSONG (`[]`) → model itu tak menerima effort sama sekali. LEWATI pertanyaan
      ketiga, langsung ke pertanyaan keempat tanpa field effort. Memaksakan nilai akan ditolak runtime.
    - Model dari "Other" → `efforts` tak diketahui; tanyakan effort sebagai pertanyaan terbuka
