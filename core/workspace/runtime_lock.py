@@ -3,7 +3,6 @@
 import json
 import os
 import secrets
-import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,24 +30,13 @@ class _RuntimeTransitionGuard:
         try:
             while True:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                self.handle = self.path.open("a+b")
-                if osutil.IS_WINDOWS:
-                    import msvcrt
-
-                    self.handle.seek(0, os.SEEK_END)
-                    if self.handle.tell() == 0:
-                        self.handle.write(b"\0")
-                        self.handle.flush()
-                    self.handle.seek(0)
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
-                    return self
-                import fcntl
-
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+                self.handle = osutil.open_lock_file(self.path)
+                osutil.lock_file(self.handle, blocking=True)
                 # `clean` may have unlinked the guard while this process waited on it
                 # (DEC-013). The lock is then on a file no one else will open: start over
-                # on whatever the path names now.
-                if _same_file(self.handle, self.path):
+                # on whatever the path names now. Windows refuses to unlink an open file,
+                # so there the path never changes under a holder.
+                if osutil.IS_WINDOWS or _same_file(self.handle, self.path):
                     return self
                 self.handle.close()
                 self.handle = None
@@ -62,15 +50,7 @@ class _RuntimeTransitionGuard:
     def __exit__(self, *exc) -> None:
         try:
             if self.handle is not None:
-                if osutil.IS_WINDOWS:
-                    import msvcrt
-
-                    self.handle.seek(0)
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                osutil.unlock_file(self.handle)
         finally:
             if self.handle is not None:
                 self.handle.close()
@@ -105,26 +85,17 @@ def remove_orphan_guard(lock_path: Path) -> str:
         except OSError:
             return "kept"
         try:
+            try:
+                osutil.lock_file(handle)
+            except OSError:
+                return "kept"
             if osutil.IS_WINDOWS:
-                import msvcrt
-
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                except OSError:
-                    return "kept"
                 try:
                     if _runtime_lock_is_live(lock_path):
                         return "kept"
                 finally:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    osutil.unlock_file(handle)
             else:
-                import fcntl
-
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    return "kept"
                 if not _same_file(handle, guard) or _runtime_lock_is_live(lock_path):
                     return "kept"
                 try:
@@ -189,44 +160,6 @@ def _runtime_lock_age_seconds(lock_path: Path, payload: dict | None) -> float | 
     return max(0.0, (datetime.now(timezone.utc) - modified).total_seconds())
 
 
-def _process_identity(pid: int) -> str | None:
-    """Best-effort process start identity, stable across PID reuse."""
-    if pid <= 0:
-        return None
-    native = osutil.pid_create_time(pid)
-    if native is not None:
-        return f"native:{native!r}"
-    if os.name == "nt":
-        return None
-    proc_stat = Path(f"/proc/{pid}/stat")
-    try:
-        stat_text = proc_stat.read_text(encoding="ascii")
-        fields_after_comm = stat_text.rsplit(")", 1)[1].split()
-        start_ticks = fields_after_comm[19]
-        try:
-            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
-                encoding="ascii"
-            ).strip()
-        except OSError:
-            boot_id = "unknown-boot"
-        return f"proc:{boot_id}:{start_ticks}"
-    except (OSError, IndexError):
-        pass
-    try:
-        result = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-            **osutil.hidden_run_kwargs(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    started = (result.stdout or "").strip()
-    return f"ps:{started}" if result.returncode == 0 and started else None
-
-
 def _runtime_lock_is_active(lock_path: Path, payload: dict | None) -> bool:
     if payload:
         try:
@@ -234,14 +167,19 @@ def _runtime_lock_is_active(lock_path: Path, payload: dict | None) -> bool:
         except (TypeError, ValueError):
             pid = 0
         if pid > 0:
-            if not osutil.process_alive(pid):
-                return False
-            expected_identity = payload.get("process_identity")
-            if expected_identity:
-                return _process_identity(pid) == expected_identity
+            expected_identity = payload.get("process_identity") or None
             expected_create_time = payload.get("pid_create_time")
+            generation = osutil.process_generation(
+                pid, expected_create_time, expected_identity
+            )
+            if generation == osutil.PROCESS_DEAD:
+                return False
+            # Keeping a lock is the safe side here, the opposite of a kill: an identity
+            # that cannot be read keeps a create-time lock, never an identity lock.
+            if expected_identity:
+                return generation == osutil.PROCESS_MATCHED
             if expected_create_time is not None:
-                return not osutil.pid_reused(pid, expected_create_time)
+                return generation != osutil.PROCESS_REUSED
             age = _runtime_lock_age_seconds(lock_path, payload)
             return age is None or age <= LOCK_TTL_SECONDS
     age = _runtime_lock_age_seconds(lock_path, payload)
@@ -285,7 +223,7 @@ def acquire_runtime_lock(lock_path: Path, command: str, session_id: str) -> dict
             "token": token,
             "pid": os.getpid(),
             "pid_create_time": osutil.pid_create_time(os.getpid()),
-            "process_identity": _process_identity(os.getpid()),
+            "process_identity": osutil.process_identity(os.getpid()),
             "created_at": now_iso(),
         }
         encoded = json.dumps(payload, indent=JSON_INDENT).encode("utf-8")

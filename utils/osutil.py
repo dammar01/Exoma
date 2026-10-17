@@ -470,19 +470,119 @@ def pid_create_time(pid: int | None) -> int | None:
         kernel32.CloseHandle(handle)
 
 
-def pid_reused(pid: int | None, expected_create_time: int | None) -> bool:
-    """True ONLY when we can PROVE the PID now hosts a different process than recorded.
+def process_identity(pid: int | None) -> str | None:
+    """Process start identity, stable across PID reuse, or None if unknowable.
 
-    Guards a kill against PID recycling: a reaped worker's PID may have been handed to an
-    unrelated process, and taskkill /F would take out the innocent bystander. Fail-open by
-    design — if we recorded no create-time (POSIX / legacy job) or cannot read the current
-    one, we return False so the kill proceeds exactly as before. We only ever BLOCK a kill
-    on positive proof of mismatch, never on uncertainty: a missed reuse costs a stray
-    worker (recoverable); a wrongful kill costs someone else's process (not).
+    Windows: the native creation FILETIME. Linux: boot id plus start ticks from `/proc`.
+    Other POSIX (macOS, BSD): the start time `ps -o lstart=` prints. The value is opaque;
+    its only use is comparing it with one recorded earlier for the same PID.
     """
-    if expected_create_time is None:
-        return False
-    current = pid_create_time(pid)
+    if not pid or pid <= 0:
+        return None
+    native = pid_create_time(pid)
+    if native is not None:
+        return f"native:{native!r}"
+    if IS_WINDOWS:
+        return None
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        start_ticks = stat_text.rsplit(")", 1)[1].split()[19]
+        try:
+            boot_id = (
+                Path("/proc/sys/kernel/random/boot_id")
+                .read_text(encoding="ascii")
+                .strip()
+            )
+        except OSError:
+            boot_id = "unknown-boot"
+        return f"proc:{boot_id}:{start_ticks}"
+    except (OSError, IndexError):
+        pass
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            **hidden_run_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    started = (result.stdout or "").strip()
+    return f"ps:{started}" if result.returncode == 0 and started else None
+
+
+PROCESS_MATCHED = "matched"  # the PID still hosts the process we recorded
+PROCESS_REUSED = "reused"  # the PID is live but proven to host a different process
+PROCESS_DEAD = "dead"  # no process has the PID
+PROCESS_UNVERIFIABLE = "unverifiable"  # live, but nothing recorded or readable to compare
+
+
+def process_generation(
+    pid: int | None,
+    expected_create_time: int | None = None,
+    expected_identity: str | None = None,
+) -> str:
+    """Which process a recorded PID names now: one of the PROCESS_* values.
+
+    The recorded identity is compared when there is one, else the recorded create time.
+    Anything that cannot be compared is `unverifiable`, never `matched`: a caller that is
+    about to kill must treat it as a different process (see JobManager._kill_worker).
+    """
+    if not process_alive(pid):
+        return PROCESS_DEAD
+    if expected_identity is not None:
+        current = process_identity(pid)
+    elif expected_create_time is not None:
+        current, expected_identity = pid_create_time(pid), expected_create_time
+    else:
+        return PROCESS_UNVERIFIABLE
     if current is None:
-        return False
-    return current != expected_create_time
+        return PROCESS_UNVERIFIABLE
+    return PROCESS_MATCHED if current == expected_identity else PROCESS_REUSED
+
+
+def open_lock_file(path: Path):
+    """Open `path` for a byte-0 advisory lock, giving an empty file the byte to lock."""
+    handle = path.open("a+b")
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+    except OSError:
+        handle.close()
+        raise
+    return handle
+
+
+def lock_file(handle, blocking: bool = False) -> None:
+    """Exclusive advisory lock on byte 0 of an open file. Raises OSError while held.
+
+    Per open handle on both platforms (LockFileEx on Windows, flock on POSIX), so two
+    threads of one process exclude each other as two processes do. Blocking on Windows
+    is msvcrt's: it retries for about ten seconds, then raises OSError.
+    """
+    handle.seek(0)
+    if IS_WINDOWS:
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def unlock_file(handle) -> None:
+    """Release the lock `lock_file` took on `handle`."""
+    handle.seek(0)
+    if IS_WINDOWS:
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

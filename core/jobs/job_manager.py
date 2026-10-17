@@ -3,7 +3,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -25,6 +24,8 @@ ALIVE_STALLED = "alive-stalled"  # PID up but silent -> probe before judging
 DEAD = "dead"  # PID gone
 _CLAIM_STALE_SECONDS = 30.0
 _MUTATION_WAIT_SECONDS = 5.0
+# The recorded process is no longer the one the PID names: it exited, or the PID was reused.
+_GONE = frozenset({osutil.PROCESS_DEAD, osutil.PROCESS_REUSED})
 
 # --- What in this file is load-bearing, and for whom -------------------------------------
 #
@@ -45,11 +46,10 @@ _MUTATION_WAIT_SECONDS = 5.0
 #                            them either kills working jobs or waits forever on dead ones.
 #
 # Costs more than it returns HERE, kept because it is cheap and correct where it does apply:
-#   _process_identity      - the /proc and `ps` branches never execute on a Windows host;
-#                            osutil.pid_create_time answers first. They are the POSIX path.
-#   _process_generation_matches
-#                          - the None (unverifiable) branch exists for platforms that expose
-#                            no process generation. Callers must still handle it.
+#   osutil.process_generation
+#                          - the `unverifiable` outcome exists for platforms that expose no
+#                            process generation. Callers must still handle it; a kill
+#                            treats it as a different process (_kill_worker).
 #   _exclusive_file_guard  - cross-process advisory locking on mutation files. Single-process
 #                            runs never contend for these.
 #   the retry loop in _acquire_session_lock
@@ -59,69 +59,6 @@ _MUTATION_WAIT_SECONDS = 5.0
 # single-user ever becomes a first-class configuration, the second group is what a flag
 # would gate — not a rewrite.
 # -----------------------------------------------------------------------------------------
-
-
-def _process_identity(pid: int | None) -> str | None:
-    """Best-effort process generation identity for PID-reuse checks."""
-    if not pid or pid <= 0:
-        return None
-    native = osutil.pid_create_time(pid)
-    if native is not None:
-        return f"native:{native!r}"
-    if os.name == "nt":
-        return None
-    try:
-        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-        start_ticks = stat_text.rsplit(")", 1)[1].split()[19]
-        try:
-            boot_id = (
-                Path("/proc/sys/kernel/random/boot_id")
-                .read_text(encoding="ascii")
-                .strip()
-            )
-        except OSError:
-            boot_id = "unknown-boot"
-        return f"proc:{boot_id}:{start_ticks}"
-    except (OSError, IndexError):
-        pass
-    try:
-        result = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-            **osutil.hidden_run_kwargs(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    started = (result.stdout or "").strip()
-    return f"ps:{started}" if result.returncode == 0 and started else None
-
-
-def _process_generation_matches(
-    pid: int | None,
-    expected_create_time: int | None,
-    expected_identity: str | None,
-) -> bool | None:
-    """True for the recorded process, False for dead/reused, None if unverifiable."""
-    if not osutil.process_alive(pid):
-        return False
-    if expected_identity is not None:
-        current_identity = _process_identity(pid)
-        return (
-            current_identity == expected_identity
-            if current_identity is not None
-            else None
-        )
-    if expected_create_time is not None:
-        current_create_time = osutil.pid_create_time(pid)
-        return (
-            current_create_time == expected_create_time
-            if current_create_time is not None
-            else None
-        )
-    return None
 
 
 class JobManager:
@@ -187,7 +124,7 @@ class JobManager:
             "worker_identity": None,
             "reservation_owner_pid": os.getpid(),
             "reservation_owner_create_time": osutil.pid_create_time(os.getpid()),
-            "reservation_owner_identity": _process_identity(os.getpid()),
+            "reservation_owner_identity": osutil.process_identity(os.getpid()),
             "recovery_attempt": 0,
             "created_at": self._now(),
             "started_at": None,
@@ -229,7 +166,7 @@ class JobManager:
             "claimed_at": self._now(),
             "owner_pid": os.getpid(),
             "owner_create_time": osutil.pid_create_time(os.getpid()),
-            "owner_identity": _process_identity(os.getpid()),
+            "owner_identity": osutil.process_identity(os.getpid()),
             "token": token,
         }
         with os.fdopen(fd, "w", encoding="utf-8") as file:
@@ -247,12 +184,12 @@ class JobManager:
                 self.release_recovery_claim(job_id)
                 return {"action": "attach", "job": job}
             worker_pid = job.get("worker_pid")
-            worker_generation = _process_generation_matches(
+            worker_generation = osutil.process_generation(
                 worker_pid,
                 job.get("worker_create_time"),
                 job.get("worker_identity"),
             )
-            if worker_pid and worker_generation is not False:
+            if worker_pid and worker_generation not in _GONE:
                 self.release_recovery_claim(job_id)
                 return {"action": "attach", "job": job}
             initial_orphan = (
@@ -262,12 +199,12 @@ class JobManager:
             )
             if initial_orphan:
                 owner_pid = job.get("reservation_owner_pid")
-                owner_generation = _process_generation_matches(
+                owner_generation = osutil.process_generation(
                     owner_pid,
                     job.get("reservation_owner_create_time"),
                     job.get("reservation_owner_identity"),
                 )
-                if owner_generation is True:
+                if owner_generation == osutil.PROCESS_MATCHED:
                     self.release_recovery_claim(job_id)
                     return {"action": "wait", "job": job}
                 age = self._age_seconds(job.get("created_at"))
@@ -310,7 +247,7 @@ class JobManager:
                 job["reservation_owner_create_time"] = osutil.pid_create_time(
                     os.getpid()
                 )
-                job["reservation_owner_identity"] = _process_identity(os.getpid())
+                job["reservation_owner_identity"] = osutil.process_identity(os.getpid())
                 job["error"] = None
                 job["output"] = None
                 job.pop("reaped", None)
@@ -344,34 +281,38 @@ class JobManager:
                 return
             job["worker_pid"] = pid
             job["worker_create_time"] = osutil.pid_create_time(pid)
-            job["worker_identity"] = _process_identity(pid)
+            job["worker_identity"] = osutil.process_identity(pid)
             job.pop("reservation_owner_pid", None)
             job.pop("reservation_owner_create_time", None)
             job.pop("reservation_owner_identity", None)
             self._save(job)
 
     def _kill_worker(self, job: dict) -> dict:
-        """Terminate a worker by PID — unless the PID was recycled to a different process.
+        """Terminate a worker by PID — only while the PID provably still hosts it.
 
-        Centralises the reuse guard so every by-PID kill path is protected. A proven
-        mismatch is reported as a skipped kill rather than taking out an innocent process.
+        Centralises the reuse guard so every by-PID kill path is protected. Fail-closed:
+        a PID whose process cannot be compared with the recorded one (`unverifiable`) is
+        treated like a reused one and left alone. A missed kill leaves a stray worker that
+        heartbeat and max-runtime reaping already fail the job for; a wrongful kill takes
+        out someone else's process. A dead PID has nothing left to kill.
         """
         pid = job.get("worker_pid")
-        if pid and pid == os.getpid():
+        if not pid:
+            return osutil.terminate_tree(None, pid=pid)
+        if pid == os.getpid():
             # Never terminate the current process. A worker_pid set to (or recycled into)
             # this runtime's own PID must not let a reap take the runtime down — and on
             # Windows terminate_tree runs `taskkill /T`, which would also kill our children.
             return {"method": "skipped", "ok": False, "reason": "self_pid", "pid": pid}
-        generation = _process_generation_matches(
+        generation = osutil.process_generation(
             pid, job.get("worker_create_time"), job.get("worker_identity")
         )
-        if pid and osutil.process_alive(pid) and generation is False:
-            return {
-                "method": "skipped",
-                "ok": False,
-                "reason": "pid_reuse_detected",
-                "pid": pid,
-            }
+        if generation != osutil.PROCESS_MATCHED:
+            reason = {
+                osutil.PROCESS_REUSED: "pid_reuse_detected",
+                osutil.PROCESS_DEAD: "worker_dead",
+            }.get(generation, "identity_unverifiable")
+            return {"method": "skipped", "ok": False, "reason": reason, "pid": pid}
         return osutil.terminate_tree(None, pid=pid)
 
     def touch_heartbeat(self, job_id: str, progress: dict | None = None) -> None:
@@ -787,10 +728,10 @@ class JobManager:
         pid = job.get("worker_pid")
         if pid is None:
             return None  # not yet spawned; nothing to reap
-        generation = _process_generation_matches(
+        generation = osutil.process_generation(
             pid, job.get("worker_create_time"), job.get("worker_identity")
         )
-        if generation is False:
+        if generation in _GONE:
             return DEAD
 
         idle = self._idle_seconds(job)
@@ -957,14 +898,14 @@ class JobManager:
             if status in {"pending", "recovering"}:
                 worker_pid = rec.get("worker_pid")
                 if worker_pid:
-                    generation = _process_generation_matches(
+                    generation = osutil.process_generation(
                         worker_pid,
                         rec.get("worker_create_time"),
                         rec.get("worker_identity"),
                     )
-                    if generation is True:
+                    if generation == osutil.PROCESS_MATCHED:
                         n += 1
-                    elif generation is None:
+                    elif generation == osutil.PROCESS_UNVERIFIABLE:
                         age = self._age_seconds(
                             rec.get("recovery_started_at") or rec.get("created_at")
                         )
@@ -973,26 +914,26 @@ class JobManager:
                     continue
 
                 owner_pid = rec.get("reservation_owner_pid")
-                owner_generation = _process_generation_matches(
+                owner_generation = osutil.process_generation(
                     owner_pid,
                     rec.get("reservation_owner_create_time"),
                     rec.get("reservation_owner_identity"),
                 )
-                if owner_generation is True:
+                if owner_generation == osutil.PROCESS_MATCHED:
                     n += 1
-                elif owner_generation is None and owner_pid:
+                elif owner_generation == osutil.PROCESS_UNVERIFIABLE and owner_pid:
                     age = self._age_seconds(
                         rec.get("recovery_started_at") or rec.get("created_at")
                     )
                     if age is None or age <= _CLAIM_STALE_SECONDS:
                         n += 1
             elif status == "running":
-                generation = _process_generation_matches(
+                generation = osutil.process_generation(
                     rec.get("worker_pid"),
                     rec.get("worker_create_time"),
                     rec.get("worker_identity"),
                 )
-                if generation is not False:
+                if generation not in _GONE:
                     n += 1
         return n
 
@@ -1027,25 +968,13 @@ class JobManager:
     def _exclusive_file_guard(self, path: Path, timeout: float = 30.0):
         """Cross-process advisory lock backed by a persistent one-byte file."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = path.open("a+b")
-        handle.seek(0, os.SEEK_END)
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
+        handle = osutil.open_lock_file(path)
         deadline = time.monotonic() + timeout
         locked = False
         try:
             while not locked:
                 try:
-                    handle.seek(0)
-                    if os.name == "nt":
-                        import msvcrt
-
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    else:
-                        import fcntl
-
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    osutil.lock_file(handle)
                     locked = True
                 except OSError:
                     if time.monotonic() >= deadline:
@@ -1054,15 +983,7 @@ class JobManager:
             yield
         finally:
             if locked:
-                handle.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                osutil.unlock_file(handle)
             handle.close()
 
     @contextmanager
@@ -1080,7 +1001,7 @@ class JobManager:
             "job_id": job_id,
             "owner_pid": os.getpid(),
             "owner_create_time": osutil.pid_create_time(os.getpid()),
-            "owner_identity": _process_identity(os.getpid()),
+            "owner_identity": osutil.process_identity(os.getpid()),
             "created_at": self._now(),
             "token": token,
         }
@@ -1123,12 +1044,12 @@ class JobManager:
             return False
         if payload:
             pid = payload.get("owner_pid")
-            generation = _process_generation_matches(
+            generation = osutil.process_generation(
                 pid,
                 payload.get("owner_create_time"),
                 payload.get("owner_identity"),
             )
-            if generation is True:
+            if generation == osutil.PROCESS_MATCHED:
                 return False
         return True
 
@@ -1185,7 +1106,7 @@ class JobManager:
             "created_at": self._now(),
             "owner_pid": os.getpid(),
             "owner_create_time": osutil.pid_create_time(os.getpid()),
-            "owner_identity": _process_identity(os.getpid()),
+            "owner_identity": osutil.process_identity(os.getpid()),
             "token": token,
         }
 

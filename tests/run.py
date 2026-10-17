@@ -72,6 +72,11 @@ from tests.checks.graph_verification import _test_graph_verification  # noqa: E4
 from tests.checks.hardening import _test_hardening  # noqa: E402
 from tests.checks.telemetry import _test_telemetry_metrics  # noqa: E402
 from tests.checks.runtime_guards import _test_runtime_guard_cleanup  # noqa: E402
+from tests.checks.process_identity import (  # noqa: E402
+    _test_byte_lock_excludes_handles_and_processes,
+    _test_process_generation_outcomes,
+    _test_worker_kill_is_fail_closed,
+)
 from tests.checks.task_telemetry import _test_task_telemetry  # noqa: E402
 from tests.checks.transcript import _test_transcript_parsing  # noqa: E402
 from tests.checks.facts import (  # noqa: E402
@@ -181,6 +186,9 @@ SUITES: dict[str, tuple] = {
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),
     "evidence-lock-file": (_test_evidence_lock_file, "evidence.jsonl.lock is a persistent one-byte OS lock that excludes other processes"),
     "runtime-guards": (_test_runtime_guard_cleanup, "clean removes the runtime-lock guards of dead sessions, keeps live and held ones (DEC-013)"),
+    "process-identity": (_test_process_generation_outcomes, "a recorded PID is matched, reused, dead or unverifiable; unverifiable is never matched"),
+    "worker-kill": (_test_worker_kill_is_fail_closed, "a worker is killed only while its PID provably still hosts it"),
+    "byte-lock": (_test_byte_lock_excludes_handles_and_processes, "the one osutil byte-0 lock excludes other handles and processes and dies with its holder"),
     "redaction": (_test_redaction_boundary, "secret boundary on outbound payloads"),
     "redaction-boundary": (_test_key_pattern_needs_a_left_boundary, "kebab-case words containing sk- are not keys; real keys still are"),
     "verify-gaps": (_test_quick_verify_gaps, "quick verify reports gaps as incomplete"),

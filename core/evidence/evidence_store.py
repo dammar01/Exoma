@@ -15,6 +15,7 @@ from core.workspace.workspace_paths import (
     now_iso,
     workflow_paths,
 )
+from utils import osutil
 from utils.redact import redact, redact_value
 
 EVIDENCE_FILENAME = "evidence.jsonl"
@@ -48,25 +49,11 @@ class _EvidenceLock:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self.handle = self.path.open("a+b")
-            self.handle.seek(0, os.SEEK_END)
-            if self.handle.tell() == 0:
-                self.handle.write(b"\0")
-                self.handle.flush()
+            self.handle = osutil.open_lock_file(self.path)
 
             while not self.file_locked:
                 try:
-                    self.handle.seek(0)
-                    if os.name == "nt":
-                        import msvcrt
-
-                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    else:
-                        import fcntl
-
-                        fcntl.flock(
-                            self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB
-                        )
+                    osutil.lock_file(self.handle)
                     self.file_locked = True
                 except OSError:
                     if time.monotonic() >= deadline:
@@ -83,15 +70,7 @@ class _EvidenceLock:
     def _release(self) -> None:
         try:
             if self.file_locked and self.handle is not None:
-                self.handle.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                osutil.unlock_file(self.handle)
         finally:
             self.file_locked = False
             if self.handle is not None:

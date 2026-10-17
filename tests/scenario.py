@@ -49,6 +49,11 @@ from tests.checks.facts import (
     _test_facts_concurrency,
 )
 from tests.checks.runtime_guards import _test_runtime_guard_cleanup
+from tests.checks.process_identity import (
+    _test_byte_lock_excludes_handles_and_processes,
+    _test_process_generation_outcomes,
+    _test_worker_kill_is_fail_closed,
+)
 from tests.checks.task_telemetry import _test_task_telemetry
 from tests.checks.redaction import (
     _test_key_pattern_needs_a_left_boundary,
@@ -1231,6 +1236,9 @@ confidence: high — all requested checks ran
         _test_evidence_reuse()
         _test_evidence_lock_file()
         _test_runtime_guard_cleanup()
+        _test_process_generation_outcomes()
+        _test_worker_kill_is_fail_closed()
+        _test_byte_lock_excludes_handles_and_processes()
         _test_task_telemetry()
         _test_redaction_boundary()
         _test_quick_verify_gaps()

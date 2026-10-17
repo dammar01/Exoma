@@ -36,23 +36,11 @@ def _try_os_lock(path: Path):
     threads of one process exclude each other as two processes do.
     """
     try:
-        handle = path.open("a+b")
+        handle = osutil.open_lock_file(path)
     except OSError:
         return None
     try:
-        handle.seek(0, os.SEEK_END)
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
-        handle.seek(0)
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        osutil.lock_file(handle)
         return handle
     except OSError:
         handle.close()
@@ -61,15 +49,7 @@ def _try_os_lock(path: Path):
 
 def _release_os_lock(handle) -> None:
     try:
-        handle.seek(0)
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        osutil.unlock_file(handle)
     except OSError:
         pass
     finally:
@@ -98,7 +78,7 @@ class OwnedFileLock:
                 # it open when it was unlinked), and creating over it is refused as access
                 # denied rather than "exists". It is gone in moments; wait like for a holder.
                 # On POSIX this is a real permissions problem and is raised.
-                if os.name != "nt" or time.monotonic() >= deadline:
+                if not osutil.IS_WINDOWS or time.monotonic() >= deadline:
                     raise
                 time.sleep(0.01)
                 continue

@@ -881,6 +881,36 @@ ends in a timeout, not a concurrent write. The evidence store still uses its own
 (`core/evidence/evidence_store._EvidenceLock`); migration takes all four store locks before
 moving anything.
 
+Every OS byte-range lock below goes through one primitive in `utils/osutil.py`:
+`open_lock_file` (opens the file and gives an empty one its byte), `lock_file` (exclusive
+lock on byte 0; non-blocking raises `OSError` while held, blocking on Windows is msvcrt's
+retry of about ten seconds) and `unlock_file`. No other module imports `msvcrt` or `fcntl`.
+
+## Process identity and worker kill
+
+A PID recorded for a worker, a job reservation, a job lock or the runtime lock carries a
+create time (`pid_create_time`, Windows only) and an identity (`osutil.process_identity`:
+the native creation time on Windows, boot id and start ticks from `/proc` on Linux, the
+`ps -o lstart=` start time elsewhere). `osutil.process_generation` compares the recorded
+values with the live PID and answers one of:
+
+| Outcome | Meaning |
+| --- | --- |
+| `matched` | The PID still hosts the recorded process |
+| `reused` | The PID is live and provably hosts a different process |
+| `dead` | No process has the PID |
+| `unverifiable` | The PID is live, but nothing was recorded or nothing can be read to compare |
+
+A worker is killed only on `matched` (`JobManager._kill_worker`). `reused`, `dead` and
+`unverifiable` return `{"method": "skipped", "reason": "pid_reuse_detected" | "worker_dead"
+| "identity_unverifiable"}` and the job is still failed and reaped. The runtime's own PID is
+never killed (`self_pid`). The policy is fail-closed because the two errors are not
+symmetric: a missed kill leaves a stray worker whose job is already failed; a wrongful kill
+ends a process that is not ours. Admission and recovery keep their rules: an `unverifiable`
+worker still counts against capacity while younger than the claim staleness window, and a
+running lock owner with an unreadable identity keeps a create-time lock but not an identity
+lock.
+
 Lock files come in two patterns: a lock file owned by its holder, removed on release, and a
 one-byte file carrying an OS byte-range lock, kept between uses:
 
