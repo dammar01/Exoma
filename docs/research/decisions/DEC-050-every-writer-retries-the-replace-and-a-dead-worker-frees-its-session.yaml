@@ -60,7 +60,7 @@ evidence_notes: |
   hands is not taken.
 implementation:
   version: 3.8.2
-  commits: [uncommitted]
+  commits: [c46d0ac]
   components:
     - core/workspace/workspace_paths.py (atomic_write_text newline/fsync, atomic_write_bytes, replace_with_retry)
     - core/evidence/fact_store.py, evidence_store.py, e2e/knowledge.py, e2e/tagging.py
