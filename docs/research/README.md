@@ -247,7 +247,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-049](decisions/DEC-049-provider-thread-kept-or-loss-named-and-integrity-fails-closed.yaml) | A provider thread id is kept or its loss is named; integrity paths fail closed | accepted | implemented | not_validated | 895aa6f |
 | [DEC-050](decisions/DEC-050-every-writer-retries-the-replace-and-a-dead-worker-frees-its-session.yaml) | Every temp-and-replace writer retries the replace; a dead worker frees its session for a different request | accepted | implemented | not_validated | c46d0ac |
 | [DEC-051](decisions/DEC-051-rework-counts-rounds-after-a-failure.yaml) | Rework counts the verify rounds after a failure, not every round after the first | accepted | implemented | not_validated | uncommitted |
-| [DEC-052](decisions/DEC-052-worker-kill-fails-closed-and-os-locks-live-in-osutil.yaml) | A worker is killed only on a matched identity, and process identity and byte locks live in osutil | accepted | implemented | not_validated | uncommitted |
+| [DEC-052](decisions/DEC-052-worker-kill-fails-closed-and-os-locks-live-in-osutil.yaml) | A worker is killed only on a matched identity, and process identity and byte locks live in osutil | accepted | implemented | not_validated | 30ba7cb |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

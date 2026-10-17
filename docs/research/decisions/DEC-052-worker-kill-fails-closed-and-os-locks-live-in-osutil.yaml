@@ -52,7 +52,7 @@ evidence_notes: |
   session for this change.
 implementation:
   version: 3.8.2
-  commits: [uncommitted]
+  commits: [30ba7cb]
   components:
     - utils/osutil.py (process_identity, process_generation and PROCESS_* outcomes; open_lock_file, lock_file, unlock_file; pid_reused removed)
     - core/jobs/job_manager.py (private identity functions removed; fail-closed _kill_worker; _exclusive_file_guard on osutil locks)
