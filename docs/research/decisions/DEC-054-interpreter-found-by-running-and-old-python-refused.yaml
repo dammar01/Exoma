@@ -50,7 +50,7 @@ evidence_notes: |
   maintainer's Windows machine (EXP-011, draft).
 implementation:
   version: 3.8.2
-  commits: [uncommitted]
+  commits: [f101515]
   components:
     - utils/osutil.py (MIN_PYTHON, find_python, find_bash, user_cache_dir, has_display, split_command, user_env_location, set_registry_user_env)
     - main.py, install.py, check.py (Python version guard)
