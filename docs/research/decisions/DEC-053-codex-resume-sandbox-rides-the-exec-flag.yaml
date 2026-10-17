@@ -39,7 +39,7 @@ evidence_notes: |
   tests/checks/codex_write_probe.py (WORKFLOW_CODEX_PROBE=1) passed on 0.154.0 and 0.155.1.
 implementation:
   version: 3.8.2
-  commits: [uncommitted]
+  commits: [8dcb6bb]
   components:
     - adapters/providers/codex_adapter.py (_build_args resume branch; resume-specific sandbox advice and meta.reason)
     - tests/checks/provider.py (resume argv shape; resume vs fresh sandbox refusal)
