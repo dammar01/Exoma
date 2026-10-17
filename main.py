@@ -2,6 +2,15 @@ import json
 import secrets
 import sys
 
+# Before any import that the newer syntax would break: the oldest supported Python is
+# utils/osutil.py MIN_PYTHON, repeated here because importing it would fail on the very
+# interpreter this names.
+if sys.version_info < (3, 10):
+    sys.exit(
+        f"agent-workflow needs Python 3.10 or newer; this is {sys.version.split()[0]} "
+        f"({sys.executable}). Run it with a newer python."
+    )
+
 # Looks unused to a linter and is NOT: core/job_lifecycle.py reaches it as
 # `_main().subprocess`, and tests/scenario.py patches `main.subprocess.Popen` to
 # intercept worker spawn. Deleting it breaks both, silently and at runtime only.

@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from tests.checks.support import assert_true, powershell_for_hooks
+from utils import osutil
 
 REPO = Path(__file__).resolve().parents[2]
 HOOKS = REPO / "dist" / "config" / "claude" / "hooks"
@@ -35,20 +36,8 @@ _TIMEOUT_S = {
 
 
 def _bash() -> str | None:
-    """The bash Claude Code's hook command would reach. On Windows that is Git Bash: PATH
-    there can also hold WSL's System32\\bash.exe and a WindowsApps alias, neither of which
-    runs these scripts against Windows paths."""
-    if sys.platform != "win32":
-        return shutil.which("bash")
-    git = shutil.which("git")
-    if not git:
-        return None
-    # git.exe sits in <Git>\cmd, or <Git>\mingw64\bin when PATH comes from Git Bash itself.
-    for root in Path(git).parents:
-        for candidate in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
-            if candidate.is_file():
-                return str(candidate)
-    return None
+    """The bash Claude Code's hook command would reach (Git Bash on Windows)."""
+    return osutil.find_bash()
 
 
 def _flavours(hook: str) -> list[tuple[str, list[str]]]:
@@ -205,6 +194,60 @@ def _test_hooks_run_through_their_launchers() -> None:
         print("  hook latency (s, per call): " + json.dumps(
             {f"{h}.{l}": [round(s, 3) for s in v] for (h, l), v in sorted(timings.items())}
         ))
+
+
+def _shim(directory: Path, name: str, body: str) -> None:
+    path = directory / name
+    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8", newline="\n")
+    path.chmod(0o755)
+
+
+def _test_hook_launchers_resolve_python() -> None:
+    """The launcher picks an interpreter by running it (field note: `python` called where
+    only `python3` existed, and the other way round). PATH holds only bash's own tools plus
+    shims, so nothing on the real PATH answers in their place."""
+    bash = _bash()
+    assert_true(bash is not None, "no bash to run the hook launchers")
+    real = Path(sys.executable).as_posix()
+    hook = [bash, str(HOOKS / "session-bind.sh")]
+    payload = lambda ws: {"source": "startup", "session_id": "c9", "cwd": str(ws.project), "hook_event_name": "SessionStart"}  # noqa: E731
+    cases = [
+        ("only `python`", {"python": f'exec "{real}" "$@"'}, True),
+        ("only `python3`", {"python3": f'exec "{real}" "$@"'}, True),
+        ("a python3 that does not run (Store alias), then python", {"python3": "exit 9009", "python": f'exec "{real}" "$@"'}, True),
+        ("an old python3 and nothing else", {"python3": 'case "$*" in *version_info*) exit 1;; esac; exec "' + real + '" "$@"'}, False),
+        ("no python at all", {}, False),
+    ]
+    for label, shims, runs in cases:
+        ws = _Workspace("resolve")
+        try:
+            shim_dir = ws.base / "bin"
+            shim_dir.mkdir()
+            for name, body in shims.items():
+                _shim(shim_dir, name, body)
+            # The launcher needs `cat` and nothing else from PATH (the shims start with an
+            # absolute #!/bin/sh). POSIX: one symlink in a private dir, because cat's own
+            # directory (/usr/bin) also holds the system python3. Git Bash: its bin dirs,
+            # which carry msys-2.0.dll beside cat and ship no python.
+            if osutil.IS_WINDOWS:
+                git_root = Path(bash).parents[1]
+                tools = [git_root / "usr" / "bin", git_root / "bin", git_root / "mingw64" / "bin"]
+            else:
+                tool_dir = ws.base / "tools"
+                tool_dir.mkdir()
+                (tool_dir / "cat").symlink_to(shutil.which("cat"))
+                tools = [tool_dir]
+            leaks = [str(d / n) for d in tools for n in ("python3", "python", "py", "python3.exe", "python.exe", "py.exe") if (d / n).exists()]
+            assert_true(not leaks, f"[{label}] the isolated PATH must hold no interpreter of its own: {leaks}")
+            ws.env["PATH"] = os.pathsep.join([str(shim_dir), *map(str, tools)])
+            code, out, _ = ws.run(hook, payload(ws))
+            assert_true(code == 0, f"[{label}] session-bind exits 0, got {code}: {ws.last_stderr[-300:]!r}")
+            if runs:
+                assert_true("MAIN_SESSION_ID=" in out, f"[{label}] the launcher found an interpreter and bound the session: {out[:200]!r}")
+            else:
+                assert_true(not out.strip(), f"[{label}] with no usable interpreter the hook fails open, silently: {out[:200]!r}")
+        finally:
+            ws.close()
 
 
 def _test_gate_k5_fixtures() -> None:

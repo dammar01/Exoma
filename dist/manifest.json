@@ -301,8 +301,8 @@
     },
     {
       "path": "claude/hooks/graph-refresh.sh",
-      "sha256": "9466157370ab0ec64520123d009737d8029501babf93f718b193fdb74a1fbcaa",
-      "bytes": 13381,
+      "sha256": "fc0a749b607403416fc30f774dc9e4c530625f5f50a839b1ca4dddb3c2f05cd7",
+      "bytes": 13916,
       "merge": "replace",
       "component": "runtime"
     },
@@ -315,8 +315,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "961334e1f9624290a6bd5385cda0d2f68b4387d229b3876046a26c4d78a62f57",
-      "bytes": 20505,
+      "sha256": "c898940497dce57a9054dd1583ffe3a8b272600873c351546a88a75678c204ee",
+      "bytes": 21039,
       "merge": "replace",
       "component": "runtime"
     },
@@ -329,8 +329,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-set.sh",
-      "sha256": "975730459a94c13b5f03a5ee5e1fcc51a6cd8ff9d7b1655e6e57c9024ba2ca9f",
-      "bytes": 3869,
+      "sha256": "ac608c3019c13fd689a1e99ffa40984f415f765eae935cb98f541206b02348a0",
+      "bytes": 4404,
       "merge": "replace",
       "component": "runtime"
     },
@@ -350,8 +350,8 @@
     },
     {
       "path": "claude/hooks/session-bind.sh",
-      "sha256": "6eaaf174167c0de0e269c592f1d139691f014a58d7ca848ae4ff83ddbbae76d7",
-      "bytes": 3662,
+      "sha256": "c8ecb206ce8cc6498714c8f95a2d839a6261f801d4fd0d8357f79784d5d39918",
+      "bytes": 4196,
       "merge": "replace",
       "component": "runtime"
     },
@@ -364,8 +364,8 @@
     },
     {
       "path": "claude/hooks/task-events.sh",
-      "sha256": "5b35a0baf7c0f39b8dc93ee956005c7e657cdf650489f76dcc7a2ce92df61c68",
-      "bytes": 5568,
+      "sha256": "64c71b1eb620104f8c27fd035622dde6b0d4ab6f22b6a0172b0c2c8d19dfabcd",
+      "bytes": 6103,
       "merge": "replace",
       "component": "runtime"
     },
@@ -378,8 +378,8 @@
     },
     {
       "path": "claude/hooks/workflow-statusline.sh",
-      "sha256": "809d6c7a9bcabdefe3925a822a2b84900d507760245d0a453beeec15e4ac14e2",
-      "bytes": 10140,
+      "sha256": "b4266dc84af1a6a8c03e7a9d852d01b0c401f37cf85bc14521596903e673ece4",
+      "bytes": 10674,
       "merge": "replace",
       "component": "runtime"
     },

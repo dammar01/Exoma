@@ -151,6 +151,16 @@ from tests.checks.intent_gate import (
     _test_intent_gate_runner_tamper,
     _test_intent_gate_non_ascii_root,
 )
+from tests.checks.hook_contract import (
+    _test_gate_k5_fixtures,
+    _test_hook_launchers_resolve_python,
+    _test_hooks_run_through_their_launchers,
+)
+from tests.checks.os_resolvers import (
+    _test_entry_points_refuse_an_old_python,
+    _test_find_bash_and_os_locations,
+    _test_find_python_runs_each_candidate,
+)
 from tests.checks.verify_tests import _test_verify_runtime_tests
 from tests.checks.metrics import _test_metrics_contract
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
@@ -193,6 +203,12 @@ def run_tests() -> None:
     _test_intent_gate_runner_parsed()
     _test_intent_gate_runner_tamper()
     _test_intent_gate_non_ascii_root()
+    _test_hooks_run_through_their_launchers()
+    _test_hook_launchers_resolve_python()
+    _test_gate_k5_fixtures()
+    _test_entry_points_refuse_an_old_python()
+    _test_find_python_runs_each_candidate()
+    _test_find_bash_and_os_locations()
     _test_verify_runtime_tests()
     _test_metrics_contract()
     _test_opencode_prompt_never_reaches_cmd()

@@ -118,7 +118,13 @@ from tests.checks.intent_gate import (  # noqa: E402
 )
 from tests.checks.hook_contract import (  # noqa: E402
     _test_gate_k5_fixtures,
+    _test_hook_launchers_resolve_python,
     _test_hooks_run_through_their_launchers,
+)
+from tests.checks.os_resolvers import (  # noqa: E402
+    _test_entry_points_refuse_an_old_python,
+    _test_find_bash_and_os_locations,
+    _test_find_python_runs_each_candidate,
 )
 from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
@@ -256,6 +262,10 @@ SUITES: dict[str, tuple] = {
     "gate-runner-tamper": (_test_intent_gate_runner_tamper, "while armed, a write to the runner scripts is refused; other writes pass"),
     "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the ps1 hooks read the session registry as UTF-8, so a non-ASCII project root resolves"),
     "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout"),
+    "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
+    "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
+    "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),
+    "os-locations": (_test_find_bash_and_os_locations, "find_bash is Git Bash on Windows; cache dir, env location and command splitting follow the OS"),
     "gate-k5-fixtures": (_test_gate_k5_fixtures, "the gate's decisions are frozen before the single-tokenizer gate; cases the target decides differently are listed"),
     "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),
     "installer-stale": (_test_installer_leaves_no_stale_files, "--apply removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),

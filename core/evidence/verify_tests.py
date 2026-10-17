@@ -33,9 +33,7 @@ into the verify result, so a later verify never reruns an old choice silently.
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
 import time
 from pathlib import Path
 
@@ -93,7 +91,7 @@ def _split(command: str) -> list[str]:
     keep their surrounding quotes; those are stripped, so `"C:\\Program Files\\x.exe" -k`
     names the executable it quotes."""
     try:
-        tokens = shlex.split(command, posix=os.name != "nt")
+        tokens = osutil.split_command(command)
     except ValueError:
         return []
     return [t[1:-1] if len(t) > 1 and t[0] == t[-1] and t[0] in "\"'" else t for t in tokens]

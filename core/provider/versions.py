@@ -44,12 +44,7 @@ def _cache_path() -> Path | None:
     if CACHE_PATH is not None:
         return Path(CACHE_PATH)
     try:
-        if osutil.IS_WINDOWS:
-            base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-            root = Path(base) if base else None
-        else:
-            xdg = os.environ.get("XDG_CACHE_HOME")
-            root = Path(xdg) if xdg else Path.home() / ".cache"
+        root = osutil.user_cache_dir()
         return root / "agent-workflow" / "provider-versions.json" if root else None
     except Exception:
         return None

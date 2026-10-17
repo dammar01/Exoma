@@ -16,10 +16,22 @@
 # So does a precision read (DEC-043): a project file outside .workflow, at most 200 lines
 # (`limit`, or a file that short), two per marker, counted in runtime/delegated.reads.
 # Escapes: WORKFLOW_LOCAL_MODE=1 / local_mode.flag. Marker/session absent -> allow (fail-open).
-# exit 2 = block ; every other path exits 0. Exit code flows from python3 (no trailing exit).
+# exit 2 = block ; every other path exits 0. Exit code flows from python (no trailing exit).
 RAW="$(cat)"
 [ -z "$RAW" ] && exit 0
-CLAUDE_HOOK_RAW="$RAW" python3 <<'PY'
+# Interpreter: the first of python3, python, `py -3` that RUNS and is >= 3.10 (utils/osutil.py
+# MIN_PYTHON). A name on PATH is not enough: Windows' WindowsApps aliases open the Store
+# instead of running, and an old python3 can shadow a newer python. None found: fail open.
+PY=""
+for cand in "python3" "python" "py -3"; do
+  set -- $cand
+  command -v "$1" >/dev/null 2>&1 || continue
+  if "$@" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    PY="$cand"; break
+  fi
+done
+[ -z "$PY" ] && exit 0
+CLAUDE_HOOK_RAW="$RAW" $PY <<'PY'
 import os, sys, json, re, shlex, datetime
 
 

@@ -1,0 +1,84 @@
+schema_version: 3
+id: DEC-054
+title: The interpreter is found by running it, an old Python is refused by name, and the remaining OS branches move into osutil
+date: 2026-10-17
+status: accepted
+provenance:
+  type: observed
+  confidence: medium
+  basis: Maintainer field notes from two weeks of use, and the OS-coupling map made for the OS-agnostic migration
+problem: |
+  Every shipped `.sh` hook ran `python3` by name. Field use reported a machine where the name
+  the workflow called did not exist, and an interpreter older than the code's syntax failing
+  with a traceback rather than a message; Python 3.10 was documented but nothing enforced it.
+  On Windows, `python3` and `python` can also be WindowsApps aliases that open the Store
+  instead of running. A handful of OS branches (user cache dir, display detection, command
+  splitting, user environment persistence) still sat outside `utils/osutil.py`, which
+  DEC-052 names as the place for them.
+decision: |
+  `utils/osutil.py` gains `MIN_PYTHON = (3, 10)`, `find_python()` (tries `python3`, `python`,
+  `py -3`, each by running a version probe, and returns the first new enough), `find_bash()`
+  (bash on PATH; on Windows Git Bash next to `git`, never WSL's or an alias),
+  `user_cache_dir()`, `has_display()`, `split_command()`, `user_env_location()` and
+  `set_registry_user_env()`; `core/provider/versions.py`, `core/evidence/verify_tests.py`,
+  `core/evidence/e2e/preflight.py` and `install.py` call them instead of branching.
+  `main.py`, `install.py` and `check.py` exit with one message naming the version and the
+  interpreter when Python is older than 3.10, before any project import. Each shipped `.sh`
+  hook resolves its interpreter the same way in bash before running its embedded Python and
+  fails open when none qualifies. The `.ps1` hooks and the hook layout are unchanged.
+rationale: |
+  A name on PATH proves nothing about what it runs; running it does. A guard placed before
+  the first project import is the only place an old interpreter can still print a sentence.
+  Keeping the guard's constant inline (a guard that imported osutil would fail on the
+  interpreter it names) costs three copies, which a check keeps equal. The bash resolver is
+  repeated in six hooks for now; the planned dispatcher replaces the six with one launcher.
+alternatives:
+  - option: Keep `python3` and document that it must exist
+    rejected_because: The field notes show the documented assumption failing; documentation does not choose the interpreter.
+  - option: Resolve the interpreter once at install time and write its path into each hook
+    rejected_because: An interpreter upgraded or removed after install breaks every hook until a reinstall; probing per call costs about 0.1 s.
+  - option: Put the guard inside osutil and import it first
+    rejected_because: osutil uses 3.10 syntax at def time, so importing it on an old Python fails before the guard runs.
+evidence: [DEC-052, DEC-030]
+evidence_notes: |
+  tests/checks/os_resolvers.py (guard text equals MIN_PYTHON, sits before the first project
+  import, refuses a simulated 3.9 with the version and interpreter; find_python order,
+  Store alias and old-version skips). tests/checks/hook_contract.py
+  `_test_hook_launchers_resolve_python` runs session-bind.sh with PATH holding only shims:
+  only `python`, only `python3`, a non-running python3 then python, an old python3 alone, none.
+  Hook call wall time through the bash launcher rose from 0.50-0.66 s to 0.65-0.76 s on the
+  maintainer's Windows machine (EXP-011, draft).
+implementation:
+  version: 3.8.2
+  commits: [uncommitted]
+  components:
+    - utils/osutil.py (MIN_PYTHON, find_python, find_bash, user_cache_dir, has_display, split_command, user_env_location, set_registry_user_env)
+    - main.py, install.py, check.py (Python version guard)
+    - core/provider/versions.py, core/evidence/verify_tests.py, core/evidence/e2e/preflight.py, install.py (call osutil instead of branching)
+    - dist/config/claude/hooks/*.sh (bash interpreter resolver)
+    - .github/workflows/ci.yml (bash prerequisite step)
+    - tests/checks/os_resolvers.py, tests/checks/hook_contract.py, tests/scenario.py, tests/run.py
+    - docs/reference.md, docs/installation.md (Prasyarat)
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+validation:
+  summary: |
+    Unit checks and launcher runs on one Windows machine with Git Bash. Not yet run on a
+    Linux or macOS machine where only `python` or an old `python3` exists, beyond the shims.
+  runs: []
+trade_offs:
+  better:
+    - Hooks run wherever any qualifying interpreter exists, under any of its usual names.
+    - An old Python is named instead of failing with a traceback.
+    - osutil holds the cache, display, splitting and user-environment branches.
+  worse:
+    - Each hook call spends about 0.1 s probing for an interpreter.
+    - The bash resolver is six copies until the dispatcher lands.
+limitations:
+  - "`os.chmod` in workspace_paths.py and e2e/tagging.py is not an OS branch and was left alone."
+  - "core/runtime/scripts.py still names `python3` for the foreign `.sh` flavour, which is deleted on generation; it changes with the single bash runner."
+revisit_when:
+  - The dispatcher replaces the per-hook resolver.
+  - Probing per call shows up against a hook timeout.
+questions: [RQ-07a, RQ-13]

@@ -82,7 +82,7 @@ Himpunan tertutup di `core/evidence/contract.py` `ERROR_TYPES`; `make_error` men
 
 | Kebutuhan | Catatan |
 |---|---|
-| Python 3.10+ | sintaks `X \| None` dipakai di seluruh kode |
+| Python 3.10+ | sintaks `X \| None` dipakai di seluruh kode. `main.py`, `install.py` dan `check.py` menolak Python yang lebih lama dengan satu pesan (versi dan interpreter yang dipakai) sebelum import apa pun. Hook `.sh` memilih interpreter dengan menjalankannya, berurutan `python3`, `python`, `py -3`; yang tidak jalan (alias WindowsApps) atau lebih lama dari 3.10 dilewati, dan tanpa satu pun hook fail-open |
 | `opencode` di `PATH` | hanya untuk command terdelegasi |
 | `git` di `PATH` | opsional; dipakai `sweep` dan mode verify `syntax` |
 | Dependency runtime | **nol**; seluruh runtime memakai standard library |

@@ -46,6 +46,16 @@ jobs:
           # without testing it.
           python-version: '3.13'
 
+      - name: Bash for the hook launchers
+        # The hooks run as bash launchers on every OS (Git Bash on Windows), and
+        # tests/checks/hook_contract.py fails closed without one. `shell: bash` is Git Bash
+        # on windows-latest, so this step failing names the missing prerequisite instead
+        # of the suite failing later on an assertion.
+        shell: bash
+        run: |
+          bash --version | head -n 1
+          for py in python3 python; do command -v "$py" >/dev/null && "$py" -c 'import sys; print(sys.executable, sys.version.split()[0])' || true; done
+
       - name: Development dependencies
         # Development only (requirements-dev.txt): PyYAML for the research-record check.
         # The runtime stays stdlib-only — the `deps` step below still proves it, because the

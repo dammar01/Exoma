@@ -10,10 +10,131 @@ from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
 
+# The oldest Python the code runs on (`X | None` in signatures is evaluated at def time).
+# main.py, install.py and check.py repeat it inline in their version guard, because a guard
+# that imported this module would fail on the very interpreter it is meant to name;
+# tests/checks/os_resolvers.py keeps the copies equal.
+MIN_PYTHON = (3, 10)
+
+# PATH names tried for an interpreter, in order. `python3` first: on Linux and macOS it is
+# often the only one; `python` is the usual Windows name; `py -3` is the Windows launcher.
+_PYTHON_CANDIDATES: tuple[tuple[str, ...], ...] = (("python3",), ("python",), ("py", "-3"))
+_VERSION_PROBE = "import sys; print('%d.%d' % sys.version_info[:2])"
+
 
 def python_exe() -> str:
     """Resolve the python interpreter name for generated scripts."""
     return sys.executable or ("python" if IS_WINDOWS else "python3")
+
+
+def _probe_python(argv: list[str]) -> tuple[int, int] | None:
+    """The version an interpreter reports by RUNNING, or None. A name on PATH proves
+    nothing: Windows ships `python3`/`python` aliases under WindowsApps that open the
+    Store instead of running, and an old python3 can shadow a newer python."""
+    try:
+        # 5 s each, three candidates: a hung interpreter still leaves the caller inside the
+        # shortest hook timeout (10 s) for the first two.
+        done = subprocess.run(
+            [*argv, "-c", _VERSION_PROBE], capture_output=True, text=True, timeout=5,
+            **hidden_run_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        major, minor = done.stdout.strip().split(".")
+        return int(major), int(minor)
+    except ValueError:
+        return None
+
+
+def find_python(min_version: tuple[int, int] = MIN_PYTHON) -> list[str] | None:
+    """argv of the first interpreter on PATH that runs and is at least `min_version`, or
+    None. Tried as `python3`, `python`, `py -3`, each by running it."""
+    for candidate in _PYTHON_CANDIDATES:
+        exe = shutil.which(candidate[0])
+        if not exe:
+            continue
+        argv = [exe, *candidate[1:]]
+        version = _probe_python(argv)
+        if version is not None and version >= min_version:
+            return argv
+    return None
+
+
+def find_bash() -> str | None:
+    """The bash that runs the hook and runner scripts, or None.
+
+    POSIX: `bash` on PATH. Windows: Git Bash, found next to `git` — PATH there can also
+    resolve `bash` to WSL's System32\\bash.exe or a WindowsApps alias, and neither runs
+    these scripts against Windows paths. git.exe lives in `<Git>\\cmd`, or in
+    `<Git>\\mingw64\\bin` when PATH comes from Git Bash itself, so the parents are walked.
+    """
+    if not IS_WINDOWS:
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if not git:
+        return None
+    for root in Path(git).parents:
+        for candidate in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def user_cache_dir() -> Path | None:
+    """The per-user cache root: %LOCALAPPDATA% (else %APPDATA%) on Windows,
+    $XDG_CACHE_HOME (else ~/.cache) elsewhere. None when Windows names neither."""
+    if IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        return Path(base) if base else None
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    return Path(xdg) if xdg else Path.home() / ".cache"
+
+
+def has_display() -> bool:
+    """Whether a headed window has a screen to open on. Only Linux can lack one in the
+    normal case (CI, a container, SSH without X11 or Wayland); Windows and macOS always
+    have a session."""
+    if not sys.platform.startswith("linux"):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def split_command(command: str) -> list[str]:
+    """Tokens of a command line by this OS's rules: POSIX quoting elsewhere; on Windows
+    backslashes are kept (non-POSIX shlex), so a path like C:\\x\\y.exe survives. Raises
+    ValueError on unbalanced quotes, as shlex does."""
+    import shlex
+
+    return shlex.split(command, posix=not IS_WINDOWS)
+
+
+def user_env_location(home: Path) -> tuple[str, str]:
+    """Where a persistent per-user environment variable is written: ("registry",
+    "HKCU\\Environment") on Windows, ("profile", <~/.zshrc or ~/.bashrc>) elsewhere."""
+    if IS_WINDOWS:
+        return "registry", r"HKCU\Environment"
+    shell = os.environ.get("SHELL", "")
+    return "profile", str(home / (".zshrc" if shell.endswith("zsh") else ".bashrc"))
+
+
+def set_registry_user_env(name: str, value: str) -> str | None:
+    """Write a user environment variable to HKCU\\Environment and broadcast the change.
+    Windows only. Returns None, or why the broadcast was skipped (the value is written
+    either way; without the broadcast it is live only after the next logon)."""
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+    try:
+        import ctypes
+
+        ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, None)
+    except Exception as exc:  # pragma: no cover - cosmetic refresh only
+        return str(exc)
+    return None
 
 
 def resolve_exe(name: str) -> str:

@@ -28,8 +28,20 @@ import json
 import os
 import shutil
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
+
+# Before any import that the newer syntax would break: the oldest supported Python is
+# utils/osutil.py MIN_PYTHON, repeated here because importing it would fail on the very
+# interpreter this names.
+if sys.version_info < (3, 10):
+    sys.exit(
+        f"agent-workflow needs Python 3.10 or newer; this is {sys.version.split()[0]} "
+        f"({sys.executable}). Run it with a newer python."
+    )
+
+from datetime import datetime, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from utils import osutil  # noqa: E402
 
 # Split out in v3.4.3; re-exported so `main()` below and any external caller keep
 # addressing install.py exactly as before.
@@ -348,37 +360,24 @@ def _persist_agent_path(agent_path, apply: bool) -> None:
     make `--rollback` erase the user's .bashrc. The undo is printed instead.
     """
     target = str(agent_path)
-    if os.name == "nt":
+    kind, location = osutil.user_env_location(HOME)
+    if kind == "registry":
         print()
         print(f"  set AGENT_PATH (user environment) = {target}")
-        print(r"    location: HKCU\Environment  — persists across sessions")
+        print(f"    location: {location}  — persists across sessions")
         print(
             '    undo: [Environment]::SetEnvironmentVariable("AGENT_PATH",$null,"User")'
         )
         if not apply:
             print("    DRY RUN — not written.")
             return
-        import winreg
-
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
-        ) as key:
-            winreg.SetValueEx(key, "AGENT_PATH", 0, winreg.REG_SZ, target)
-        try:
-            # Without the broadcast the value is live only for processes started after the
-            # next logon; explorer-spawned shells pick it up immediately with it.
-            import ctypes
-
-            ctypes.windll.user32.SendMessageTimeoutW(
-                0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, None
-            )
-        except Exception as exc:  # pragma: no cover - cosmetic refresh only
-            print(f"    (written; environment broadcast skipped: {exc})")
+        skipped = osutil.set_registry_user_env("AGENT_PATH", target)
+        if skipped:
+            print(f"    (written; environment broadcast skipped: {skipped})")
         print("    written.")
         return
 
-    shell = os.environ.get("SHELL", "")
-    profile = HOME / (".zshrc" if shell.endswith("zsh") else ".bashrc")
+    profile = Path(location)
     existing = ""
     if profile.exists():
         existing = profile.read_text(encoding="utf-8")
@@ -652,7 +651,7 @@ def main() -> int:
     elif os.environ.get("AGENT_PATH") != str(agent_path):
         print()
         print("  set AGENT_PATH so `init` can bootstrap new projects:")
-        if os.name == "nt":
+        if osutil.user_env_location(HOME)[0] == "registry":
             print(
                 f'    [Environment]::SetEnvironmentVariable("AGENT_PATH","{agent_path}","User")'
             )

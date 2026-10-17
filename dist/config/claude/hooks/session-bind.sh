@@ -5,10 +5,22 @@
 #   resume                     -> REUSE MAIN_SESSION_ID
 # Registry: $HOME/.claude/session_registry.json (key = claude session_id)
 # Output: JSON hookSpecificOutput.additionalContext -> injects MAIN_SESSION_ID.
-# Never blocks session start (always exit 0). JSON via python3 (bash 3.2 safe).
+# Never blocks session start (always exit 0). JSON via python (bash 3.2 safe).
 RAW="$(cat)"
 [ -z "$RAW" ] && exit 0
-CLAUDE_HOOK_RAW="$RAW" python3 <<'PY'
+# Interpreter: the first of python3, python, `py -3` that RUNS and is >= 3.10 (utils/osutil.py
+# MIN_PYTHON). A name on PATH is not enough: Windows' WindowsApps aliases open the Store
+# instead of running, and an old python3 can shadow a newer python. None found: fail open.
+PY=""
+for cand in "python3" "python" "py -3"; do
+  set -- $cand
+  command -v "$1" >/dev/null 2>&1 || continue
+  if "$@" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    PY="$cand"; break
+  fi
+done
+[ -z "$PY" ] && exit 0
+CLAUDE_HOOK_RAW="$RAW" $PY <<'PY'
 import os, sys, json, datetime, random
 
 try:

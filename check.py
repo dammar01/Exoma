@@ -3,7 +3,16 @@ import json
 import sys
 import time
 
-from config.settings import (
+# Before any import that the newer syntax would break: the oldest supported Python is
+# utils/osutil.py MIN_PYTHON, repeated here because importing it would fail on the very
+# interpreter this names.
+if sys.version_info < (3, 10):
+    sys.exit(
+        f"agent-workflow needs Python 3.10 or newer; this is {sys.version.split()[0]} "
+        f"({sys.executable}). Run it with a newer python."
+    )
+
+from config.settings import (  # noqa: E402
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
     DEFAULT_MAX_PROBES,

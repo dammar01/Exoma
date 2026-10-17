@@ -305,13 +305,11 @@ def display_available() -> bool:
     Only Linux can lack one in the normal case: Windows and macOS always have a session a
     window can open in, while a Linux box without X11 or Wayland (CI, a container, SSH)
     fails the launch outright. A module-level function so tests can describe a machine
-    they are not running on.
+    they are not running on; the OS rule itself is osutil.has_display().
     """
-    if not sys.platform.startswith("linux"):
-        return True
-    import os
+    from utils import osutil
 
-    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return osutil.has_display()
 
 
 def safe_base_url(url: str, config: dict) -> tuple[bool, str]:

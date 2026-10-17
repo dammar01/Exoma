@@ -29,7 +29,7 @@ it again. Every installer flag, target file and hook is listed in the
 
 | Requirement | Required | Notes |
 | --- | --- | --- |
-| **Python 3.10+** | Yes | The runtime needs no third-party packages. Optional browser verification uses Playwright (`requirements-e2e.txt`) |
+| **Python 3.10+** | Yes | The runtime needs no third-party packages. An older Python is refused with a message naming the version found. Optional browser verification uses Playwright (`requirements-e2e.txt`) |
 | **A secondary-agent CLI** | Yes | `opencode` (recommended), `codex`, or `agy`, on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
 | **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
 | **Claude Code** | Recommended | The primary integration target |
