@@ -180,7 +180,14 @@ def first_pass_correctness(rows: list[UsageRecord]) -> dict:
 
 
 def rework(rows: list[UsageRecord]) -> dict:
-    """Tasks that needed more than one verification round.
+    """Tasks whose work came back after a verify that did not pass (DEC-051).
+
+    A group is reworked when a judged round that did not pass (`fail` or `incomplete`, both
+    `accepted=False`) is followed by another judged round; the extra rounds are the ones
+    after that first failure. Rounds that all pass are not rework: a plan built in phases
+    verifies each phase under one correlation id, and counting those rounds read planned
+    work as work that came back. A failure with nothing after it is not rework either: the
+    work never came back, and first_pass_correctness already counts it.
 
     Read together with first_pass_correctness rather than instead of it: this counts how
     often work came back, that one counts how often it came back green the first time.
@@ -193,9 +200,15 @@ def rework(rows: list[UsageRecord]) -> dict:
         if not verdicts:
             continue
         judged += 1
-        if len(verdicts) > 1:
+        # Stable sort: rows without a timestamp keep their append order.
+        verdicts.sort(key=lambda row: row.recorded_at or "")
+        first_failure = next((i for i, row in enumerate(verdicts) if row.accepted is False), None)
+        if first_failure is None:
+            continue
+        after = len(verdicts) - 1 - first_failure
+        if after:
             reworked += 1
-            extra_rounds += len(verdicts) - 1
+            extra_rounds += after
     return {
         "reworked_tasks": reworked,
         "judged": judged,

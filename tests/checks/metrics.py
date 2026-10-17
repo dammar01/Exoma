@@ -249,6 +249,8 @@ def _test_metrics_contract() -> None:
     assert_true("alice" not in line and str(project) not in line and "in 2s" in line,
                 f"graphify's last line keeps its summary, not its paths: {line}")
 
+    _feature_segments()
+
     # --- the tool's commit comes only from the repository whose top is the install root ---
     repo = Path(__file__).resolve().parents[2]
     if shutil.which("git") and (repo / ".git").exists():
@@ -265,6 +267,84 @@ def _test_metrics_contract() -> None:
 
         with mock.patch.object(metrics.subprocess, "run", failing_status):
             assert_true(metrics.tool_commit(repo) is None, "a failed git status stamps no commit")
+
+
+def _feature_segments() -> None:
+    """outcome.feature_segment, solved_fixed_outside_feature and continuation_cost compute
+    what the registry defines."""
+    from datetime import datetime, timedelta, timezone
+
+    from tools.maintain import measure_task_outcomes as outcomes
+
+    def at(minute):
+        return f"2026-10-09T10:{minute:02d}:00+00:00"
+
+    usage = [
+        {"session_id": "s", "command": "plan", "prompt_id": "p0", "correlation_id": "c1",
+         "provider": "codex", "recorded_at": at(0), "actual_input_tokens": 1000},
+        {"session_id": "s", "command": "verify", "prompt_id": "p1", "correlation_id": "c1",
+         "provider": "codex", "recorded_at": at(10)},
+        {"session_id": "s", "command": "verify", "prompt_id": "p2", "correlation_id": "c1",
+         "provider": "codex", "recorded_at": at(20)},
+        # A verify-browser run: only its draft stage row carries the correlation.
+        {"session_id": "s", "command": "verify-browser", "prompt_id": "b1", "correlation_id": "c2",
+         "provider": "codex", "recorded_at": at(30)},
+        # A verify whose task event lost its prompt id (reused evidence).
+        {"session_id": "s", "command": "verify", "correlation_id": "c3", "recorded_at": at(41)},
+    ]
+    quality = [{"kind": "e2e", "provider_prompt_ids": ["b1", "b2"]}]
+    correlations, browser = outcomes.verify_correlations(usage, quality)
+    assert_true(correlations["b2"] == "c2" and browser == {"b2"},
+                f"a verify-browser stage without its own id takes its run's: {correlations}")
+
+    events = [
+        {"session_id": "s", "kind": "skill", "skill": "plan", "at": at(0)},
+        {"session_id": "s", "kind": "edit", "path": "a.py", "at": at(5)},
+        {"session_id": "s", "kind": "skill", "skill": "verify", "prompt_id": "p1", "derived": "pass", "at": at(10)},
+        {"session_id": "s", "kind": "edit", "path": "b.py", "at": at(15)},
+        {"session_id": "s", "kind": "skill", "skill": "verify", "prompt_id": "p2", "derived": "pass", "at": at(20)},
+        {"session_id": "s", "kind": "edit", "path": "c.py", "at": at(25)},
+        {"session_id": "s", "kind": "skill", "skill": "verify", "prompt_id": "b2", "derived": "pass", "at": at(30)},
+        {"session_id": "s", "kind": "skill", "skill": "verify", "derived": "fail", "at": at(40)},
+        {"session_id": "s", "kind": "skill", "skill": "verify", "derived": "fail", "at": at(50)},
+        {"session_id": "s", "kind": "edit", "path": "d.py", "at": at(55)},
+    ]
+    segs = {s["correlation_id"] or "none": s for s in outcomes.segments(events, usage, correlations, browser)}
+    assert_true(set(segs) == {"c1", "c2", "c3", "none"},
+                f"two phases of one plan are one segment; each other id its own: {sorted(segs)}")
+    assert_true(segs["c1"]["verifies"] == 2 and segs["c1"]["passes"] == 2 and segs["c1"]["files"] == {"a.py", "b.py"}
+                and segs["c1"]["link"] == "direct",
+                f"phases verified under the plan's id join it: {segs['c1']}")
+    assert_true(segs["c2"]["link"] == "browser" and segs["c3"]["link"] == "inferred"
+                and segs["none"]["link"] == "unlinked" and segs["none"]["files"] == {"d.py"},
+                "a browser stage id, a nearby verify row, or nothing: each link is named; "
+                f"late edits join the last segment: {segs}")
+
+    start = datetime(2026, 10, 9, 10, tzinfo=timezone.utc)
+    rows = [u for u in usage if u.get("provider")]
+    cost = outcomes.ramp_up(rows, start + timedelta(minutes=5))
+    assert_true(cost == {"calls": 1, "tokens": 1000}, f"ramp-up counts what was spent before the first edit: {cost}")
+    assert_true(outcomes.ramp_up(rows, None) is None, "no recorded edit is no ramp-up, not zero")
+
+    def task(project, begin, hours, files, grade="solved_clean", **extra):
+        return {"project": project, "start": start + timedelta(hours=begin),
+                "end": start + timedelta(hours=begin + hours), "files": set(files), "grade": grade, **extra}
+
+    tasks = [
+        task("A", 0, 2, {"x.py"}, grade="solved_fixed", landed_at=start + timedelta(hours=2), lost_files={"x.py"}),
+        task("A", 5, 2, {"x.py", "y.py"}),                     # continues task 0, explains its fix
+        task("A", 100, 1, {"z.py"}, grade="solved_fixed", landed_at=start + timedelta(hours=101),
+             lost_files={"z.py"}),                              # fixed, nothing continues it
+        task("B", 6, 1, {"x.py"}),                             # another project: never a link
+        task("A", 8, 1, {"y.py", "x.py"}),                     # two candidates: ambiguous
+    ]
+    outcomes.link_continuations(tasks)
+    outcomes.fixed_outside_feature(tasks)
+    assert_true([t["continuation"] for t in tasks] == ["none", "linked", "none", "none", "ambiguous"]
+                and tasks[1]["continues"] == 0 and tasks[4]["continues"] is None,
+                f"one candidate links, several are ambiguous, other projects never: {[t['continuation'] for t in tasks]}")
+    assert_true([t["fixed_outside_feature"] for t in tasks] == [False, False, True, False, False],
+                "a fix its own continuation explains is not a fix outside the feature")
 
 
 def _check_tool_exports(root: Path) -> None:

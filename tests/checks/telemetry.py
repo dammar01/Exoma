@@ -49,6 +49,49 @@ def _acceptance_is_per_task() -> None:
     )
 
 
+def _rework_counts_work_that_came_back_after_a_failure() -> None:
+    def rounds(*verdicts):
+        return [
+            _usage(correlation_id="t", command="verify", accepted=v, recorded_at=f"2026-10-09T00:00:0{i}+00:00")
+            for i, v in enumerate(verdicts)
+        ]
+
+    cases = {
+        "pass, pass": (rounds(True, True), 0, 0),
+        "four phases, all pass": (rounds(True, True, True, True), 0, 0),
+        "fail, pass": (rounds(False, True), 1, 1),
+        "fail, fail, pass": (rounds(False, False, True), 1, 2),
+        "pass, fail": (rounds(True, False), 0, 0),
+        "pass, fail, pass": (rounds(True, False, True), 1, 1),
+    }
+    for name, (rows, reworked, extra) in cases.items():
+        got = telemetry.rework(rows)
+        assert_true(
+            got["reworked_tasks"] == reworked and got["extra_verification_rounds"] == extra
+            and got["judged"] == 1,
+            f"{name}: rework counts rounds after the first failure, not every round; got {got}",
+        )
+
+    # incomplete is accepted=False, the same as fail.
+    incomplete = [
+        _usage(correlation_id="t", command="verify", verdict="incomplete", accepted=False,
+               recorded_at="2026-10-09T00:00:00+00:00"),
+        _usage(correlation_id="t", command="verify", verdict="pass", accepted=True,
+               recorded_at="2026-10-09T00:00:01+00:00"),
+    ]
+    assert_true(
+        telemetry.rework(incomplete)["reworked_tasks"] == 1,
+        "an incomplete verify followed by another round is rework, like a failed one",
+    )
+
+    # Order is the rows' timestamps, not the order they were appended in.
+    late_first = list(reversed(rounds(False, True)))
+    assert_true(
+        telemetry.rework(late_first)["reworked_tasks"] == 1,
+        "a failure recorded earlier counts as earlier, whatever the append order",
+    )
+
+
 def _unjudged_work_is_not_incorrect() -> None:
     rows = [_usage(correlation_id="t9", command="explore")]
     first = telemetry.first_pass_correctness(rows)
@@ -393,6 +436,7 @@ def _provider_less_browser_runs_are_not_calls() -> None:
 
 def _test_telemetry_metrics() -> None:
     _acceptance_is_per_task()
+    _rework_counts_work_that_came_back_after_a_failure()
     _provider_less_browser_runs_are_not_calls()
     _unjudged_work_is_not_incorrect()
     _report_reports_its_denominators()

@@ -85,6 +85,11 @@ REGISTRY: dict[str, dict] = {
         "definition": "Share of judged correlation ids whose first judged verify passed.",
         "denominator": "correlation ids with at least one judged verify", "missing": "As runtime.accepted_task.",
     },
+    "runtime.rework": {
+        "version": 1, "producer": _RUNTIME, "unit": "correlation_id", "statistic": "rate",
+        "definition": "A judged correlation id whose judged verify rounds, ordered by recorded_at, hold a round that did not pass (fail or incomplete) followed by another round. extra_verification_rounds counts the rounds after that first failure. All-pass rounds (a plan verified phase by phase) are not rework (DEC-051). Report key `rework`.",
+        "denominator": "correlation ids with at least one judged verify", "missing": "As runtime.accepted_task.",
+    },
     "runtime.time_to_completion": {
         "version": 1, "producer": _RUNTIME, "unit": "seconds per command", "statistic": "median_interpolated",
         "definition": "Summed provider duration_seconds of one command's rows. Browser time (browser_seconds) and runtime test time (tests_seconds) are not included.",
@@ -147,6 +152,21 @@ REGISTRY: dict[str, dict] = {
         "version": 1, "producer": _OUTCOMES, "unit": "solved task", "statistic": "count",
         "definition": "A solved task whose lines changed on main within --fix-hours (24) of landing, in a commit by an author of the commits that brought them in (author window: -5 min before start, +1 min after landing).",
         "denominator": "-", "missing": "-",
+    },
+    "outcome.feature_segment": {
+        "version": 1, "producer": _OUTCOMES, "unit": "correlation id within one session", "statistic": "count",
+        "definition": "A coding task's tasks.jsonl events split by the correlation id of the verify that judged them: a verify's prompt_id joined to usage.jsonl (`direct`), through a verify-browser run's provider_prompt_ids in quality.jsonl (`browser`), or, without a prompt_id, the nearest verify usage row of the same session within 120 s (`inferred`); else `unlinked`. Edits join the next verify of their session; edits after the last one join the last segment, or `unverified`. Report keys `segments_per_task_median`, `segment_links`.",
+        "denominator": "-", "missing": "Sessions before 3.8.0 wrote no task events and have no segments.",
+    },
+    "outcome.solved_fixed_outside_feature": {
+        "version": 1, "producer": _OUTCOMES, "unit": "solved task", "statistic": "count",
+        "definition": "An outcome.solved_fixed@1 task whose fix no continuation explains. A task continues an earlier one of the same project when it starts at most --link-hours (72) after that one ended and edits a file that one left lines in; with several such earlier tasks it is `ambiguous` and continues none. A fix is explained when a continuation of the task started within --fix-hours of landing and edited every file whose lines were lost. No author check: transcripts carry none.",
+        "denominator": "-", "missing": "-",
+    },
+    "outcome.continuation_cost": {
+        "version": 1, "producer": _OUTCOMES, "unit": "coding task", "statistic": "median_stdlib",
+        "definition": "Delegated calls (distinct prompt_id with a provider) and their input tokens (actual, else estimated) recorded before the session's first edit in tasks.jsonl. Reported for continuations and for tasks that continue nothing. Report keys `ramp_up_*`.",
+        "denominator": "tasks with a recorded edit", "missing": "Tasks without task events (before 3.8.0) are left out.",
     },
     "outcome.context_final": {
         "version": 1, "producer": _OUTCOMES, "unit": "tokens", "statistic": "median_stdlib",

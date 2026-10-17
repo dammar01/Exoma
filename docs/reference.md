@@ -918,6 +918,8 @@ Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran selur
 
 State: `completed` (verify `derived: pass` tanpa edit sesudahnya, di-commit atau belum), `open` (ada edit, belum `pass` — di-commit atau belum), `read_only` (tidak ada edit), `unknown` (event tanpa identitas sesi). Edit sesudah `pass` membuka task baru. Commit yang memuat file task yang baru `completed` masuk ke `sequence` task itu; commit di task `open` masuk ke `sequence`-nya tanpa mengubah state. Event sebelum DEC-020 tidak membawa `derived`, sehingga task-nya tetap `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (commit berbeda yang tak satu pun salinannya diklaim task; commit baru ditandai terpakai saat diklaim, sehingga salinan yang dicatat sesi lain lebih dulu tidak menyembunyikannya dari sesi pembuatnya), dan `recent` (10 task terakhir dengan `sequence`). Stream ini terpisah dari `usage.jsonl`: skill lokal dan edit bukan call delegated dan tidak boleh masuk budget governance.
 
+`--command report` → `rework` dihitung dari `usage.jsonl`, bukan dari stream ini: per `correlation_id`, ronde verify yang dinilai diurutkan menurut `recorded_at`, dan grup dihitung rework hanya bila ronde yang tidak `pass` (`fail` atau `incomplete`) diikuti ronde lain; `extra_verification_rounds` = ronde sesudah kegagalan pertama. Plan yang diverifikasi per fase dengan semua ronde `pass` bukan rework (DEC-051, `runtime.rework@1` di [metrics](evaluation/metrics.md)).
+
 ---
 
 ## Mode verify

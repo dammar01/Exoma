@@ -17,6 +17,12 @@ Per task, from the transcript, the project's Git history, and the runtime's usag
                a solved task whose lines change on main within 24 hours of entering it, by a
                commit from an author of the commits that brought them in, counts as fixed
                after the fact: `solved` splits into clean and fixed. (The maintainer's rule.)
+  segments     the session's work split by the correlation id of the verifies that judged it
+               (tasks.jsonl joined to usage.jsonl by prompt id), so a plan verified phase by
+               phase is one segment per id; a later session that edits a file this one left
+               lines in, within --link-hours, continues it. A fix within 24 h that such a
+               continuation explains is not counted in `solved_fixed_outside_feature`; what a
+               session spent before its first edit is its ramp-up (`continuation_cost`)
   prompts      follow-up prompts classified as plan, execute, fix, question, verify,
                explore_analyze, change_request, or other, from the slash command or the
                intent map shipped in dist/config/claude/hooks/intent-map.json
@@ -53,11 +59,12 @@ import statistics
 import subprocess
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from core.audit import metrics  # noqa: E402
+from core.audit import metrics, task_telemetry  # noqa: E402
+from core.audit.telemetry import load_quality  # noqa: E402
 from core.audit.transcript import project_slug  # noqa: E402
 from tools.maintain.measure_real_use import CORRECTION, load_usage, read_transcript  # noqa: E402
 from utils import osutil  # noqa: E402
@@ -232,6 +239,7 @@ def outcome(repo: Repo, per_file, start, end) -> dict:
         return out
     share, rev0, t0 = best
     out["main_share"] = round(share, 2)
+    out["landed_at"] = t0
     files = {k.lower() for k in per_file}
     authors = {c["author"] for c in repo.touching(rev0, start - AUTHOR_BEFORE, t0 + AUTHOR_AFTER, files)}
     rev1 = git(repo.path, "rev-list", "-1", "--first-parent", f"--before={(t0 + FIX_WINDOW).isoformat()}", "main").strip()
@@ -239,7 +247,172 @@ def outcome(repo: Repo, per_file, start, end) -> dict:
         lost = {k.lower() for k, v in per_file.items()
                 if any(x in repo.lines(k, rev0) and x not in repo.lines(k, rev1) for x in v)}
         out["fixed_24h"] = bool(lost and repo.touching("main", t0 + timedelta(seconds=1), t0 + FIX_WINDOW, lost, authors))
+        if out["fixed_24h"]:
+            out["lost_files"] = lost
     return out
+
+
+# --- feature segments: phases in a session, continuations across sessions ----------------
+#
+# A session is the unit above, so a feature built over several sessions, or a plan verified
+# phase by phase, reads as separate tasks and its own next phase as a fix (CASE-012). The
+# runtime's correlation id ties a plan to the verifies that follow it inside one session and,
+# by design, never across sessions (core/evidence/contracts.py): a session that continues a
+# feature starts clean and rebuilds its context, which is a cost worth seeing on its own.
+# So a feature is read as segments -- one correlation id within one session -- joined across
+# sessions by a heuristic link that says why it was made.
+
+LINK_WINDOW = timedelta(hours=72)
+INFER_SECONDS = 120
+
+
+def _ts(value) -> datetime | None:
+    """An ISO timestamp as an aware datetime (naive is read as UTC), or None."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def verify_correlations(usage: list[dict], quality: list[dict]) -> tuple[dict[str, str], set[str]]:
+    """prompt_id -> correlation_id from the usage rows, and the ids known only through a
+    verify-browser run: its quality row lists every stage's prompt id, and a stage without a
+    correlation of its own takes the one another stage of the same run carries."""
+    out: dict[str, str] = {}
+    for r in usage:
+        if r.get("prompt_id") and r.get("correlation_id"):
+            out.setdefault(r["prompt_id"], r["correlation_id"])
+    browser: set[str] = set()
+    for q in quality:
+        ids = [i for i in (q.get("provider_prompt_ids") or []) if isinstance(i, str)]
+        corr = next((out[i] for i in ids if i in out), None)
+        if corr:
+            for i in ids:
+                if i not in out:
+                    out[i] = corr
+                    browser.add(i)
+    return out, browser
+
+
+def segments(events: list[dict], usage: list[dict], correlations: dict[str, str], browser: set[str]) -> list[dict]:
+    """One session's work split by the correlation id of the verify that judged it.
+
+    Edits join the next verify of their session; edits after the last verify join the last
+    segment, or an `unverified` one when the session never verified. A verify finds its id by
+    its prompt id (`direct`, or `browser` through a verify-browser run's stage ids); without
+    one, by the nearest verify usage row of the same session within INFER_SECONDS
+    (`inferred`); else it is `unlinked` and makes a segment of its own.
+    """
+    by_session: dict[str, list[dict]] = defaultdict(list)
+    for e in events:
+        if e.get("session_id") and e.get("kind") in ("edit", "skill"):
+            by_session[e["session_id"]].append(e)
+    verify_rows: dict[str, list[tuple[datetime, str]]] = defaultdict(list)
+    for r in usage:
+        at = _ts(r.get("recorded_at"))
+        if r.get("command") == "verify" and r.get("correlation_id") and r.get("session_id") and at:
+            verify_rows[r["session_id"]].append((at, r["correlation_id"]))
+
+    out: list[dict] = []
+    for session, evs in by_session.items():
+        evs.sort(key=lambda e: _ts(e.get("at")) or datetime.min.replace(tzinfo=timezone.utc))
+        segs: dict[str, dict] = {}
+        pending: list[tuple[datetime | None, str]] = []
+        unlinked = 0
+
+        def seg(key, corr, link):
+            if key not in segs:
+                segs[key] = {"session_id": session, "correlation_id": corr, "link": link,
+                             "files": set(), "first_edit": None, "verifies": 0, "passes": 0}
+            return segs[key]
+
+        def take(target):
+            for at, path in pending:
+                target["files"].add(path)
+                if at and (target["first_edit"] is None or at < target["first_edit"]):
+                    target["first_edit"] = at
+            pending.clear()
+
+        for e in evs:
+            at = _ts(e.get("at"))
+            if e["kind"] == "edit":
+                pending.append((at, str(e.get("path") or "").replace("\\", "/").lower()))
+                continue
+            if e.get("skill") != "verify":
+                continue
+            pid = e.get("prompt_id")
+            corr, link = (correlations.get(pid), "browser" if pid in browser else "direct") if pid else (None, None)
+            if corr is None and at:
+                near = [(abs((t - at).total_seconds()), c) for t, c in verify_rows.get(session, [])]
+                near = sorted(n for n in near if n[0] <= INFER_SECONDS)
+                if near and (len(near) == 1 or near[0][0] < near[1][0]):
+                    corr, link = near[0][1], "inferred"
+            if corr is None:
+                unlinked += 1
+                target = seg(f"unlinked-{unlinked}", None, "unlinked")
+            else:
+                target = seg(corr, corr, link)
+            take(target)
+            target["verifies"] += 1
+            if str(e.get("derived") or "").strip().lower() == "pass":
+                target["passes"] += 1
+        if pending:
+            take(list(segs.values())[-1] if segs else seg("unverified", None, "unverified"))
+        out.extend(segs.values())
+    return out
+
+
+def link_continuations(tasks: list[dict]) -> None:
+    """Mark each task that continues an earlier task of the same project.
+
+    A candidate is an earlier task (by start) whose session ended at most LINK_WINDOW before
+    this one started and whose kept lines lie in a file this task also edits. One candidate:
+    `continues` names it; several: `ambiguous`, linked to none. Transcripts carry no author,
+    so unlike outcome.solved_fixed the link does not check one.
+    """
+    for t in tasks:
+        t.setdefault("continues", None)
+        t.setdefault("continuation", "none")
+    for i, t in enumerate(tasks):
+        cands = [j for j, e in enumerate(tasks)
+                 if j != i and e["project"] == t["project"] and e["start"] < t["start"]
+                 and timedelta(0) <= t["start"] - e["end"] <= LINK_WINDOW
+                 and e["files"] & t["files"]]
+        if len(cands) == 1:
+            t["continues"], t["continuation"] = cands[0], "linked"
+        elif cands:
+            t["continuation"] = "ambiguous"
+
+
+def fixed_outside_feature(tasks: list[dict]) -> None:
+    """outcome.solved_fixed_outside_feature: a fix within the window that the feature's own
+    next session does not explain. A solved_fixed task is explained when a task linked as its
+    continuation started before the window closed and edited every file whose lines were lost."""
+    for i, t in enumerate(tasks):
+        t["fixed_outside_feature"] = t["grade"] == "solved_fixed"
+        if not t["fixed_outside_feature"] or t.get("landed_at") is None:
+            continue
+        for c in tasks:
+            if c.get("continues") == i and c["start"] <= t["landed_at"] + FIX_WINDOW \
+                    and t.get("lost_files", set()) <= c["files"]:
+                t["fixed_outside_feature"] = False
+                break
+
+
+def ramp_up(rows: list[dict], first_edit: datetime | None) -> dict | None:
+    """outcome.continuation_cost: delegated calls and provider input tokens recorded before
+    the session's first edit -- what it spent finding its way in. None without a recorded edit."""
+    if first_edit is None:
+        return None
+    before = [r for r in rows if r.get("provider") and (_ts(r.get("recorded_at")) or first_edit) < first_edit]
+    tokens = sum(int(r.get("actual_input_tokens") if r.get("actual_input_tokens") is not None
+                     else r.get("estimated_input_tokens") or 0) for r in before)
+    return {"calls": len({r.get("prompt_id") or r.get("correlation_id") for r in before}), "tokens": tokens}
 
 
 def context(path: str) -> dict | None:
@@ -385,13 +558,27 @@ def summary(tasks: list[dict]) -> dict:
         "digest_saved_total": sum(t["digest_saved"] for t in tasks),
         "digest_saved_recorded_total": sum(t["digest_saved_recorded"] for t in tasks),
         "solved_touching_tests": sum(1 for t in tasks if t["grade"].startswith("solved") and t["tests_edited"]),
+        "solved_fixed_outside_feature": sum(1 for t in tasks if t["fixed_outside_feature"]),
+        "continuations": sum(1 for t in tasks if t["continuation"] == "linked"),
+        "continuations_ambiguous": sum(1 for t in tasks if t["continuation"] == "ambiguous"),
+        "segments_per_task_median": med([t["segments"] for t in tasks]),
+        "segment_links": dict(sorted(sum((t["segment_links"] for t in tasks), Counter()).items())),
+        "ramp_up_calls_median_continuation": med([t["ramp_up"]["calls"] for t in tasks
+                                                  if t["ramp_up"] and t["continuation"] == "linked"]),
+        "ramp_up_tokens_median_continuation": med([t["ramp_up"]["tokens"] for t in tasks
+                                                   if t["ramp_up"] and t["continuation"] == "linked"]),
+        "ramp_up_calls_median_first": med([t["ramp_up"]["calls"] for t in tasks
+                                           if t["ramp_up"] and t["continuation"] == "none"]),
+        "ramp_up_tokens_median_first": med([t["ramp_up"]["tokens"] for t in tasks
+                                            if t["ramp_up"] and t["continuation"] == "none"]),
     }
 
 
 def _apply_rule(args) -> None:
     """The outcome rule's parameters, from the command line, for this run."""
-    global SOLVED_SHARE, PARTIAL_SHARE, FIX_WINDOW, SEARCH_WINDOW, IDLE_SECONDS, AUTHOR_BEFORE, AUTHOR_AFTER
+    global SOLVED_SHARE, PARTIAL_SHARE, FIX_WINDOW, SEARCH_WINDOW, IDLE_SECONDS, AUTHOR_BEFORE, AUTHOR_AFTER, LINK_WINDOW
     SOLVED_SHARE, PARTIAL_SHARE = args.solved_share, args.partial_share
+    LINK_WINDOW = timedelta(hours=getattr(args, "link_hours", LINK_WINDOW.total_seconds() / 3600))
     FIX_WINDOW = timedelta(hours=args.fix_hours)
     SEARCH_WINDOW = timedelta(days=args.search_days)
     IDLE_SECONDS = args.idle_minutes * 60
@@ -414,6 +601,8 @@ def main() -> int:
     ap.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
     ap.add_argument("--author-before-minutes", type=float, default=AUTHOR_BEFORE.total_seconds() / 60)
     ap.add_argument("--author-after-minutes", type=float, default=AUTHOR_AFTER.total_seconds() / 60)
+    ap.add_argument("--link-hours", type=float, default=LINK_WINDOW.total_seconds() / 3600,
+                    help="a session starting this long after an earlier one ended can continue it")
     ap.add_argument("--export", metavar="FILE",
                     help="also write the figures to FILE for sharing; refused if it would carry a path or project name")
     args = ap.parse_args()
@@ -433,6 +622,10 @@ def main() -> int:
         usage_path = os.path.join(path, ".workflow", "data", "usage.jsonl")
         usage = load_usage(usage_path)
         inputs.append(Path(usage_path))
+        data = Path(path) / ".workflow" / "data"
+        inputs += [data / "tasks.jsonl", data / "quality.jsonl"]
+        correlations, browser = verify_correlations(usage, load_quality(path))
+        segs = segments(task_telemetry.load_events(path), usage, correlations, browser)
         heads.append(git(path, "rev-parse", "--verify", "-q", "main").strip())
         root = os.path.abspath(path).replace("\\", "/") + "/"
         repo = Repo(path)
@@ -459,7 +652,13 @@ def main() -> int:
             rows = [r for r in usage if owners.get(r.get("session_id")) == i]
             saved_recorded, saved_digest = saved_tokens(path, rows)
             net = saved_net(rows)
+            own = [g for g in segs if owners.get(g["session_id"]) == i]
+            edits = [g["first_edit"] for g in own if g["first_edit"]]
             tasks.append({
+                "start": _ts(start), "end": _ts(end), "files": {k.lower() for k in per_file},
+                "landed_at": _ts(out.get("landed_at")), "lost_files": out.get("lost_files", set()),
+                "segments": len(own), "segment_links": Counter(g["link"] for g in own),
+                "ramp_up": ramp_up(rows, min(edits) if edits else None),
                 "project": name, "version": s["version"], "category": category,
                 "grade": grade(out["main_share"], bool(per_file), out["fixed_24h"]),
                 "prompts": len(s["prompts"]), "active_minutes": s["active_minutes"],
@@ -478,6 +677,8 @@ def main() -> int:
                 "digest_saved_recorded": saved_recorded,
                 "tests_edited": any(TESTFILE.search(k) for k in per_file),
             })
+    link_continuations(tasks)
+    fixed_outside_feature(tasks)
     for t in tasks:
         names.setdefault(t["project"], None)
     order = sorted(names, key=lambda n: -sum(1 for t in tasks if t["project"] == n))
@@ -491,6 +692,7 @@ def main() -> int:
         "solved_share": SOLVED_SHARE, "partial_share": PARTIAL_SHARE, "min_line_chars": MIN_LINE,
         "fix_hours": FIX_WINDOW.total_seconds() / 3600, "search_days": SEARCH_WINDOW.total_seconds() / 86400,
         "idle_minutes": IDLE_SECONDS / 60,
+        "link_hours": LINK_WINDOW.total_seconds() / 3600, "infer_seconds": INFER_SECONDS,
         "author_window_minutes": [-AUTHOR_BEFORE.total_seconds() / 60, AUTHOR_AFTER.total_seconds() / 60],
         # git history cannot be hashed cheaply; the main heads it was read at can.
         "main_heads_sha256": hashlib.sha256("\n".join(sorted(heads)).encode()).hexdigest(),
