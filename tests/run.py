@@ -116,6 +116,10 @@ from tests.checks.intent_gate import (  # noqa: E402
     _test_intent_gate_runner_tamper,
     _test_intent_gate_non_ascii_root,
 )
+from tests.checks.hook_contract import (  # noqa: E402
+    _test_gate_k5_fixtures,
+    _test_hooks_run_through_their_launchers,
+)
 from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
@@ -251,6 +255,8 @@ SUITES: dict[str, tuple] = {
     "gate-runner-parsed": (_test_intent_gate_runner_parsed, "the gate parses Bash and PowerShell runner calls; one plain call to <root>/.workflow/{run,check,inspect} passes, in both flavours"),
     "gate-runner-tamper": (_test_intent_gate_runner_tamper, "while armed, a write to the runner scripts is refused; other writes pass"),
     "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the ps1 hooks read the session registry as UTF-8, so a non-ASCII project root resolves"),
+    "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout"),
+    "gate-k5-fixtures": (_test_gate_k5_fixtures, "the gate's decisions are frozen before the single-tokenizer gate; cases the target decides differently are listed"),
     "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),
     "installer-stale": (_test_installer_leaves_no_stale_files, "--apply removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
