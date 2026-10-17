@@ -74,6 +74,8 @@ Himpunan tertutup di `core/evidence/contract.py` `ERROR_TYPES`; `make_error` men
 
 `worker_died` dengan `meta.reason: recovery_exhausted` berarti recovery otomatis sudah dipakai; jangan ulang otomatis (lihat [Job asinkron & pemulihan](#job-asinkron--pemulihan)).
 
+`sandbox_unavailable` dengan `meta.reason: resume_sandbox_failed` berarti sandbox Windows codex menolak thread yang **di-resume**; thread baru diketahui jalan (lihat "Codex di Windows" di [`.workflow/second_agent.json`](#workflowsecond_agentjson)).
+
 ---
 
 ## Prasyarat
@@ -817,7 +819,10 @@ gagal). Runtime mengklasifikasikannya dari stderr saja (teks serupa di output ag
 dengan `next_action` berurutan: mulai sesi utama baru (`/clear` memberi `MAIN_SESSION_ID` dan
 thread codex baru) lalu jalankan ulang; bila thread baru juga gagal, perbarui codex dan jalankan
 `codex` sekali secara interaktif untuk menyetujui setup sandbox; sementara itu ganti second
-agent lewat `/.provider`. Runtime **tidak** menurunkan sandbox: profil deny-read yang dikirim
+agent lewat `/.provider`. Bila yang gagal adalah resume, error yang sama membawa
+`meta.reason: resume_sandbox_failed` dan `next_action` khusus resume: rilis codex yang gagal,
+`/clear` (konteks thread lama tidak terbawa), lalu pin codex ke `stable_version` bila setiap
+resume tetap gagal. Runtime **tidak** menurunkan sandbox: profil deny-read yang dikirim
 butuh backend `elevated`, dan memilih yang lebih lemah (`[windows] sandbox = "unelevated"` di
 `~/.codex/config.toml`) adalah keputusan user. Versi codex (`codex --version`, dibaca sekali per
 proses) tercatat di `meta.provider_version`, di baris usage (`provider_version`), dan di

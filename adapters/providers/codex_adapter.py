@@ -66,6 +66,7 @@ import threading
 import time
 from pathlib import Path
 
+from config.providers import provider_stable_version
 from config.settings import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -164,6 +165,30 @@ _SANDBOX_NEXT_ACTION = (
     "The workflow does not lower the sandbox for you; meta.provider_version names the codex "
     "release that failed."
 )
+
+# The same refusal on a RESUMED thread is a different failure for the reader: a new thread is
+# known to work there (CASE-015, CASE-016 bisect: 0.155.0-0.160.0 fail on resume only), so the
+# first step is certain rather than one of three guesses. `meta.reason` carries the split; the
+# error type stays `sandbox_unavailable` so DEC-024's contract is unchanged.
+_RESUME_SANDBOX_REASON = "resume_sandbox_failed"
+
+
+def _resume_sandbox_next_action(provider_version: str | None) -> str:
+    pinned = provider_stable_version("codex")
+    release = provider_version or "this codex release"
+    return (
+        f"Resuming the codex thread failed in the Windows sandbox ({release}); nothing ran. "
+        "New threads are known to work where a resume fails (a codex regression on resume, "
+        "CASE-016). Fix in order: "
+        "(1) start a new main session (/clear in Claude Code, which issues a new "
+        "MAIN_SESSION_ID and a new codex thread) and rerun the same command — the previous "
+        "thread's context is not carried over; "
+        f"(2) if every resume keeps failing, pin codex back to {pinned}, the release this "
+        "workflow was tested against; "
+        "(3) if a new thread fails too, this is not the resume regression — follow the "
+        "sandbox setup steps (run `codex` once interactively, approve UAC) or switch with "
+        "/.provider. The workflow does not lower the sandbox for you."
+    )
 
 _ERROR_TAIL_CHARS = 1600
 
@@ -473,6 +498,14 @@ class CodexAdapter:
             # stderr only: stdout is the agent's JSONL, tool output included, so a file it
             # read that mentions a sandbox failure turned an unrelated exit into this one.
             if _matches(_error_tail(outcome["stderr"]), _SANDBOX_SIGNS):
+                if resume_id:
+                    meta["reason"] = _RESUME_SANDBOX_REASON
+                    return make_error(
+                        "sandbox_unavailable",
+                        content or "codex's Windows sandbox could not resume the thread",
+                        next_action=_resume_sandbox_next_action(meta["provider_version"]),
+                        meta=meta,
+                    )
                 return make_error(
                     "sandbox_unavailable",
                     content or "codex's Windows sandbox could not start the session",

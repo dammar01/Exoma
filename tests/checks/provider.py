@@ -1343,6 +1343,25 @@ def _assert_codex_provider() -> None:
         and sandboxed.last_call_meta.get("provider_version") == "codex-cli 9.9.9",
         "the codex release travels with the failure, to the usage row too",
     )
+    # A resumed thread refused by the sandbox is told apart from a fresh one (CASE-016): its
+    # own reason, the failing release and the pin named in the advice, the type unchanged.
+    from config.providers import provider_stable_version
+
+    assert_true(
+        refused["meta"].get("reason") == "resume_sandbox_failed"
+        and "Resuming the codex thread failed" in refused["meta"]["next_action"]
+        and "codex-cli 9.9.9" in refused["meta"]["next_action"]
+        and provider_stable_version("codex") in refused["meta"]["next_action"],
+        f"a resume refusal names itself: {refused['meta'].get('reason')} / {refused['meta'].get('next_action')}",
+    )
+    fresh_refused = _SandboxCodex(command="codex").run("task", {}, None, None)
+    assert_true(
+        not fresh_refused["ok"]
+        and fresh_refused["meta"]["error_type"] == "sandbox_unavailable"
+        and "reason" not in fresh_refused["meta"]
+        and fresh_refused["meta"]["next_action"] == codex_module._SANDBOX_NEXT_ACTION,
+        f"a fresh thread refused keeps the general advice: {fresh_refused['meta'].get('reason')} / {fresh_refused['meta'].get('next_action')}",
+    )
 
     # stdout is the agent's JSONL, tool output included: a file it read that mentions a
     # sandbox failure must not turn an unrelated exit into `sandbox_unavailable`.
