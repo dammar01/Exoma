@@ -73,10 +73,10 @@ def _test_codex_sandbox_blocks_writes() -> None:
             f"and record a CASE. Reply tail: {(result.get('content') or '')[-400:]}",
         )
 
-        # The resumed call is the other branch: `exec resume` rejects `--sandbox`, so the
-        # policy rides `-c` there, and codex resolves `-c` selections by different rules
-        # than the CLI flag. A boundary that holds on the first call only is a hole on the
-        # second call of every session.
+        # The resumed call is the other branch: `exec resume` rejects `--sandbox` after the
+        # subcommand, so the flag rides `exec` before it (CASE-021), with the read denies on
+        # `-c`. A different argv shape is a different parse, and a boundary that holds on the
+        # first call only is a hole on the second call of every session.
         thread = meta.get("provider_session_id")
         assert_true(bool(thread), f"the first call must leave a thread to resume: {meta}")
         resumed = adapter.run(_PROMPT, {"session_id": "codex-write-probe", "provider_session_id": thread}, work_dir=str(root))

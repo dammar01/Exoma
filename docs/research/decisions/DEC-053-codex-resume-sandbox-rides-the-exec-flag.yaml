@@ -1,0 +1,71 @@
+schema_version: 3
+id: DEC-053
+title: A resumed codex call carries its sandbox as `exec --sandbox` before `resume`, not `-c sandbox_mode`
+date: 2026-10-17
+status: accepted
+provenance:
+  type: observed
+  confidence: medium
+  basis: Resume argv matrix on the maintainer's Windows machine (CASE-021)
+problem: |
+  From codex 0.155.0 every resumed thread failed on Windows with `sandbox_unavailable` while
+  new threads worked (CASE-015, CASE-016), so a session's second delegated call always failed
+  and the workflow had to pin codex to 0.154.0. The resume argv differed from the fresh one: it
+  carried the sandbox as `-c sandbox_mode="read-only"` because `exec resume` rejects
+  `--sandbox` after the subcommand.
+decision: |
+  The resume argv is `codex exec --sandbox <mode> resume <id> - --json --skip-git-repo-check`
+  followed by the approval and read-deny `-c` pairs: `--sandbox` is passed as an `exec` option
+  before the subcommand, and `-c sandbox_mode` is no longer sent. The fresh argv, the boundary,
+  the approval policy and DEC-024's `sandbox_unavailable` naming are unchanged; a resume that
+  is still refused carries `meta.reason: resume_sandbox_failed`. `stable_version` stays 0.154.0.
+rationale: |
+  CASE-021 isolated the refusal to the `-c sandbox_mode` form together with the
+  `default_permissions` profile; the flag form resumes on 0.154.0, 0.155.1 and 0.160.0 with the
+  boundary kept, and the real write probe shows the read-only sandbox still refuses writes on
+  the resumed call. Dropping the read-deny profile also avoided the refusal but loosens the
+  boundary, which DEC-024 rules out.
+alternatives:
+  - option: Keep `-c sandbox_mode`, pin codex to 0.154.0 and rely on the resume-specific advice
+    rejected_because: Leaves every later codex release unable to resume on Windows and makes the user act on each failure; the maintainer asked for the cause to be fixed.
+  - option: Start a new thread automatically when a resume is refused
+    rejected_because: Loses the thread's context silently and treats the symptom; the maintainer chose to fix the cause and warn.
+  - option: Drop the `default_permissions` read-deny profile on resume
+    rejected_because: Loosens the declared boundary on the second call of every session.
+evidence: [CASE-015, CASE-016, CASE-021, DEC-024, DEC-028]
+evidence_notes: |
+  tests/checks/provider.py asserts `exec --sandbox read-only` before `resume`, no flag that
+  `resume` rejects after it, and no `sandbox_mode=` anywhere in the resume argv.
+  tests/checks/codex_write_probe.py (WORKFLOW_CODEX_PROBE=1) passed on 0.154.0 and 0.155.1.
+implementation:
+  version: 3.8.2
+  commits: [uncommitted]
+  components:
+    - adapters/providers/codex_adapter.py (_build_args resume branch; resume-specific sandbox advice and meta.reason)
+    - tests/checks/provider.py (resume argv shape; resume vs fresh sandbox refusal)
+    - tests/checks/codex_write_probe.py (comment on the resume argv)
+    - docs/reference.md (Codex di Windows; Provider releases; meta.reason)
+    - docs/runtime-contracts.md (codex write boundary on the resume argv)
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+validation:
+  summary: |
+    Observed on one Windows machine: resume works on 0.154.0, 0.155.1 and 0.160.0 with the new
+    argv, and the write probe refuses writes on new and resumed calls on 0.154.0 and 0.155.1.
+    Not yet seen in real delegated use on a codex release after 0.154.0.
+  runs: []
+trade_offs:
+  better:
+    - Resumed codex threads work on Windows on releases that refused them, keeping thread continuity.
+    - The resume argv now states the sandbox the same way the fresh one does.
+  worse:
+    - Relies on `exec` accepting `--sandbox` before `resume`, observed parser behavior rather than a documented contract.
+limitations:
+  - One machine and one Windows build; the write probe did not run on 0.160.0.
+  - The read-deny profile is declared, not enforced, so the probe shows writes refused, not reads.
+revisit_when:
+  - A codex release rejects `--sandbox` before `resume`, or refuses resumes again with the flag form.
+  - stable_version is raised past 0.154.0 after a full test pass on a later release.
+revises: [DEC-024]
+questions: [RQ-07a, RQ-09]

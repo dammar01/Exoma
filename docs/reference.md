@@ -822,7 +822,11 @@ thread codex baru) lalu jalankan ulang; bila thread baru juga gagal, perbarui co
 agent lewat `/.provider`. Bila yang gagal adalah resume, error yang sama membawa
 `meta.reason: resume_sandbox_failed` dan `next_action` khusus resume: rilis codex yang gagal,
 `/clear` (konteks thread lama tidak terbawa), lalu pin codex ke `stable_version` bila setiap
-resume tetap gagal. Runtime **tidak** menurunkan sandbox: profil deny-read yang dikirim
+resume tetap gagal. Resume mengirim sandbox sebagai `exec --sandbox read-only resume <id> …`
+(flag `exec` sebelum subcommand), bukan `-c sandbox_mode=…`: bentuk `-c` itu, bersama profil
+deny-read, yang membuat resume ditolak pada rilis codex yang tercantum di
+[Provider releases](#provider-releases) (CASE-021); bentuk flag me-resume di rilis yang diuji di
+sana, dan write probe membuktikan read-only tetap berlaku. Runtime **tidak** menurunkan sandbox: profil deny-read yang dikirim
 butuh backend `elevated`, dan memilih yang lebih lemah (`[windows] sandbox = "unelevated"` di
 `~/.codex/config.toml`) adalah keputusan user. Versi codex (`codex --version`, dibaca sekali per
 proses) tercatat di `meta.provider_version`, di baris usage (`provider_version`), dan di
@@ -1017,7 +1021,10 @@ Kembali ke rilis stabil bila call gagal setelah provider di-update:
 | agy | installer agy dengan versi itu |
 
 Rilis codex 0.155.0 sampai 0.160.0 gagal me-resume thread di Windows dengan
-`sandbox_unavailable` (CASE-016); thread baru tetap jalan.
+`sandbox_unavailable` (CASE-016) selama sandbox resume dikirim lewat `-c sandbox_mode`;
+adapter kini mengirim `exec --sandbox`, dan resume jalan di rilis yang diuji dalam rentang itu
+(codex-cli 0.155.1 dan 0.160.0, CASE-021).
+`stable_version` tidak berubah sampai rilis lain diuji penuh.
 
 ---
 

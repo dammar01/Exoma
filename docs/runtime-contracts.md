@@ -794,7 +794,9 @@ or `enforceable` for opencode) and one `WARNING: second_agent provider ...` entr
 Writes are a separate axis, declared per bundle as `boundary.writes` in `config/providers.py`
 and read through `provider_boundary()`: opencode `denied` (permission map), codex `sandboxed`,
 agy `unbounded`. codex's `sandboxed` takes TWO flags on every call, resumed ones included:
-`--sandbox read-only` (or `-c sandbox_mode=` on `exec resume`) confines shell commands, and
+`--sandbox read-only` (an `exec` option, so `exec --sandbox read-only resume <id>` on a resumed
+call; `-c sandbox_mode=` there made codex 0.155+ refuse every resume on Windows, DEC-053)
+confines shell commands, and
 `-c approval_policy="never"` makes codex reject an `apply_patch` outside the writable roots —
 without it, codex-cli 0.154.0 on Windows wrote a file through that tool under a read-only
 sandbox. `tests/checks/codex_write_probe.py` (opt-in, `WORKFLOW_CODEX_PROBE=1`) re-proves both

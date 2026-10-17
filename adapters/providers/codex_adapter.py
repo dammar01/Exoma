@@ -706,25 +706,32 @@ class CodexAdapter:
             # `resume` accepts a NARROWER option set than `exec` itself, and the ones it
             # rejects are rejected by the argument parser — before the model is reached, so
             # the call dies with `unexpected argument` and exit 2 rather than anything the
-            # error classifier below can read. Verified against codex-cli 0.147.0: no -C,
-            # no --sandbox, and no --color. Only --json, -c, -o, -m and
-            # --skip-git-repo-check survive here.
+            # error classifier below can read. Verified against codex-cli 0.147.0 through
+            # 0.160.0: AFTER `resume` there is no -C, no --sandbox, and no --color. Only
+            # --json, -c, -o, -m and --skip-git-repo-check survive there.
+            #
+            # `--sandbox` is an `exec` option, so it goes BEFORE the subcommand, where the
+            # parser takes it. It used to ride `-c sandbox_mode=...` instead, and from codex
+            # 0.155.0 that form, together with the `default_permissions` profile below, makes
+            # the Windows elevated sandbox refuse every resumed thread ("requires effective
+            # `:root` read access") while new threads work (CASE-016, CASE-021). The flag
+            # form resumes on 0.154.0 through 0.160.0 with the same boundary.
             #
             # The call is rooted by the process cwd, which `_popen_capture` sets on both
-            # branches, so dropping -C here changes nothing about where codex looks. What
-            # -c CAN still carry is policy: the sandbox mode and the filesystem read denies
-            # both ride through it, so a resumed call cannot end up looser than the one
-            # that opened the thread.
+            # branches, so dropping -C here changes nothing about where codex looks; -C
+            # before `resume` was tried and changes nothing about the refusal either. The
+            # filesystem read denies ride -c, so a resumed call cannot end up looser than
+            # the one that opened the thread.
             args = [
                 command,
                 "exec",
+                "--sandbox",
+                self.sandbox,
                 "resume",
                 resume_id,
                 "-",
                 "--json",
                 "--skip-git-repo-check",
-                "-c",
-                f'sandbox_mode="{self.sandbox}"',
                 *_APPROVAL_ARGS,
                 *boundary,
             ]

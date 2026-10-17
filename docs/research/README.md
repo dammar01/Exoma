@@ -198,6 +198,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-018](real-cases/CASE-018-real-use-execute-without-plan-or-approval.yaml) | Real use of 3.8.1 — feature requests executed without a plan, plan answers taken as approval | negative | implemented | observed | 4a09c04 |
 | [CASE-019](real-cases/CASE-019-codex-writes-through-apply-patch-under-read-only-sandbox.yaml) | codex wrote a file through apply_patch under --sandbox read-only | negative | implemented | observed | 895aa6f |
 | [CASE-020](real-cases/CASE-020-headless-simulation-of-dec-046-scenarios.yaml) | Headless simulation of DEC-046 scenarios A, C and D — routing holds, delegated calls cannot finish | inconclusive | implemented | observed | 58db760, 895aa6f |
+| [CASE-021](real-cases/CASE-021-codex-resume-sandbox-fails-on-config-sandbox-mode.yaml) | Codex resume fails on Windows only when the sandbox rides `-c sandbox_mode`; `exec --sandbox` before `resume` works on 0.154.0 through 0.160.0 | positive | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -248,6 +249,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-050](decisions/DEC-050-every-writer-retries-the-replace-and-a-dead-worker-frees-its-session.yaml) | Every temp-and-replace writer retries the replace; a dead worker frees its session for a different request | accepted | implemented | not_validated | c46d0ac |
 | [DEC-051](decisions/DEC-051-rework-counts-rounds-after-a-failure.yaml) | Rework counts the verify rounds after a failure, not every round after the first | accepted | implemented | not_validated | uncommitted |
 | [DEC-052](decisions/DEC-052-worker-kill-fails-closed-and-os-locks-live-in-osutil.yaml) | A worker is killed only on a matched identity, and process identity and byte locks live in osutil | accepted | implemented | not_validated | 30ba7cb |
+| [DEC-053](decisions/DEC-053-codex-resume-sandbox-rides-the-exec-flag.yaml) | A resumed codex call carries its sandbox as `exec --sandbox` before `resume`, not `-c sandbox_mode` | accepted | implemented | observed | uncommitted |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

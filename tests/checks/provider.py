@@ -1190,18 +1190,27 @@ def _assert_codex_provider() -> None:
     # reached, so one stray flag is a total outage of continuation rather than a degraded
     # call. `--color never` shipped in v3.4.3 and made every resumed codex call fail; the
     # test that existed then only checked -C and --sandbox, so the list is now explicit.
+    # The refusal is of flags AFTER `resume`; `exec` options before it are parsed by `exec`.
+    after_resume = resumed[resumed.index("resume") + 1 :]
     for rejected in ("-C", "--cd", "--sandbox", "-s", "--color"):
         assert_true(
-            rejected not in resumed,
+            rejected not in after_resume,
             f"`exec resume` rejects {rejected} — passing it fails the call: {resumed}",
         )
     assert_true(
         "--json" in resumed and "--skip-git-repo-check" in resumed,
         f"a resumed call must still stream JSONL events: {resumed}",
     )
+    # CASE-021: the sandbox rides `exec --sandbox` before `resume`. The `-c sandbox_mode`
+    # form it replaced makes codex 0.155+ refuse every resumed thread on Windows.
+    before_resume = resumed[: resumed.index("resume")]
     assert_true(
-        'sandbox_mode="read-only"' in resumed,
-        f"a resumed call must re-assert the sandbox through -c: {resumed}",
+        before_resume[-3:] == ["exec", "--sandbox", "read-only"],
+        f"a resumed call must re-assert the sandbox as `exec --sandbox read-only resume`: {resumed}",
+    )
+    assert_true(
+        not any(arg.startswith("sandbox_mode=") for arg in resumed),
+        f"a resumed call must not carry the sandbox through -c sandbox_mode: {resumed}",
     )
 
     # The seam that has not been fixed yet: config/settings.py defaults provider_command to
