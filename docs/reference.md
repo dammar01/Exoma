@@ -390,10 +390,19 @@ follows the user's instructions outside the block (the user's CLAUDE.md, memory,
 `graph-refresh`) and `statusLine` remain, because they only record. Run `--auto-intent`
 to restore the default mode. Without either flag, an upgrade keeps the previous mode.
 
-A prompt that starts with `<task-notification>` (a background-task notification that Claude Code sends
-via `UserPromptSubmit`) is ignored by `intent-gate-set`: it neither sets a marker nor removes
-a marker set by a user prompt in the same turn (DEC-045). Previously a task name or a snippet of
-output in the notification could match the NL map and set a gate nobody asked for.
+A turn the user did not write is ignored by `intent-gate-set`: it neither sets a marker nor
+removes a marker set by a user prompt in the same turn (DEC-045, DEC-059). Claude Code sends such
+turns via `UserPromptSubmit` too. A turn counts as not the user's when its `source` is `system`,
+`loop_wakeup`, `schedule_wakeup` or `poll_event`; when it carries `agent_id` (it runs inside a
+subagent); or when, after any leading `<system-reminder>` blocks are removed, it is empty or
+opens with `<task-notification>`, `[SYSTEM NOTIFICATION`, `<agent-message` or
+`Another Claude session sent a message` (a native subagent's hand-back). `source` `user` and
+`sdk` stay classified, and a user prompt that only mentions one of these shapes mid-sentence
+still arms the gate. Previously a task name, an agent report or a snippet of output could match
+the NL map and set a gate nobody asked for, which also blocked the main agent's own subagents
+during `/.execute`. A real marker still binds subagents: their gather calls go through
+`intent-gate-check` like the main agent's. The marker records `source`, `has_agent_id` and
+`prompt_id` beside `prompt_excerpt`, so a false arming names its origin.
 
 Up to 3.8.0, `intent-gate-set` read the prompt from the `user_prompt` field, which Claude Code never
 sends (the field is `prompt`). As a result the runtime gate was never active and only the

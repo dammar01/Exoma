@@ -1,0 +1,79 @@
+{
+  "_comment": "Turns the host sends that the user did not write (DEC-059). Shapes observed in a real session on 2026-10-18, text sanitized; each matches the delegated NL map, so a gate that classified it would arm. `payload` fields are merged into the UserPromptSubmit payload.",
+  "host": [
+    {
+      "name": "subagent hand-back",
+      "prompt": "Another Claude session sent a message:\n<agent-message from=\"a0000000000000001\">\n[Subagent hand-back] The text below is the final report of a subagent.\n  I translated the release notes. Please verify the result and run the grep; the analyze step found nothing to audit.\n</agent-message>"
+    },
+    {
+      "name": "hand-back inside a reminder with an id",
+      "prompt": "<system-reminder id=\"f0000000000000001\">\nAnother Claude session sent a message while you were working:\n<agent-message from=\"a0000000000000004\">\n  Reproduction report: tolong cek hasil dan analisa kenapa gate memblokir.\n</agent-message>\n</system-reminder id=\"f0000000000000001\">"
+    },
+    {
+      "name": "hand-back while the main agent works",
+      "prompt": "Another Claude session sent a message while you were working:\n<agent-message from=\"a0000000000000005\">\n  Selesai. Tolong cek hasil dan analisa kenapa test gagal.\n</agent-message>"
+    },
+    {
+      "name": "hand-back without the opening line",
+      "prompt": "<agent-message from=\"a0000000000000002\">\n  Done. Tolong cek hasil terjemahan; analisa kenapa gate memblokir Bash.\n</agent-message>"
+    },
+    {
+      "name": "task notification inside a system reminder",
+      "prompt": "<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\n<task-notification>\n<task-id>b0000001</task-id>\n<status>completed</status>\n<summary>Background command \"Run delegated verify, analyze audit\" completed</summary>\n</task-notification>\n</system-reminder>"
+    },
+    {
+      "name": "task notification after a system reminder",
+      "prompt": "<system-reminder>\nReminder text.\n</system-reminder>\n<task-notification>\n<summary>Agent \"Translate docs, then audit\" finished</summary>\n</task-notification>"
+    },
+    {
+      "name": "system notification without the reminder wrapper",
+      "prompt": "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>\n<summary>analyze audit completed</summary>\n</task-notification>"
+    },
+    {
+      "name": "source system",
+      "prompt": "analisa kenapa gate ini memblokir",
+      "payload": {
+        "source": "system"
+      }
+    },
+    {
+      "name": "source poll_event",
+      "prompt": "cek hasil verify tadi",
+      "payload": {
+        "source": "poll_event"
+      }
+    },
+    {
+      "name": "prompt inside a subagent",
+      "prompt": "analisa kenapa test ini gagal",
+      "payload": {
+        "agent_id": "a0000000000000003",
+        "agent_type": "general-purpose"
+      }
+    }
+  ],
+  "user": [
+    {
+      "name": "user prompt quoting a hand-back",
+      "prompt": "analisa kenapa pesan \"Another Claude session sent a message:\" memicu gate"
+    },
+    {
+      "name": "source user",
+      "prompt": "analisa kenapa gate ini memblokir",
+      "payload": {
+        "source": "user"
+      }
+    },
+    {
+      "name": "source sdk",
+      "prompt": "/.explore cari entry point auth",
+      "payload": {
+        "source": "sdk"
+      }
+    },
+    {
+      "name": "user text after a system reminder",
+      "prompt": "<system-reminder>\nReminder text.\n</system-reminder>\nanalisa kenapa gate ini memblokir"
+    }
+  ]
+}

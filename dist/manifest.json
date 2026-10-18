@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "9191efeeb8066a9cfc7fd87e542951add199da806ac9e62a717047b71b603fec",
-      "bytes": 31578,
+      "sha256": "c5b88deddacc18d41cdb4634c50b28c20bda150cc6bf29110347fd624952d9a5",
+      "bytes": 31779,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -322,8 +322,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-set.py",
-      "sha256": "a468260c8dba723d50031a466724b46350caddd23b4490250b92ff76bc7d5b81",
-      "bytes": 3684,
+      "sha256": "f2f8295e55ce479217c8bdb04df83548c9914a53294da9671eb69ea9d1101b4d",
+      "bytes": 5808,
       "merge": "replace",
       "component": "runtime"
     },

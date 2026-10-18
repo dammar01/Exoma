@@ -1,9 +1,9 @@
 """The intent gate's SET side, run as shipped.
 
-intent-gate-set read the prompt from `user_prompt`, a field Claude Code never sends (it
-sends `prompt`), so every prompt classified as "no command" and the runtime gate never
-armed. Pinned on the real scripts: each hook's .py directly, and its bash launcher as
-Claude Code runs it (Git Bash on Windows).
+intent-gate-set once read the prompt from `user_prompt`, a field Claude Code never sends (it
+sends `prompt`), so the runtime gate never armed. It must also leave alone every turn the user
+did not write (DEC-045, DEC-059). Pinned on the real scripts: each hook's .py directly, and its
+bash launcher as Claude Code runs it (Git Bash on Windows).
 """
 
 import json
@@ -34,6 +34,7 @@ def _runners() -> list[tuple[str, list[str]]]:
 
 def _test_intent_gate_reads_the_prompt_field() -> None:
     _check_prompt_field()
+    _check_subagent_stays_gated()
     _check_verify_lane()
     _check_skill_read_lane()
     _check_precision_read_lane()
@@ -85,6 +86,85 @@ def _check_prompt_field() -> None:
             assert_true(not marker.exists(), f"[{label}] leading whitespace does not hide a task notification")
             notify("analisa kenapa <task-notification> muncul di log")
             assert_true(marker.is_file(), f"[{label}] a user prompt that merely mentions the tag still arms the gate")
+
+            # DEC-059: the other turns the host writes, a subagent's hand-back among them,
+            # armed the gate in the middle of an /.execute. Each fixture matches the NL map,
+            # so passing here means the provenance check, not a missed pattern, held it back.
+            def send(case: dict) -> None:
+                body = {"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": case["prompt"]}
+                body.update(case.get("payload") or {})
+                raw = json.dumps(body)
+                subprocess.run(command, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60)
+
+            for case in _HOST_TURNS["host"]:
+                assert_true(_matches_map(case["prompt"]), f"fixture `{case['name']}` must match the NL map to test anything")
+                armed_by_user = marker.read_text(encoding="utf-8")
+                send(case)
+                assert_true(
+                    marker.is_file() and marker.read_text(encoding="utf-8") == armed_by_user,
+                    f"[{label}] `{case['name']}` leaves the user's marker as it was",
+                )
+                marker.unlink()
+                send(case)
+                assert_true(not marker.exists(), f"[{label}] `{case['name']}` does not arm the gate")
+                notify("analisa kenapa gate ini memblokir")
+            for case in _HOST_TURNS["user"]:
+                marker.unlink()
+                send(case)
+                assert_true(marker.is_file(), f"[{label}] `{case['name']}` is the user's own prompt and arms the gate")
+            recorded = json.loads(marker.read_text(encoding="utf-8"))
+            assert_true(
+                {"source", "has_agent_id", "prompt_id"} <= recorded.keys(),
+                f"[{label}] the marker records the prompt's provenance: {recorded}",
+            )
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+
+_HOST_TURNS = json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures" / "hooks" / "host_turns.json").read_text(encoding="utf-8")
+)
+
+
+def _matches_map(prompt: str) -> bool:
+    import re
+
+    mp = json.loads((HOOKS / "intent-map.json").read_text(encoding="utf-8"))
+    if mp.get("prefix_regex") and re.search(mp["prefix_regex"], prompt):
+        return True
+    return any(
+        re.search(pat, prompt, re.IGNORECASE)
+        for cmd in mp.get("delegated", [])
+        for pat in mp.get("patterns", {}).get(cmd, [])
+    )
+
+
+def _check_subagent_stays_gated() -> None:
+    """DEC-059 keeps a real marker binding on subagents: a native subagent is not the
+    default evidence path, so a gather call that carries `agent_id` is refused like the
+    main agent's. Only false arming was fixed, not the gate's reach."""
+    for label, command in _check_runners():
+        base = Path(tempfile.mkdtemp(prefix=f"gate-sub-{label.replace(':', '-')}-"))
+        try:
+            home, project = base / "home", base / "project"
+            (home / ".claude").mkdir(parents=True)
+            runtime = project / ".workflow" / "data" / "sessions" / "m1" / "runtime"
+            runtime.mkdir(parents=True)
+            registry = {"c1": {"main_session_id": "m1", "cwd": str(project)}}
+            (home / ".claude" / "session_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+            (runtime / "delegated.marker").write_text(json.dumps({"command": "analyze"}), encoding="utf-8")
+            env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+            env.pop("WORKFLOW_LOCAL_MODE", None)
+            payload = json.dumps({
+                "session_id": "c1", "cwd": str(project), "hook_event_name": "PreToolUse",
+                "agent_id": "a0000000000000003", "agent_type": "general-purpose",
+                "tool_name": "Bash", "tool_input": {"command": "grep -rn gate ."},
+            })
+            done = subprocess.run(
+                command, input=payload, text=True, env={**env, "CLAUDE_HOOK_RAW": payload},
+                capture_output=True, timeout=60,
+            )
+            assert_true(done.returncode == 2, f"[{label}] a subagent's gather call stays gated by a real marker: {done.returncode}")
         finally:
             shutil.rmtree(base, ignore_errors=True)
 

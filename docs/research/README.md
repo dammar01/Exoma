@@ -199,6 +199,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-019](real-cases/CASE-019-codex-writes-through-apply-patch-under-read-only-sandbox.yaml) | codex wrote a file through apply_patch under --sandbox read-only | negative | implemented | observed | 895aa6f |
 | [CASE-020](real-cases/CASE-020-headless-simulation-of-dec-046-scenarios.yaml) | Headless simulation of DEC-046 scenarios A, C and D — routing holds, delegated calls cannot finish | inconclusive | implemented | observed | 58db760, 895aa6f |
 | [CASE-021](real-cases/CASE-021-codex-resume-sandbox-fails-on-config-sandbox-mode.yaml) | Codex resume fails on Windows only when the sandbox rides `-c sandbox_mode`; `exec --sandbox` before `resume` works on 0.154.0 through 0.160.0 | positive | implemented | observed | — |
+| [CASE-022](real-cases/CASE-022-subagent-hand-backs-arm-the-intent-gate.yaml) | Native subagent hand-backs armed the intent gate during /.execute and blocked the main agent and its subagents | negative | implemented | observed | 3a4ba3e |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -255,6 +256,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-056](decisions/DEC-056-provider-picker-reads-the-installed-cli-catalog.yaml) | The provider picker offers what the installed CLI lists, newest first, and accepts a typed selection | accepted | implemented | not_validated | ce97c4f |
 | [DEC-057](decisions/DEC-057-installer-pins-npm-providers-to-stable-on-request.yaml) | On request, the installer pins npm-global provider CLIs to their stable release, never a newer one | accepted | implemented | not_validated | f72ef8b |
 | [DEC-058](decisions/DEC-058-provider-stable-pins-move-to-releases-that-pass-the-live-probe.yaml) | Provider stable pins move to opencode 1.19.3 and codex 0.163.0 after both pass the live boundary probe | accepted | implemented | observed | 769dc20 |
+| [DEC-059](decisions/DEC-059-the-gate-ignores-every-turn-the-user-did-not-write.yaml) | The intent gate ignores every turn the user did not write, and a real marker still binds subagents | accepted | implemented | not_validated | uncommitted |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

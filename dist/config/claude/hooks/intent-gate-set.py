@@ -18,6 +18,45 @@ def workflow_data_dir(root):
     return data
 
 
+# Prompt `source` values Claude Code uses for turns the user did not type. `user` and `sdk`
+# are someone's own words and stay classified.
+_HOST_SOURCES = ("system", "loop_wakeup", "schedule_wakeup", "poll_event")
+# How a host-generated turn opens once any leading <system-reminder> blocks are removed: a
+# background task's completion, and a native subagent's hand-back to the main agent.
+_HOST_OPENINGS = ("<task-notification>", "<agent-message", "Another Claude session sent a message")
+# Both tags may carry attributes (`<system-reminder id="...">`, and the same on the close).
+_REMINDER = re.compile(r"\A\s*<system-reminder\b[^>]*>.*?</system-reminder\b[^>]*>", re.DOTALL)
+
+
+def not_user_prompt(payload, prompt):
+    """True for a turn the user did not write (DEC-045, DEC-059).
+
+    Such a turn quotes task names, agent reports and output excerpts, which match the NL map
+    as easily as a request does: a subagent's hand-back armed `verify`, then `analyze`, in the
+    middle of an /.execute and blocked the main agent and its subagents alike. The payload's
+    own fields decide first; the text shapes cover a host that sends neither field.
+    """
+    if str(payload.get("source") or "") in _HOST_SOURCES:
+        return True
+    if payload.get("agent_id"):
+        return True
+    text = prompt
+    while True:
+        stripped = _REMINDER.sub("", text, count=1)
+        if stripped == text:
+            break
+        text = stripped
+    text = text.lstrip()
+    # Nothing but reminders: the notification sat inside one. Treating that as an empty user
+    # prompt would clear the marker the user's own prompt armed.
+    if text != prompt.lstrip() and not text:
+        return True
+    # A notification can also follow the reminder that announces it, inside the same turn.
+    if text.startswith("[SYSTEM NOTIFICATION"):
+        return True
+    return text.startswith(_HOST_OPENINGS)
+
+
 try:
     raw = os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
@@ -26,10 +65,10 @@ try:
     # Claude Code sends the prompt as `prompt`; `user_prompt` alone was never set, so the
     # runtime gate never armed.
     prompt = str(payload.get("prompt") or payload.get("user_prompt") or "")
-    # A background task's completion reaches this hook as a prompt, but the user did not
-    # write it: its task names and output excerpts matched the NL map and armed the gate
-    # (DEC-045). It neither arms nor clears a marker; the user's own prompt decides.
-    if prompt.lstrip().startswith("<task-notification>"):
+    # A background task's completion or a subagent's hand-back reaches this hook as a prompt,
+    # but the user did not write it. It neither arms nor clears a marker; the user's own
+    # prompt decides (DEC-045, DEC-059).
+    if not_user_prompt(payload, prompt):
         sys.exit(0)
     claude_sid = payload.get("session_id")
     cwd = payload.get("cwd")
@@ -80,6 +119,11 @@ try:
             "set_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "claude_sid": claude_sid,
             "prompt_excerpt": prompt[:160],
+            # Provenance, so the next false arming names its source instead of leaving
+            # only an excerpt (DEC-059).
+            "source": payload.get("source"),
+            "has_agent_id": bool(payload.get("agent_id")),
+            "prompt_id": payload.get("prompt_id"),
         }
         with open(marker, "w", encoding="utf-8") as f:
             f.write(json.dumps(obj))
