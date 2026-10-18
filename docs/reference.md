@@ -1,4 +1,4 @@
-# agent-workflow v3.8.2
+# agent-workflow v3.8.3
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -99,7 +99,7 @@ git --version
 
 ---
 
-## Install (v3.8.2)
+## Install (v3.8.3)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -673,7 +673,7 @@ ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
 | `doctor` | lokal | — | cek kesiapan, tulis `reports/doctor.json` |
 | `clean` | lokal | — | prune job, fakta usang/duplikat, guard runtime-lock milik sesi tanpa lock hidup (`sessions/<id>/runtime/lock.guard`; guard yang sedang dipegang proses lain tetap), sesi lama |
 | `inspect` | lokal | — | daftar job untuk sesi berjalan |
-| `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort |
+| `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort; picker tanpa argumen, langsung dengan `<provider> <model> [effort] [routes]` |
 | `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run), `e2e.drafts` (draft), dan `graph_refresh` (biaya Stop hook graph per outcome), serta dari `usage.jsonl`: `evidence_reuse` (command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse, continuation dihitung sekali; `by_outcome` memecah per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, dan `unrecorded` untuk baris sebelum contract v3), `provider_cache` (share cached input dari input terukur provider: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; baris yang adapternya tidak melaporkan `resumed` tidak masuk dua bucket thread), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, dan `thread_changed` = call resume yang dijawab di thread lain, tanda sesi kehilangan state; baris sebelum contract v3 tidak dihitung), `by_effort` (per `<command>/<effort>`: jumlah command, median durasi, median input/output token — tiap median hanya dari command yang nilainya terukur, output tak terukur tidak dihitung nol; `default` = tanpa flag effort; baris sebelum contract v3 tidak dihitung), dan `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); serta dari `tasks.jsonl`: `tasks` (lihat [Task telemetry](#task-telemetry)); dan `provenance` (versi registry metrik, versi tiap metrik `runtime.*`, commit tool, hash isi stream — definisi di [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
 | `audit` | lokal | — | baca `audit.jsonl` sesi |
 | `graph-meta` | lokal | — | status snapshot graphify: segar, usang, atau tak ada |
@@ -845,7 +845,41 @@ Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu mene
 
 Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
 
-Kunci reliability (v3.8.2):
+#### Katalog model `/.provider`
+
+`/.provider` menawarkan model dari CLI provider yang terpasang saat itu
+(`core/provider/model_catalog.py`), bukan dari shortlist `config/providers.py`. Tiap entri
+`meta.providers[]` membawa `models` (maks 20, terbaru dulu), `newest`, dan `models_source`
+(`live` | `cache` | `static`). Picker menaruh `newest` sebagai opsi pertama "(Recommended)";
+model tetap dikonfirmasi user, tidak ditulis otomatis.
+
+| Provider | Sumber | "Terbaru" |
+| --- | --- | --- |
+| `opencode` | `opencode models` + cache models.dev `~/.cache/opencode/models.json` (`family`, `release_date`, `reasoning_options`) | `release_date` terbaru dalam `family` model aktif; tanpa model aktif → terbaru dari semua |
+| `codex` | `~/.codex/models_cache.json` (`$CODEX_HOME`), hanya `visibility: list` | `priority` terkecil |
+| `agy` | `agy models` | versi tertinggi dalam keluarga model aktif; tanpa model aktif → urutan CLI |
+
+Varian agy (`<model>-low|medium|high`) dilipat jadi satu model dengan `efforts` = suffix
+yang ada (`effort_in_id: true`). Apply menyusun id varian (`claude-opus-5-5` + `high` →
+`claude-opus-5-5-high`) dan menulis `effort: null`; model bervarian tanpa effort ditolak.
+Route yang menyebut model dasar agy memakai varian dengan effort yang sama.
+
+Validasi effort saat apply memakai katalog live (fallback ke shortlist), jadi model yang
+lebih baru dari shortlist diterima tanpa warning. Router dan `validate_provider_config`
+tetap memakai shortlist: keduanya jalan di tiap panggilan delegated, tempat spawn CLI terlalu
+mahal; model di luar shortlist di sana diperlakukan sebagai "unknown" (effort dipertahankan).
+
+CLI hilang, timeout (30 dtk), atau format tak dikenali → `models_source: static`, shortlist
+dipakai. Hasil live di-cache 10 menit di `<cache user>/agent-workflow/model-catalog.json`
+supaya katalog dan apply dalam satu sesi picker melihat daftar yang sama.
+`AI_PROXY_MODEL_CATALOG=static` mematikan pembacaan live.
+
+Mode langsung: `/.provider <provider> <model> [effort] [routes]` (mis. `/.provider codex
+gpt-6-luna low`) melewati picker. Payload tanpa `|` dipecah per spasi — aman karena tak ada
+provider, id model, atau effort yang memuat spasi — lalu divalidasi sama persis dengan
+payload `provider|model|effort|routes`.
+
+Kunci reliability (v3.8.3):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -1167,7 +1201,7 @@ sesi itu saja dilepas, dan request baru diproses sebagai job baru. Job yang seda
 recovery (belum punya worker PID) dan worker yang hidup atau stalled tidak pernah diambil.
 Request identik tetap memakai jalur recovery di atas.
 
-### Liveness worker (v3.8.2)
+### Liveness worker (v3.8.3)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 

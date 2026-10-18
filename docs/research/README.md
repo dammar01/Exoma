@@ -252,6 +252,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-053](decisions/DEC-053-codex-resume-sandbox-rides-the-exec-flag.yaml) | A resumed codex call carries its sandbox as `exec --sandbox` before `resume`, not `-c sandbox_mode` | accepted | implemented | observed | 8dcb6bb |
 | [DEC-054](decisions/DEC-054-interpreter-found-by-running-and-old-python-refused.yaml) | The interpreter is found by running it, an old Python is refused by name, and the remaining OS branches move into osutil | accepted | implemented | observed | f101515 |
 | [DEC-055](decisions/DEC-055-hooks-and-runner-are-bash-on-every-os.yaml) | Hooks and the workspace runner are bash on every OS, one Python source each, and the gate reads Bash and PowerShell with one tokeniser | accepted | implemented | observed | 2e41ffc |
+| [DEC-056](decisions/DEC-056-provider-picker-reads-the-installed-cli-catalog.yaml) | The provider picker offers what the installed CLI lists, newest first, and accepts a typed selection | accepted | implemented | not_validated | ce97c4f |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

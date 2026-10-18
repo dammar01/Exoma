@@ -1,0 +1,98 @@
+schema_version: 3
+id: DEC-056
+title: The provider picker offers what the installed CLI lists, newest first, and accepts a typed selection
+date: 2026-10-09
+status: accepted
+provenance:
+  type: observed
+  confidence: medium
+  basis: Shortlists in config/providers.py found behind the models the installed CLIs list on the maintainer machine
+problem: |
+  `/.provider` offered a hand-refreshed shortlist per provider. Between releases it fell
+  behind: the installed codex cache listed newer models than the shortlist, and `agy models`
+  listed a newer Gemini generation and new Claude models the shortlist did not have. The
+  user picked from a menu that no longer described the provider, and a newer model typed
+  through "Other" applied only with an "off the shortlist" warning and unchecked effort.
+  Selecting also always meant answering the full picker, even when the user already knew
+  the provider, model and effort.
+decision: |
+  - New `core/provider/model_catalog.py` reads each provider's own listing: opencode
+    (`opencode models` + its cached models.dev catalog), codex (`models_cache.json`,
+    `visibility: list` only), agy (`agy models`). Fail-open: no live reading falls back to
+    the bundled shortlist (`models_source: static`). Readings are cached for 10 minutes;
+    `AI_PROXY_MODEL_CATALOG=static` disables the live read.
+  - "Newest" per provider: opencode = latest `release_date` within the family of the model
+    in use (all models when none); codex = lowest `priority`; agy = highest version within
+    the family of the model in use (CLI order when none).
+  - The catalog sends at most 20 models, newest first. The picker shows up to 10 as a
+    numbered list and offers the newest as "(Recommended)". The user still confirms; nothing
+    is written without an answer.
+  - agy variants (`<model>-low|medium|high`) fold into one model whose efforts are the
+    suffixes. Apply composes the variant id and writes `effort: null`.
+  - Apply validates effort against the live catalog. Router and settings validation stay
+    on the shortlist so a delegated call never spawns the CLI.
+  - `/.provider <provider> <model> [effort] [routes]` applies directly: a payload with no
+    `|` is split on whitespace and validated exactly like the picker's payload.
+rationale: |
+  The provider CLI is the only source that knows what this machine can actually run, so
+  the menu is read from it rather than copied from it by hand. Recommending instead of
+  auto-applying keeps the model choice with the user (the maintainer chose this over
+  auto-apply). Ranking within the family of the model in use keeps a user on one vendor
+  from being recommended another vendor's latest release. Keeping the router on the
+  shortlist trades effort-checking of new models on hand-edited configs for zero added
+  latency per delegated call.
+alternatives:
+  - option: Auto-apply the newest model when a provider is selected
+    rejected_because: The maintainer chose to keep the model a confirmed choice.
+  - option: Keep the static shortlist and add a maintainer script that regenerates it each release
+    rejected_because: Still stale between releases on the user's machine; does not answer "what is available now".
+  - option: Rank opencode globally by release date
+    rejected_because: Recommends whichever vendor shipped last; the maintainer chose ranking within the active family.
+  - option: Make the router read the live catalog too
+    rejected_because: Adds a CLI spawn (seconds for opencode's node shim) to every delegated call.
+evidence: []
+evidence_notes: |
+  Maintainer machine, 2026-10-09: codex cache priority 0 = `gpt-6.1-sol` while the shortlist
+  topped at `gpt-5.6-sol`; `agy models` listed `gemini-3.8-flash-*` and `claude-opus-5-5-*`
+  absent from the shortlist. Live catalog smoke run: codex -> `gpt-6.1-sol`, opencode with
+  `opencode/claude-opus-4-8` in use -> `opencode/claude-opus-5-5`, agy -> `gemini-3.8-flash`.
+  `tests/checks/provider.py` (`_assert_live_model_catalog`, fixed readers): per-provider
+  ordering, family ranking, the 20 cap, lookup beyond the cap, live effort enforcement, agy
+  variant composition and refusal without effort, typed whitespace payload, static fallback.
+  The existing shortlist assertions run with the live catalog switched off.
+implementation:
+  version: 3.8.3
+  commits: [ce97c4f]
+  components:
+    - core/provider/model_catalog.py (new; live readers, ordering, cache, fallback)
+    - core/provider/provider_select.py (catalog newest/models_source, live validation, agy variant composition, whitespace payload)
+    - config/providers.py (provider_models docstring; shortlist is the fallback)
+    - dist/config/claude/skills/provider.md, skills/help.md, commands/.provider.md
+    - docs/reference.md, tests/checks/provider.py
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+validation:
+  summary: |
+    Unit assertions with fixed readers, and one smoke read against the three real CLIs on
+    the maintainer machine. The full suite (`tests/run.py`) passed on this tree. No
+    end-to-end `/.provider` session in another project yet.
+  runs: []
+trade_offs:
+  better:
+    - The picker offers models the installed CLI has now, with the newest recommended.
+    - A model newer than the shortlist applies without a warning and with its effort checked.
+    - A known selection is one command instead of four questions.
+  worse:
+    - Three undocumented CLI formats are parsed; a format change silently degrades to the shortlist.
+    - The picker can take seconds while opencode or agy lists its models (agy fetches over the network).
+    - Router and settings validation still see only the shortlist, so effort on a new model in a hand-edited config is not checked.
+limitations:
+  - When the opencode model in use is unknown to the models.dev cache, ranking falls back to all models.
+  - Codex `priority` is read as recency; nothing upstream documents that meaning.
+  - agy effort suffixes are recognised only as `low|medium|high`.
+revisit_when:
+  - "A provider changes its listing or cache format and the picker shows `models_source: static` on a working CLI."
+  - The recommended model is observed to be older than one the CLI lists.
+  - A hand-edited config fails a delegated call on an effort the live catalog would have refused.
+questions: [RQ-10]

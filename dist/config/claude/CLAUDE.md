@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.8.2)
+# Claude Code — Personal Global Config (v3.8.3)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.8.2, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.8.3, do not edit manually -->
 
-## Workflow Main Agent — v3.8.2
+## Workflow Main Agent — v3.8.3
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: provider terpilih — OpenCode/Codex/Agy (read-only evidence), dipanggil via .workflow/run script.

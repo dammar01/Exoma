@@ -1,4 +1,4 @@
 # Development only: checks run by the maintainer, the test suite, and CI — never imported
 # by the runtime, which stays stdlib-only (tests/checks/deps.py).
 #   tools/maintain/check_research.py — research records are YAML (docs/research/schema.yaml)
-PyYAML==6.0.2
+PyYAML==6.0.3
