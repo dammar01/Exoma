@@ -110,14 +110,23 @@ def _parse(stdout: str, stderr: str) -> str | None:
     return None
 
 
-def read_version(command: str) -> str | None:
+def read_version(command: str, fresh: bool = False) -> str | None:
     """The version line of `<command> --version`; None on failure.
 
     Read once per binary per process, and across processes through the on-disk cache (see
     the module docstring). Bounded and tree-killed: on Windows these CLIs are `.cmd` shims
     over node, and a plain run(timeout=) waits unbounded on pipes the node child still holds.
+
+    `fresh` runs the CLI regardless of either cache and writes neither: a reading for a
+    caller that must not change anything (install.py --update-providers planning a dry run).
     """
     exe = osutil.resolve_exe(command)
+    if fresh:
+        try:
+            code, stdout, stderr = osutil.run_bounded([exe, "--version"], 15)
+            return _parse(stdout, stderr) if code == 0 else None
+        except Exception:
+            return None
     if exe in _CACHE:
         return _CACHE[exe]
     key = None

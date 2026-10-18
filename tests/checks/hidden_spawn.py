@@ -7,12 +7,16 @@ fixed once for OpenCode and again with the shared `osutil.hidden_run_kwargs()`; 
 back in v3.7.3 through a new module that called `git` with a bare `subprocess.run`. The
 fix was never the problem — nothing said a new spawn site had to use it. This does.
 
-Scope is the code the worker runs: `core/`, `adapters/`, `utils/`. `tools/` and
+Scope is the code the worker runs: `core/`, `adapters/`, `utils/`, and the shipped hooks
+under `dist/config/claude/hooks/`, which Claude Code starts without a console too (v3.8.3:
+the Bash hook port brought the flash back through task-events' bare `git`). `tools/` and
 `installer/` run in the user's own terminal, where a child shares that console and
 nothing flashes.
 
-A call passes when it carries `**hidden_run_kwargs()`, `**detached_popen_kwargs()`, or an
-explicit `creationflags=`. A call that can only run off Windows goes in `_POSIX_ONLY`
+A call passes when it carries `**hidden_run_kwargs()`, `**detached_popen_kwargs()`, an
+explicit `creationflags=`, or `**<name>` where the same file puts a `creationflags` key in
+that dict (the hooks are stdlib-only and cannot import the helpers). A call that can only
+run off Windows goes in `_POSIX_ONLY`
 with the reason, keyed by file and the command's first argument — not by line number,
 so the allowance cannot drift onto a different call.
 """
@@ -24,7 +28,7 @@ from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_SCOPE = ("core", "adapters", "utils")
+_SCOPE = ("core", "adapters", "utils", "dist/config/claude/hooks")
 _SKIP_PARTS = {"__pycache__"}
 _SPAWNERS = {"run", "Popen", "call", "check_call", "check_output"}
 _HIDING_HELPERS = {"hidden_run_kwargs", "detached_popen_kwargs"}
@@ -46,9 +50,32 @@ def _is_subprocess_spawn(call: ast.Call) -> bool:
     return isinstance(owner, ast.Attribute) and owner.attr == "subprocess"
 
 
-def _hides_console(call: ast.Call) -> bool:
+def _hiding_dicts(tree: ast.AST) -> set[str]:
+    """Names the file gives a `creationflags` key: `x = {"creationflags": ...}` or
+    `x["creationflags"] = ...`."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and isinstance(node.value, ast.Dict):
+                if any(isinstance(k, ast.Constant) and k.value == "creationflags" for k in node.value.keys):
+                    names.add(target.id)
+            elif (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value == "creationflags"
+            ):
+                names.add(target.value.id)
+    return names
+
+
+def _hides_console(call: ast.Call, dicts: set[str] = frozenset()) -> bool:
     for keyword in call.keywords:
         if keyword.arg == "creationflags":
+            return True
+        if keyword.arg is None and isinstance(keyword.value, ast.Name) and keyword.value.id in dicts:
             return True
         if keyword.arg is None and isinstance(keyword.value, ast.Call):
             target = keyword.value.func
@@ -85,11 +112,20 @@ def _check_scanner_sees_the_known_shapes() -> None:
         "_main().subprocess.Popen(['x'], **osutil.detached_popen_kwargs())\n"
         "subprocess.Popen(['y'], creationflags=0)\n"
         "_main().subprocess.Popen(['z'])\n"
+        "hide = {'creationflags': 0x08000000}\n"
+        "flags = {}\n"
+        "flags['creationflags'] = 0x08000000\n"
+        "subprocess.Popen(['a'], **hide)\n"
+        "subprocess.Popen(['b'], **flags)\n"
+        "other = {'cwd': '.'}\n"
+        "subprocess.run(['c'], **other)\n"
     )
-    calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call) and _is_subprocess_spawn(node)]
-    assert_true(len(calls) == 5, f"scanner found {len(calls)} spawn calls in the sample, expected 5")
-    bare = sorted(call.lineno for call in calls if not _hides_console(call))
-    assert_true(bare == [2, 6], f"scanner flagged lines {bare} as bare, expected [2, 6]")
+    tree = ast.parse(source)
+    dicts = _hiding_dicts(tree)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and _is_subprocess_spawn(node)]
+    assert_true(len(calls) == 8, f"scanner found {len(calls)} spawn calls in the sample, expected 8")
+    bare = sorted(call.lineno for call in calls if not _hides_console(call, dicts))
+    assert_true(bare == [2, 6, 13], f"scanner flagged lines {bare} as bare, expected [2, 6, 13]")
 
 
 def _test_every_spawn_hides_its_console() -> None:
@@ -106,11 +142,13 @@ def _test_every_spawn_hides_its_console() -> None:
     spawns = 0
     for path in files:
         relative = path.relative_to(REPO_ROOT).as_posix()
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dicts = _hiding_dicts(tree)
+        for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not _is_subprocess_spawn(node):
                 continue
             spawns += 1
-            if _hides_console(node):
+            if _hides_console(node, dicts):
                 continue
             key = (relative, _argv_head(node))
             if key in _POSIX_ONLY:

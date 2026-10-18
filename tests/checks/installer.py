@@ -939,7 +939,14 @@ def _test_provider_update() -> None:
             pu.osutil.IS_WINDOWS = True
             pu.osutil.provider_callable = lambda name: (name in paths, paths.get(name, "missing"))
             pu.osutil.resolve_exe = lambda name: paths.get(name, name)
-            versions.read_version = lambda command: installed.get(command)
+            fresh_reads: list[str] = []
+
+            def read_version(command, fresh=False):
+                if fresh:
+                    fresh_reads.append(command)
+                return installed.get(command)
+
+            versions.read_version = read_version
             versions.forget = lambda command: forgotten.append(command)
             model_catalog.forget = lambda provider: forgotten.append(f"catalog:{provider}")
 
@@ -959,6 +966,11 @@ def _test_provider_update() -> None:
                 f"a CLI npm did not install is left to whoever did: {entries['opencode']}",
             )
             assert_true(not any(a[1] == "install" for a in calls), "planning installs nothing")
+            assert_true(not forgotten, f"planning drops no cache, on disk or in memory: {forgotten}")
+            assert_true(
+                set(fresh_reads) == {"codex", "opencode"},
+                f"planning reads each CLI on PATH fresh, past a day-old cached version: {fresh_reads}",
+            )
 
             registry_has.discard("@openai/codex@0.154.0")
             assert_true(plan()["codex"]["action"] == "skip", "no stable release on the registry, no update")

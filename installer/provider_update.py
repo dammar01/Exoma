@@ -106,9 +106,9 @@ def plan_updates(run=_run, getenv=os.getenv) -> list[dict]:
             entry["reason"] = "not on PATH; --update-providers updates, it does not install"
             continue
         # A fresh reading: the cache keeps one for a day, and an update made outside the
-        # workflow behind an unchanged shim would plan from the release before it.
-        versions.forget(command)
-        installed = versions.release(versions.read_version(command))
+        # workflow behind an unchanged shim would plan from the release before it. Fresh
+        # also writes no cache, so planning stays the read-only step its docstring says.
+        installed = versions.release(versions.read_version(command, fresh=True))
         entry["installed"] = installed
         if installed == stable:
             entry.update(action="current", reason=f"already {stable}")

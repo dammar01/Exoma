@@ -444,6 +444,7 @@ def _test_provider_selection() -> None:
     try:
         _provider_selection_static(temp_root, workflow_dir, config_file)
         _assert_live_model_catalog(temp_root, config_file)
+        _assert_live_catalog_readers(temp_root)
     finally:
         model_catalog.LIVE_ENABLED = live_before
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -567,6 +568,179 @@ def _assert_live_model_catalog(temp_root: Path, config_file: Path) -> None:
             os.environ.pop("AI_PROXY_AGY_OPT_IN", None)
         else:
             os.environ["AI_PROXY_AGY_OPT_IN"] = opt_in
+
+
+def _assert_live_catalog_readers(temp_root: Path) -> None:
+    """The readers themselves, on payloads shaped like each CLI's output (DEC-056), and the
+    disk cache between them and the picker.
+
+    Synthetic, not captured: a format change in a real CLI release is still caught only by
+    a live run. What this pins is that each documented shape parses, and that every way a
+    read can fail ends in the shortlist rather than a broken picker.
+    """
+    from core.provider import model_catalog
+
+    work = temp_root / "catalog-readers"
+    (work / "xdg" / "opencode").mkdir(parents=True)
+    (work / "codex").mkdir()
+    (work / "xdg" / "opencode" / "models.json").write_text(
+        json.dumps(
+            {
+                "x": {
+                    "models": {
+                        "alpha-1": {
+                            "family": "alpha",
+                            "release_date": "2026-01-01",
+                            "reasoning_options": [{"type": "effort", "values": ["low", "high"]}],
+                        },
+                        "beta-9": {"family": "beta", "release_date": "2026-09-01"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "codex" / "models_cache.json").write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "gpt-a",
+                        "visibility": "list",
+                        "priority": 3,
+                        "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}, {"x": 1}],
+                    },
+                    {"slug": "auto-review", "visibility": "hide", "priority": 0},
+                    {"slug": "", "visibility": "list"},
+                    {"slug": "gpt-b", "visibility": "list", "priority": "first"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    listings = {
+        "opencode": (0, "x/alpha-1\nx/beta-9\nLoading providers...\ny/unknown\n", ""),
+        "agy": (
+            0,
+            "Available models:\ngem-3.8-flash-high\tGem Flash High\n"
+            "gem-3.8-flash-low\tGem Flash Low\noss-120b\tOSS 120B\n",
+            "",
+        ),
+    }
+    answers: dict = {}
+
+    def fake_run(args, timeout, **_kwargs):
+        provider = next(name for name in listings if name in Path(args[0]).name.lower())
+        answer = answers.get(provider, listings[provider])
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    saved_env = {key: os.environ.get(key) for key in ("XDG_CACHE_HOME", "CODEX_HOME", "AI_PROXY_AGY_OPT_IN")}
+    saved = (
+        model_catalog.osutil.run_bounded,
+        model_catalog.osutil.resolve_exe,
+        model_catalog.LIVE_ENABLED,
+        model_catalog.CACHE_TTL_SECONDS,
+        model_catalog.CACHE_PATH,
+        dict(model_catalog._READERS),
+    )
+    os.environ.update(XDG_CACHE_HOME=str(work / "xdg"), CODEX_HOME=str(work / "codex"), AI_PROXY_AGY_OPT_IN="1")
+    model_catalog.osutil.run_bounded = fake_run
+    model_catalog.osutil.resolve_exe = lambda name: name
+    model_catalog.LIVE_ENABLED = True
+    model_catalog.CACHE_TTL_SECONDS = 0
+    model_catalog.CACHE_PATH = work / "model-catalog.json"
+    try:
+        opencode = {entry["id"]: entry for entry in model_catalog._read_opencode()}
+        assert_true(
+            set(opencode) == {"x/alpha-1", "x/beta-9", "y/unknown"},
+            f"opencode keeps every `provider/model` line and drops the rest: {sorted(opencode)}",
+        )
+        assert_true(
+            opencode["x/alpha-1"]["efforts"] == ("low", "high")
+            and opencode["x/alpha-1"]["family"] == "alpha"
+            and opencode["x/alpha-1"]["released"] == "2026-01-01",
+            f"opencode efforts, family and date come from the models.dev cache: {opencode['x/alpha-1']}",
+        )
+        assert_true(
+            opencode["x/beta-9"]["efforts"] == () and opencode["y/unknown"]["family"] is None
+            and opencode["y/unknown"]["released"] == "",
+            f"no effort option is no effort; a model the catalog lacks is kept, undated: {opencode}",
+        )
+
+        codex = {entry["id"]: entry for entry in model_catalog._read_codex()}
+        assert_true(
+            set(codex) == {"gpt-a", "gpt-b"},
+            f"codex offers only `visibility: list` entries with a slug: {sorted(codex)}",
+        )
+        assert_true(
+            codex["gpt-a"]["efforts"] == ("low", "high") and codex["gpt-a"]["priority"] == 3
+            and codex["gpt-b"]["priority"] == 1 << 30,
+            f"codex efforts from supported_reasoning_levels; a bad priority ranks last: {codex}",
+        )
+
+        agy = {entry["id"]: entry for entry in model_catalog._read_agy()}
+        assert_true(set(agy) == {"gem-3.8-flash", "oss-120b"}, f"agy folds variants, drops the banner: {sorted(agy)}")
+        flash = agy["gem-3.8-flash"]
+        assert_true(
+            flash["efforts"] == ("low", "high")
+            and sorted(flash["variants"]) == ["gem-3.8-flash-high", "gem-3.8-flash-low"]
+            and flash.get("effort_in_id") and flash["family"] == "gem-flash",
+            f"agy effort suffixes become ordered efforts of one base model: {flash}",
+        )
+        assert_true(
+            agy["oss-120b"]["efforts"] == () and not agy["oss-120b"].get("effort_in_id"),
+            f"an agy id without a suffix takes no effort: {agy['oss-120b']}",
+        )
+
+        for failure in ((None, "", ""), (1, "", "not logged in"), OSError("spawn failed")):
+            answers["opencode"] = failure
+            fallback = model_catalog.catalog("opencode")
+            assert_true(
+                fallback["source"] == "static",
+                f"a timed-out, failing or unspawnable CLI falls back to the shortlist ({failure!r}): {fallback}",
+            )
+        answers.clear()
+
+        # The disk cache: a reading answers for CACHE_TTL_SECONDS, then the CLI is asked again.
+        reads: list[int] = []
+        model_catalog._READERS["codex"] = lambda: reads.append(1) or [{"id": "gpt-a", "efforts": (), "priority": 0}]
+        model_catalog.CACHE_TTL_SECONDS = 600
+        first, second = model_catalog.catalog("codex"), model_catalog.catalog("codex")
+        assert_true(
+            first["source"] == "live" and second["source"] == "cache" and len(reads) == 1,
+            f"a reading inside the window is served from the cache: {first['source']}, {second['source']}, {reads}",
+        )
+        data = json.loads(model_catalog.CACHE_PATH.read_text(encoding="utf-8"))
+        for entry in data.values():
+            entry["read_at"] -= 601
+        model_catalog.CACHE_PATH.write_text(json.dumps(data), encoding="utf-8")
+        assert_true(
+            model_catalog.catalog("codex")["source"] == "live" and len(reads) == 2,
+            f"an expired reading is read again: {reads}",
+        )
+        model_catalog.forget("codex")
+        assert_true(
+            model_catalog.catalog("codex")["source"] == "live" and len(reads) == 3,
+            f"forget drops the reading, so an updated CLI is asked: {reads}",
+        )
+    finally:
+        (
+            model_catalog.osutil.run_bounded,
+            model_catalog.osutil.resolve_exe,
+            model_catalog.LIVE_ENABLED,
+            model_catalog.CACHE_TTL_SECONDS,
+            model_catalog.CACHE_PATH,
+            readers,
+        ) = saved
+        model_catalog._READERS.clear()
+        model_catalog._READERS.update(readers)
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _provider_selection_static(temp_root: Path, workflow_dir: Path, config_file: Path) -> None:
@@ -1213,6 +1387,24 @@ def _check_version_cache(versions_module) -> None:
         os.utime(exe, ns=(0, 0))
         answers.append((0, "fakecli 4.0.1", ""))
         assert_true(read() == "fakecli 4.0.1" and len(calls) == 7, "an mtime change alone invalidates")
+
+        # fresh: past both caches, and writes neither (a dry-run planner changes nothing).
+        on_disk = versions_module.CACHE_PATH.read_bytes()
+        mtime = versions_module.CACHE_PATH.stat().st_mtime_ns
+        versions_module._CACHE[str(exe)] = "fakecli 4.0.1"
+        answers.append((0, "fakecli 4.1.0", ""))
+        assert_true(
+            versions_module.read_version(str(exe), fresh=True) == "fakecli 4.1.0" and len(calls) == 8,
+            "a fresh read spawns despite a cached reading",
+        )
+        assert_true(
+            versions_module.CACHE_PATH.read_bytes() == on_disk
+            and versions_module.CACHE_PATH.stat().st_mtime_ns == mtime,
+            "a fresh read leaves the disk cache untouched",
+        )
+        assert_true(versions_module._CACHE[str(exe)] == "fakecli 4.0.1", "and the in-process cache too")
+        answers.append((None, "", ""))
+        assert_true(versions_module.read_version(str(exe), fresh=True) is None, "a fresh timeout is None")
 
         versions_module.CACHE_PATH = work / "cache-file-is-a-dir"
         versions_module.CACHE_PATH.mkdir()

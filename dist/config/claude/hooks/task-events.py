@@ -52,8 +52,24 @@ def inside(root, path):
     return rel
 
 
+def hidden_window():
+    """(startupinfo, creationflags) that keep git's console hidden on Windows; (None, 0)
+    elsewhere. Claude Code runs this hook without a console, and a console child (git)
+    started from such a process opens a window of its own, once per event."""
+    if os.name != "nt":
+        return None, 0
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 0  # SW_HIDE
+    return info, 0x08000000  # CREATE_NO_WINDOW
+
+
 def git_out(root, *args):
-    out = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=5)
+    info, flags = hidden_window()
+    out = subprocess.run(
+        ["git", "-C", root, *args], capture_output=True, text=True, timeout=5,
+        startupinfo=info, creationflags=flags,
+    )
     return out.stdout if out.returncode == 0 else None
 
 
