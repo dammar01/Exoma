@@ -53,7 +53,7 @@ evidence_notes: |
   Windows after each step. Not yet run as an installed hook inside a live Claude Code session.
 implementation:
   version: 3.8.2
-  commits: [uncommitted]
+  commits: [2e41ffc]
   components:
     - dist/config/claude/hooks/*.sh, *.py, workflow_hooks.py (launchers, verbatim hook bodies, dispatcher; .ps1 removed)
     - dist/config/claude/hooks/intent-gate-check.py (one tokeniser for Bash and PowerShell, .sh runners only)

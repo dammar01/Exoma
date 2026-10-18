@@ -35,7 +35,7 @@ evidence_notes: |
   (core/provider/executor.py, plan chain in core/runtime/state.py).
 implementation:
   version: 3.8.2
-  commits: [uncommitted]
+  commits: [9e32676]
   components:
     - core/audit/telemetry.py (rework() orders rounds by recorded_at and counts rounds after the first failure)
     - core/audit/metrics.py (registry entry runtime.rework@1)

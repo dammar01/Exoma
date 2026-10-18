@@ -247,11 +247,11 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-048](decisions/DEC-048-provider-write-boundary-declared-and-codex-approval-never.yaml) | Providers declare their enforced write boundary; codex runs with approval_policy never | accepted | implemented | observed | 895aa6f |
 | [DEC-049](decisions/DEC-049-provider-thread-kept-or-loss-named-and-integrity-fails-closed.yaml) | A provider thread id is kept or its loss is named; integrity paths fail closed | accepted | implemented | not_validated | 895aa6f |
 | [DEC-050](decisions/DEC-050-every-writer-retries-the-replace-and-a-dead-worker-frees-its-session.yaml) | Every temp-and-replace writer retries the replace; a dead worker frees its session for a different request | accepted | implemented | not_validated | c46d0ac |
-| [DEC-051](decisions/DEC-051-rework-counts-rounds-after-a-failure.yaml) | Rework counts the verify rounds after a failure, not every round after the first | accepted | implemented | not_validated | uncommitted |
+| [DEC-051](decisions/DEC-051-rework-counts-rounds-after-a-failure.yaml) | Rework counts the verify rounds after a failure, not every round after the first | accepted | implemented | not_validated | 9e32676 |
 | [DEC-052](decisions/DEC-052-worker-kill-fails-closed-and-os-locks-live-in-osutil.yaml) | A worker is killed only on a matched identity, and process identity and byte locks live in osutil | accepted | implemented | not_validated | 30ba7cb |
 | [DEC-053](decisions/DEC-053-codex-resume-sandbox-rides-the-exec-flag.yaml) | A resumed codex call carries its sandbox as `exec --sandbox` before `resume`, not `-c sandbox_mode` | accepted | implemented | observed | 8dcb6bb |
 | [DEC-054](decisions/DEC-054-interpreter-found-by-running-and-old-python-refused.yaml) | The interpreter is found by running it, an old Python is refused by name, and the remaining OS branches move into osutil | accepted | implemented | observed | f101515 |
-| [DEC-055](decisions/DEC-055-hooks-and-runner-are-bash-on-every-os.yaml) | Hooks and the workspace runner are bash on every OS, one Python source each, and the gate reads Bash and PowerShell with one tokeniser | accepted | implemented | observed | uncommitted |
+| [DEC-055](decisions/DEC-055-hooks-and-runner-are-bash-on-every-os.yaml) | Hooks and the workspace runner are bash on every OS, one Python source each, and the gate reads Bash and PowerShell with one tokeniser | accepted | implemented | observed | 2e41ffc |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
