@@ -68,7 +68,7 @@ evidence_notes: |
   and agy as unsupported; `npm view` resolved both stable releases. No real update was applied.
 implementation:
   version: 3.8.3
-  commits: [uncommitted]
+  commits: [f72ef8b]
   components:
     - installer/provider_update.py (plan_updates, apply_updates, write_journal)
     - install.py (--update-providers, _update_providers after the file install)
