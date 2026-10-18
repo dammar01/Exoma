@@ -25,7 +25,7 @@ minutes and spend the secondary agent's quota.
 | `/.sweep` | you want to see what the current changes touch before verifying or committing |
 | `/.review` | you want a quick line-by-line review of code, without the secondary agent |
 | `/.refactor` | you want structure cleaned up with no change in behavior |
-| `/.commit` | you want a commit message for the staged change (it asks before committing) |
+| `/.commit` | you want your changes committed: it stages them when nothing is staged (secret-looking files skipped), proposes the message, and asks before committing |
 | `/.local` | the secondary agent is unavailable, or you want Claude Code to gather evidence itself |
 | `/.promote` | verified findings should become shared, Git-tracked project knowledge |
 | `/.memory` | a lesson should be kept in your personal notes across projects |

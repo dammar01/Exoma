@@ -7,12 +7,13 @@ the graph is older. Its cost was a perception until this measured it. CASE-008 w
 with it, and it is kept so the figures can be re-counted on any project:
 
   1. project size: files inside the hook's skip directories vs source files outside them
-  2. the v3.7.3 PowerShell scan (Get-ChildItem -Recurse, filtered afterwards)
-  3. a pruned scan that never enters a skip directory, the change DEC-012 proposes
-  4. optionally the installed hook end to end, and `graphify update` alone
+  2. the hook's own scan (graph-refresh.py: os.walk, skip directories pruned before descent,
+     matched case-insensitively), replicated here and timed in this process
+  3. optionally the installed hook end to end, and `graphify update` alone
 
-Both scans are timed inside PowerShell, because that is what the hook runs; Python only
-starts them. Without PowerShell (the POSIX hook already prunes) they are reported as null.
+The scan is the same on every OS, because since DEC-055 every OS runs the same Python hook
+through Bash. CASE-008's figures came from the retired PowerShell scans (v3.7.3); they were
+timed by another method and are not comparable with `scan_ms`.
 
 Read-only unless --run-hook or --run-graphify is given: both may regenerate graphify-out/.
 --force-stale (with --run-hook) backdates graphify-out/graph.json before the hook runs, so
@@ -22,12 +23,13 @@ is put back when the hook did not rewrite it.
 graphify-out/.refresh.lock, and reports how long it took after the hook returned.
 Prints one JSON object of counts and timings, nothing from the project's files: the hook
 is named by its repository path or as `~/...`, and graphify's last line has its paths
-masked. Not part of the test suite.
+masked. The suite (metrics-contract) checks its scan and output shape; it never runs a
+measurement on a real project.
 
   python tools/maintain/measure_graph_hook.py --project <root>
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale
-  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh       --hook dist/config/claude/hooks/graph-refresh.ps1
+  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh --hook dist/config/claude/hooks/graph-refresh.sh
 """
 from __future__ import annotations
 
@@ -43,50 +45,36 @@ import sys
 import time
 from pathlib import Path
 
-# The same lists as dist/config/claude/hooks/graph-refresh.py.
+# The same lists as dist/config/claude/hooks/graph-refresh.py (a test parses both).
 SOURCE_EXTENSIONS = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".php", ".go", ".rs", ".java", ".rb")
-SKIP_DIRS = ("node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", ".next", "coverage", "graphify-out", ".workflow")
+SKIP_DIRS = frozenset({
+    "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
+    "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
+})
 
-_PS_INCLUDE = ", ".join(f"'*{ext}'" for ext in SOURCE_EXTENSIONS)
-_PS_SKIP_PATTERN = r"[\\/](" + "|".join(name.replace(".", r"\.") for name in SKIP_DIRS) + r")[\\/]"
-_PS_SKIP_NAMES = ", ".join(f"'{name}'" for name in SKIP_DIRS)
 
-# The hook's scan as v3.7.3 runs it: walk everything, drop skip directories afterwards.
-CURRENT_SCAN = f"""
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-$null = Get-ChildItem -LiteralPath $env:MEASURE_ROOT -Recurse -File -Include @({_PS_INCLUDE}) -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.FullName -notmatch '{_PS_SKIP_PATTERN}' }} |
-    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-$sw.Stop()
-[math]::Round($sw.Elapsed.TotalMilliseconds)
-"""
-
-# The scan DEC-012 proposes: an explicit stack that never enters a skip directory.
-PRUNED_SCAN = f"""
-$skip = @({_PS_SKIP_NAMES})
-$ext = @{{}}; foreach ($e in @({_PS_INCLUDE})) {{ $ext[$e.TrimStart('*')] = $true }}
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-$visited = 0; $newest = $null
-$stack = [System.Collections.Generic.Stack[string]]::new(); $stack.Push($env:MEASURE_ROOT)
-while ($stack.Count -gt 0) {{
-    $dir = $stack.Pop()
-    try {{ $entries = [System.IO.Directory]::EnumerateFileSystemEntries($dir) }} catch {{ continue }}
-    foreach ($entry in $entries) {{
-        $name = [System.IO.Path]::GetFileName($entry)
-        if ([System.IO.Directory]::Exists($entry)) {{ if ($skip -notcontains $name) {{ $stack.Push($entry) }}; continue }}
-        if (-not $ext.ContainsKey([System.IO.Path]::GetExtension($name).ToLower())) {{ continue }}
-        $visited++
-        $t = [System.IO.File]::GetLastWriteTimeUtc($entry)
-        if ($null -eq $newest -or $t -gt $newest) {{ $newest = $t }}
-    }}
-}}
-$sw.Stop()
-"$([math]::Round($sw.Elapsed.TotalMilliseconds)) $visited"
-"""
+def hook_scan(root: Path) -> dict:
+    """The hook's gate-2 scan, as graph-refresh.py runs it: milliseconds, source files seen,
+    directories pruned."""
+    started = time.perf_counter()
+    visited = skipped = 0
+    newest = 0.0
+    for dirpath, dirnames, filenames in os.walk(root):
+        kept = [d for d in dirnames if d.lower() not in SKIP_DIRS]
+        skipped += len(dirnames) - len(kept)
+        dirnames[:] = kept
+        for name in filenames:
+            if name.lower().endswith(SOURCE_EXTENSIONS):
+                visited += 1
+                try:
+                    newest = max(newest, os.path.getmtime(os.path.join(dirpath, name)))
+                except OSError:
+                    pass
+    return {"ms": round((time.perf_counter() - started) * 1000), "files_visited": visited, "dirs_skipped": skipped}
 
 
 def _hidden() -> dict:
-    """No console window per PowerShell started (Windows); the scans start one per repeat."""
+    """No console window per child started (Windows): the hook and graphify."""
     if os.name != "nt":
         return {}
     info = subprocess.STARTUPINFO()
@@ -95,25 +83,13 @@ def _hidden() -> dict:
     return {"startupinfo": info, "creationflags": subprocess.CREATE_NO_WINDOW}
 
 
-def _powershell() -> str | None:
-    return shutil.which("powershell") or shutil.which("pwsh")
-
-
-def _run_ps(shell: str, script: str, root: Path) -> str:
-    done = subprocess.run(
-        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        capture_output=True, text=True, env={**os.environ, "MEASURE_ROOT": str(root)}, check=True, **_hidden(),
-    )
-    return done.stdout.strip().splitlines()[-1]
-
-
 def project_size(root: Path) -> dict:
     """Files inside skip directories (by directory) and source files outside them."""
     in_skip: dict[str, int] = {}
     total = source = 0
     for current, dirs, files in os.walk(root):
         parts = Path(current).relative_to(root).parts
-        hit = next((part for part in parts if part in SKIP_DIRS), None)
+        hit = next((part for part in parts if part.lower() in SKIP_DIRS), None)
         total += len(files)
         if hit:
             in_skip[hit] = in_skip.get(hit, 0) + len(files)
@@ -188,20 +164,14 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
         "graph_exists": graph.is_file(),
         **project_size(root),
     }
-    shell = _powershell()
-    if shell:
-        current = [int(float(_run_ps(shell, CURRENT_SCAN, root))) for _ in range(repeat)]
-        pruned_runs = [_run_ps(shell, PRUNED_SCAN, root).split() for _ in range(repeat)]
-        pruned = [int(float(ms)) for ms, _ in pruned_runs]
-        result.update(
-            scan_current_ms=current,
-            scan_current_median_ms=statistics.median_low(current),
-            scan_pruned_ms=pruned,
-            scan_pruned_median_ms=statistics.median_low(pruned),
-            scan_pruned_files_visited=int(pruned_runs[-1][1]),
-        )
-    else:
-        result.update(scan_current_ms=None, scan_pruned_ms=None, scan_note="no PowerShell: the scans measure the Windows hook")
+    scans = [hook_scan(root) for _ in range(repeat)]
+    timings = [scan["ms"] for scan in scans]
+    result.update(
+        scan_ms=timings,
+        scan_median_ms=statistics.median_low(timings),
+        scan_files_visited=scans[-1]["files_visited"],
+        scan_dirs_skipped=scans[-1]["dirs_skipped"],
+    )
 
     if run_hook:
         if not hook.is_file():
@@ -224,8 +194,10 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
         before = _mtime(graph)
         started = time.perf_counter()
         try:
-            subprocess.run(command, input=payload, capture_output=True, text=True, **_hidden())
+            done = subprocess.run(command, input=payload, capture_output=True, text=True, errors="replace", **_hidden())
             result["hook_total_ms"] = round((time.perf_counter() - started) * 1000)
+            # The hook always exits 0; anything else is its launcher failing, not a timing.
+            result["hook_exit_code"] = done.returncode
             if wait_refresh:
                 # The turn pays hook_total_ms; this is how long the graph stayed stale after it.
                 result["refresh_after_hook_ms"] = _wait_for_refresh(root)

@@ -1,5 +1,6 @@
 """The calculation contract: registry, its documentation, and the provenance stamp."""
 
+import ast
 import contextlib
 import io
 import json
@@ -248,6 +249,7 @@ def _test_metrics_contract() -> None:
     line = graph_hook.sanitize_line(f"wrote {project / 'graphify-out' / 'graph.json'} and /home/alice/x in 2s", project)
     assert_true("alice" not in line and str(project) not in line and "in 2s" in line,
                 f"graphify's last line keeps its summary, not its paths: {line}")
+    _graph_hook_scan(graph_hook)
 
     _feature_segments()
 
@@ -267,6 +269,69 @@ def _test_metrics_contract() -> None:
 
         with mock.patch.object(metrics.subprocess, "run", failing_status):
             assert_true(metrics.tool_commit(repo) is None, "a failed git status stamps no commit")
+
+
+def _hook_literal(source: str, name: str):
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == name for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} not found in graph-refresh.py")
+
+
+def _graph_hook_scan(graph_hook) -> None:
+    # The tool times the hook's scan, so its lists are the hook's lists.
+    hook = (graph_hook.REPO_ROOT / "dist" / "config" / "claude" / "hooks" / "graph-refresh.py").read_text(encoding="utf-8")
+    assert_true(set(_hook_literal(hook, "SKIP_DIRS")) == set(graph_hook.SKIP_DIRS)
+                and tuple(_hook_literal(hook, "SOURCE_EXT")) == graph_hook.SOURCE_EXTENSIONS,
+                "measure_graph_hook skips and matches exactly what graph-refresh.py does")
+    tool = Path(graph_hook.__file__).read_text(encoding="utf-8")
+    assert_true("Get-ChildItem" not in tool and "-NoProfile" not in tool and not hasattr(graph_hook, "_powershell"),
+                "the tool measures the Bash/Python hook, not the retired PowerShell one")
+
+    root = Path(tempfile.mkdtemp(prefix="graph-hook-"))
+    try:
+        (root / "src").mkdir()
+        (root / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (root / "src" / "notes.txt").write_text("n\n", encoding="utf-8")
+        for skipped in ("Vendor", "target", "node_modules"):
+            (root / skipped).mkdir()
+            (root / skipped / "dep.py").write_text("y = 2\n", encoding="utf-8")
+        scan = graph_hook.hook_scan(root)
+        assert_true(scan["files_visited"] == 1 and scan["dirs_skipped"] == 3,
+                    f"skip directories are pruned case-insensitively, target included: {scan}")
+        size = graph_hook.project_size(root)
+        assert_true(size["source_files_outside_skip"] == 1 and size["files_in_skip_dirs"] == 3,
+                    f"project size uses the same case-insensitive skips: {size}")
+
+        result = graph_hook.measure(root, hook=root / "missing.sh", repeat=2, run_hook=False, run_graphify=False)
+        assert_true(len(result["scan_ms"]) == 2 and result["scan_files_visited"] == 1
+                    and result["scan_dirs_skipped"] == 3 and "scan_current_ms" not in result,
+                    f"measure reports the hook scan, no PowerShell fields: {result}")
+
+        hook_file = root / "graph-refresh.sh"
+        hook_file.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        with mock.patch("utils.osutil.find_bash", return_value=None):
+            try:
+                graph_hook.measure(root, hook=hook_file, repeat=1, run_hook=True, run_graphify=False)
+                refused = None
+            except SystemExit as exc:
+                refused = str(exc)
+        assert_true(refused is not None and "no bash" in refused,
+                    f"without Bash the hook is refused, never run through a guessed shell: {refused}")
+
+        from utils.osutil import find_bash
+        if find_bash():
+            # A space and a non-ASCII letter in the path: Windows Git Bash and POSIX alike.
+            odd = root / "hook dir é"
+            odd.mkdir()
+            for code in (0, 3):
+                failing = odd / f"graph-refresh-{code}.sh"
+                failing.write_bytes(f"#!/usr/bin/env bash\ncat >/dev/null\nexit {code}\n".encode())
+                ran = graph_hook.measure(root, hook=failing, repeat=1, run_hook=True, run_graphify=False)
+                assert_true(ran["hook_exit_code"] == code and isinstance(ran["hook_total_ms"], int),
+                            f"the hook's exit code is recorded beside its timing: {ran}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _feature_segments() -> None:

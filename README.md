@@ -193,7 +193,7 @@ the reference says **exactly what the runtime does** — see [docs/](docs/README
 | [docs/security.md](docs/security.md) | What each secondary-agent provider is allowed to read and change |
 | [docs/team-guide](docs/team-guide/README.md) | For developers: getting started, when to use it, task framing, examples, troubleshooting |
 | [docs/architecture](docs/architecture/README.md) | Verified request flow, components, and storage |
-| [docs/reference.md](docs/reference.md) | Complete technical reference: configuration, jobs, fact store, evidence reuse, verify modes, sessions, tests, CI *(Bahasa Indonesia)* |
+| [docs/reference.md](docs/reference.md) | Complete technical reference: configuration, jobs, fact store, evidence reuse, verify modes, sessions, tests, CI |
 | [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the runtime obeys, and which it cannot enforce |
 | [docs/limitations.md](docs/limitations.md) | Known limitations |
 | [docs/research](docs/research/README.md) | Research method, contract, and records |

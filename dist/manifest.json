@@ -28,8 +28,8 @@
     },
     {
       "path": "claude/skills/commit.md",
-      "sha256": "dabc419f982abd510d5503baf9318a257864ce0059c93bdf8cac003eff39681c",
-      "bytes": 492,
+      "sha256": "c11fa596ff27e090b99ec4f215e9d0d15ef707f85f59ba06afcf790d962ca942",
+      "bytes": 1228,
       "merge": "replace",
       "component": "prompt_bundle"
     },
