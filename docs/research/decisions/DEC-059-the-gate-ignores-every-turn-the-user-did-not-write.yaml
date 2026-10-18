@@ -46,7 +46,7 @@ evidence_notes: |
   a real marker.
 implementation:
   version: 3.8.4
-  commits: [uncommitted]
+  commits: [0a43309]
   components:
     - dist/config/claude/hooks/intent-gate-set.py (not_user_prompt, provenance fields in the marker)
     - tests/checks/intent_gate.py, tests/fixtures/hooks/host_turns.json
