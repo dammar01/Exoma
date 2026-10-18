@@ -51,7 +51,7 @@ related_notes: |
 
 implementation:
   version: 3.8.4
-  commits: [3a4ba3e]
+  commits: [0a43309]
   feature: intent gate (intent-gate-set)
 
 disposition:
