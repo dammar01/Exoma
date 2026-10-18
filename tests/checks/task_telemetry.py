@@ -12,7 +12,8 @@ from pathlib import Path
 from core.audit import task_telemetry
 from core.audit.task_telemetry import derive_tasks
 
-from tests.checks.support import assert_true, powershell_for_hooks
+from tests.checks.support import assert_true
+from utils.osutil import find_bash
 
 HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
 
@@ -117,18 +118,10 @@ def _check_runtime_event() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def _embedded_python() -> str:
-    text = (HOOKS / "task-events.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
-    start = text.index("<<'PY'\n") + len("<<'PY'\n")
-    return text[start : text.index("\nPY\n", start)]
-
-
 def _runners() -> list[tuple[str, list[str]]]:
-    runners = [("sh:python", [sys.executable, "-c", _embedded_python()])]
-    shell = powershell_for_hooks()
-    if shell:
-        runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "task-events.ps1")]))
-    bash = shutil.which("bash") if sys.platform != "win32" else None
+    """task-events.py directly, and the bash launcher Claude Code runs (Git Bash on Windows)."""
+    runners = [("py", [sys.executable, str(HOOKS / "task-events.py")])]
+    bash = find_bash()
     if bash:
         runners.append(("sh", [bash, str(HOOKS / "task-events.sh")]))
     return runners
@@ -139,7 +132,7 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _check_hook_flavours() -> None:
-    """Both flavours turn the same hook events into the same task events (event v2).
+    """The hook and its launcher turn the same hook events into the same task events (event v2).
 
     A skill comes from the prompt or the Skill tool, never from a Read; a commit is a HEAD
     that moved between two turn boundaries, recorded once, whatever Bash calls ran.

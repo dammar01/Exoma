@@ -53,8 +53,8 @@ def graph_path(project_root) -> Path:
 
 
 REFRESH_LOCK_FILENAME = ".refresh.lock"
-# Equal to BEAT_STALE_S / $BeatStaleSeconds and LEGACY_MAX_AGE_S / $LegacyMaxAgeSeconds in
-# graph-refresh.sh / .ps1 (a test parses both). graphify runs without a time limit (DEC-042),
+# Equal to BEAT_STALE_S and LEGACY_MAX_AGE_S in the graph-refresh hook
+# (dist/config/claude/hooks/graph-refresh.py; a test parses both). graphify runs without a time limit (DEC-042),
 # so a lock is held while its worker keeps rewriting `beat`, every BEAT_INTERVAL_S there, not
 # while it is young: a refresh of any length never reads as stale.
 _REFRESH_BEAT_STALE_SECONDS = 120

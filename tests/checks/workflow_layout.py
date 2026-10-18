@@ -75,7 +75,7 @@ def _check_unmigrated_workspace_stays_where_its_data_is() -> None:
 def _check_hooks_share_the_rule() -> None:
     hooks = _REPO / "dist" / "config" / "claude" / "hooks"
     for name in ("intent-gate-set", "intent-gate-check", "workflow-statusline"):
-        for suffix in ("ps1", "sh"):
+        for suffix in ("py",):
             text = (hooks / f"{name}.{suffix}").read_text(encoding="utf-8")
             listed = re.findall(r"['\"]([\w.-]+(?:\.jsonl)?)['\"]", text[text.find("data") :])
             assert_true(

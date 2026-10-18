@@ -5,9 +5,8 @@ description: Local .workflow readiness and bundle-integrity check.
 /.doctor
 
 ## STEP 1 — Bootstrap check
-- .workflow/run.ps1|sh ADA → local runtime call:
-    Windows:   & "<work_dir>\.workflow\run.ps1" doctor "check .workflow readiness"
-    mac/linux: "<work_dir>/.workflow/run.sh" doctor "check .workflow readiness"
+- .workflow/run.sh ADA → local runtime call:
+    Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' doctor 'check .workflow readiness'
 - .workflow belum ada → STEP 2 (local check). JANGAN gagal, JANGAN simpulkan package missing.
 
 ## STEP 2 — Local check (fallback, cek langsung)

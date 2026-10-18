@@ -124,13 +124,13 @@ Ask in natural language; the primary agent routes it:
 ```text
 you:          where is the authentication logic in this project?
 Claude Code:  [INTENT] explore — location question
-              (runs .workflow/run.ps1 explore "...")
+              (runs bash .workflow/run.sh explore '...')
 ```
 
 Or call the runtime directly:
 
 ```bash
-.workflow/run.sh explore "find the authentication entry point" "<SESSION_ID>"
+bash .workflow/run.sh explore 'find the authentication entry point' '<SESSION_ID>'
 ```
 
 The generated runner refuses a delegated call without a session id: without one,

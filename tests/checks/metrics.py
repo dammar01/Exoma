@@ -241,7 +241,7 @@ def _test_metrics_contract() -> None:
     # --- the graph-hook tool names no absolute path -----------------------------------------
     from tools.maintain import measure_graph_hook as graph_hook
 
-    assert_true(graph_hook.hook_label(Path.home() / ".claude" / "hooks" / "graph-refresh.ps1") == "~/.claude/hooks/graph-refresh.ps1"
+    assert_true(graph_hook.hook_label(Path.home() / ".claude" / "hooks" / "graph-refresh.sh") == "~/.claude/hooks/graph-refresh.sh"
                 and graph_hook.hook_label(graph_hook.REPO_ROOT / "dist" / "h.sh") == "dist/h.sh",
                 "the measured hook is named by its repository path or under ~, never with the user's home")
     project = Path(tempfile.gettempdir()) / "some-project"

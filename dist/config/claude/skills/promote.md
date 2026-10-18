@@ -36,8 +36,7 @@ Anchor tiap `codeSource` diambil dari runtime, bukan dihitung sendiri:
 ## STEP 4 — Rekonsiliasi
 Tulis dokumen kandidat ke file, lalu:
 
-Windows:   & "<work_dir>\.workflow\run.ps1" promote-verify "<path kandidat.json>"
-mac/linux: "<work_dir>/.workflow/run.sh" promote-verify "<path kandidat.json>"
+Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' promote-verify '<path kandidat.json>'
 
 Runtime balas `meta.verification` (status freshness per klaim) dan `meta.reconciliation`
 (NEW | UNCHANGED | UPDATE | CONFLICT | UNVERIFIED per klaim, plus `untouched_existing`).
@@ -68,8 +67,7 @@ verifikasi lagi SEBELUM menulis. Jangan menulis hasil verifikasi yang sudah basi
 ## STEP 7 — Tulis
 Hanya setelah approve:
 
-Windows:   & "<work_dir>\.workflow\run.ps1" promote-write "<path final.json>"
-mac/linux: "<work_dir>/.workflow/run.sh" promote-write "<path final.json>"
+Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' promote-write '<path final.json>'
 
 Runtime memvalidasi, menolak source yang di-gitignore, memangkas exclusion yang branch-nya
 sudah mati, lalu menulis. Ditolak → laporkan `meta.errors` apa adanya, jangan akali

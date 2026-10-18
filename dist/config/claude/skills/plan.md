@@ -6,8 +6,7 @@ description: Structured planning — evidence (1-call) + reasoning main_agent. A
 
 ## STEP 1 — Evidence
 Reuse LAST_EXPLORE_RESULT jika ada di context. Else 1-call:
-  Windows:   & "<work_dir>\.workflow\run.ps1" plan "<task>" "<MAIN_SESSION_ID>"
-  mac/linux: "<work_dir>/.workflow/run.sh" plan "<task>" "<MAIN_SESSION_ID>"
+  Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' plan '<task>' '<MAIN_SESSION_ID>'
 <MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent).
 - GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
   STOP → "[PROXY GAGAL] <alasan>. Lanjut plan via /.local atau tanpa evidence? (yes/no)" → TUNGGU. JANGAN auto-fallback.

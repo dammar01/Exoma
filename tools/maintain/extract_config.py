@@ -51,7 +51,7 @@ ALLOWLIST = [
     (".claude/CLAUDE.md", "claude/CLAUDE.md", "file"),
     (".claude/skills", "claude/skills", "dir:*.md"),
     (".claude/commands", "claude/commands", "dir:*.md"),
-    (".claude/hooks", "claude/hooks", "dir:*.ps1,*.sh,intent-map.json"),
+    (".claude/hooks", "claude/hooks", "dir:*.sh,*.py,intent-map.json"),
     *(
         # One entry per declared provider bundle (config/providers.py) rather than a
         # literal per vendor. Still an explicit allowlist: a provider only appears here

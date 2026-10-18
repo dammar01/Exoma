@@ -6,8 +6,7 @@ description: Deep analysis via second_agent (1-call). --local: Claude only.
 /.analyze --local <topic>  → Claude langsung (skip proxy)
 
 ## Run (1-call)
-Windows:   & "<work_dir>\.workflow\run.ps1" analyze "<topic>" "<MAIN_SESSION_ID>"
-mac/linux: "<work_dir>/.workflow/run.sh" analyze "<topic>" "<MAIN_SESSION_ID>"
+Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' analyze '<topic>' '<MAIN_SESSION_ID>'
 <MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent). Reuse LAST_EXPLORE_RESULT jika relevan.
 Task nyentuh library eksternal → sebut nama library; proxy baca context7 docs dulu → temuan di external (bukan tebakan API).
 GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:

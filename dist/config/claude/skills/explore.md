@@ -5,8 +5,7 @@ description: Codebase evidence via second_agent (1-call). Fallback: /.local.
 /.explore <hint>
 
 ## Run (1-call)
-Windows:   & "<work_dir>\.workflow\run.ps1" explore "<hint>" "<MAIN_SESSION_ID>"
-mac/linux: "<work_dir>/.workflow/run.sh" explore "<hint>" "<MAIN_SESSION_ID>"
+Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' explore '<hint>' '<MAIN_SESSION_ID>'
 - <MAIN_SESSION_ID> = nilai dari blok [SESSION BINDING]. WAJIB diteruskan (arg ke-3) — concurrent same-project butuh isolasi per-session. Absent → run script fallback (single-agent OK).
 - Blocking sampai selesai. Return JSON {ok, content, meta, digest}.
 - Tak karang command, tak check.py, tak AGENT_PATH.

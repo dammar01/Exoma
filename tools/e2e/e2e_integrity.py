@@ -12,6 +12,7 @@ from tools.e2e.e2e_support import (
     sys,
     tempfile,
 )
+from utils.osutil import find_bash  # noqa: E402 - after e2e_support puts the repo on sys.path
 from core.workspace.workspace_paths import data_dir  # noqa: E402 - after e2e_support puts the repo on sys.path
 
 
@@ -238,14 +239,8 @@ def integrity_checks(report: Report) -> None:
             r2["regenerated_scripts"] == [],
             f"{len(r2['regenerated_scripts'])} script(s)",
         )
-        script = next(
-            (
-                p
-                for p in (project / ".workflow").glob("run.*")
-                if p.suffix in {".ps1", ".sh"}
-            ),
-            None,
-        )
+        script = project / ".workflow" / "run.sh"
+        script = script if script.exists() else None
         if script is None:
             report.record(
                 "upgrade: rewrites a drifted script", SKIP, "no run script generated"
@@ -273,40 +268,28 @@ def integrity_checks(report: Report) -> None:
                 "doctor: drift clears once upgrade has rewritten the script",
                 script_drift(project, str(REPO_ROOT / "main.py")) == [],
             )
-            # A leftover from the other platform is unmaintained by every generator that
-            # runs here, so it must be reported and then removed — not quietly kept.
-            other = script.with_suffix(".sh" if script.suffix == ".ps1" else ".ps1")
-            other.write_text("# stale cross-OS leftover\n", encoding="utf-8")
+            # A run.ps1 an earlier release generated is unmaintained by every generator
+            # now, so it must be reported and then removed — not quietly kept.
+            other = script.with_suffix(".ps1")
+            other.write_text("# retired PowerShell runner\n", encoding="utf-8")
             report.check(
-                "doctor: flags an entry script left behind for the other OS",
+                "doctor: flags a retired PowerShell entry script",
                 any(
-                    d["script"] == other.name and d["state"] == "foreign_os_leftover"
+                    d["script"] == other.name and d["state"] == "retired_leftover"
                     for d in script_drift(project, str(REPO_ROOT / "main.py"))
                 ),
             )
             upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
             report.check(
-                "upgrade: removes the other OS's leftover entry script",
+                "upgrade: removes the retired PowerShell entry script",
                 not other.exists(),
             )
 
             # The entry script is the only sanctioned way in, and local commands take no
-            # task. PowerShell drops empty-string arguments to a native exe, so a literal
-            # `--prompt $Task` used to reach argparse as a bare flag and every local
-            # command died at the door. Exercised through the script, not the CLI: calling
-            # main.py directly would never have caught it.
-            runner = (
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script),
-                ]
-                if script.suffix == ".ps1"
-                else [str(script)]
-            )
+            # task: an empty `--prompt` reaching argparse as a bare flag once killed every
+            # local command at the door. Exercised through the script, under the bash the
+            # skills use (Git Bash on Windows); calling main.py directly would never catch it.
+            runner = [find_bash() or "bash", str(script)]
             for command in ("doctor", "inspect"):
                 res = subprocess.run(
                     [*runner, command],

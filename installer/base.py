@@ -487,17 +487,13 @@ def _targets() -> list[tuple[Path, Path, str]]:
             dir_families.append(
                 (name, bundle["agents_dir"], provider_home / bundle["agents_dir"])
             )
-    # Ship only the current OS's script flavour: Windows gets .ps1, POSIX gets .sh. Non-script
-    # files (e.g. intent-map.json) carry no ext filter and install on both.
-    want_ext = "ps1" if os.name == "nt" else "sh"
+    # One set of files for every OS: hooks are bash launchers (Git Bash on Windows) beside
+    # the .py they run.
     for family, sub, dest_dir in dir_families:
         source_dir = DIST_CONFIG / family / sub
         if source_dir.is_dir():
             for path in sorted(source_dir.iterdir()):
                 if path.is_file():
-                    ext = path.suffix.lstrip(".").lower()
-                    if ext in ("ps1", "sh") and ext != want_ext:
-                        continue
                     mapping.append(
                         (path, dest_dir / path.name, f"{family}/{sub}/{path.name}")
                     )

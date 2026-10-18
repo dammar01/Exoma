@@ -142,19 +142,6 @@ def _marker_block(text: str, start: str, end: str) -> str | None:
     return match.group(0) if match else None
 
 
-def _os_variant_skip(rel: str) -> bool:
-    """True for a shipped script written for the other OS.
-
-    The installer ships one flavour per platform (.ps1 on Windows, .sh elsewhere) while
-    the manifest lists both, so the absent flavour is expected — not missing. Mirrors the
-    filter in install._targets(); keep the two in step.
-    """
-    suffix = Path(rel).suffix.lstrip(".").lower()
-    if suffix not in {"ps1", "sh"}:
-        return False
-    return suffix != ("ps1" if os.name == "nt" else "sh")
-
-
 def _bundle_integrity(
     dist_config_dir: Path, manifest_path: Path, project_root: Path | str | None = None
 ) -> dict:
@@ -213,9 +200,6 @@ def _bundle_integrity(
     result["intent_mode"] = "command_only" if only_command else "auto_intent"
     for entry in files:
         rel = entry.get("path")
-        if _os_variant_skip(rel):
-            result["skipped"].append({"path": rel, "reason": "os_variant"})
-            continue
         installed = _installed_path_for(rel, targets, project_root)
         if (
             _is_agent_roster_path(rel)
@@ -292,12 +276,10 @@ def _bundle_integrity(
     except OSError:
         result["manifest_fresh"] = None
 
-    # Same OS split as the installer: checking for .ps1 on Linux would fail every time.
-    ext = "ps1" if os.name == "nt" else "sh"
+    # The same on every OS: each gate hook is a bash launcher plus the .py it runs.
     required_hooks = [
-        f"session-bind.{ext}",
-        f"intent-gate-set.{ext}",
-        f"intent-gate-check.{ext}",
+        "workflow_hooks.py",
+        *(f"{stem}.{ext}" for stem in ("session-bind", "intent-gate-set", "intent-gate-check") for ext in ("sh", "py")),
     ]
     hook_target = _installed_path_for("claude/hooks", targets, project_root)
     if hook_target is not None:

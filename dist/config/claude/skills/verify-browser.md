@@ -62,8 +62,7 @@ Key settings sah di request: base_url browser headless slow_mo_ms nav_timeout_ms
 DILARANG menulis nilai credential ke request, task, atau scenario — hanya `${E2E_USER}`/`${E2E_PASS}`. Runtime mencocokkan nilai secrets.json ke task, draft, dan request.json: yang cocok diganti placeholder (request.json ditulis ulang), run tetap jalan, dan `meta.e2e.secret_literals` + `config_warnings` menyebut NAMA key-nya. Muncul → laporkan ke user sebagai kebocoran yang sudah ditambal, bukan sukses diam-diam. `fill` ke field password tanpa placeholder → `spec_invalid`.
 
 ## STEP 3 — Draft (background)
-Windows:   & "<work_dir>\.workflow\run.ps1" verify-browser "<task>" "<MAIN_SESSION_ID>"
-mac/linux: "<work_dir>/.workflow/run.sh" verify-browser "<task>" "<MAIN_SESSION_ID>"
+Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' verify-browser '<task>' '<MAIN_SESSION_ID>'
 `run_in_background: true`, ambil hasil task ID yang sama. <task> ≤3000 char, isi: alur + claims yang diharapkan, base_url, nama key credential (`${E2E_USER}`...), boleh/tidak side effect, file yang berubah bila tahu. JANGAN tempel isi kode.
 Hasil `meta.phase=draft`, `content` = [E2E DRAFT], detail di `meta.e2e.draft` + file `draft.json` di folder yang sama.
 - ok:false (stage 1 gagal) → HARD GATE [PROXY GAGAL] seperti delegated. JANGAN karang scenario sendiri diam-diam.

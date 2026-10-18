@@ -7,8 +7,8 @@ now prunes skip directories before walking, starts a detached worker under
 graphify that sleeps, rewrites graph.json, and exits 1 as the real one does on a large
 graph.
 
-Runners follow tests/checks/statusline.py: the `.ps1` through PowerShell when present, the
-`.sh` flavour's embedded python everywhere, and the real bash wrapper on POSIX only.
+Runners follow tests/checks/statusline.py: graph-refresh.py directly, and the bash launcher
+(Git Bash on Windows) that Claude Code runs.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ import time
 from pathlib import Path
 
 from core.graph import graph_index
-from utils.osutil import hidden_run_kwargs
-from tests.checks.support import assert_true, powershell_for_hooks
+from utils.osutil import find_bash, hidden_run_kwargs
+from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOKS = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
@@ -44,18 +44,13 @@ sys.exit(1)
 """
 
 
-def _embedded_python() -> str:
-    text = (HOOKS / "graph-refresh.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
-    start = text.index("<<'PY'\n") + len("<<'PY'\n")
-    return text[start : text.index("\nPY\n", start)]
+def _hook_source() -> str:
+    return (HOOKS / "graph-refresh.py").read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
 def _runners() -> list[tuple[str, list[str]]]:
-    runners: list[tuple[str, list[str]]] = [("sh:python", [sys.executable, "-c", _embedded_python()])]
-    shell = powershell_for_hooks()
-    if shell:
-        runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "graph-refresh.ps1")]))
-    bash = shutil.which("bash") if sys.platform != "win32" else None
+    runners: list[tuple[str, list[str]]] = [("py", [sys.executable, str(HOOKS / "graph-refresh.py")])]
+    bash = find_bash()
     if bash:
         runners.append(("sh", [bash, str(HOOKS / "graph-refresh.sh")]))
     return runners
@@ -353,11 +348,11 @@ def _check_call_during_refresh() -> None:
 
 
 def _sh_namespace() -> dict:
-    """The `.sh` flavour's embedded python, loaded without running a hook (no payload)."""
-    namespace: dict = {"__name__": "graph_refresh_sh"}
+    """graph-refresh.py, loaded without running a hook (no payload)."""
+    namespace: dict = {"__name__": "graph_refresh_hook"}
     saved = os.environ.pop("CLAUDE_HOOK_RAW", None)
     try:
-        exec(_embedded_python(), namespace)
+        exec(_hook_source(), namespace)
     except SystemExit:
         pass
     finally:
@@ -366,48 +361,26 @@ def _sh_namespace() -> dict:
     return namespace
 
 
-def _ps1_block(text: str, first: str) -> str:
-    """The lines of graph-refresh.ps1 from the one starting with `first` to its closing `}`."""
-    start = text.index(first)
-    return text[start : text.index("\n}\n", start) + 3]
-
-
-def _run_ps1_snippet(shell: str, root: Path, body: str, env: dict | None = None) -> str:
-    script = root / f"snippet-{time.monotonic_ns()}.ps1"
-    script.write_text(body, encoding="utf-8")
-    done = subprocess.run(
-        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-        capture_output=True, text=True, timeout=60, env={**os.environ, **(env or {})}, **hidden_run_kwargs(),
-    )
-    return done.stdout.strip()
-
-
 def _check_lock_rule_agrees() -> None:
-    """Both hooks and the reader judge a lock by the same numbers (DEC-042): held while its
+    """The hook and the reader judge a lock by the same numbers (DEC-042): held while its
     beat is younger than the stale window, a legacy lock by its age, and the interval a
     worker beats at is well inside the window. GRAPH_REFRESH_BEAT_S only shortens it."""
     import re
 
-    sh = (HOOKS / "graph-refresh.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
-    ps1 = (HOOKS / "graph-refresh.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
+    sh = _hook_source()
 
     def number(text: str, pattern: str) -> int:
         return int(re.search(pattern, text, re.M).group(1))
 
     sh_beat, sh_stale, sh_legacy = (number(sh, rf"^{name} = (\d+)$") for name in ("BEAT_INTERVAL_S", "BEAT_STALE_S", "LEGACY_MAX_AGE_S"))
-    ps1_beat, ps1_stale, ps1_legacy = (
-        number(ps1, rf"^\${name} = (\d+)$") for name in ("BeatIntervalSeconds", "BeatStaleSeconds", "LegacyMaxAgeSeconds")
-    )
     reader = (graph_index._REFRESH_BEAT_STALE_SECONDS, graph_index._REFRESH_LEGACY_MAX_AGE_SECONDS)
     assert_true(
-        (sh_beat, sh_stale, sh_legacy) == (ps1_beat, ps1_stale, ps1_legacy)
-        and (sh_stale, sh_legacy) == reader and 0 < sh_beat * 4 <= sh_stale,
-        f"lock rule agrees across graph-refresh.sh ({sh_beat}/{sh_stale}/{sh_legacy}), graph-refresh.ps1 "
-        f"({ps1_beat}/{ps1_stale}/{ps1_legacy}) and core.graph.graph_index {reader}",
+        (sh_stale, sh_legacy) == reader and 0 < sh_beat * 4 <= sh_stale,
+        f"lock rule agrees across graph-refresh.py ({sh_beat}/{sh_stale}/{sh_legacy}) and core.graph.graph_index {reader}",
     )
     assert_true(
-        "GRAPH_REFRESH_LIMIT_S" not in sh and "GRAPH_REFRESH_LIMIT_S" not in ps1,
-        "neither flavour reads GRAPH_REFRESH_LIMIT_S any more: graphify has no time limit",
+        "GRAPH_REFRESH_LIMIT_S" not in sh,
+        "the hook no longer reads GRAPH_REFRESH_LIMIT_S: graphify has no time limit",
     )
 
     namespace = _sh_namespace()
@@ -416,24 +389,12 @@ def _check_lock_rule_agrees() -> None:
         for given, expected in (("0.5", 0.5), ("0", sh_beat), (str(sh_stale), sh_beat), ("soon", sh_beat)):
             os.environ["GRAPH_REFRESH_BEAT_S"] = given
             got = namespace["beat_interval"]()
-            assert_true(got == expected, f"[sh] GRAPH_REFRESH_BEAT_S={given} beats every {expected}s; got {got}")
+            assert_true(got == expected, f"[py] GRAPH_REFRESH_BEAT_S={given} beats every {expected}s; got {got}")
     finally:
         if saved is None:
             os.environ.pop("GRAPH_REFRESH_BEAT_S", None)
         else:
             os.environ["GRAPH_REFRESH_BEAT_S"] = saved
-
-    shell = powershell_for_hooks()
-    if not shell:
-        return
-    block = _ps1_block(ps1, "$BeatIntervalSeconds = ")
-    root = Path(tempfile.mkdtemp(prefix="graph-refresh-beat-"))
-    try:
-        for given, expected in (("0.5", "0.5"), ("soon", str(ps1_beat)), (str(ps1_stale), str(ps1_beat))):
-            got = _run_ps1_snippet(shell, root, block + "[string]$BeatIntervalSeconds\n", {"GRAPH_REFRESH_BEAT_S": given})
-            assert_true(got == expected, f"[ps1] GRAPH_REFRESH_BEAT_S={given} beats every {expected}s; got {got!r}")
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 class _Worker:
@@ -447,7 +408,7 @@ class _Worker:
 def _check_hand_off_only_while_the_lock_is_ours() -> None:
     """The hook hands its lock to the worker only while it still holds it. A worker that
     already finished has removed the lock; writing it back would leave an orphan naming a
-    dead pid. Both flavours: missing stays missing, another hook's lock is not clobbered."""
+    dead pid. Missing stays missing, another hook's lock is not clobbered."""
     hand_off = _sh_namespace()["hand_off"]
     root = Path(tempfile.mkdtemp(prefix="graph-refresh-handoff-"))
     try:
@@ -457,12 +418,12 @@ def _check_hand_off_only_while_the_lock_is_ours() -> None:
             return sorted(p.name for p in root.iterdir() if p.name.startswith(".refresh.lock."))
 
         hand_off(str(lock), "tok", _Worker(4242, None))
-        assert_true(not lock.exists() and not leftovers(), "[sh] a lock the worker already removed is not recreated")
+        assert_true(not lock.exists() and not leftovers(), "[py] a lock the worker already removed is not recreated")
 
         foreign = json.dumps({"pid": 1, "token": "other", "started": 1})
         lock.write_text(foreign, encoding="utf-8")
         hand_off(str(lock), "tok", _Worker(4242, None))
-        assert_true(lock.read_text(encoding="utf-8") == foreign and not leftovers(), "[sh] another hook's lock is left alone")
+        assert_true(lock.read_text(encoding="utf-8") == foreign and not leftovers(), "[py] another hook's lock is left alone")
 
         lock.write_text(json.dumps({"pid": 7, "token": "tok", "started": 1}), encoding="utf-8")
         hand_off(str(lock), "tok", _Worker(4242, None))
@@ -470,33 +431,12 @@ def _check_hand_off_only_while_the_lock_is_ours() -> None:
         assert_true(
             handed.get("pid") == 4242 and handed.get("token") == "tok" and isinstance(handed.get("beat"), int)
             and not leftovers(),
-            f"[sh] a lock still ours is handed to the running worker: {handed}",
+            f"[py] a lock still ours is handed to the running worker: {handed}",
         )
 
         lock.write_text(json.dumps({"pid": 7, "token": "tok", "started": 1}), encoding="utf-8")
         hand_off(str(lock), "tok", _Worker(4242, 0))
-        assert_true(not lock.exists(), "[sh] a worker that finished during the hand-off leaves no lock behind")
-
-        shell = powershell_for_hooks()
-        if not shell:
-            return
-        ps1 = (HOOKS / "graph-refresh.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
-        function = _ps1_block(ps1, "function Set-RefreshLock")
-        call = f"try {{ Set-RefreshLock '{lock}' 4242 'tok' $false }} catch {{ }}\n"
-        lock.unlink(missing_ok=True)
-        _run_ps1_snippet(shell, root, function + call)
-        assert_true(not lock.exists() and not leftovers(), "[ps1] a lock the worker already removed is not recreated")
-        lock.write_text(foreign, encoding="utf-8")
-        _run_ps1_snippet(shell, root, function + call)
-        assert_true(lock.read_text(encoding="utf-8") == foreign and not leftovers(), "[ps1] another hook's lock is left alone")
-        lock.write_text(json.dumps({"pid": 7, "token": "tok", "started": 1}), encoding="utf-8")
-        _run_ps1_snippet(shell, root, function + call)
-        handed = json.loads(lock.read_text(encoding="utf-8"))
-        assert_true(
-            handed.get("pid") == 4242 and handed.get("token") == "tok" and isinstance(handed.get("beat"), int)
-            and not leftovers(),
-            f"[ps1] a lock still ours is handed to the worker: {handed}",
-        )
+        assert_true(not lock.exists(), "[py] a worker that finished during the hand-off leaves no lock behind")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

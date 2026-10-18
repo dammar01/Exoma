@@ -111,12 +111,11 @@ def installer_checks(report: Report) -> None:
             ),
         )
 
-        want_ext = "ps1" if os.name == "nt" else "sh"
-        statusline = fake_home / ".claude" / "hooks" / f"workflow-statusline.{want_ext}"
+        hooks_dir = fake_home / ".claude" / "hooks"
         report.check(
-            "statusline script installed for this OS",
-            statusline.exists(),
-            f"expected workflow-statusline.{want_ext}",
+            "statusline launcher, its module and the dispatcher installed",
+            all((hooks_dir / name).exists() for name in ("workflow-statusline.sh", "workflow-statusline.py", "workflow_hooks.py")),
+            "expected workflow-statusline.sh, workflow-statusline.py and workflow_hooks.py",
         )
 
         if settings.exists():
@@ -137,14 +136,15 @@ def installer_checks(report: Report) -> None:
                     "workflow-statusline" in status_cmd and "{{HOME}}" not in status_cmd,
                     status_cmd[:120],
                 )
-                # `statusLine` sits BESIDE `hooks`, so the POSIX rewrite has to reach it
-                # separately. Getting this wrong ships a mac/linux statusline that shells
-                # out to `powershell`, and Claude Code renders a broken statusline as an
-                # empty one — no error, just a bar that stops saying anything.
+                # `statusLine` sits BESIDE `hooks`, so the renderer has to reach it
+                # separately. Getting this wrong ships a statusline naming no interpreter,
+                # and Claude Code renders a broken statusline as an empty one — no error,
+                # just a bar that stops saying anything.
                 report.check(
-                    "statusLine points at this OS's script flavour",
-                    f"workflow-statusline.{want_ext}" in status_cmd
-                    and ("powershell" in status_cmd) == (os.name == "nt"),
+                    "statusLine runs the bash launcher, interpreter filled in",
+                    "workflow-statusline.sh" in status_cmd
+                    and "{{HOOK_BASH}}" not in json.dumps(loaded)
+                    and "powershell" not in status_cmd,
                     status_cmd[:120],
                 )
             except json.JSONDecodeError as exc:

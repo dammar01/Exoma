@@ -102,7 +102,8 @@ from installer.settings import (  # noqa: E402,F401
     _merge_hook_entries,
     _provider_config_path,
     _remove_intent_hook_entries,
-    _rewrite_hooks_for_posix,
+    _render_hook_commands,
+    hook_bash_command,
 )
 
 
@@ -535,6 +536,18 @@ def main() -> int:
 
     for key in stale_bundle:
         plan.warn(f"dist/ does not match the manifest for {key} (dry run; --apply refuses)")
+
+    # Every hook is a bash launcher on every OS. Without a bash the settings would register
+    # commands that cannot start, and Claude Code shows a hook that cannot start as nothing.
+    if hook_bash_command() is None:
+        message = (
+            "no Git Bash found: the workflow's hooks run through bash on every OS. Install "
+            "Git for Windows (its bash is found next to git.exe), then rerun."
+        )
+        if apply:
+            print(f"[INSTALL] ABORTED — {message} Nothing was written.")
+            return 6
+        plan.warn(f"{message} (dry run, would block --apply)")
 
     if apply:
         # Begun after every abort-before-writing check and before the first write,

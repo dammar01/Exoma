@@ -34,7 +34,8 @@ from installer.base import Plan
 from installer.settings import (
     _install_settings,
     _merge_hook_entries,
-    _rewrite_hooks_for_posix,
+    _render_hook_commands,
+    hook_bash_command,
 )
 from tests.checks.support import assert_true
 
@@ -281,48 +282,43 @@ def _test_installer_settings_merge() -> None:
         "the shipped half of a mixed entry must still be refreshed",
     )
 
+    shipped_cmd = {"type": "command", "command": '{{HOOK_BASH}} "C:\\Users\\x/.claude/hooks/session-bind.sh"'}
     template = {
-        "statusLine": {
-            "type": "command",
-            "command": (
-                "powershell -NoProfile -ExecutionPolicy Bypass -File "
-                '"C:\\Users\\x\\.claude\\hooks\\workflow-statusline.ps1"'
-            ),
-        },
-        "hooks": {
-            "SessionStart": [json.loads(json.dumps(shipped)), json.loads(json.dumps(foreign))]
-        },
+        "statusLine": {"type": "command", "command": '{{HOOK_BASH}} "C:\\Users\\x/.claude/hooks/workflow-statusline.sh"'},
+        "hooks": {"SessionStart": [{"hooks": [shipped_cmd]}, json.loads(json.dumps(foreign))]},
     }
-    original_os_name = settings_mod.os.name
-    try:
-        settings_mod.os.name = "posix"
-        rewritten = _rewrite_hooks_for_posix(json.loads(json.dumps(template)))
+    for bash in ("bash", '"C:/Program Files/Git/bin/bash.exe"'):
+        rendered = _render_hook_commands(json.loads(json.dumps(template)), bash)
         assert_true(
-            rewritten["statusLine"]["command"]
-            == 'bash "C:/Users/x/.claude/hooks/workflow-statusline.sh"',
-            "statusLine sits BESIDE hooks, so a rewrite that walks only `hooks` leaves a "
-            "mac/linux statusline shelling out to powershell. Claude Code renders a "
-            "broken statusline as an empty one, so the symptom is a bar that silently "
-            f"stops saying anything: got {rewritten['statusLine']['command']!r}",
+            rendered["statusLine"]["command"] == f'{bash} "C:/Users/x/.claude/hooks/workflow-statusline.sh"',
+            "statusLine sits BESIDE hooks, so a renderer that walks only `hooks` leaves the "
+            "statusline naming no interpreter. Claude Code renders a broken statusline as an "
+            f"empty one: got {rendered['statusLine']['command']!r}",
         )
-        ours = rewritten["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        theirs = rewritten["hooks"]["SessionStart"][1]["hooks"][0]["command"]
+        ours = rendered["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        theirs = rendered["hooks"]["SessionStart"][1]["hooks"][0]["command"]
         assert_true(
-            ours == 'bash "C:/Users/x/.claude/hooks/session-bind.sh"',
-            f"a POSIX install must swap interpreter, extension, and slashes; got {ours!r}",
+            ours == f'{bash} "C:/Users/x/.claude/hooks/session-bind.sh"',
+            f"a shipped command gets its bash and forward slashes; got {ours!r}",
         )
         assert_true(
             theirs == foreign["hooks"][0]["command"],
             "a foreign hook must keep its command verbatim, backslashes included",
         )
-        settings_mod.os.name = "nt"
-        untouched = _rewrite_hooks_for_posix(json.loads(json.dumps(template)))
+    real_windows, real_find = settings_mod.osutil.IS_WINDOWS, settings_mod.osutil.find_bash
+    try:
+        settings_mod.osutil.IS_WINDOWS = False
+        assert_true(hook_bash_command() == "bash", "POSIX names plain bash")
+        settings_mod.osutil.IS_WINDOWS = True
+        settings_mod.osutil.find_bash = lambda: "C:\\Program Files\\Git\\bin\\bash.exe"
         assert_true(
-            untouched == template,
-            "on Windows the template must pass through unchanged",
+            hook_bash_command() == '"C:/Program Files/Git/bin/bash.exe"',
+            f"Windows names Git Bash by absolute, quoted path, never a bare bash (WSL's): {hook_bash_command()!r}",
         )
+        settings_mod.osutil.find_bash = lambda: None
+        assert_true(hook_bash_command() is None, "Windows without Git Bash has no command; install refuses --apply")
     finally:
-        settings_mod.os.name = original_os_name
+        settings_mod.osutil.IS_WINDOWS, settings_mod.osutil.find_bash = real_windows, real_find
 
     _check_hook_ownership_is_by_directory()
 
@@ -565,19 +561,14 @@ def _test_installer_drift_check() -> None:
             "a missing settings.json is drift — an install would create it",
         )
 
-        # A dest already matching the template (only on Windows does the template apply
-        # verbatim; on POSIX the hook rewrite makes the shipped form itself differ).
-        original_os_name = settings_mod.os.name
-        try:
-            settings_mod.os.name = "nt"
-            current_dest = root / "settings.json"
-            current_dest.write_text(json.dumps(template, indent=2), encoding="utf-8")
-            assert_true(
-                _settings_would_change(src, current_dest, False) is False,
-                "a settings.json already carrying the shipped keys and hooks is not drift",
-            )
-        finally:
-            settings_mod.os.name = original_os_name
+        # A dest already matching the template. This template carries no {{HOOK_BASH}}, so
+        # the renderer leaves it as written on every OS.
+        current_dest = root / "settings.json"
+        current_dest.write_text(json.dumps(template, indent=2), encoding="utf-8")
+        assert_true(
+            _settings_would_change(src, current_dest, False) is False,
+            "a settings.json already carrying the shipped keys and hooks is not drift",
+        )
 
         broken_dest = root / "broken.json"
         broken_dest.write_text("{not json", encoding="utf-8")

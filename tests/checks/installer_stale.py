@@ -171,9 +171,9 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
         plan = Plan()
         _install_settings(src, dest, plan, True, backups / "install_29990101_000001")
         written = json.loads(dest.read_text(encoding="utf-8"))
-        from installer.settings import _rewrite_hooks_for_posix, _resolve_in_json
+        from installer.settings import _render_hook_commands, _resolve_in_json
 
-        expected_status = _rewrite_hooks_for_posix(_resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None))["statusLine"]
+        expected_status = _render_hook_commands(_resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None))["statusLine"]
         assert_true(written["statusLine"] == expected_status, f"a workflow statusLine is refreshed to the shipped command: {written['statusLine']}")
         assert_true("old-gate" not in json.dumps(written["hooks"]), "the hook entry for a retired script is dropped")
 

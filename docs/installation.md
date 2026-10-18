@@ -32,6 +32,7 @@ it again. Every installer flag, target file and hook is listed in the
 | **Python 3.10+** | Yes | The runtime needs no third-party packages. An older Python is refused with a message naming the version found. Optional browser verification uses Playwright (`requirements-e2e.txt`) |
 | **A secondary-agent CLI** | Yes | `opencode` (recommended), `codex`, or `agy`, on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
 | **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
+| **bash** | Yes | Hooks and the `.workflow/` runner are bash scripts on every OS. On Windows that is Git Bash, from Git for Windows; the installer finds it next to `git.exe` and refuses `--apply` without it |
 | **Claude Code** | Recommended | The primary integration target |
 
 ## Install on a machine (once)

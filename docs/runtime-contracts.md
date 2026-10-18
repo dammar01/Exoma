@@ -62,13 +62,17 @@ One prompt contract is enforced **partly outside Python**: the pre-flight gate f
 delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode the
 `intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools (including
 the `PowerShell` tool, and writes to the runner scripts) until `.workflow/run` dispatches;
-a Bash or PowerShell call passes only when it parses as one plain call to
-`<root>/.workflow/{run,check,inspect}` with constant arguments, and a Read passes when it
+a Bash or PowerShell call passes only when one shared tokeniser reads it as one plain call to
+`[bash] <root>/.workflow/{run,check,inspect}.sh` whose every word is bare or single-quoted —
+literal in both shells, so `$`, `;`, `|`, `&`, redirects and newlines pass only inside single
+quotes, and double quotes, `bash -c` and the retired `run.ps1` do not — and a Read passes when it
 names an existing `.md` whose real path lies inside `~/.claude/skills` (the skill that says
 how to dispatch, DEC-039) or is a precision read: a project file outside `.workflow/`, at
 most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
 `runtime/delegated.reads` keyed to the marker's `set_at` (DEC-043). That enforcement lives in the agent host, not in this runtime,
-and it fails open. The full prompt-layer list, with what each contract requires, is in
+and it fails open. The hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
+on Windows, named by absolute path in `settings.json`) that resolves a Python 3.10+ by running
+it and execs `workflow_hooks.py <hook>`, which runs `<hook>.py`; no `.ps1` ships. The full prompt-layer list, with what each contract requires, is in
 [reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
 What *is* checkable is the second agent's output, because it comes back through the

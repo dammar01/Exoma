@@ -52,35 +52,35 @@ def _run_check(module_name: str) -> tuple[int, str]:
     return int(code), buffer.getvalue().strip()
 
 
-def _test_every_shipped_hook_has_both_os_flavours() -> None:
-    """A hook shipped for one OS only disappears on the other, silently.
+def _test_every_shipped_hook_is_a_launcher_and_its_module() -> None:
+    """Each hook is `<stem>.sh` (the launcher Claude Code runs on every OS) beside
+    `<stem>.py` (its logic), and workflow_hooks.py knows every one of them.
 
-    `installer/base.py:_targets` picks `.ps1` on Windows and `.sh` on POSIX, then filters
-    the mapping down to sources that exist. A missing sibling is therefore not an error
-    anywhere: the file is simply never installed, and the feature is absent on that
-    platform with nothing in the install output to say so. The failure surfaces as a
-    statusline that renders nothing, or a gate that stops gating.
-
-    Checked here rather than in the installer e2e because that harness installs on ONE
-    platform and cannot see what the other would have got.
+    A launcher whose module is missing, or a module workflow_hooks.py does not list, fails
+    open: the hook exits 0 and the feature is gone with nothing in the install output to say
+    so — a statusline that renders nothing, a gate that stops gating. No `.ps1` ships any
+    more; one coming back would be a second copy of the logic to drift.
     """
+    import ast
+
     hooks = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
-    scripts: dict[str, set[str]] = {}
-    for path in sorted(hooks.iterdir()):
-        ext = path.suffix.lstrip(".").lower()
-        if path.is_file() and ext in ("ps1", "sh"):
-            scripts.setdefault(path.stem, set()).add(ext)
-    assert_true(bool(scripts), f"no hook scripts found under {hooks}")
-    missing = {
-        stem: sorted({"ps1", "sh"} - found)
-        for stem, found in scripts.items()
-        if found != {"ps1", "sh"}
-    }
+    launchers = {p.stem for p in hooks.glob("*.sh")}
+    modules = {p.stem for p in hooks.glob("*.py")} - {"workflow_hooks"}
+    assert_true(bool(launchers), f"no hook launchers found under {hooks}")
     assert_true(
-        not missing,
-        "every shipped hook needs both flavours; the installer selects one by OS and "
-        f"skips a missing sibling without complaining: {missing}",
+        launchers == modules,
+        f"every launcher needs its module and every module its launcher: launchers only "
+        f"{sorted(launchers - modules)}, modules only {sorted(modules - launchers)}",
     )
+    tree = ast.parse((hooks / "workflow_hooks.py").read_text(encoding="utf-8"))
+    listed = next(
+        set(ast.literal_eval(node.value))
+        for node in tree.body
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "HOOKS" for t in node.targets)
+    )
+    assert_true(listed == launchers, f"workflow_hooks.HOOKS names exactly the shipped hooks: {sorted(listed ^ launchers)}")
+    retired = sorted(p.name for p in hooks.glob("*.ps1"))
+    assert_true(not retired, f"no PowerShell flavour ships: {retired}")
 
 
 def _test_bundle_registry_bijection() -> None:

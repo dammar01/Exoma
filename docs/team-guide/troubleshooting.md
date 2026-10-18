@@ -2,7 +2,7 @@
 
 ## Setup and runtime errors
 
-Start with `doctor` (`.workflow/run.sh doctor`, on Windows `.workflow\run.ps1 doctor`) and
+Start with `doctor` (`bash .workflow/run.sh doctor`, the same on every OS) and
 read its `recommended_fixes`. The common cases are in the [README
 troubleshooting table](../../README.md#quick-start); commands and their options are in the
 [reference](../reference.md#command).

@@ -9,8 +9,7 @@ LOCAL. Nol second_agent, nol job, nol lock. Runtime yang menulis config — kamu
 `.workflow/second_agent.json` sendiri. Kamu cuma merender pilihan dan meneruskan satu string.
 
 ## STEP 1 — Baca katalog
-    Windows:   & "<work_dir>\.workflow\run.ps1" provider "" "<MAIN_SESSION_ID>"
-    mac/linux: "<work_dir>/.workflow/run.sh" provider "" "<MAIN_SESSION_ID>"
+    Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' provider '' '<MAIN_SESSION_ID>'
 
 Balasannya `meta.providers[]` (`name`, `installed`, `detail`, `models[] {id, efforts}`) plus
 `meta.current` (provider/model/effort yang aktif, dan `routes` = model tiap route sekarang),
@@ -54,7 +53,7 @@ Batas keras tool: MAX 4 pertanyaan per call, 2-4 opsi per pertanyaan, `header` M
 Jangan bikin opsi "lainnya" sendiri — "Other" sudah otomatis.
 
 ## STEP 3 — Terapkan
-    & "<work_dir>\.workflow\run.ps1" provider "<provider>|<model>|<effort>|<routes>" "<MAIN_SESSION_ID>"
+    bash '<work_dir>/.workflow/run.sh' provider '<provider>|<model>|<effort>|<routes>' '<MAIN_SESSION_ID>'
 
 Pemisah `|` — bukan `/`, karena id model opencode mengandung `/`.
 Model atau effort dikosongkan → field itu di-clear. Untuk opencode, model kosong DITOLAK saat

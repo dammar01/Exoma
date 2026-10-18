@@ -42,7 +42,7 @@ from tests.checks.prompt import (  # noqa: E402
 )
 from tests.checks.bundle_sync import (  # noqa: E402
     _test_bundle_registry_bijection,
-    _test_every_shipped_hook_has_both_os_flavours,
+    _test_every_shipped_hook_is_a_launcher_and_its_module,
 )
 from tests.checks.continuation import (  # noqa: E402
     _test_contract_continuation,
@@ -168,7 +168,7 @@ SUITES: dict[str, tuple] = {
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
     "test-isolation": (_test_suite_ignores_the_machine_seed, "test workspaces are seeded from the shipped example, never the machine's provider pick"),
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
-    "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
+    "hook-flavours": (_test_every_shipped_hook_is_a_launcher_and_its_module, "every shipped hook is a bash launcher beside its .py, all listed by workflow_hooks.py; no .ps1 ships"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
     "manifest": (_test_manifest_matches_dist, "dist/manifest.json matches the dist/ tree it describes"),
     "manifest-malformed": (_test_malformed_manifest_entry_fails_closed, "a malformed manifest entry fails bundle integrity by name"),
@@ -258,15 +258,15 @@ SUITES: dict[str, tuple] = {
     "metrics-contract": (_test_metrics_contract, "every benchmark metric has an ID, version and method, is documented, and its producers stamp provenance"),
     "verify-runtime-tests": (_test_verify_runtime_tests, "tests main_agent chose run only under the allowlist, without a shell, and decide the verdict beside the review"),
     "gate-prompt-field": (_test_intent_gate_reads_the_prompt_field, "intent-gate-set arms the gate from Claude Code's `prompt` field"),
-    "gate-runner-parsed": (_test_intent_gate_runner_parsed, "the gate parses Bash and PowerShell runner calls; one plain call to <root>/.workflow/{run,check,inspect} passes, in both flavours"),
+    "gate-runner-parsed": (_test_intent_gate_runner_parsed, "one tokeniser for the Bash and PowerShell tools: one plain call to [bash] <root>/.workflow/{run,check,inspect}.sh passes; $ ; | & < > pass only inside single quotes; run.ps1 is retired"),
     "gate-runner-tamper": (_test_intent_gate_runner_tamper, "while armed, a write to the runner scripts is refused; other writes pass"),
-    "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the ps1 hooks read the session registry as UTF-8, so a non-ASCII project root resolves"),
+    "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the hooks read the session registry as UTF-8 and the gate takes a non-ASCII project root in a runner path"),
     "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
     "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),
     "os-locations": (_test_find_bash_and_os_locations, "find_bash is Git Bash on Windows; cache dir, env location and command splitting follow the OS"),
-    "gate-k5-fixtures": (_test_gate_k5_fixtures, "the gate's decisions are frozen before the single-tokenizer gate; cases the target decides differently are listed"),
+    "gate-k5-fixtures": (_test_gate_k5_fixtures, "the single-tokeniser gate decides each K5 case as recorded (the #4 field cases included)"),
     "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),
     "installer-stale": (_test_installer_leaves_no_stale_files, "--apply removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),

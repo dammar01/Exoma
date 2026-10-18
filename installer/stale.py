@@ -153,7 +153,9 @@ def write_ledger(targets: list[tuple[Path, Path, str]], apply: bool) -> None:
 
 
 def shipped_hook_stems() -> set[str]:
-    """Every hook script stem dist/ ships, in either OS flavour."""
+    """Every hook stem dist/ ships: one bash launcher (`<stem>.sh`) each. A `.ps1` an earlier
+    release installed under the same stem is the same hook, so its settings entry is
+    refreshed, not dropped, and the file itself goes as a stale file."""
     hooks = DIST_CONFIG / "claude" / "hooks"
     if not hooks.is_dir():
         return set()

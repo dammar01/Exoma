@@ -102,10 +102,6 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "Pada 3.8.0 ini teramati",
         "Sebelum 3.8.0 hook ini jalan",
     ),
-    "dist/config/claude/hooks/task-events.ps1": (
-        # The v3.8.0 draft's matcher, described as history.
-        "the 3.8.0 draft hooked",
-    ),
     "dist/config/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.
         '"ref": "v',

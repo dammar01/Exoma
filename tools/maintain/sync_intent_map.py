@@ -2,7 +2,7 @@
 """Validate that the runtime intent NL-map and CLAUDE.md's NL-map agree.
 
 Two hand-maintained copies of the same delegated intent logic exist:
-  - dist/config/claude/hooks/intent-map.json  (consumed by intent-gate-set.ps1 at runtime)
+  - dist/config/claude/hooks/intent-map.json  (consumed by intent-gate-set.py at runtime)
   - dist/config/claude/CLAUDE.md               (the LLM-facing NL-map + command registry)
 
 `intent-map.json` is the CANONICAL source; CLAUDE.md must cover everything it lists. When

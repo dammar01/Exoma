@@ -5,12 +5,12 @@ rollback: everything here appends to the receipt, and a check must not.
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+from utils import osutil
 from config.providers import (
     bundle_for,
     provider_config_path,
@@ -137,48 +137,52 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
     return result, updated
 
 
-def _posix_command(cmd: str) -> str:
-    """One shipped Windows command line, pointed at its .sh sibling."""
-    cmd = cmd.replace(
-        'powershell -NoProfile -ExecutionPolicy Bypass -File "', 'bash "'
-    )
-    cmd = cmd.replace('.ps1"', '.sh"')
-    return cmd.replace("\\", "/")
+# Where a shipped command names its interpreter. The template is the same on every OS
+# (`{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<stem>.sh"`); only the bash differs.
+_HOOK_BASH = "{{HOOK_BASH}}"
 
 
-def _rewrite_hooks_for_posix(template: dict) -> dict:
-    """On POSIX, point our shipped commands at their .sh siblings via bash.
+def hook_bash_command() -> str | None:
+    """How a shipped hook command names bash, or None when this machine has none.
 
-    The template ships Windows-native commands (`powershell ... -File "...ps1"`) — those
-    cannot run on mac/linux. For each entry that calls one of OUR scripts, swap the
-    interpreter to `bash`, the extension to `.sh`, and normalise the backslash path the
-    Windows template embedded. A user's foreign hook (no shipped script) is left untouched.
-    Windows (`os.name == "nt"`) is returned unchanged.
-
-    `statusLine` is rewritten too, though it sits beside `hooks` rather than inside it.
-    It is the same shipped script under a different key, and a rewrite that walked only
-    `hooks` would install a mac/linux statusline that shells out to `powershell` — a
-    failure with no error to read, because Claude Code renders a broken statusline as an
-    empty one.
+    POSIX: `bash`. Windows: the absolute path of Git Bash, quoted. A bare `bash` there can
+    resolve to WSL's System32\\bash.exe, which cannot read the Windows paths these
+    commands carry, and Claude Code shows a hook that cannot start as nothing at all.
     """
-    if os.name == "nt":
-        return template
+    if not osutil.IS_WINDOWS:
+        return "bash"
+    found = osutil.find_bash()
+    return '"' + found.replace("\\", "/") + '"' if found else None
+
+
+def _render_command(cmd: str, bash: str) -> str:
+    """One shipped command with its interpreter filled in and the home path in forward
+    slashes (bash reads `C:/Users/x` but takes `\\U` in `C:\\Users` as an escape)."""
+    return cmd.replace("\\", "/").replace(_HOOK_BASH, bash) if _HOOK_BASH in cmd else cmd
+
+
+def _render_hook_commands(template: dict, bash: str | None = None) -> dict:
+    """Fill in `{{HOOK_BASH}}` in every shipped command, `statusLine` included.
+
+    `statusLine` sits beside `hooks` rather than inside it, but it is the same shipped
+    script under a different key: a renderer that walked only `hooks` would install a
+    statusline that names no interpreter, and Claude Code renders a broken statusline as an
+    empty one. A user's own command carries no placeholder and is left untouched. With no
+    bash on the machine the placeholder becomes `bash`, so a dry run still shows a command;
+    install refuses --apply before that matters (install.py).
+    """
+    bash = bash or hook_bash_command() or "bash"
     status = template.get("statusLine")
-    if isinstance(status, dict) and _hook_script_ids({"hooks": [status]}):
-        status["command"] = _posix_command(status.get("command", ""))
+    if isinstance(status, dict) and isinstance(status.get("command"), str):
+        status["command"] = _render_command(status["command"], bash)
     hooks = template.get("hooks")
     if not isinstance(hooks, dict):
         return template
     for entries in hooks.values():
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict) or not _hook_script_ids(entry):
-                continue
-            for hook in entry.get("hooks", []):
-                if not isinstance(hook, dict):
-                    continue
-                hook["command"] = _posix_command(hook.get("command", ""))
+        for entry in entries if isinstance(entries, list) else []:
+            for hook in entry.get("hooks", []) if isinstance(entry, dict) else []:
+                if isinstance(hook, dict) and isinstance(hook.get("command"), str):
+                    hook["command"] = _render_command(hook["command"], bash)
     return template
 
 
@@ -332,7 +336,7 @@ def _install_settings(
     retired = retired_hook_stems()
     owned_stems = shipped_hook_stems() | retired
     template = _resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None)
-    template = _rewrite_hooks_for_posix(template)
+    template = _render_hook_commands(template)
     if only_command:
         # The runtime half of auto-intent. Dropping the prompt stanza while leaving this
         # hook registered would keep the gate blocking gather tools on a classification

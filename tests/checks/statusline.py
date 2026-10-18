@@ -6,11 +6,9 @@ such a row. One failed call turned a fully measured session into an "estimate" �
 practice, as "this provider cannot be measured". Failed calls are now counted beside the
 calls and kept out of the totals.
 
-The `.ps1` flavour runs through PowerShell when present. The `.sh` flavour is a thin bash
-wrapper around embedded python3, so its python body runs everywhere through this
-interpreter — the logic under test lives there — and the real bash wrapper runs on POSIX
-only: on Windows `bash` on PATH is often WSL's, which cannot read a Windows path and
-prints nothing, and that would test the machine rather than the script.
+workflow-statusline.py runs directly through this interpreter (the logic under test lives
+there), and its bash launcher runs as Claude Code runs it — through Git Bash on Windows,
+found next to git, never WSL's bash, which cannot read a Windows path.
 """
 
 from __future__ import annotations
@@ -26,6 +24,7 @@ import tempfile
 from pathlib import Path
 
 from tests.checks.support import assert_true
+from utils.osutil import find_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOKS = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
@@ -41,25 +40,11 @@ _ESTIMATED = {"session_id": "main-1", "ok": True, "prompt_id": "p3", "token_sour
 _OTHER_SESSION = {**_MEASURED, "session_id": "main-2", "prompt_id": "p9"}
 
 
-def _embedded_python() -> str:
-    text = (HOOKS / "workflow-statusline.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
-    start = text.index("<<'PY'\n") + len("<<'PY'\n")
-    return text[start : text.index("\nPY\n", start)]
-
-
 def _runners() -> list[tuple[str, list[str]]]:
-    runners: list[tuple[str, list[str]]] = [("sh:python", [sys.executable, "-c", _embedded_python()])]
-    shell = shutil.which("pwsh") or (shutil.which("powershell") if sys.platform == "win32" else None)
-    if shell:
-        runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "workflow-statusline.ps1")]))
-    bash = shutil.which("bash") if sys.platform != "win32" else None
+    runners: list[tuple[str, list[str]]] = [("py", [sys.executable, str(HOOKS / "workflow-statusline.py")])]
+    bash = find_bash()
     if bash:
-        try:
-            probe = subprocess.run([bash, "-c", 'python3 -c "print(1)"'], capture_output=True, text=True, timeout=20)
-        except (OSError, subprocess.TimeoutExpired):
-            probe = None
-        if probe is not None and probe.stdout.strip() == "1":
-            runners.append(("sh", [bash, str(HOOKS / "workflow-statusline.sh")]))
+        runners.append(("sh", [bash, str(HOOKS / "workflow-statusline.sh")]))
     return runners
 
 

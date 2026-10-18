@@ -7,15 +7,15 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "6b26162743eb6be6afd6147c50b4e48b10d913b5b52e31ed9d3c66aa35f906cb",
-      "bytes": 31228,
+      "sha256": "23ead15132d048007e5d9c02aad1555db07de627ebb33878f7b8eb08f8783575",
+      "bytes": 31578,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/analyze.md",
-      "sha256": "2d1c194f3657b5ae5114bc9ec097f07c0bb613951ef2de405a1ef4881670911f",
-      "bytes": 1751,
+      "sha256": "b6dc025ffa4c67716f4252802e9409ad2736aece695356b5629a61c96f51159e",
+      "bytes": 1685,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -42,8 +42,8 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "6936029d4c1e280069d16a5a451d83fa495b18787a822f2a1bcf72173ca58ca8",
-      "bytes": 2410,
+      "sha256": "ce4539a60ef42a853b7a5b252ae7a5f0f4cd3a683812e719803ce4f407d20a7b",
+      "bytes": 2339,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -56,8 +56,8 @@
     },
     {
       "path": "claude/skills/explore.md",
-      "sha256": "16427c5829fc0dbe1bdfa3e02b61d007c507c60c96f85f4afccf2b337b7d3a45",
-      "bytes": 1276,
+      "sha256": "04734042b76c63052bc3dd22ff41c8aa89af0930872fcb4c464d1276b2f36f8c",
+      "bytes": 1211,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -70,8 +70,8 @@
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "1b4c81e13ba60d53a2bed9ca4e962a98e97f9681652687d0b8d72582d93e925c",
-      "bytes": 2093,
+      "sha256": "47180886cfe47f7b71e8aefa78916c7cd9954da1797867ccc666af8f9bbc51bb",
+      "bytes": 2289,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -91,22 +91,22 @@
     },
     {
       "path": "claude/skills/plan.md",
-      "sha256": "928a4a6eb6fa33152f8a0e27df3d2cc4fead60eb39c02595e060648139c95e7d",
-      "bytes": 6457,
+      "sha256": "7077249176a1b11618a84a0d06c49089e5c780aff325cc852569caec5e841e59",
+      "bytes": 6393,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/promote.md",
-      "sha256": "6e32abd5927783f32b4adabf51e00e462a8895fd69654a03860f3313ac4f02d6",
-      "bytes": 4327,
+      "sha256": "701e1d4441c6efea9ec2cdf1eb5cac368be4b1370adb3210a1355ec002ba01db",
+      "bytes": 4199,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/provider.md",
-      "sha256": "ad6914d1bfe3d3a4cfad82241d0973f1dff1d824aaf419e3ad1162d9d9ece916",
-      "bytes": 5547,
+      "sha256": "2a1583d18afa34cedb3fc07f63edc7d5275a37c34358641663dafdafbdc2bb45",
+      "bytes": 5485,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -126,22 +126,22 @@
     },
     {
       "path": "claude/skills/sweep.md",
-      "sha256": "0a78e51c32f648e536e0c8f10796ae9b2971ad30d199c581b3ae569b05306e12",
-      "bytes": 869,
+      "sha256": "1012aee9f2fa1139004b52205439d6a375c54b6534dffeb44c4a1067858abac1",
+      "bytes": 782,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/upgrade.md",
-      "sha256": "2b8bde73b6a1ecff1e4c370ed8963c4136b293d4dd73aba91a7319be0a4c4055",
-      "bytes": 2713,
+      "sha256": "82cb1c8444f5b73fcc32bb3186e01c034a1b17e56ed140c07a88263602c96d24",
+      "bytes": 2832,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/verify-browser.md",
-      "sha256": "a183dcd7774664f32506723803284a54248f508eff8cd2e32bdb7d01ee792215",
-      "bytes": 31934,
+      "sha256": "cd34132ffb8b2da79b72ee9fef846addf7f36c3a9271e9728ff1894c20cfb2bf",
+      "bytes": 31862,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -293,44 +293,44 @@
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/hooks/graph-refresh.ps1",
-      "sha256": "526dc17330aed0248f41720b6a82d65814da341bccb084fdd080350ff9b84f14",
-      "bytes": 19986,
+      "path": "claude/hooks/graph-refresh.py",
+      "sha256": "e497117847103621b42b3178242b3a94af53a968c47d55bf95ae4b2c57757e47",
+      "bytes": 13122,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/graph-refresh.sh",
-      "sha256": "fc0a749b607403416fc30f774dc9e4c530625f5f50a839b1ca4dddb3c2f05cd7",
-      "bytes": 13916,
+      "sha256": "2f33b5a5dae2790fa10785856166085e9851655da3a6c4f913eb5d2f11f5925c",
+      "bytes": 1151,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "a518665098a6439a9fff11baa4912bec986dffa89013a8fae1e3e10d9d55c5ba",
-      "bytes": 26552,
+      "path": "claude/hooks/intent-gate-check.py",
+      "sha256": "f3f4417f6bb4cad3fa16bce7fb0164f1145b9bb158efad4b245f61ba012b9e41",
+      "bytes": 17952,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "c898940497dce57a9054dd1583ffe3a8b272600873c351546a88a75678c204ee",
-      "bytes": 21039,
+      "sha256": "ce12b9efe09fb3d92661954deeed8bc147785785fbbcd7c64b9976c0bb208918",
+      "bytes": 1171,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-gate-set.ps1",
-      "sha256": "49abc2d8d6cd970f13f89c24991ac7e5db0ce3fb91bae6452770dbc594b5501b",
-      "bytes": 4991,
+      "path": "claude/hooks/intent-gate-set.py",
+      "sha256": "a468260c8dba723d50031a466724b46350caddd23b4490250b92ff76bc7d5b81",
+      "bytes": 3684,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-set.sh",
-      "sha256": "ac608c3019c13fd689a1e99ffa40984f415f765eae935cb98f541206b02348a0",
-      "bytes": 4404,
+      "sha256": "43b84f961513bd25bb29c8a81c2b7d15d9623f6ffe96f9279191b4c6e572d011",
+      "bytes": 1161,
       "merge": "replace",
       "component": "runtime"
     },
@@ -342,44 +342,51 @@
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/session-bind.ps1",
-      "sha256": "f4ba99ec8eba8b5370efb5a5ac19a1173a605f7d9d41e1bbe6ef63ecd1fded48",
-      "bytes": 3974,
+      "path": "claude/hooks/session-bind.py",
+      "sha256": "ecfe7a63c48edd072858010be03d3041bfcf4071f6a1e14e334a8e20d04bca9c",
+      "bytes": 3505,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/session-bind.sh",
-      "sha256": "c8ecb206ce8cc6498714c8f95a2d839a6261f801d4fd0d8357f79784d5d39918",
-      "bytes": 4196,
+      "sha256": "a2ce380de6b353c3e939135f7270b7f4111617dd7332b8af805bc374dec690cf",
+      "bytes": 1146,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/task-events.ps1",
-      "sha256": "4a9b29b83a8c08502f2aa2fa30acbe9b8f08a176fcad0542a06dda99ec2412f7",
-      "bytes": 9542,
+      "path": "claude/hooks/task-events.py",
+      "sha256": "828cce0b93861dcbf73ed036f55ed982ee70a0b14521ac7c47fa1c270b488960",
+      "bytes": 5428,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/task-events.sh",
-      "sha256": "64c71b1eb620104f8c27fd035622dde6b0d4ab6f22b6a0172b0c2c8d19dfabcd",
-      "bytes": 6103,
+      "sha256": "e75e63a0cb7d720165d7bcd0f0055067b83963cfd4173a71b92a888836a89c41",
+      "bytes": 1141,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/workflow-statusline.ps1",
-      "sha256": "22b99dfcb43ac62ff55a197730ef09a886a2d2f7cbeb32df18f6763d74b0fba9",
-      "bytes": 12447,
+      "path": "claude/hooks/workflow-statusline.py",
+      "sha256": "9398cb629003ef20857e597ebdc67a3bd5d627d3bc45fbaf6240e72b76442221",
+      "bytes": 9970,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/workflow-statusline.sh",
-      "sha256": "b4266dc84af1a6a8c03e7a9d852d01b0c401f37cf85bc14521596903e673ece4",
-      "bytes": 10674,
+      "sha256": "8d4a7b6037518bb3c071a2a95f5a76d74cd08a78721fc16f54d199038fcebab9",
+      "bytes": 1181,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "claude/hooks/workflow_hooks.py",
+      "sha256": "92b9601fb1a4e6220af220ce11b8d70108b92518f958b4e6a4402833dcd309cc",
+      "bytes": 2026,
       "merge": "replace",
       "component": "runtime"
     },
@@ -441,8 +448,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "62ce5e03326bf58f86ff5ce4fdbce7687f8931798e31af0e21e1b1fc4edef2bf",
-      "bytes": 2273,
+      "sha256": "99db5a987ea1ff57da28784ab1952ab37f7033354ab291feadf124f116f411a4",
+      "bytes": 1937,
       "merge": "merge",
       "component": "runtime"
     },

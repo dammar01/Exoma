@@ -2,8 +2,8 @@
 
 intent-gate-set read the prompt from `user_prompt`, a field Claude Code never sends (it
 sends `prompt`), so every prompt classified as "no command" and the runtime gate never
-armed. Pinned on the real scripts: PowerShell where it exists, the bash wrapper on POSIX, and
-the `.sh` flavour's embedded python everywhere.
+armed. Pinned on the real scripts: each hook's .py directly, and its bash launcher as
+Claude Code runs it (Git Bash on Windows).
 """
 
 import json
@@ -14,26 +14,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-from tests.checks.support import assert_true, powershell_for_hooks
+from tests.checks.support import assert_true
+from utils.osutil import find_bash
 
 HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
 
 
-def _embedded_python() -> str:
-    text = (HOOKS / "intent-gate-set.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
-    start = text.index("<<'PY'\n") + len("<<'PY'\n")
-    return text[start : text.index("\nPY\n", start)]
+def _hook_runners(stem: str) -> list[tuple[str, list[str]]]:
+    runners = [("py", [sys.executable, str(HOOKS / f"{stem}.py")])]
+    bash = find_bash()
+    if bash:
+        runners.append(("sh", [bash, str(HOOKS / f"{stem}.sh")]))
+    return runners
 
 
 def _runners() -> list[tuple[str, list[str]]]:
-    runners = [("sh:python", [sys.executable, "-c", _embedded_python()])]
-    shell = powershell_for_hooks()
-    if shell:
-        runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "intent-gate-set.ps1")]))
-    bash = shutil.which("bash") if sys.platform != "win32" else None
-    if bash:
-        runners.append(("sh", [bash, str(HOOKS / "intent-gate-set.sh")]))
-    return runners
+    return _hook_runners("intent-gate-set")
 
 
 def _test_intent_gate_reads_the_prompt_field() -> None:
@@ -93,21 +89,8 @@ def _check_prompt_field() -> None:
             shutil.rmtree(base, ignore_errors=True)
 
 
-def _check_script(name: str) -> str:
-    text = (HOOKS / name).read_text(encoding="utf-8").replace("\r\n", "\n")
-    start = text.index("<<'PY'\n") + len("<<'PY'\n")
-    return text[start : text.index("\nPY\n", start)]
-
-
 def _check_runners() -> list[tuple[str, list[str]]]:
-    runners = [("sh:python", [sys.executable, "-c", _check_script("intent-gate-check.sh")])]
-    shell = powershell_for_hooks()
-    if shell:
-        runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "intent-gate-check.ps1")]))
-    bash = shutil.which("bash") if sys.platform != "win32" else None
-    if bash:
-        runners.append(("sh", [bash, str(HOOKS / "intent-gate-check.sh")]))
-    return runners
+    return _hook_runners("intent-gate-check")
 
 
 def _check_verify_lane() -> None:
@@ -154,7 +137,7 @@ def _check_verify_lane() -> None:
                 ("Bash", {"command": "git diff --name-only HEAD"}),
                 ("Bash", {"command": "git diff --stat HEAD~1 -- src"}),
                 ("Bash", {"command": "git diff --cached --name-status"}),
-                ("Bash", {"command": ".workflow/run.ps1 verify \"t\" \"m1\""}),
+                ("Bash", {"command": "bash .workflow/run.sh verify 't' 'm1'"}),
                 ("Read", {"file_path": str(config)}),
                 ("Read", {"file_path": ".workflow/config.json"}),
                 ("Read", {"file_path": str(tests_json)}),
@@ -191,10 +174,9 @@ def _check_verify_lane() -> None:
 
             # The runner passes only as the command itself, never as a word inside another one.
             runner_calls = [
-                ".workflow/run.ps1 plan \"t\" \"m1\"",
-                "./.workflow/run.sh plan \"t\" \"m1\"",
-                f"\"{project.as_posix()}/.workflow/run.ps1\" plan \"t\" \"m1\"",
-                "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan \"t\" \"m1\"",
+                "bash .workflow/run.sh plan 't' 'm1'",
+                "./.workflow/run.sh plan 't' 'm1'",
+                f"bash {project.as_posix()}/.workflow/run.sh plan 't' 'm1'",
                 "bash .workflow/inspect.sh",
             ]
             for runner_call in runner_calls:
@@ -202,10 +184,13 @@ def _check_verify_lane() -> None:
                 assert_true(code == 0, f"[{label}] a runner call must pass the gate: {runner_call}; exit {code}")
             smuggled = [
                 "python -c \"open('secret').read()\" /tmp/.workflow/run.sh",
-                "cat src/app.py .workflow/run.ps1",
+                "cat src/app.py .workflow/run.sh",
                 "rg secret .workflow/check.sh",
-                "powershell -Command Get-Content secret .workflow/run.ps1",
-                ".workflow/run.ps1.bak plan",
+                "powershell -Command Get-Content secret .workflow/run.sh",
+                ".workflow/run.sh.bak plan",
+                # retired: the .ps1 runners pass no more, however they are called
+                ".workflow/run.ps1 plan 't' 'm1'",
+                "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan 't' 'm1'",
             ]
             for command_line in smuggled:
                 code = exit_code("Bash", {"command": command_line})
@@ -306,7 +291,7 @@ def _check_precision_read_lane() -> None:
 
 
 class _ArmedGate:
-    """A throwaway home + project with the gate armed, and one hook flavour to ask."""
+    """A throwaway home + project with the gate armed, and one way to run the hook."""
 
     def __init__(self, label: str, command: list[str], root_name: str = "project") -> None:
         self.label, self.command = label, command
@@ -355,11 +340,8 @@ class _ArmedGate:
 
 def _flavours() -> list[tuple[str, list[str]]]:
     runners = _check_runners()
-    labels = {label for label, _ in runners}
-    if "ps1" not in labels:
-        print("  note: no PowerShell on PATH; the .ps1 flavour of intent-gate-check is not exercised")
-    if "sh" not in labels:
-        print("  note: bash wrapper not exercised on this platform; the .sh flavour runs through its embedded python")
+    if "sh" not in {label for label, _ in runners}:
+        print("  note: no bash found; intent-gate-check runs only through its .py, not its launcher")
     return runners
 
 
@@ -368,78 +350,72 @@ def _test_intent_gate_runner_parsed() -> None:
 
     The regex let any directory sit in front of `.workflow/run.sh` and let an interpreter
     flag such as `-c`/`-Command` hand the rest of the line to PowerShell, and the PowerShell
-    tool was never gated at all. Every case runs against both flavours with one verdict.
+    tool was never gated at all. One tokeniser now reads both tools (K5): words bare or in
+    single quotes, which both shells take literally, so every case below is asked of the Bash
+    and the PowerShell tool alike, through the .py and its launcher, with one verdict.
     """
     for label, command in _flavours():
         gate = _ArmedGate(label, command)
         try:
             gate.arm("plan")
-            root, posix_root = str(gate.project), gate.project.as_posix()
+            posix_root = gate.project.as_posix()
             foreign = gate.foreign.as_posix()
-            ps_allowed = [
-                f"& \"{root}{os.sep}.workflow{os.sep}run.ps1\" analyze \"task (x) kenapa\" \"m1\"",
-                ".workflow/run.ps1 plan \"t\" 'm1'",
-                "& .workflow/check.ps1",
-                f"& '{posix_root}/.workflow/inspect.ps1' -Verbose",
-                "&.workflow/run.ps1 plan \"say \"\"hi\"\"\" 'it''s'",
-            ]
-            for source in ps_allowed:
-                gate.expect("PowerShell", {"command": source}, 0, "a plain runner call must pass")
-            ps_refused = [
-                "Get-Content README.md",
-                "Get-ChildItem -Recurse",
-                "& .workflow/run.ps1 (Get-Content README.md -Raw)",
-                "& .workflow/run.ps1 \"$(Get-Content README.md)\"",
-                "& .workflow/run.ps1 \"$env:USERPROFILE\"",
-                "& .workflow/run.ps1 $x",
-                "& .workflow/run.ps1 plan; Get-Content README.md",
-                "& .workflow/run.ps1 @{x=(gc y)}",
-                "& .workflow/run.ps1 plan | Out-Null",
-                "& .workflow/run.ps1 plan > out.txt",
-                "& .workflow/run.ps1 -Task:x",
-                "& .workflow/run.ps1 --% x",
-                "& .workflow/run.ps1 plan\nGet-Content README.md",
-                ". .workflow/run.ps1 plan",
-                f"\"{posix_root}/.workflow/run.ps1\" plan",
-                "& .workflow/runx.ps1 plan",
-                "& ../.workflow/run.ps1 plan",
-                f"& \"{foreign}/.workflow/run.ps1\" plan",
-                "& .workflow/run.ps1 “plan”",
-            ]
-            for source in ps_refused:
-                gate.expect("PowerShell", {"command": source}, 2, "PowerShell that is not one plain runner call must block")
-
-            bash_allowed = [
-                ".workflow/run.ps1 plan \"t\" \"m1\"",
-                "./.workflow/run.sh plan 't (x)' \"m1\"",
-                f"\"{posix_root}/.workflow/run.ps1\" plan \"t\" \"m1\"",
-                "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan \"t\" \"m1\"",
-                "pwsh.exe -NonInteractive -File .workflow/check.ps1",
+            allowed = [
+                f"bash {posix_root}/.workflow/run.sh analyze 'task (x) kenapa' 'm1'",
+                "bash .workflow/run.sh plan 't' 'm1'",
+                "./.workflow/run.sh plan 't (x)' 'm1'",
+                "bash .workflow/run.sh plan 'rancang X; lalu cek $(y) | z > w' 'm1'",
+                "bash .workflow/check.sh job_1 --wait",
                 "bash .workflow/inspect.sh",
                 ".workflow/sub/../run.sh plan",
+                "bash .workflow/run.sh plan HEAD~1",
             ]
-            for line in bash_allowed:
-                gate.expect("Bash", {"command": line}, 0, "a clean runner call must pass")
-            bash_refused = [
+            refused = [
+                # a gather, plain
+                "cat README.md",
+                "Get-Content README.md",
+                "Get-ChildItem -Recurse",
+                # anything outside single quotes that either shell would act on
+                "bash .workflow/run.sh plan \"x $(cat README.md)\" 'm1'",
+                "bash .workflow/run.sh plan \"x $HOME\" 'm1'",
+                "bash .workflow/run.sh plan \"$env:USERPROFILE\"",
+                "bash .workflow/run.sh plan $x",
+                "bash .workflow/run.sh plan 't'; cat README.md",
+                "bash .workflow/run.sh plan | cat",
+                "bash .workflow/run.sh plan > out.txt",
+                "bash .workflow/run.sh plan & cat secret",
+                "bash .workflow/run.sh plan `id`",
+                "bash .workflow/run.sh (Get-Content README.md -Raw)",
+                "bash .workflow/run.sh @{x=(gc y)}",
+                "bash .workflow/run.sh -Task:x",
+                "bash .workflow/run.sh plan\ncat README.md",
+                "bash .workflow/run.sh 'plan",
+                "bash .workflow/run.sh pl'a'n",
+                "bash .workflow/run.sh ~/x",
+                "bash .workflow/run.sh “plan”",
+                # the runner must be the command itself, anchored to this project
                 f"bash {foreign}/.workflow/run.sh plan",
-                f"\"{foreign}/.workflow/run.ps1\" plan",
                 ".workflow/runx.sh plan",
                 "../.workflow/run.sh plan",
                 ".workflow/../../other/.workflow/run.sh plan",
-                "powershell -c .workflow/run.ps1 (Get-Content README.md -Raw)",
-                "powershell -Command .workflow/run.ps1 plan",
-                "powershell -EncodedCommand ZQBjAGgAbwA=",
-                "powershell -e .workflow/run.ps1",
-                "powershell .workflow/run.ps1 plan",
-                "powershell -NoProfile -ExecutionPolicy Unrestricted -File .workflow/run.ps1 plan",
                 "bash -c .workflow/run.sh",
                 "bash -x .workflow/run.sh plan",
-                "bash -ExecutionPolicy Bypass -File .workflow/run.sh",
                 "FOO=1 .workflow/run.sh plan",
-                ".workflow/run.sh \"plan",
+                "& .workflow/run.sh plan",
+                ". .workflow/run.sh plan",
+                "python x .workflow/run.sh",
+                # the retired .ps1 runners, however they are called
+                ".workflow/run.ps1 plan 't' 'm1'",
+                "& .workflow/run.ps1 plan",
+                f"{posix_root}/.workflow/run.ps1 plan",
+                "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan",
+                "pwsh -File .workflow/check.ps1",
             ]
-            for line in bash_refused:
-                gate.expect("Bash", {"command": line}, 2, "a Bash line that is not a clean anchored runner call must block")
+            for tool in ("Bash", "PowerShell"):
+                for line in allowed:
+                    gate.expect(tool, {"command": line}, 0, "a plain runner call must pass")
+                for line in refused:
+                    gate.expect(tool, {"command": line}, 2, "a line that is not one plain anchored runner call must block")
         finally:
             gate.close()
 
@@ -485,14 +461,15 @@ def _test_intent_gate_non_ascii_root() -> None:
 
     session-bind writes the registry as UTF-8 without a BOM; Windows PowerShell 5.1 read it
     as ANSI (`proyék` -> `proyÃ©k`), resolved a root that does not exist, found no marker and
-    let everything through. Both hooks, every flavour available.
+    let everything through. Both hooks, run both ways.
     """
     for label, command in _flavours():
         gate = _ArmedGate(label, command, root_name="proyék")
         try:
             gate.arm("plan")
             gate.expect("Grep", {"pattern": "x"}, 2, "a non-ASCII root must still arm the check")
-            gate.expect("Bash", {"command": ".workflow/run.sh plan \"t\" \"m1\""}, 0, "the runner under a non-ASCII root must pass")
+            gate.expect("Bash", {"command": "bash .workflow/run.sh plan 't' 'm1'"}, 0, "the runner under a non-ASCII root must pass")
+            gate.expect("Bash", {"command": f"bash {gate.project.as_posix()}/.workflow/run.sh plan 't' 'm1'"}, 0, "an absolute runner path through a non-ASCII root must pass")
         finally:
             gate.close()
     for label, command in _runners():

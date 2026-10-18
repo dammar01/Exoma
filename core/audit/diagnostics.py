@@ -24,7 +24,6 @@ from core.audit.bundle_integrity import (  # noqa: E402,F401
     _installed_intent_mode,
     _installed_path_for,
     _marker_block,
-    _os_variant_skip,
     _select_intent_section,
 )
 from config.providers import bundled_providers as _bundled_providers  # noqa: E402
@@ -479,7 +478,7 @@ def run_doctor(
                 "entry script drift: "
                 + ", ".join(f"{d['script']} ({d['state']})" for d in drifted)
             )
-            if any(d["state"] != "foreign_os_leftover" for d in drifted):
+            if any(d["state"] != "retired_leftover" for d in drifted):
                 recommended_fixes.append(
                     "Run `--command upgrade` to rewrite the drifted .workflow entry script(s)"
                 )
@@ -487,11 +486,11 @@ def run_doctor(
             # share, another process holding the handle. Naming the manual route as well
             # keeps a workspace from sitting at NOT_READY with only advice that failed.
             leftovers = [
-                d["script"] for d in drifted if d["state"] == "foreign_os_leftover"
+                d["script"] for d in drifted if d["state"] == "retired_leftover"
             ]
             if leftovers:
                 recommended_fixes.append(
-                    "Run `--command upgrade` to remove the other platform's leftover "
+                    "Run `--command upgrade` to remove the retired PowerShell "
                     f"script(s): {', '.join(f'.workflow/{name}' for name in leftovers)} "
                     "— delete them by hand if upgrade has already run and they remain"
                 )

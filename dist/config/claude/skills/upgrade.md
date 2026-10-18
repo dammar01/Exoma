@@ -13,8 +13,9 @@ Resolve the workflow entry point in this order:
 The runtime then prefers the build actually running the command, so an upgrade always
 repoints the workspace at the code doing the upgrade.
 
-Windows: python "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
-POSIX:   python3 "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
+Semua OS (tool Bash): <python> "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
+<python> = yang pertama JALAN dan ≥ 3.10 dari `python3`, `python`, `py -3`. Upgrade juga menghapus
+`run.ps1`/`inspect.ps1`/`check.ps1` lama: runner sekarang `.sh` saja, di semua OS.
 
 Upgrade refuses while delegated jobs are active. On a workspace still on the v3.5.x layout it
 first MIGRATES: backup to `.workflow/data/backups/<stamp>/`, internal files moved into

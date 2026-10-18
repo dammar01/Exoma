@@ -162,10 +162,6 @@ def provider_callable(command_name: str) -> tuple[bool, str]:
     return False, f"{command_name} not found in PATH"
 
 
-def script_ext() -> str:
-    return "ps1" if IS_WINDOWS else "sh"
-
-
 def make_executable(path: Path) -> None:
     """chmod +x on POSIX; no-op on Windows."""
     if IS_WINDOWS:

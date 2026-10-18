@@ -18,9 +18,9 @@ JANGAN hunt main.py di project/global/pip/npm — bukan package, ini git repo vi
 
 ## STEP 2 — Run init
 work_dir = absolute path project aktif.
-Windows: python "$env:AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
-POSIX:   python3 "$AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
-init otomatis: generate scripts (run/inspect/check) + config abs-path + copy second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
+Semua OS (tool Bash): <python> "$AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
+<python> = yang pertama JALAN dan ≥ 3.10 dari `python3`, `python`, `py -3` (Windows sering `python`, mac/linux sering cuma `python3`). Lebih tua → main.py menolak dengan satu pesan; pakai interpreter lain, jangan tebak "package missing".
+init otomatis: generate scripts (run/inspect/check .sh, bash di semua OS) + config abs-path + copy second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
 init SCAFFOLD, bukan pembaruan: config.json dan second_agent.json yang SUDAH ADA tidak ditimpa (tak ada active-job guard di init — itu milik /.upgrade). Workspace dari build lama tetap versi lama sesudah init. `meta.upgrade_needed: true` + `meta.versions` di output = jalankan /.upgrade.
 
 ## Output

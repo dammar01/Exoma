@@ -12,6 +12,7 @@ from tools.e2e.e2e_support import (
     subprocess,
     tempfile,
 )
+from utils.osutil import find_bash  # noqa: E402 - after e2e_support puts the repo on sys.path
 
 
 def delegated_checks(report: Report, session_id: str) -> None:
@@ -29,7 +30,7 @@ def delegated_checks(report: Report, session_id: str) -> None:
         code, output = _run_cli(
             "--command", "init", "--work-dir", str(project), "--pretty"
         )
-        script = project / ".workflow" / ("run.ps1" if os.name == "nt" else "run.sh")
+        script = project / ".workflow" / "run.sh"
         if code != 0 or not script.exists():
             report.record(
                 "delegated commands", SKIP, "fresh workflow runner was not generated"
@@ -42,18 +43,8 @@ def delegated_checks(report: Report, session_id: str) -> None:
             ("sweep", "scan git diff, identify impact", "local-report"),
         ]
         for command, task, contract in cases:
-            runner = (
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script),
-                ]
-                if os.name == "nt"
-                else [str(script)]
-            )
+            # bash on every OS (Git Bash on Windows), as the skills call it.
+            runner = [find_bash() or "bash", str(script)]
             result = subprocess.run(
                 [*runner, command, task, session_id],
                 capture_output=True,

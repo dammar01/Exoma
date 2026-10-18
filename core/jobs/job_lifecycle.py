@@ -101,7 +101,7 @@ def submit(
                         f"session {session_id} already has active job {active_id}",
                         next_action=(
                             f"Wait for {active_id} or run: "
-                            f".workflow/check.{osutil.script_ext()} {active_id} --wait"
+                            f"bash .workflow/check.sh {active_id} --wait"
                         ),
                         meta={"command": normalized_command},
                         active_job_id=active_id,
@@ -188,7 +188,7 @@ def submit(
                     active_id = active["job_id"] if active else None
                     next_action = (
                         f"Wait for {active_id} or run: "
-                        f".workflow/check.{osutil.script_ext()} {active_id} --wait"
+                        f"bash .workflow/check.sh {active_id} --wait"
                         if active_id
                         else "Wait for the active job to finish, then retry."
                     )

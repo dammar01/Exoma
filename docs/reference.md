@@ -26,7 +26,7 @@ Evidence, config, state per-sesi, dan binding sesi provider (`.workflow/data/pro
 ```text
 Prompt user
 → main_agent: auto-detect intent atau pakai override /.
-→ .workflow/run.{ps1|sh}
+→ .workflow/run.sh (bash di semua OS)
 → main.py await → JobManager → detached worker
 → Executor → Router
 → Graphify leads + fact store → PromptBuilder
@@ -91,13 +91,8 @@ Himpunan tertutup di `core/evidence/contract.py` `ERROR_TYPES`; `make_error` men
 Cek cepat:
 
 ```bash
-python3 --version   # atau: python --version
-opencode --version
-git --version
-```
-
-```powershell
-python --version
+python3 --version   # atau: python --version / py -3 --version
+bash --version      # Windows: Git Bash (Git for Windows)
 opencode --version
 git --version
 ```
@@ -122,7 +117,7 @@ Verifikasi sebelum memakainya:
 
 ```bash
 python install.py --check                  # bundle + instalasi global
-cd /path/to/project-anda && .workflow/run.sh doctor    # .workflow\run.ps1 di Windows
+cd /path/to/project-anda && bash .workflow/run.sh doctor    # semua OS (Git Bash di Windows)
 ```
 
 `doctor` harus melaporkan `READY` dengan nol issue. Selain itu, baca `recommended_fixes`
@@ -183,7 +178,7 @@ Yang dilakukan `--apply`:
 |---|---|
 | `~/.claude/CLAUDE.md` | ganti isi **di antara marker** `WORKFLOW-MAIN-AGENT` — tulisan tangan di luar marker selamat. File belum ada → ditulis **hanya blok marker** |
 | `~/.claude/skills/*.md`, `~/.claude/commands/*.md` | replace (template) |
-| `~/.claude/hooks/*` | replace; hanya flavour OS aktif (`.ps1` di Windows, `.sh` di POSIX) |
+| `~/.claude/hooks/*` | replace; satu set untuk semua OS: launcher `<hook>.sh`, logika `<hook>.py`, `workflow_hooks.py`, `intent-map.json`. `.ps1` dari rilis lama dihapus sebagai file stale (yang sudah diedit dibiarkan dan disebut) |
 | `~/.claude/settings.json` | tambah hook dan `statusLine` milik workflow; hook dan key user dipertahankan (lihat "Hook yang didaftarkan") |
 | `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md`, `~/.agy/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT`; file belum ada → hanya blok marker. Blok itu hanya berlaku untuk call runtime (instruksi dibuka `[WORKFLOW_AGENT]`); sesi provider yang dipakai user langsung mengabaikannya |
 | `~/.claude/.workflow-install-mode.json`, `~/.claude/.workflow-installed.json` | mode intent terpilih dan ledger file yang ditulis install (untuk membersihkan file basi) |
@@ -260,8 +255,8 @@ Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, i
 
 ### Statusline (badge second agent)
 
-Installer memasang `~/.claude/hooks/workflow-statusline.<ps1|sh>` dan mendaftarkannya sebagai
-`statusLine` di `settings.json`.
+Installer memasang `~/.claude/hooks/workflow-statusline.sh` (beserta `.py`-nya) dan mendaftarkannya
+sebagai `statusLine` di `settings.json`.
 
 `settings.json` **additive**: hanya key yang belum ada yang ditulis, dan template sejak 3.8.0
 hanya membawa `hooks` dan `statusLine` — `model`, `enabledPlugins`,
@@ -272,7 +267,7 @@ output install. Hapus key itu lalu jalankan ulang `install.py --apply` bila ingi
 yang dikirim.
 
 File script-nya sendiri ikut aturan `~/.claude/hooks/*` di tabel di atas: **replace**,
-dengan backup lebih dulu. Punya `workflow-statusline.ps1` buatan sendiri di sana → ia tertimpa
+dengan backup lebih dulu. Punya `workflow-statusline.sh` buatan sendiri di sana → ia tertimpa
 (salinannya ada di `~/.claude/backups/install_<timestamp>/`). Yang dipertahankan adalah
 key `statusLine` di `settings.json`, bukan file di `hooks/`.
 
@@ -290,8 +285,8 @@ agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k 
 
 Kedua angka selalu tampil, termasuk saat bernilai nol. Segmen yang hilang terbaca sebagai rusak, bukan sebagai kosong.
 
-Angka diambil dari `<project_root>/.workflow/data/usage.jsonl` (atau `.workflow/usage.jsonl` pada workspace yang belum di-upgrade). Flavor PowerShell meng-cache hasilnya 30 detik; flavor `.sh` menghitung
-ulang tiap render (angka sama, hanya biaya baca berbeda). Sesi Claude
+Angka diambil dari `<project_root>/.workflow/data/usage.jsonl` (atau `.workflow/usage.jsonl` pada workspace yang belum di-upgrade). Statusline menghitung
+ulang tiap render. Sesi Claude
 dipetakan ke `MAIN_SESSION_ID` lewat `~/.claude/session_registry.json` yang ditulis
 `session-bind`. Belum ada `usage.jsonl`, atau sesi belum terpetakan, badge cuma menampilkan
 nama project — tak pernah menggagalkan prompt.
@@ -331,7 +326,7 @@ mengukur panjang **prompt**, bukan berapa yang dibaca. Baris cadangan menyalakan
 | `SessionStart` | `startup\|resume\|clear\|compact` | `session-bind` | mengikat sesi Claude ke `MAIN_SESSION_ID` |
 | `UserPromptSubmit` | — | `intent-gate-set` | mode auto-intent saja: pasang marker gate untuk prompt delegated |
 | `UserPromptSubmit` | — | `task-events` | skill lokal dari prompt; snapshot HEAD |
-| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit` | `intent-gate-check` | blokir gather tool selama marker gate ada; Bash/PowerShell hanya lolos untuk satu panggilan polos ke `<root>/.workflow/{run,check,inspect}` (di-parse: Bash dipecah kata ala POSIX, PowerShell lewat parser PowerShell; argumen konstan; interpreter hanya `powershell`/`pwsh` dengan `-NoProfile`/`-NonInteractive`/`-ExecutionPolicy Bypass`/`-File`, atau `bash`/`sh` tanpa flag; path di luar root, `..`, dan nama mirip ditolak); Write/Edit lolos kecuali ke script runner itu; marker berintent `verify` meloloskan jalur pilih-test (lihat "Mode intent") |
+| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit` | `intent-gate-check` | blokir gather tool selama marker gate ada; Bash dan PowerShell lewat satu tokenizer dan satu aturan: hanya lolos untuk satu panggilan polos `[bash] <root>/.workflow/{run,check,inspect}.sh` (tiap kata polos atau `'...'`; `$`, backtick, `;`, `|`, `&`, redirect, newline hanya di dalam petik tunggal; petik ganda, `bash -c`, interpreter lain di depan, `run.ps1`, path di luar root, `..`, dan nama mirip ditolak); Write/Edit lolos kecuali ke script runner itu; marker berintent `verify` meloloskan jalur pilih-test (lihat "Mode intent") |
 | `PostToolUse` | `Skill\|Edit\|Write\|MultiEdit\|NotebookEdit` | `task-events` | skill via tool `Skill`, file diedit |
 | `Stop` | — | `graph-refresh` | regenerasi graph setelah turn yang mengimplementasi (detached) |
 | `Stop` | — | `task-events` | commit sejak snapshot HEAD |
@@ -339,7 +334,11 @@ mengukur panjang **prompt**, bukan berapa yang dibaca. Baris cadangan menyalakan
 Hook dikenali dari nama script-nya. Saat install, hook milik workflow di-refresh per event,
 hook user dibiarkan, dan command script workflow yang tidak lagi didaftarkan rilis ini di
 suatu event dicabut dari event itu (misalnya `task-events` di `PreToolUse` dari draft 3.8.0).
-Di POSIX command `powershell ... .ps1` ditulis ulang menjadi `bash ... .sh`.
+Command di template sama untuk semua OS, `{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<hook>.sh"`;
+installer mengisi `{{HOOK_BASH}}` dengan `bash` di POSIX dan path absolut Git Bash (dikutip) di
+Windows, karena `bash` polos di sana bisa jatuh ke bash WSL di `System32`. Tanpa Git Bash di
+Windows, `--apply` ditolak (exit 6) sebelum menulis apa pun. Command lama berbentuk
+`powershell ... .ps1` dikenali dari nama hook-nya dan diganti.
 
 ### Uninstall
 
@@ -352,7 +351,7 @@ Di POSIX command `powershell ... .ps1` ditulis ulang menjadi `bash ... .sh`.
 - `settings.json` kehilangan command hook yang menjalankan script workflow (dikirim atau
   pensiun) dan `statusLine` workflow; key lain tetap, termasuk yang dulu ditanam rilis lama.
   Sebuah command dianggap milik workflow hanya bila script-nya ada di folder hook terpasang,
-  `<home>/.claude/hooks/<nama>.ps1|.sh` (`<home>` = home install, `~`, `$HOME`,
+  `<home>/.claude/hooks/<nama>.sh` (atau `.ps1` dari rilis lama; `<home>` = home install, `~`, `$HOME`,
   `%USERPROFILE%`, `$env:USERPROFILE`, atau path berbentuk home user), dan namanya dikirim atau
   pensiun. Script user bernama sama di folder lain (`~/tools/task-events.sh`) tidak disentuh
   install maupun uninstall; satu command yang menjalankan script kita plus script lain dianggap
@@ -398,13 +397,17 @@ lapisan prompt yang bekerja. Sejak perbaikan itu, di mode auto-intent `intent-ga
 benar-benar memblokir gather tool sesudah prompt yang terpetakan ke command delegated sampai
 `.workflow/run` dipanggil; escape-nya tetap `WORKFLOW_LOCAL_MODE=1` atau `local_mode.flag`.
 
-Runner hanya lolos bila ia command itu sendiri: token pertama adalah path
-`.workflow/{run,check,inspect}.{ps1,sh}` (polos atau ber-quote), boleh didahului
-`powershell`/`pwsh`/`bash`/`sh` beserta flag-nya. Path runner yang muncul sebagai argumen
-command lain (`python -c "..." x/.workflow/run.sh`) tetap diblokir.
+Runner hanya lolos bila ia command itu sendiri: kata pertama adalah path
+`.workflow/{run,check,inspect}.sh` milik project ini, atau kata kedua sesudah `bash` polos (tanpa
+flag). Tool Bash dan PowerShell dibaca oleh tokenizer yang sama: tiap kata harus polos (huruf, angka,
+`_ . / : = + % - ^`, dan `~` di tengah kata) atau dibungkus petik tunggal, yang literal di kedua
+shell. Karena itu task boleh memuat `$`, `;`, `|`, `&`, `<`, `>`, dan kurung asal di dalam
+`'...'`; petik ganda ditolak karena kedua shell mengekspansi `$` di dalamnya, dan apostrof di
+dalam task tidak bisa ditulis. Path runner yang muncul sebagai argumen command lain
+(`python -c "..." x/.workflow/run.sh`) dan `run.ps1` (pensiun) tetap diblokir.
 
 Field `command` di marker memilih aturan lolos. Untuk `verify`, main_agent harus memilih test
-sebelum delegasi, jadi tiga hal lolos: `git diff` bersih (tanpa `&&`, `;`, pipe, redirect)
+sebelum delegasi, jadi tiga hal lolos: `git diff` polos (aturan kata yang sama dengan runner)
 dengan `--name-only`, `--name-status`, atau `--stat[=N]`, plus opsional `--cached`, `--staged`,
 `--relative`, `--no-renames`, `--no-color`, `--`, ref, dan path (opsi lain seperti `-p` atau
 `--output` tetap diblokir); Read `<root>/.workflow/config.json`; Read/Write
@@ -413,7 +416,7 @@ file di diff. Matcher `PreToolUse` memuat `Write`/`Edit`/`MultiEdit`/`NotebookEd
 hook hanya menolak tulis ke script runner `.workflow/{run,check,inspect}` (ekstensi apa pun)
 selama marker ada (menulis ulang runner lalu menjalankannya akan membuat allowlist runner jadi command bebas);
 tulis ke file lain, termasuk `tests.json`, lolos.
-`.ps1` hook diuji di Windows PowerShell 5.1 (`powershell`), shell yang dipasang settings.
+Hook diuji lewat launcher `.sh` yang benar-benar dipasang, di Windows lewat Git Bash dan di Linux.
 
 Untuk semua `command` di marker, Read definisi skill juga lolos: path absolut tanpa segmen
 `..`, berakhiran `.md`, file-nya ada, dan path aslinya (semua symlink/junction diikuti) berada
@@ -536,11 +539,11 @@ python3 "$AGENT_PATH" --command init --work-dir /path/to/target-app --pretty
 python $env:AGENT_PATH --command init --work-dir "C:/path/to/target-app" --pretty
 ```
 
-`init` bersifat idempoten: membuat scaffolding yang belum ada dan meregenerasi enam runner script. Workspace yang dibuat build lama (versi berbeda atau layout lama) langsung di-upgrade oleh init; bila ada job hidup, upgrade dilewati dan perintahnya disebut.
+`init` bersifat idempoten: membuat scaffolding yang belum ada dan meregenerasi tiga runner script. Workspace yang dibuat build lama (versi berbeda atau layout lama) langsung di-upgrade oleh init; bila ada job hidup, upgrade dilewati dan perintahnya disebut.
 
 - `.workflow/config.json` — path absolut `main.py`/`check.py`, sehingga runner dapat menemukan tool tanpa mengandalkan `AGENT_PATH`
 - `.workflow/second_agent.json` — salinan project-local, boleh kamu ubah
-- skrip runner untuk platform yang sedang berjalan: `run` `inspect` `check` — `.ps1` di Windows, `.sh` di POSIX
+- skrip runner `run.sh` `inspect.sh` `check.sh` — bash di semua OS (Git Bash di Windows); tak ada lagi `.ps1`
 - `.workflow/data/sessions/` kosong — state per-sesi dibuat lazy saat panggilan terdelegasi pertama. Semua file internal (stream, store, cache, sesi, report) ada di `.workflow/data/`; root `.workflow/` hanya berisi file yang kamu edit, script, dan `current/`
 - entri `.workflow/` ditambahkan ke `.gitignore` root project
 
@@ -552,9 +555,9 @@ chmod +x .workflow/*.sh
 
 **Batasan portabilitas.** Skrip memanggang **path absolut dari mesin tempat `init` dijalankan** — path ke `main.py`, `--work-dir`, dan interpreter Python yang terdeteksi. Tak ada satu pun yang portabel lintas mesin.
 
-Karena itu hanya flavour OS yang sedang berjalan yang ditulis, dan `init`/`upgrade` **menghapus** skrip flavour lain yang tertinggal dari build lama. Sebuah `run.sh` yang dihasilkan di Windows berisi path bergaya `C:\...`, tidak akan jalan di Linux/macOS, dan tidak dipelihara generator mana pun di mesin itu — menyimpannya hanya membuatnya tampak dapat dipakai. Setiap anggota tim menjalankan `init` (atau `upgrade`) sendiri di environment masing-masing; itu juga berlaku saat berpindah antara WSL dan Windows asli.
+Path ditulis dengan garis miring maju (`C:/...` di Windows), yang dibaca Git Bash maupun Python Windows. `init`/`upgrade` **menghapus** `run.ps1`/`inspect.ps1`/`check.ps1` yang tertinggal dari build lama: tak ada generator yang memeliharanya lagi dan gate tak meloloskan panggilan ke sana, jadi menyimpannya hanya membuatnya tampak dapat dipakai. Sebuah `run.sh` dari mesin lain tetap memuat path absolut mesin itu. Setiap anggota tim menjalankan `init` (atau `upgrade`) sendiri di environment masing-masing; itu juga berlaku saat berpindah antara WSL dan Windows asli.
 
-`doctor` membandingkan isi skrip di disk dengan hasil generator dan melaporkannya di `run_script_drift` — `missing`, `content_differs`, atau `foreign_os_leftover`. Semuanya dihitung sebagai issue: skrip inilah satu-satunya pintu masuk, dan yang sudah melenceng akan merutekan command yang sudah tidak diterima CLI.
+`doctor` membandingkan isi skrip di disk dengan hasil generator dan melaporkannya di `run_script_drift` — `missing`, `content_differs`, atau `retired_leftover` (`.ps1` dari build lama). Semuanya dihitung sebagai issue: skrip inilah satu-satunya pintu masuk, dan yang sudah melenceng akan merutekan command yang sudah tidak diterima CLI.
 
 ## Upgrade workspace
 
@@ -594,15 +597,15 @@ Command biasa tidak menjalankan **full workspace upgrade**. Delegated call dapat
 
 ## Pemakaian harian
 
-main_agent memanggil **satu** skrip runner — tidak merakit command Python sendiri.
-
-```powershell
-& "C:/path/to/target-app/.workflow/run.ps1" explore "cari entry point auth" "<MAIN_SESSION_ID>"
-```
+main_agent memanggil **satu** skrip runner — tidak merakit command Python sendiri — lewat tool
+Bash, di semua OS:
 
 ```bash
-/path/to/target-app/.workflow/run.sh explore "cari entry point auth" "<MAIN_SESSION_ID>"
+bash '/path/to/target-app/.workflow/run.sh' explore 'cari entry point auth' '<MAIN_SESSION_ID>'
 ```
+
+Tiap argumen dibungkus petik tunggal: itu bentuk yang diloloskan pre-flight gate, dan isinya literal
+(`$`, `;`, `|`, kurung boleh; apostrof tidak). Di Windows path-nya `C:/...`.
 
 Argumen ketiga adalah session id. **Wajib** diteruskan: tanpa itu runner memakai fallback `"default"` yang di-resolve melalui cache global tool, sehingga beberapa main_agent dapat berbagi ID efektif, saling menimpa state, dan saling memblokir job. Skrip mencetak peringatan ke stderr bila ini terjadi.
 
@@ -901,9 +904,9 @@ Dengan `policies.graph_leads_enabled: true`, runtime membaca `graphify-out/graph
 - graph yang lebih tua daripada source `.py` tetap dipakai, tetapi prompt membawa warning stale;
 - graph tidak ada, rusak, atau sedang di-refresh (`graphify-out/.refresh.lock` dipegang worker yang masih berdetak) → delegated flow tetap berjalan tanpa leads dan tidak menunggu lock. Baris `usage.jsonl` mencatat `graph_status` (`used`, `empty`, `absent`, `refreshing`, `disabled`) dan `graph_ms`. `verify-browser` tidak memakai leads, jadi tidak melakukan lookup; ia hanya mencatat sekali per command apakah refresh sedang berjalan: `refreshing`, `available` (graph ada, tidak dibaca), atau `absent`.
 
-Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Satu-satunya pemicu `graphify update` adalah Stop hook `graph-refresh` di bundle Claude (`.ps1` dan `.sh`); `CLAUDE.md` dan skill `refactor` tidak lagi meminta main agent menjalankannya. Hook jalan setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, lebih tua dari source, dan binary tersedia:
+Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Satu-satunya pemicu `graphify update` adalah Stop hook `graph-refresh` di bundle Claude (launcher `.sh` + `graph-refresh.py`); `CLAUDE.md` dan skill `refactor` tidak lagi meminta main agent menjalankannya. Hook jalan setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, lebih tua dari source, dan binary tersedia:
 
-- scan mtime melewati direktori skip (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, `target`, ...) sebelum masuk, jadi biayanya mengikuti jumlah source, bukan jumlah dependency; nama direktori dan ekstensi dicocokkan tanpa peduli huruf besar-kecil di kedua flavour;
+- scan mtime melewati direktori skip (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, `target`, ...) sebelum masuk, jadi biayanya mengikuti jumlah source, bukan jumlah dependency; nama direktori dan ekstensi dicocokkan tanpa peduli huruf besar-kecil;
 - graph basi → hook membuat `graphify-out/.refresh.lock` (`pid`, `token`, `started`, `beat`), menjalankan worker terpisah, lalu kembali. Turn tidak menunggu graphify. Worker menjalankan `graphify update` **tanpa batas waktu** dan tak pernah membunuhnya (DEC-042); selama graphify jalan, worker menulis ulang `beat` (dan `graphify_pid`) tiap 15 detik, lalu mencatat satu baris dan menghapus lock miliknya. `GRAPH_REFRESH_LIMIT_S` tak lagi dibaca. Lock diserahkan hook ke worker hanya selama masih membawa token hook itu, dan bila worker sudah selesai dan menghapusnya, lock tidak dibuat ulang. Lock basi hanya dihapus bila isinya masih sama saat dibaca ulang tepat sebelum dihapus; lock yang berubah dianggap `skipped_running`, sehingga dua sesi tak menjalankan dua refresh bersamaan;
 - graphify menulis ulang `graph.json` di tempat, jadi selama lock dipegang runtime memperlakukan graph sebagai tidak tersedia, dan main agent diminta menganggapnya basi. Lock dipegang selama `beat`-nya berumur < 120 detik, berapa pun umur lock itu; refresh sepanjang apa pun tak pernah terbaca basi. Lock tanpa `beat` (ditulis sebelum DEC-042) memakai aturan lama: pid hidup dan berumur < 15 menit. Lock yang ada tetapi tak terbaca dianggap dipegang selama mtime-nya < 120 detik. Setiap penulisan lock ditulis ke file sementara lalu di-rename;
 - graphify yang hang menahan graph selama worker-nya hidup. `--command doctor` melaporkan lock itu (`checks.graph_refresh_lock`: `state`, `age`, `beat_age`, `pid`, `graphify_pid`) dan memberi saran bila refresh sudah berjalan ≥ 1 jam atau lock-nya basi; ini saran, bukan issue, karena delegated flow tetap jalan tanpa leads. `--command clean` hanya menghapus lock yang basi (tak ada `beat` dalam 120 detik) dan tak pernah membunuh proses: hentikan proses graphify-nya sendiri, tunggu lock basi, lalu jalankan `clean`. Bila worker mati sementara graphify masih hidup, lock basi dalam 120 detik walau graphify mungkin masih menulis;
@@ -923,7 +926,7 @@ Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran selur
 `--command report` → `tasks` membaca `.workflow/data/tasks.jsonl` (DEC-015, direvisi DEC-020). Satu task = rangkaian event dalam satu MAIN_SESSION_ID, dari event pertamanya sampai verify yang verdict **turunan** runtime-nya `pass` setelah task itu mengedit file. Commit adalah langkah berikut yang dianjurkan, bukan penutup. Event ditulis dua pihak, tanpa instruksi tambahan di prompt:
 
 - runtime: satu event per command delegated (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). Event verify membawa `verdict` (yang **dideklarasikan** reply; `DONE` dengan blocking finding dihitung `NEEDS FIX`) dan `derived` (verdict turunan runtime: `pass`, `incomplete`, atau `fail`). Hanya `derived: pass` yang menutup task; `DONE` yang oleh runtime dianggap `incomplete`, termasuk karena `not_verified`, membiarkan task tetap `open`;
-- hook `task-events` (`.ps1`/`.sh`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): skill lokal yang dipanggil dari prompt (`/.<name>`) atau lewat tool `Skill`, file di dalam project diedit (bukan `.workflow/`/`.git/`), dan commit sebagai HEAD yang **berpindah antar turn**. Event pertama sesi menyimpan snapshot HEAD di `.workflow/data/task-hook/<claude_session_id>.head`; tiap `Stop` (atau prompt berikutnya, untuk commit yang dibuat di terminal di antara turn) mencatat commit sejak snapshot — first-parent, urut terlama dulu, masing-masing dengan `paths` — lalu memajukan snapshot. Event v2 (`v: 2`). Sebelum 3.8.0 hook ini jalan di setiap `Read` dan `Bash` (dua kali untuk `Bash`); satu spawn PowerShell ~450 ms di Windows, sementara skill dan commit cukup dibaca sekali per turn. Konsekuensi: skill yang dimuat lewat `Read` tanpa prefix (auto-intent bahasa natural) tidak tercatat, dan commit tercatat di akhir turn yang membuatnya, sesudah verify di turn itu.
+- hook `task-events` (launcher `.sh` + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): skill lokal yang dipanggil dari prompt (`/.<name>`) atau lewat tool `Skill`, file di dalam project diedit (bukan `.workflow/`/`.git/`), dan commit sebagai HEAD yang **berpindah antar turn**. Event pertama sesi menyimpan snapshot HEAD di `.workflow/data/task-hook/<claude_session_id>.head`; tiap `Stop` (atau prompt berikutnya, untuk commit yang dibuat di terminal di antara turn) mencatat commit sejak snapshot — first-parent, urut terlama dulu, masing-masing dengan `paths` — lalu memajukan snapshot. Event v2 (`v: 2`). Sebelum 3.8.0 hook ini jalan di setiap `Read` dan `Bash` (dua kali untuk `Bash`); satu spawn PowerShell ~450 ms di Windows, sementara skill dan commit cukup dibaca sekali per turn. Konsekuensi: skill yang dimuat lewat `Read` tanpa prefix (auto-intent bahasa natural) tidak tercatat, dan commit tercatat di akhir turn yang membuatnya, sesudah verify di turn itu.
 
 State: `completed` (verify `derived: pass` tanpa edit sesudahnya, di-commit atau belum), `open` (ada edit, belum `pass` — di-commit atau belum), `read_only` (tidak ada edit), `unknown` (event tanpa identitas sesi). Edit sesudah `pass` membuka task baru. Commit yang memuat file task yang baru `completed` masuk ke `sequence` task itu; commit di task `open` masuk ke `sequence`-nya tanpa mengubah state. Event sebelum DEC-020 tidak membawa `derived`, sehingga task-nya tetap `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (commit berbeda yang tak satu pun salinannya diklaim task; commit baru ditandai terpakai saat diklaim, sehingga salinan yang dicatat sesi lain lebih dulu tidak menyembunyikannya dari sesi pembuatnya), dan `recent` (10 task terakhir dengan `sequence`). Stream ini terpisah dari `usage.jsonl`: skill lokal dan edit bukan call delegated dan tidak boleh masuk budget governance.
 
@@ -1088,9 +1091,9 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 ├─ e2e/secrets.json         # opsional, profil credential verify-browser
 ├─ current/                 # cermin dispatch terakhir (tanpa credential)
 ├─ .gitignore
-├─ run.ps1  run.sh          # entry point 1-panggilan
-├─ inspect.ps1  inspect.sh  # daftar job
-├─ check.ps1  check.sh      # status/hasil job
+├─ run.sh                  # entry point 1-panggilan (bash di semua OS)
+├─ inspect.sh              # daftar job
+├─ check.sh                # status/hasil job
 └─ data/                    # semua yang bukan file edit manusia (layout 2)
    ├─ facts.jsonl           # fact store lintas sesi
    ├─ evidence.jsonl        # index artifact immutable lintas sesi
@@ -1140,14 +1143,9 @@ Jika worker sudah mati, job yang sama dipulihkan satu kali melalui thread provid
 dengan prompt continuation terstruktur. Kematian kedua menghasilkan
 `recovery_exhausted`, melepas lock, dan tidak memicu loop otomatis.
 
-```powershell
-& ".workflow/inspect.ps1"
-& ".workflow/check.ps1" <job_id> --wait --result
-```
-
 ```bash
-.workflow/inspect.sh
-.workflow/check.sh <job_id> --wait --result
+bash .workflow/inspect.sh
+bash .workflow/check.sh <job_id> --wait --result
 ```
 
 Exit code status `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `3` tak
@@ -1274,10 +1272,11 @@ input dispatch — default `e2e-dispatch` dan `self-hosted`.
 
 Python dipaku ke `3.13` lewat `actions/setup-python`, jadi workflow MENYEDIAKAN interpreter
 alih-alih berharap runner membawanya. Matrix `runs-on` mencakup `ubuntu-latest` dan
-`windows-latest` dengan `fail-fast: false`: runtime mengirim runner PowerShell dan
-menghasilkan yang POSIX, dan penanganan path paling berbeda persis di tempat yang penting
-(lock, direktori sesi) — run satu-OS akan lolos sementara separuh produk tak teruji, dan satu
-platform yang merah tak boleh menyembunyikan hasil platform lain.
+`windows-latest` dengan `fail-fast: false`: hook dan runner adalah bash di kedua OS (Git Bash di
+Windows, diperiksa di langkah pertama job), tetapi penanganan path paling berbeda persis di tempat
+yang penting (lock, direktori sesi, path ber-backslash yang diterima launcher) — run satu-OS akan
+lolos sementara separuh produk tak teruji, dan satu platform yang merah tak boleh menyembunyikan
+hasil platform lain.
 
 `on: push` (`main`/`dev`) + `pull_request` + `workflow_dispatch`, dengan
 `concurrency: cancel-in-progress` supaya pipeline yang tersalip di ref yang sama dibatalkan

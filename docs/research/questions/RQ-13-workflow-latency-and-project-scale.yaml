@@ -10,7 +10,7 @@ what_exists: |
   since DEC-012, and runtime lock guards accumulate one per session. Nothing records project
   size next to latency at run time; one-off measurements exist for the hook on two projects
   (CASE-008) and for verify spread and the lookup on every local project (CASE-010).
-records: [CASE-006, CASE-007, CASE-008, CASE-010, DEC-012, DEC-013, DEC-021, DEC-025, DEC-029, DEC-030, DEC-033, DEC-037, DEC-042, DEC-054]
+records: [CASE-006, CASE-007, CASE-008, CASE-010, DEC-012, DEC-013, DEC-021, DEC-025, DEC-029, DEC-030, DEC-033, DEC-037, DEC-042, DEC-054, DEC-055]
 notes: |
   The maintainer feels latency after execute, in execute+verify turns, in verify alone, and
   when the main agent runs graphify itself; verify is slower on a large Laravel backend than

@@ -122,7 +122,7 @@ from tests.checks.provider import (
 from tests.checks.registry import _test_every_check_is_registered
 from tests.checks.bundle_sync import (
     _test_bundle_registry_bijection,
-    _test_every_shipped_hook_has_both_os_flavours,
+    _test_every_shipped_hook_is_a_launcher_and_its_module,
 )
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses
 from tests.checks.manifest import (
@@ -189,7 +189,7 @@ from tests.checks.prompt import (
 def run_tests() -> None:
     _test_every_check_is_registered()
     _test_bundle_registry_bijection()
-    _test_every_shipped_hook_has_both_os_flavours()
+    _test_every_shipped_hook_is_a_launcher_and_its_module()
     _test_stamp_version_reads_versions_not_addresses()
     _test_manifest_matches_dist()
     _test_malformed_manifest_entry_fails_closed()

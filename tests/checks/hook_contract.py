@@ -1,12 +1,10 @@
-"""Every shipped hook, run through its bash launcher as Claude Code would run it.
+"""Every shipped hook, run through its bash launcher as Claude Code runs it, on every OS.
 
-Stage 0 of the OS-agnostic migration (bash launchers on every OS, one Python dispatcher):
-the contract is frozen on the real `.sh` files before any of them changes. The other hook
-checks run the `.sh` flavour's embedded python, and the bash wrapper on POSIX only, so the
-launcher itself (`cat`, `python3`, exit code) was never exercised on Windows — and Windows is
-where it will now run. Each case asks one hook what the contract says it must do (exit code,
-stdout, the file it writes) and times the call; where PowerShell exists the `.ps1` flavour
-answers the same case, so the exit codes are pinned for both.
+A hook is `<stem>.sh` (resolves an interpreter, execs workflow_hooks.py) and `<stem>.py`
+(the logic). The other hook checks call the `.py` directly; this one runs the launcher
+itself — `python` resolution, stdin, exit code — on Windows through Git Bash too. Each case
+asks one hook what its contract says (exit code, stdout/stderr, the file it writes) and
+times the call.
 
 The gate's K5 fixtures (tests/fixtures/hooks/gate_k5.json) assert what the gate decides now
 and list where the target gate must decide differently; the list is printed, not failed.
@@ -21,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from tests.checks.support import assert_true, powershell_for_hooks
+from tests.checks.support import assert_true
 from utils import osutil
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,14 +39,9 @@ def _bash() -> str | None:
 
 
 def _flavours(hook: str) -> list[tuple[str, list[str]]]:
-    runners = []
+    """The one way a hook runs on every OS: its bash launcher."""
     bash = _bash()
-    if bash:
-        runners.append(("sh", [bash, str(HOOKS / f"{hook}.sh")]))
-    shell = powershell_for_hooks()
-    if shell:
-        runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / f"{hook}.ps1")]))
-    return runners
+    return [("sh", [bash, str(HOOKS / f"{hook}.sh")])] if bash else []
 
 
 class _Workspace:

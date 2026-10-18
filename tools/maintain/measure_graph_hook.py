@@ -43,7 +43,7 @@ import sys
 import time
 from pathlib import Path
 
-# The same lists as dist/config/claude/hooks/graph-refresh.ps1 (v3.7.3).
+# The same lists as dist/config/claude/hooks/graph-refresh.py.
 SOURCE_EXTENSIONS = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".php", ".go", ".rs", ".java", ".rb")
 SKIP_DIRS = ("node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", ".next", "coverage", "graphify-out", ".workflow")
 
@@ -159,8 +159,8 @@ def sanitize_line(line: str | None, root: Path) -> str | None:
 
 
 def default_hook() -> Path:
-    name = "graph-refresh.ps1" if os.name == "nt" else "graph-refresh.sh"
-    return Path.home() / ".claude" / "hooks" / name
+    """The installed hook launcher, the same on every OS."""
+    return Path.home() / ".claude" / "hooks" / "graph-refresh.sh"
 
 
 # Older than any source file, so the hook's mtime gate sees the graph as stale.
@@ -206,7 +206,11 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
     if run_hook:
         if not hook.is_file():
             raise SystemExit(f"hook not found: {hook}")
-        command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(hook)] if hook.suffix == ".ps1" else ["bash", str(hook)]
+        # Git Bash on Windows (osutil.find_bash), as the installed settings run it.
+        sys.path.insert(0, str(REPO_ROOT))
+        from utils.osutil import find_bash
+
+        command = [find_bash() or "bash", str(hook)]
         payload = json.dumps({"last_assistant_message": "[EXECUTION RESULT] measurement", "cwd": str(root)})
         original = graph.stat() if force_stale and graph.is_file() else None
         if original is not None:

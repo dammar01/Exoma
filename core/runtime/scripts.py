@@ -5,16 +5,6 @@ from core.workspace.workspace_paths import atomic_write_text
 from pathlib import Path
 from utils import osutil
 
-# PowerShell does not adopt the exit code of the native command it invoked: a .ps1 that
-# calls a python which exits 1 still exits 0 itself. Everything that scripts this runtime
-# reads the exit status first, so that silence turned a failed run into a reported success
-# on Windows while the .sh flavour — which `exec`s, and so inherits the code for free —
-# reported the same failure honestly. Every generated .ps1 ends with this line to close
-# the gap. `$LASTEXITCODE` is $null when the interpreter never launched at all (a missing
-# python, a bad path), and that case must not collapse to 0 either.
-_PS_PROPAGATE_EXIT = "if ($null -eq $LASTEXITCODE) { exit 1 } else { exit $LASTEXITCODE }\n"
-
-
 def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str]]:
     """Compose run/inspect/check scripts so main_agent calls one script.
 
@@ -22,76 +12,31 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
     this function would produce — a script that drifted out of step with the generator is
     invisible to a check that only asks whether the file exists.
 
-    Each script uses a python resolvable on ITS OWN platform: the current-OS script
-    gets the exact interpreter; the cross-OS script gets a generic name (python/python3)
-    resolved via PATH on the target machine — so a project copied across OSes still runs.
+    One flavour on every OS: bash scripts (Git Bash on Windows) that exec the interpreter
+    running this generator, by absolute path. Paths are written with forward slashes:
+    Windows python and Git Bash both read `C:/x`, and a forward-slash path holds nothing
+    bash treats as special inside double quotes.
     """
-    ps_py = osutil.python_exe() if osutil.IS_WINDOWS else "python"
-    sh_py = osutil.python_exe() if not osutil.IS_WINDOWS else "python3"
-    check_py = str(Path(main_py).parent / "check.py")
-    root = str(project_root)
+    sh_py = Path(osutil.python_exe()).as_posix()
+    main_py = Path(main_py).as_posix()
+    check_py = (Path(main_py).parent / "check.py").as_posix()
+    root = project_root.as_posix()
     workflow_dir = project_root / WORKFLOW_DIRNAME
-    ps_markers = ",".join(f"'{name}'" for name in _LEGACY_MARKERS)
     sh_markers = " ".join(_LEGACY_MARKERS)
 
     # Background (job) commands go through await+job-command; the rest run directly.
-    run_ps1 = (
-        "param([Parameter(Mandatory=$true)][string]$Command,"
-        '[string]$Task="",'
-        "[string]$Session=$env:MAIN_SESSION_ID)\n"
-        'if (-not $Session) { $Session = "default" }\n'
-        "$bg = @('explore','plan','analyze','verify','verify-browser')\n"
-        # session=default on a DELEGATED command is not a warning-shaped problem: two main
-        # agents on one project silently share a lock, state and logs, and each overwrites
-        # the other's evidence. This used to print to stderr and proceed — but the caller
-        # runs this as a background task and never reads that stream, so the one safeguard
-        # was invisible exactly when it fired. Refuse instead. Local commands are unaffected:
-        # a shared default session costs them nothing.
-        'if ($Session -eq "default" -and ($bg -contains $Command) -and -not $env:AI_PROXY_ALLOW_DEFAULT_SESSION) {\n'
-        '  [Console]::Error.WriteLine("[workflow] ERROR: session=default on delegated command \'$Command\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set AI_PROXY_ALLOW_DEFAULT_SESSION=1.")\n'
-        "  exit 2\n"
-        "}\n"
-        # A pre-dispatch task-size warning used to sit here, keyed to the smallest cap any
-        # provider applied. Two of the three providers have no cap at all now — their
-        # prompts travel as a file and on stdin, neither of which has a command line to
-        # overflow — so the warning fired on the calls that were never at risk. A warning
-        # that arrives on ordinary work is one people learn to scroll past, and this script
-        # cannot tell which provider it is dispatching to. What replaced it measures the
-        # thing actually worth bounding: `quick_verify.scope_width`, on the change the work
-        # produces rather than the length of the sentence asking for it. An argv provider
-        # that really is over its ceiling is still refused by its own adapter, loudly, and
-        # naming the real limit.
-        "if ($bg -contains $Command) {\n"
-        # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
-        # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
-        # The data directory is decided when the script RUNS, by the rule
-        # workspace_paths.data_dir uses, so a workspace migrated after this script was
-        # generated clears the marker where the hooks now write it.
-        f'  $wf = Join-Path "{root}" ".workflow"; $dd = Join-Path $wf "data"\n'
-        f'  if (-not (Test-Path -LiteralPath $dd -PathType Container)) {{ foreach ($n in @({ps_markers})) {{ if (Test-Path -LiteralPath (Join-Path $wf $n)) {{ $dd = $wf; break }} }} }}\n'
-        '  $mk = Join-Path $dd "sessions\\$Session\\runtime\\delegated.marker"\n'
-        "  if (Test-Path -LiteralPath $mk) { Remove-Item -LiteralPath $mk -Force -ErrorAction SilentlyContinue }\n"
-        f'  $a = @("{main_py}", "--command", "await", "--job-command", $Command)\n'
-        "} else {\n"
-        f'  $a = @("{main_py}", "--command", $Command)\n'
-        "}\n"
-        # PowerShell drops empty-string arguments on their way to a native exe, so a literal
-        # `--prompt $Task` with no task reaches argparse as a bare `--prompt` and it errors
-        # with "expected one argument". Local commands do not need a prompt at all, so the
-        # flag is only appended when there is something to put after it.
-        'if ($Task) { $a += @("--prompt", $Task) }\n'
-        f'$a += @("--session", $Session, "--work-dir", "{root}", "--pretty")\n'
-        f'& "{ps_py}" @a\n'
-        + _PS_PROPAGATE_EXIT
-    )
     run_sh = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'COMMAND="${1:?command required}"\n'
         'TASK="${2:-}"\n'
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
-        # Same refusal as the PowerShell branch, same reasoning: a shared default session
-        # is fatal for delegated commands and harmless for local ones.
+        # session=default on a DELEGATED command is not a warning-shaped problem: two main
+        # agents on one project silently share a lock, state and logs, and each overwrites
+        # the other's evidence. Printing to stderr and proceeding was invisible exactly when
+        # it fired — the caller runs this as a background task and never reads that stream —
+        # so the script refuses. Local commands are unaffected: a shared default session
+        # costs them nothing.
         'if [ "$SESSION" = "default" ] && [ -z "${AI_PROXY_ALLOW_DEFAULT_SESSION:-}" ]; then\n'
         '  case " explore plan analyze verify verify-browser " in\n'
         '    *" $COMMAND "*)\n'
@@ -99,10 +44,12 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         "      exit 2 ;;\n"
         "  esac\n"
         "fi\n"
-        # The POSIX half of the removal described in the PowerShell builder above.
         'case " explore plan analyze verify verify-browser " in\n'
         '  *" $COMMAND "*)\n'
-        # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
+        # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
+        # so the PreToolUse hook stops blocking gather tools for the rest of this turn. The
+        # data directory is decided when the script RUNS, by the rule workspace_paths.data_dir
+        # uses, so a workspace migrated after generation clears the marker where hooks write.
         f'    WF="{root}/.workflow"; DD="$WF/data"\n'
         f'    if [ ! -d "$DD" ]; then for n in {sh_markers}; do if [ -e "$WF/$n" ]; then DD="$WF"; break; fi; done; fi\n'
         '    MK="$DD/sessions/$SESSION/runtime/delegated.marker"\n'
@@ -111,15 +58,11 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         "  *)\n"
         f'    ARGS=("{main_py}" --command "$COMMAND") ;;\n'
         "esac\n"
-        # Kept in step with the PowerShell branch: no task, no --prompt. Local commands do
-        # not take one, and an empty value buys nothing on either platform.
+        # No task, no --prompt: local commands do not take one, and an empty value reaches
+        # argparse as a bare flag.
         'if [ -n "$TASK" ]; then ARGS+=(--prompt "$TASK"); fi\n'
         f'ARGS+=(--session "$SESSION" --work-dir "{root}" --pretty)\n'
         f'exec "{sh_py}" "${{ARGS[@]}}"\n'
-    )
-    inspect_ps1 = (
-        f'& "{ps_py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
-        + _PS_PROPAGATE_EXIT
     )
     inspect_sh = (
         "#!/usr/bin/env bash\n"
@@ -128,32 +71,16 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
     )
     # Attach to an existing job by id (recovery after a foreground timeout). Passes through
     # flags like --wait --result to check.py, which polls without spawning a new run.
-    check_ps1 = (
-        "param([Parameter(Mandatory=$true)][string]$JobId,"
-        "[Parameter(ValueFromRemainingArguments=$true)]$Rest)\n"
-        f'& "{ps_py}" "{check_py}" $JobId @Rest\n'
-        + _PS_PROPAGATE_EXIT
-    )
     check_sh = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         f'exec "{sh_py}" "{check_py}" "$@"\n'
     )
 
-    # Generate only the current OS's flavour: Windows gets .ps1, POSIX gets .sh. The other
-    # flavour is dead weight on this machine and only confuses the Bash-allowlist matcher.
-    want_ext = osutil.script_ext()
     return [
-        (workflow_dir / name, content)
-        for name, content in (
-            ("run.ps1", run_ps1),
-            ("run.sh", run_sh),
-            ("inspect.ps1", inspect_ps1),
-            ("inspect.sh", inspect_sh),
-            ("check.ps1", check_ps1),
-            ("check.sh", check_sh),
-        )
-        if name.rsplit(".", 1)[-1] == want_ext
+        (workflow_dir / "run.sh", run_sh),
+        (workflow_dir / "inspect.sh", inspect_sh),
+        (workflow_dir / "check.sh", check_sh),
     ]
 
 def _read_script(path: Path) -> str | None:
@@ -161,29 +88,24 @@ def _read_script(path: Path) -> str | None:
 
     utf-8-sig strips a BOM if present and is harmless when absent, so every comparison
     against generated content is about the content, never about how a previous writer
-    (or an editor, or PowerShell) chose to encode it.
+    (or an editor) chose to encode it.
     """
     try:
         return path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
         return None
 
-def _foreign_os_scripts(project_root: Path) -> list[Path]:
-    """Entry scripts for the OTHER platform that are still sitting in .workflow/.
+def _retired_scripts(project_root: Path) -> list[Path]:
+    """`.ps1` entry scripts an earlier release generated, still sitting in .workflow/.
 
-    Earlier builds wrote both flavours, so a workspace can carry a .sh that no generator
-    has touched since. Nothing on this machine runs it, so nothing notices when it falls
-    out of step — and a copy of the project handed to a colleague on Linux would run that
-    stale file. Left for the caller to delete rather than silently repaired here.
+    The runner is bash on every OS now. A leftover run.ps1 looks usable and is not: no
+    generator maintains it, and the gate no longer passes a call to it. Left for the
+    caller to delete rather than silently repaired here.
     """
-    want_ext = osutil.script_ext()
-    other = "sh" if want_ext == "ps1" else "ps1"
     workflow_dir = project_root / WORKFLOW_DIRNAME
     return [
         path
-        for path in (
-            workflow_dir / f"{stem}.{other}" for stem in ("run", "inspect", "check")
-        )
+        for path in (workflow_dir / f"{stem}.ps1" for stem in ("run", "inspect", "check"))
         if path.exists()
     ]
 
@@ -191,8 +113,8 @@ def script_drift(project_root: Path, main_py: str) -> list[dict]:
     """Scripts on disk that no longer match what the generator produces.
 
     Each entry is {'script', 'state'} with state 'missing', 'content_differs', or
-    'foreign_os_leftover'. A drifted script keeps working right up until the CLI it calls
-    changes shape underneath it — the on-disk run.sh routed `sweep` through `--job-command`
+    'retired_leftover' (a .ps1 an earlier release generated). A drifted script keeps
+    working right up until the CLI it calls changes shape underneath it — the on-disk run.sh routed `sweep` through `--job-command`
     for a whole release cycle after the generator stopped doing so, because nothing
     compared the two.
     """
@@ -204,19 +126,19 @@ def script_drift(project_root: Path, main_py: str) -> list[dict]:
         elif current != content:
             drifted.append({"script": path.name, "state": "content_differs"})
     drifted.extend(
-        {"script": path.name, "state": "foreign_os_leftover"}
-        for path in _foreign_os_scripts(project_root)
+        {"script": path.name, "state": "retired_leftover"}
+        for path in _retired_scripts(project_root)
     )
     return drifted
 
 def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     """Write the scripts _build_run_scripts composes; return the paths actually rewritten.
 
-    Also deletes leftovers for the other platform: keeping a script no generator maintains
-    is worse than not having one, because it looks usable.
+    Also deletes the .ps1 scripts an earlier release generated: keeping a script no
+    generator maintains is worse than not having one, because it looks usable.
     """
     written: list[str] = []
-    for path in _foreign_os_scripts(project_root):
+    for path in _retired_scripts(project_root):
         try:
             path.unlink()
             written.append(f"removed {path}")
@@ -225,14 +147,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     for path, content in _build_run_scripts(project_root, main_py):
         if _read_script(path) == content:
             continue
-        if path.suffix == ".ps1":
-            # UTF-8 BOM: Windows PowerShell 5.1 reads a no-BOM file as ANSI/Win-1252,
-            # which corrupts any non-ASCII byte (em-dash, accented path) -> parse error.
-            atomic_write_text(path, content, encoding="utf-8-sig")
-        else:
-            atomic_write_text(
-                path, content
-            )  # .sh stays plain UTF-8 (BOM breaks the shebang)
-            osutil.make_executable(path)
+        atomic_write_text(path, content)  # plain UTF-8: a BOM breaks the shebang
+        osutil.make_executable(path)
         written.append(str(path))
     return written

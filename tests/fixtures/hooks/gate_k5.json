@@ -1,23 +1,131 @@
 {
-  "_doc": "Gate decisions frozen before the OS-agnostic gate (K5). `now` is what the shipped .sh gate decides today and is asserted; `target` is what the single-tokenizer gate must decide (one rule for Bash and PowerShell: one plain call to <root>/.workflow/run.sh passes, anything else blocks; `$`, backtick, `;|&`, redirection and newline pass only inside single quotes). {root} is the project root, POSIX form.",
+  "_doc": "Gate decisions of the single-tokeniser gate (K5), for the Bash and PowerShell tools alike: one plain call to [bash] <root>/.workflow/{run,check,inspect}.sh passes, anything else blocks; `$`, backtick, `;|&`, redirection and newline pass only inside single quotes. `now` is asserted; `target` stays beside it so a later rule change is a visible diff. {root} is the project root, POSIX form.",
   "cases": [
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan 'rancang X' 'm1'", "now": 0, "target": 0, "why": "plain runner call"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan 'rancang X; lalu cek' 'm1'", "now": 2, "target": 0, "why": "#4: `;` inside single quotes is literal"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan 'hitung $(x) dan (y)' 'm1'", "now": 2, "target": 0, "why": "#4: `$(` and brackets inside single quotes are literal"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan 'a | b & c > d' 'm1'", "now": 2, "target": 0, "why": "#4: pipe, ampersand, redirect inside single quotes are literal"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan 'task (x)' 'm1'", "now": 0, "target": 0, "why": "brackets alone already pass"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan \"x $(cat README.md)\" 'm1'", "now": 2, "target": 2, "why": "command substitution inside double quotes executes"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan \"x $HOME\" 'm1'", "now": 0, "target": 2, "why": "variable expansion inside double quotes passes today (only `$(` is refused); the target refuses any `$` outside single quotes"},
-    {"tool": "Bash", "command": "bash {root}/.workflow/run.sh plan 'x' 'm1'; cat README.md", "now": 2, "target": 2, "why": "chained command outside quotes"},
-    {"tool": "Bash", "command": "bash -c 'cat README.md'", "now": 2, "target": 2, "why": "bash -c hides a gather"},
-    {"tool": "Bash", "command": "bash -c 'powershell -NoProfile -File .workflow/run.ps1 plan'", "now": 2, "target": 2, "why": "bash -c wrapping powershell"},
-    {"tool": "Bash", "command": "cat README.md", "now": 2, "target": 2, "why": "plain gather"},
-    {"tool": "Bash", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan 't' 'm1'", "now": 0, "target": 2, "why": "run.ps1 is retired (K1)"},
-    {"tool": "PowerShell", "command": "bash {root}/.workflow/run.sh plan 'rancang X' 'm1'", "now": 2, "target": 0, "why": "K5: the same plain runner call passes from the PowerShell tool"},
-    {"tool": "PowerShell", "command": "bash {root}/.workflow/run.sh plan 'rancang X; lalu $(y)' 'm1'", "now": 2, "target": 0, "why": "K5 + #4: single quotes are literal in PowerShell too"},
-    {"tool": "PowerShell", "command": "bash {root}/.workflow/run.sh plan \"x $env:USERPROFILE\" 'm1'", "now": 2, "target": 2, "why": "expansion inside double quotes in PowerShell"},
-    {"tool": "PowerShell", "command": "& {root}/.workflow/run.ps1 plan 't' 'm1'", "now": 0, "target": 2, "why": "run.ps1 is retired (K1)"},
-    {"tool": "PowerShell", "command": "Get-Content README.md", "now": 2, "target": 2, "why": "plain gather"},
-    {"tool": "PowerShell", "command": "bash {root}/.workflow/run.sh plan 't' 'm1'; Get-Content README.md", "now": 2, "target": 2, "why": "chained command"}
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan 'rancang X' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "plain runner call"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan 'rancang X; lalu cek' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "#4: `;` inside single quotes is literal"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan 'hitung $(x) dan (y)' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "#4: `$(` and brackets inside single quotes are literal"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan 'a | b & c > d' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "#4: pipe, ampersand, redirect inside single quotes are literal"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan 'task (x)' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "brackets alone already pass"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan \"x $(cat README.md)\" 'm1'",
+      "now": 2,
+      "target": 2,
+      "why": "command substitution inside double quotes executes"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan \"x $HOME\" 'm1'",
+      "now": 2,
+      "target": 2,
+      "why": "variable expansion inside double quotes: any `$` outside single quotes refuses"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash {root}/.workflow/run.sh plan 'x' 'm1'; cat README.md",
+      "now": 2,
+      "target": 2,
+      "why": "chained command outside quotes"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash -c 'cat README.md'",
+      "now": 2,
+      "target": 2,
+      "why": "bash -c hides a gather"
+    },
+    {
+      "tool": "Bash",
+      "command": "bash -c 'powershell -NoProfile -File .workflow/run.ps1 plan'",
+      "now": 2,
+      "target": 2,
+      "why": "bash -c wrapping powershell"
+    },
+    {
+      "tool": "Bash",
+      "command": "cat README.md",
+      "now": 2,
+      "target": 2,
+      "why": "plain gather"
+    },
+    {
+      "tool": "Bash",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan 't' 'm1'",
+      "now": 2,
+      "target": 2,
+      "why": "run.ps1 is retired (K1)"
+    },
+    {
+      "tool": "PowerShell",
+      "command": "bash {root}/.workflow/run.sh plan 'rancang X' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "K5: the same plain runner call passes from the PowerShell tool"
+    },
+    {
+      "tool": "PowerShell",
+      "command": "bash {root}/.workflow/run.sh plan 'rancang X; lalu $(y)' 'm1'",
+      "now": 0,
+      "target": 0,
+      "why": "K5 + #4: single quotes are literal in PowerShell too"
+    },
+    {
+      "tool": "PowerShell",
+      "command": "bash {root}/.workflow/run.sh plan \"x $env:USERPROFILE\" 'm1'",
+      "now": 2,
+      "target": 2,
+      "why": "expansion inside double quotes in PowerShell"
+    },
+    {
+      "tool": "PowerShell",
+      "command": "& {root}/.workflow/run.ps1 plan 't' 'm1'",
+      "now": 2,
+      "target": 2,
+      "why": "run.ps1 is retired (K1)"
+    },
+    {
+      "tool": "PowerShell",
+      "command": "Get-Content README.md",
+      "now": 2,
+      "target": 2,
+      "why": "plain gather"
+    },
+    {
+      "tool": "PowerShell",
+      "command": "bash {root}/.workflow/run.sh plan 't' 'm1'; Get-Content README.md",
+      "now": 2,
+      "target": 2,
+      "why": "chained command"
+    }
   ]
 }

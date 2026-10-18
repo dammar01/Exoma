@@ -457,17 +457,8 @@ def _test_init_upgrade_and_session_guard() -> None:
             if key not in ("MAIN_SESSION_ID", "AI_PROXY_ALLOW_DEFAULT_SESSION")
         }
         workflow_dir = workflow_paths(root)["workflow_dir"]
-        if osutil.script_ext() == "ps1":
-            argv = [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(workflow_dir / "run.ps1"),
-            ]
-        else:
-            argv = ["bash", str(workflow_dir / "run.sh")]
+        # The runner is bash on every OS (Git Bash on Windows).
+        argv = [osutil.find_bash() or "bash", str(workflow_dir / "run.sh")]
         refused = subprocess.run(
             argv + ["analyze", "probe task"],
             env=env,
