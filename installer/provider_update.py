@@ -51,8 +51,8 @@ def _npm_global(npm: str, run) -> tuple[Path, list[Path]] | None:
         return None
     modules = Path(root[0])
     # Windows: <prefix>\node_modules, shims in <prefix>. POSIX: <prefix>/lib/node_modules,
-    # shims in <prefix>/bin.
-    return modules, [modules.parent, modules.parent.parent / "bin"]
+    # shims in <prefix>/bin. Only the one for this OS: <prefix>/lib is no bin on POSIX.
+    return modules, [modules.parent if osutil.IS_WINDOWS else modules.parent.parent / "bin"]
 
 
 def _owned_by_npm(exe: str, package: str, npm_global: tuple[Path, list[Path]]) -> bool:
@@ -105,6 +105,9 @@ def plan_updates(run=_run, getenv=os.getenv) -> list[dict]:
         if not on_path:
             entry["reason"] = "not on PATH; --update-providers updates, it does not install"
             continue
+        # A fresh reading: the cache keeps one for a day, and an update made outside the
+        # workflow behind an unchanged shim would plan from the release before it.
+        versions.forget(command)
         installed = versions.release(versions.read_version(command))
         entry["installed"] = installed
         if installed == stable:

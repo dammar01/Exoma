@@ -8,7 +8,7 @@ description: Pilih second_agent (provider → model → effort → model per rou
 ## Mode langsung (ada argumen)
 Contoh: `/.provider codex gpt-6-luna low`. LEWATI STEP 1-2 — nol katalog, nol pertanyaan.
 Teruskan argumen apa adanya (dipisah spasi) sebagai payload STEP 3:
-    & "<work_dir>\.workflow\run.ps1" provider "codex gpt-6-luna low" "<MAIN_SESSION_ID>"
+    Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' provider 'codex gpt-6-luna low' '<MAIN_SESSION_ID>'
 Runtime yang memecah dan memvalidasi (provider dikenal, opt-in agy, effort milik model,
 varian agy disusun dari effort). `<routes>` opsional: `same` atau `explore=A,plan=B`.
 `ok:false` → relay `content` + `meta.next_action`, status REFUSED; JANGAN jatuh ke picker

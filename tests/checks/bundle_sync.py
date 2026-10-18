@@ -81,6 +81,18 @@ def _test_every_shipped_hook_is_a_launcher_and_its_module() -> None:
     assert_true(listed == launchers, f"workflow_hooks.HOOKS names exactly the shipped hooks: {sorted(listed ^ launchers)}")
     retired = sorted(p.name for p in hooks.glob("*.ps1"))
     assert_true(not retired, f"no PowerShell flavour ships: {retired}")
+    # Nor an instruction to run one: a branch cut before the bash runner merged its
+    # `& "<work_dir>\.workflow\run.ps1" ...` back into the provider skill, a command for a
+    # file init no longer writes. Naming run.ps1 as retired stays allowed.
+    import re
+
+    invokes = re.compile(r"&\s*\"[^\"\n]*\.ps1\"")
+    calling = sorted(
+        str(p.relative_to(REPO_ROOT))
+        for p in (REPO_ROOT / "dist" / "config").rglob("*.md")
+        if invokes.search(p.read_text(encoding="utf-8"))
+    )
+    assert_true(not calling, f"no shipped instruction invokes a retired .ps1 runner: {calling}")
 
 
 def _test_bundle_registry_bijection() -> None:

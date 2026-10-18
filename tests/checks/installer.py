@@ -933,8 +933,10 @@ def _test_provider_update() -> None:
                 return 1, "", "npm error EACCES: permission denied"
             raise AssertionError(f"unexpected call {args}")
 
-        real = (pu.osutil.provider_callable, pu.osutil.resolve_exe, versions.read_version, versions.forget, model_catalog.forget)
+        real = (pu.osutil.provider_callable, pu.osutil.resolve_exe, versions.read_version, versions.forget, model_catalog.forget, pu.osutil.IS_WINDOWS)
         try:
+            # The Windows layout: <prefix>/node_modules, shims in <prefix>.
+            pu.osutil.IS_WINDOWS = True
             pu.osutil.provider_callable = lambda name: (name in paths, paths.get(name, "missing"))
             pu.osutil.resolve_exe = lambda name: paths.get(name, name)
             versions.read_version = lambda command: installed.get(command)
@@ -965,6 +967,7 @@ def _test_provider_update() -> None:
             paths["opencode"] = str(prefix / "opencode.cmd")
             entries = plan()
             assert_true(entries["opencode"]["action"] == "update", f"an npm-global opencode is updated: {entries['opencode']}")
+            forgotten.clear()
             done = {e["provider"]: e for e in pu.apply_updates(list(entries.values()), run=run)}
             assert_true(done["codex"]["result"] == "updated" and done["codex"]["after"] == "0.154.0", f"verified by --version: {done['codex']}")
             assert_true(
@@ -982,5 +985,21 @@ def _test_provider_update() -> None:
             journal = pu.write_journal(list(done.values()), Path(tmp) / "backup")
             data = json.loads(journal.read_text(encoding="utf-8"))
             assert_true(len(data["providers"]) == 3, f"the journal holds every provider: {data}")
+
+            # POSIX: <prefix>/lib/node_modules, shims in <prefix>/bin; <prefix>/lib is no bin.
+            pu.osutil.IS_WINDOWS = False
+            modules = prefix / "lib" / "node_modules"
+            (modules / "@openai" / "codex").mkdir(parents=True)
+            (modules / "opencode-ai").mkdir()
+            (prefix / "bin").mkdir()
+            paths["codex"] = str(prefix / "bin" / "codex")
+            paths["opencode"] = str(prefix / "lib" / "opencode")
+            installed.update(codex="codex-cli 0.150.0", opencode="1.10.0")
+            entries = plan()
+            assert_true(entries["codex"]["action"] == "update", f"a shim in <prefix>/bin is npm's: {entries['codex']}")
+            assert_true(
+                entries["opencode"]["action"] == "skip",
+                f"a CLI in <prefix>/lib is not npm's global bin: {entries['opencode']}",
+            )
         finally:
-            pu.osutil.provider_callable, pu.osutil.resolve_exe, versions.read_version, versions.forget, model_catalog.forget = real
+            pu.osutil.provider_callable, pu.osutil.resolve_exe, versions.read_version, versions.forget, model_catalog.forget, pu.osutil.IS_WINDOWS = real

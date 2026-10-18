@@ -105,8 +105,8 @@
     },
     {
       "path": "claude/skills/provider.md",
-      "sha256": "7f6c84070e5acf6ccb6356ae925479808a22c0d49a3a63e0647e0bba9a073210",
-      "bytes": 7061,
+      "sha256": "38b3abccd61319a5796e5074d06cf129f2d7ee4cd5d8ecd03dc4bdc706229836",
+      "bytes": 7085,
       "merge": "replace",
       "component": "prompt_bundle"
     },

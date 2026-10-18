@@ -155,12 +155,14 @@ def forget(command: str) -> None:
     otherwise answer for `_CACHE_MAX_AGE_SECONDS`.
     """
     exe = osutil.resolve_exe(command)
-    _CACHE.pop(exe, None)
+    same = os.path.normcase(os.path.abspath(exe))
+    for key in [k for k in _CACHE if os.path.normcase(os.path.abspath(k)) == same]:
+        _CACHE.pop(key, None)
     path = _cache_path()
     if path is None:
         return
     try:
-        prefix = os.path.normcase(os.path.abspath(exe)) + "|"
+        prefix = same + "|"
         data = _load_disk()
         kept = {k: v for k, v in data.items() if not k.startswith(prefix)}
         if len(kept) != len(data):
