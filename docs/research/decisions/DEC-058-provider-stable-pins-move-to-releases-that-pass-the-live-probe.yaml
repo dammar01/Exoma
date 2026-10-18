@@ -1,0 +1,83 @@
+schema_version: 3
+id: DEC-058
+title: Provider stable pins move to opencode 1.19.3 and codex 0.163.0 after both pass the live boundary probe
+date: 2026-10-18
+status: accepted
+provenance:
+  type: direct
+  confidence: medium
+  basis: Maintainer request to move the providers to the newest npm release, conditioned on a real probe; a failing probe was to be fixed in the adapter when the cause is the workflow, or stepped down one release at a time when it is the provider
+problem: |
+  The stable pins (opencode 1.18.34, codex 0.154.0) trailed npm `latest` by five opencode and
+  more than eight codex releases. `install.py --update-providers` (DEC-057) can only pin to
+  `stable_version`, so it kept every user on releases that were weeks old. Codex 0.163.0 is
+  outside the 0.154.0-0.160.0 range in which the resume argv was checked (DEC-053, CASE-021),
+  and DEC-053 makes a full test on a newer release the condition for moving the pin.
+decision: |
+  `stable_version` becomes opencode `1.19.3` and codex `0.163.0`, the npm `latest` dist-tags
+  on 2026-10-18. Both releases were installed through `install.py --update-providers --apply`
+  and probed for real before the pin was kept: codex with the `codex-write-probe` check (shell
+  and file-edit writes on a new and on a resumed thread), opencode with a run and a resumed run
+  through `OpenCodeAdapter` asking for the same two writes. No adapter change and no step-down
+  was needed. agy keeps `1.1.13`; it has no update method.
+rationale: |
+  The pin is the release the workflow claims to have run against, so it moves only to a release
+  that has been run against. The probe covers the boundary that a CLI release has broken before
+  (CASE-016, CASE-021): writes refused on both call shapes. Research question: does moving the
+  pin only after the live probe keep delegated calls on releases that hold the boundary (RQ-07a,
+  RQ-09)? Hypothesis: a release that passes the two-branch probe does not regress the boundary
+  or resume in real use. Variable changed: the pinned provider releases. Experiment enabled: the
+  same probe on the next release, with a step-down when it fails for provider reasons. Expected
+  measurement: probe pass/fail per release, and `untested` usage rows after an update. Why
+  existing mechanisms are insufficient: the synthetic catalog and update checks mock the CLI,
+  and only a real call shows how a release parses argv and applies its sandbox.
+alternatives:
+  - option: Keep the old pins until a full release cycle runs on the new CLIs
+    rejected_because: The maintainer asked for the newest releases; the probe is the test that DEC-053 named for this boundary.
+  - option: Move the pins without a live probe
+    rejected_because: DEC-053 and CASE-021 make a test on the newer release the condition; codex 0.163.0 is outside the checked resume range.
+evidence: [DEC-053, DEC-057, CASE-021]
+evidence_notes: |
+  2026-10-18, Windows, maintainer machine. `install.py --update-providers --apply` updated codex
+  0.154.0 -> 0.163.0 and opencode 1.18.34 -> 1.19.3, each verified by `--version`; the journal
+  recorded both pin-backs. This is also the first real (non-mocked) update under DEC-057.
+  `WORKFLOW_CODEX_PROBE=1 python tests/run.py --only codex-write-probe` passed on codex-cli
+  0.163.0: both writes refused on the new thread and on the resumed thread, no file created.
+  OpenCode 1.19.3 through `OpenCodeAdapter.run`, new and resumed session: both calls ok, plan
+  agent refused the file-tool and shell writes, no file created. Two earlier opencode attempts
+  failed before reaching the model for account reasons (an exhausted provider balance and an
+  expired OpenCode Console API key); the argv was parsed and the request was sent, so they say
+  nothing about the release. The live model catalog read both CLIs (`source=live`).
+implementation:
+  version: 3.8.4
+  commits: [uncommitted]
+  components:
+    - config/providers.py (stable_version for opencode and codex)
+    - adapters/providers/codex_adapter.py (resume comment names 0.163.0)
+    - tests/checks/installer.py (provider-update expectations)
+    - docs/reference.md (Provider releases)
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+validation:
+  summary: |
+    One live probe per provider on Windows. Not run on Linux or macOS, and the full delegated
+    end-to-end suite was not rerun on the new releases.
+  runs:
+    - {date: 2026-10-18, job_id: codex-write-probe, description: codex-cli 0.163.0 new and resumed thread refuse shell and file-edit writes on Windows, clean: true}
+    - {date: 2026-10-18, job_id: opencode-probe, description: opencode 1.19.3 new and resumed session through OpenCodeAdapter refuse writes on Windows, clean: true}
+trade_offs:
+  better:
+    - "`--update-providers` brings users to current releases instead of weeks-old ones"
+    - The pin is backed by a real call on both call shapes
+  worse:
+    - Users updated by the flag change a CLI they may also use outside the workflow
+    - Behavior beyond the write boundary and resume (output format drift, new defaults) is covered only by real use
+limitations:
+  - Probed on Windows only; the codex sandbox differs per OS
+  - The opencode probe used one OpenRouter model; a provider-specific regression in another model route would not show
+revisit_when:
+  - A probe on Linux or macOS fails on these releases
+  - Real use shows `invalid_evidence` or parse failures that trace to the CLI release
+questions: [RQ-07a, RQ-09]
+revises: [DEC-057]

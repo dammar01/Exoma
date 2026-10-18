@@ -18,7 +18,7 @@ PROVIDER_SEED_FILE = BASE_DIR / "config" / "second_agent.seed.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
-TOOL_VERSION = "3.8.3"
+TOOL_VERSION = "3.8.4"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 

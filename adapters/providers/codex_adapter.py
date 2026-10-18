@@ -715,7 +715,8 @@ class CodexAdapter:
             # 0.155.0 that form, together with the `default_permissions` profile below, makes
             # the Windows elevated sandbox refuse every resumed thread ("requires effective
             # `:root` read access") while new threads work (CASE-016, CASE-021). The flag
-            # form resumes on 0.154.0 through 0.160.0 with the same boundary.
+            # form resumes on 0.154.0 through 0.160.0, and on 0.163.0 (DEC-058), with the
+            # same boundary.
             #
             # The call is rooted by the process cwd, which `_popen_capture` sets on both
             # branches, so dropping -C here changes nothing about where codex looks; -C

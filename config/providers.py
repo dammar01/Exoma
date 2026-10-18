@@ -59,7 +59,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # Advisory: a different release still runs, and doctor and every call's meta mark it
         # `untested` (core/provider/versions.py). Provider releases have broken the workflow
         # before (CASE-015); this is the release to pin back to when one does.
-        "stable_version": "1.18.34",
+        "stable_version": "1.19.3",
         # How `install.py --update-providers` brings this CLI to `stable_version` (DEC-057):
         # opt-in, npm-global installs only, never a release other than the stable one.
         # A bundle without it is reported unsupported and left alone.
@@ -145,7 +145,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # Advisory: a different release still runs, and doctor and every call's meta mark it
         # `untested` (core/provider/versions.py). Provider releases have broken the workflow
         # before (CASE-015); this is the release to pin back to when one does.
-        "stable_version": "0.154.0",
+        "stable_version": "0.163.0",
         # How `install.py --update-providers` brings this CLI to `stable_version` (DEC-057):
         # opt-in, npm-global installs only, never a release other than the stable one.
         # A bundle without it is reported unsupported and left alone.

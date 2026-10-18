@@ -1,97 +1,97 @@
-# agent-workflow v3.8.3
+# agent-workflow v3.8.4
 
-Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
+Standalone orchestration runtime for a two-agent workflow. No third-party dependencies.
 
-## Ringkas
+## Summary
 
-Dua peran dipisah tegas:
+Two roles, strictly separated:
 
-- **main_agent** — agent yang kamu pakai (Claude Code, Codex, Cursor, dll). Orchestrator, antarmuka user, dan **satu-satunya** yang boleh menulis file.
-- **second_agent** — provider terpilih (OpenCode, Codex, atau Agy), pengumpul bukti **read-only**. Bukan jawaban akhir. Batas tulis tiap provider berbeda; lihat [Security](security.md).
+- **main_agent** — the agent you use (Claude Code, Codex, Cursor, etc.). Orchestrator, user interface, and the **only** one allowed to write files.
+- **second_agent** — the selected provider (OpenCode, Codex, or Agy), a **read-only** evidence gatherer. Not the final answer. Each provider's write boundary differs; see [Security](security.md).
 
-Runtime ini duduk di antara keduanya: menerima command, merakit prompt terstruktur, menjalankan CLI provider terpilih (mis. `opencode run`), memvalidasi bentuk output, menyimpan state per-sesi, lalu mengembalikan JSON contract yang stabil:
+This runtime sits between the two: it receives a command, assembles a structured prompt, runs the selected provider's CLI (e.g. `opencode run`), validates the output shape, stores per-session state, then returns a stable JSON contract:
 
 ```json
 { "ok": true, "content": "...", "meta": {} }
 ```
 
-`digest` ditambahkan hanya bila output second_agent membawa blok `[DIGEST]` yang dapat diparse; ia bukan field wajib.
+`digest` is added only when the second_agent output carries a parseable `[DIGEST]` block; it is not a required field.
 
-Evidence, config, state per-sesi, dan binding sesi provider (`.workflow/data/provider-sessions/`) hidup project-local di `.workflow/` pada project target. Antrean job dan cache lintas project milik tool tetap berada di `storage/` repo ini (lihat [Layout workspace](#layout-workspace)).
+Evidence, config, per-session state, and provider session bindings (`.workflow/data/provider-sessions/`) live project-local in `.workflow/` in the target project. The job queue and the tool's cross-project cache stay in this repo's `storage/` (see [Workspace layout](#workspace-layout)).
 
 ---
 
-## Alur prompt sampai response
+## Flow from prompt to response
 
 ```text
 Prompt user
-→ main_agent: auto-detect intent atau pakai override /.
-→ .workflow/run.sh (bash di semua OS)
+→ main_agent: auto-detect intent or use the /. override
+→ .workflow/run.sh (bash on every OS)
 → main.py await → JobManager → detached worker
 → Executor → Router
 → Graphify leads + fact store → PromptBuilder
-→ adapter provider terpilih (OpenCode/Codex/Agy) → second_agent
-→ sub-agent fan-out bila aktif
-→ validasi contract + digest + penyimpanan evidence
-→ await mengembalikan {ok, content, meta, digest?}
+→ selected provider adapter (OpenCode/Codex/Agy) → second_agent
+→ sub-agent fan-out when enabled
+→ contract validation + digest + evidence storage
+→ await returns {ok, content, meta, digest?}
 → main_agent relay/synthesis
 → response user
 ```
 
-Auto-intent, output `[OPTIONS]` pada `/.plan`, dan keputusan menjalankan `/.verify` setelah `/.execute` berada di lapisan prompt **main_agent**. Runtime Python tidak menerima pesan user mentah dan tidak melihat response final yang ditulis main_agent. Runtime hanya mengelola delegasi, evidence, job, dan policy metadata.
+Auto-intent, the `[OPTIONS]` output of `/.plan`, and the decision to run `/.verify` after `/.execute` live in the **main_agent** prompt layer. The Python runtime never receives the raw user message and never sees the final response written by main_agent. The runtime only manages delegation, evidence, jobs, and policy metadata.
 
-Diagram ini menggambarkan jalur delegated penuh. `sweep` dipotong lebih awal oleh `main.run()` dan selesai lokal tanpa `Executor`; `verify` dengan `verify_mode: syntax` berhenti di `quick_verify` sebelum Router, Graphify, PromptBuilder, OpenCode, dan second_agent.
+This diagram shows the full delegated path. `sweep` is cut short earlier by `main.run()` and finishes locally without `Executor`; `verify` with `verify_mode: syntax` stops at `quick_verify` before Router, Graphify, PromptBuilder, OpenCode, and second_agent.
 
 ---
 
-## Envelope response
+## Response envelope
 
-Setiap hasil berbentuk `{ok, content, meta}`. Field lain bersifat kondisional:
+Every result has the shape `{ok, content, meta}`. Other fields are conditional:
 
-| Field | Kapan ada | Isi |
+| Field | When present | Content |
 |---|---|---|
-| `digest` | output second_agent membawa blok `[DIGEST]` yang dapat diparse | ringkasan untuk direlay. `digest.anchors = {certified, total}` ditambahkan bila evidence mencatat anchor; confidence yang diturunkan karena anchor/graph menyimpan nilai aslinya di `digest.confidence_reported` dan alasannya di `digest.confidence_capped_by` |
-| `evidence_ref` | hanya jalur evidence explore/plan/analyze | `{artifact_path, anchors, certified_anchors, reused}`. `reused: true` = artifact sesi lampau dipakai ulang (lihat [Evidence reuse dan boundary](#evidence-reuse-dan-boundary)) |
-| `meta.task_cap`, `meta.task_cap_source` | setiap call delegated | batas panjang task efektif. `task_cap_source`: `transport` (dihitung dari sisa ruang command line argv), `floor` (scaffolding hampir memenuhi command line; angka minimum), `policy` (opt-in `AI_PROXY_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; transport stdin/file atau argv di luar Windows) |
-| `meta.task_truncated` | task dipotong oleh cap | sinyal untuk meringkas instruksi, bukan untuk memecah call |
-| `meta.content_mode`, `meta.content_full_chars` | `AI_PROXY_SLIM_CONTENT` aktif, content panjang, dan artifact ada di disk | `content_mode: "ref_only"`: `content` hanya preview; teks lengkap di `evidence_ref.artifact_path` |
-| `meta.policy` | setiap call delegated | `auto_verify_after_execute`, `verify_mode`, `subagent_fanout_enabled` yang efektif |
-| `meta.error_type`, `meta.next_action` | `ok: false` | keduanya wajib; `error_type` dari himpunan tertutup di bawah |
+| `digest` | second_agent output carries a parseable `[DIGEST]` block | summary to be relayed. `digest.anchors = {certified, total}` is added when the evidence records anchors; a confidence lowered because of anchors/graph keeps its original value in `digest.confidence_reported` and the reason in `digest.confidence_capped_by` |
+| `evidence_ref` | only the explore/plan/analyze evidence path | `{artifact_path, anchors, certified_anchors, reused}`. `reused: true` = an artifact from a past session was reused (see [Evidence reuse and boundary](#evidence-reuse-and-boundary)) |
+| `meta.task_cap`, `meta.task_cap_source` | every delegated call | effective task length limit. `task_cap_source`: `transport` (computed from the remaining argv command-line space), `floor` (scaffolding nearly fills the command line; minimum value), `policy` (opt-in `AI_PROXY_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; stdin/file transport, or argv outside Windows) |
+| `meta.task_truncated` | task cut by the cap | signal to shorten the instruction, not to split the call |
+| `meta.content_mode`, `meta.content_full_chars` | `AI_PROXY_SLIM_CONTENT` is active, content is long, and the artifact exists on disk | `content_mode: "ref_only"`: `content` is only a preview; the full text is at `evidence_ref.artifact_path` |
+| `meta.policy` | every delegated call | the effective `auto_verify_after_execute`, `verify_mode`, `subagent_fanout_enabled` |
+| `meta.error_type`, `meta.next_action` | `ok: false` | both required; `error_type` from the closed set below |
 
 ### `error_type`
 
-Himpunan tertutup di `core/evidence/contract.py` `ERROR_TYPES`; `make_error` menolak nama di luar himpunan itu, dan suite `error-types` memastikan setiap literal yang dipakai kode terdaftar.
+A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects names outside that set, and the `error-types` suite ensures every literal used in code is registered.
 
-| Kelompok | `error_type` |
+| Group | `error_type` |
 |---|---|
-| Provider dan worker | `timeout`, `worker_died`, `worker_crashed`, `worker_stalled`, `job_expired`, `rate_limited`, `streaming_failed`, `sandbox_unavailable`, `second_agent_unavailable`, `command_not_found`, `permission_denied` |
-| Output second_agent | `empty_output`, `invalid_evidence`, `session_capture_failed`, `task_truncated`, `fact_ingest_failed` |
-| Prompt dan command line | `prompt_too_long`, `unsafe_command_line` |
-| Config provider | `provider_config_missing`, `provider_config_invalid`, `model_unset`, `invalid_provider_selection` |
-| Job, sesi, workspace | `job_already_running`, `job_submit_error`, `worker_capacity`, `runtime_lock`, `session_state_error`, `routing_error`, `workflow_init_error`, `workflow_upgrade_error`, `sweep_git_error`, `budget_exceeded` |
-| Promote dan knowledge | `promote_input_missing`, `promote_input_unreadable`, `promote_existing_unreadable`, `promote_not_on_branch`, `promote_not_production_branch`, `promote_write_rejected`, `invalid_knowledge`, `secret_shaped_content`, `ignored_source`, `ignored_destination` |
-| Lainnya | `unknown` |
+| Provider and worker | `timeout`, `worker_died`, `worker_crashed`, `worker_stalled`, `job_expired`, `rate_limited`, `streaming_failed`, `sandbox_unavailable`, `second_agent_unavailable`, `command_not_found`, `permission_denied` |
+| second_agent output | `empty_output`, `invalid_evidence`, `session_capture_failed`, `task_truncated`, `fact_ingest_failed` |
+| Prompt and command line | `prompt_too_long`, `unsafe_command_line` |
+| Provider config | `provider_config_missing`, `provider_config_invalid`, `model_unset`, `invalid_provider_selection` |
+| Job, session, workspace | `job_already_running`, `job_submit_error`, `worker_capacity`, `runtime_lock`, `session_state_error`, `routing_error`, `workflow_init_error`, `workflow_upgrade_error`, `sweep_git_error`, `budget_exceeded` |
+| Promote and knowledge | `promote_input_missing`, `promote_input_unreadable`, `promote_existing_unreadable`, `promote_not_on_branch`, `promote_not_production_branch`, `promote_write_rejected`, `invalid_knowledge`, `secret_shaped_content`, `ignored_source`, `ignored_destination` |
+| Other | `unknown` |
 
-`worker_died` dengan `meta.reason: recovery_exhausted` berarti recovery otomatis sudah dipakai; jangan ulang otomatis (lihat [Job asinkron & pemulihan](#job-asinkron--pemulihan)).
+`worker_died` with `meta.reason: recovery_exhausted` means automatic recovery has already been used; do not retry automatically (see [Async jobs & recovery](#async-jobs--recovery)).
 
-`sandbox_unavailable` dengan `meta.reason: resume_sandbox_failed` berarti sandbox Windows codex menolak thread yang **di-resume**; thread baru diketahui jalan (lihat "Codex di Windows" di [`.workflow/second_agent.json`](#workflowsecond_agentjson)).
+`sandbox_unavailable` with `meta.reason: resume_sandbox_failed` means the codex Windows sandbox rejects a **resumed** thread; a new thread is known to work (see "Codex on Windows" in [`.workflow/second_agent.json`](#workflowsecond_agentjson)).
 
 ---
 
-## Prasyarat
+## Prerequisites
 
-| Kebutuhan | Catatan |
+| Requirement | Notes |
 |---|---|
-| Python 3.10+ | sintaks `X \| None` dipakai di seluruh kode. `main.py`, `install.py` dan `check.py` menolak Python yang lebih lama dengan satu pesan (versi dan interpreter yang dipakai) sebelum import apa pun. Hook `.sh` memilih interpreter dengan menjalankannya, berurutan `python3`, `python`, `py -3`; yang tidak jalan (alias WindowsApps) atau lebih lama dari 3.10 dilewati, dan tanpa satu pun hook fail-open |
-| `opencode` di `PATH` | hanya untuk command terdelegasi |
-| `git` di `PATH` | opsional; dipakai `sweep` dan mode verify `syntax` |
-| Dependency runtime | **nol**; seluruh runtime memakai standard library |
-| Graphify | opsional |
+| Python 3.10+ | the `X \| None` syntax is used throughout the code. `main.py`, `install.py` and `check.py` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks pick an interpreter by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.10 is skipped, and with none of them the hook fails open |
+| `opencode` on `PATH` | only for delegated commands |
+| `git` on `PATH` | optional; used by `sweep` and the `syntax` verify mode |
+| Runtime dependencies | **zero**; the whole runtime uses the standard library |
+| Graphify | optional |
 
-Cek cepat:
+Quick check:
 
 ```bash
-python3 --version   # atau: python --version / py -3 --version
+python3 --version   # or: python --version / py -3 --version
 bash --version      # Windows: Git Bash (Git for Windows)
 opencode --version
 git --version
@@ -99,426 +99,427 @@ git --version
 
 ---
 
-## Install (v3.8.3)
+## Install (v3.8.4)
 
-### Anggota tim baru — urutan lengkap dari nol
+### New team member — full sequence from scratch
 
-Empat langkah, dijalankan sekali per mesin (kecuali langkah 4, sekali per project):
-
-```bash
-git clone <repo> && cd agent-workflow      # 1. ambil tool-nya
-python install.py --apply                  # 2. pasang config agent global
-export AGENT_PATH="$PWD/main.py"           # 3. beri tahu runtime letak main.py
-                                           #    (permanenkan — lihat "Set AGENT_PATH")
-python main.py --command init --work-dir /path/to/project-anda   # 4. per project
-```
-
-Verifikasi sebelum memakainya:
+Four steps, run once per machine (except step 4, once per project):
 
 ```bash
-python install.py --check                  # bundle + instalasi global
-cd /path/to/project-anda && bash .workflow/run.sh doctor    # semua OS (Git Bash di Windows)
+git clone <repo> && cd agent-workflow      # 1. get the tool
+python install.py --apply                  # 2. install the global agent config
+export AGENT_PATH="$PWD/main.py"           # 3. tell the runtime where main.py is
+                                           #    (make it permanent — see "Set AGENT_PATH")
+python main.py --command init --work-dir /path/to/your-project   # 4. per project
 ```
 
-`doctor` harus melaporkan `READY` dengan nol issue. Selain itu, baca `recommended_fixes`
-sebelum melanjutkan — status `NOT_READY` berarti ada pintu masuk yang benar-benar rusak,
-bukan sekadar catatan gaya.
+Verify before using it:
 
-Skrip entry di `.workflow/` memanggang path absolut mesin tempat `init` dijalankan, jadi
-langkah 4 milik masing-masing orang. Mengcommit `.workflow/` ke repo bersama tidak akan
-menolong siapa pun; `init` sudah menambahkannya ke `.gitignore`.
+```bash
+python install.py --check                  # bundle + global install
+cd /path/to/your-project && bash .workflow/run.sh doctor    # every OS (Git Bash on Windows)
+```
 
-### Detail installer
+`doctor` must report `READY` with zero issues. Otherwise, read `recommended_fixes`
+before continuing — a `NOT_READY` status means an entry point is genuinely broken,
+not merely a style note.
 
-Clone → jalankan satu script → terkonfigurasi.
+The entry scripts in `.workflow/` bake in absolute paths of the machine where `init` was run, so
+step 4 belongs to each person. Committing `.workflow/` to a shared repo will not
+help anyone; `init` already adds it to `.gitignore`.
+
+<a id="detail-installer"></a>
+### Installer details
+
+Clone → run one script → configured.
 
 ```bash
 git clone <repo> && cd agent-workflow
-python install.py            # DRY RUN — tampilkan semua perubahan, tulis nol
-python install.py --apply    # baru menulis
-python install.py --apply --only-command      # workflow aktif hanya lewat /.<command>
-python install.py --apply --provider codex --model gpt-5.6-sol   # pilih second agent tanpa ditanya
-python install.py --check                     # cek bundle + instalasi (termasuk project bila cwd punya .workflow/)
-python install.py --rollback                  # dry-run rollback terakhir
-python install.py --rollback --apply          # rollback setelah preflight hash
-python install.py --uninstall                 # dry-run: apa yang akan dicabut
-python install.py --uninstall --apply         # cabut, ber-receipt (bisa di-rollback)
+python install.py            # DRY RUN — show every change, write nothing
+python install.py --apply    # now writes
+python install.py --apply --only-command      # workflow active only through /.<command>
+python install.py --apply --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
+python install.py --check                     # check bundle + install (including the project when cwd has .workflow/)
+python install.py --rollback                  # dry run of the latest rollback
+python install.py --rollback --apply          # rollback after a hash preflight
+python install.py --uninstall                 # dry run: what would be removed
+python install.py --uninstall --apply         # remove, with a receipt (can be rolled back)
 ```
 
-Semua flag `install.py`:
+All `install.py` flags:
 
-| Flag | Efek | Tulis? |
+| Flag | Effect | Writes? |
 |---|---|---|
-| (tanpa flag) | dry run: cetak rencana | tidak |
-| `--apply` | jalankan rencana; digabung dengan flag lain di bawah untuk benar-benar menulis | ya |
-| `--only-command` | mode command-only (lihat "Mode intent"); disimpan, berlaku untuk install berikutnya | dengan `--apply` |
-| `--auto-intent` | kembalikan mode auto-intent | dengan `--apply` |
-| `--provider NAME` / `--model ID` | pilihan second agent untuk seed (`--model` butuh `--provider`) | dengan `--apply` |
-| `--with-e2e` | juga pasang extra Playwright + Chromium untuk `/.verify-browser` | dengan `--apply` |
-| `--set-env` | permanenkan `AGENT_PATH` (Windows: `HKCU\Environment`; POSIX: `~/.bashrc`/`~/.zshrc`) | dengan `--apply` |
-| `--update-providers` | bawa tiap CLI provider ke `stable_version`-nya, hanya instalasi npm global (lihat "Provider releases") | dengan `--apply` |
-| `--check` | laporan drift bundle, instalasi global, dan project bila cwd punya `.workflow/` | tidak |
-| `--rollback [ID]` | batalkan satu install/uninstall dari receipt-nya (default: terbaru) | dengan `--apply` |
-| `--uninstall` | cabut yang dipasang workflow (lihat "Uninstall") | dengan `--apply` |
+| (no flag) | dry run: print the plan | no |
+| `--apply` | execute the plan; combined with the other flags below to actually write | yes |
+| `--only-command` | command-only mode (see "Intent mode"); persisted, applies to subsequent installs | with `--apply` |
+| `--auto-intent` | restore auto-intent mode | with `--apply` |
+| `--provider NAME` / `--model ID` | second agent choice for the seed (`--model` requires `--provider`) | with `--apply` |
+| `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser` | with `--apply` |
+| `--set-env` | persist `AGENT_PATH` (Windows: `HKCU\Environment`; POSIX: `~/.bashrc`/`~/.zshrc`) | with `--apply` |
+| `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | with `--apply` |
+| `--check` | drift report for the bundle, the global install, and the project when cwd has `.workflow/` | no |
+| `--rollback [ID]` | undo one install/uninstall from its receipt (default: latest) | with `--apply` |
+| `--uninstall` | remove what the workflow installed (see "Uninstall") | with `--apply` |
 
-`AGENT_HOME` (env) mengganti `~` sebagai home target — dipakai test dan e2e installer untuk
-memasang ke HOME sementara.
+`AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
+install into a temporary HOME.
 
-Drift bundle (`--check`, dan penolakan `--apply`) dihitung dua arah: file `dist/` yang hash-nya
-tak cocok atau tak tercatat di `dist/manifest.json`, **dan** entri manifest yang file sumbernya
-di `dist/config/` sudah tidak ada. `doctor` (`checks.bundle_integrity`) memvalidasi bentuk tiap
-entri manifest lebih dulu: entri yang bukan objek, tanpa `path`, atau tanpa `sha256` 64-hex membuat cek
-berhenti dengan `error` + `malformed` (indeks entri), yang `doctor` jadikan issue — bukan drift
-instalasi lokal.
+Bundle drift (`--check`, and the `--apply` refusal) is computed in both directions: `dist/` files whose hash
+does not match or that are not recorded in `dist/manifest.json`, **and** manifest entries whose source file
+in `dist/config/` no longer exists. `doctor` (`checks.bundle_integrity`) first validates the shape of each
+manifest entry: an entry that is not an object, lacks `path`, or lacks a 64-hex `sha256` makes the check
+stop with `error` + `malformed` (the entry indices), which `doctor` turns into an issue — not local
+install drift.
 
-**Dry run adalah default, disengaja.** Script ini menulis ke config agent global — dibaca setiap project di mesin itu. Kesalahan di sini tidak terkurung dalam satu repo.
+**Dry run is the default, deliberately.** This script writes to the global agent config — read by every project on that machine. A mistake here is not confined to one repo.
 
-Yang dilakukan `--apply`:
+What `--apply` does:
 
-| Target | Strategi |
+| Target | Strategy |
 |---|---|
-| `~/.claude/CLAUDE.md` | ganti isi **di antara marker** `WORKFLOW-MAIN-AGENT` — tulisan tangan di luar marker selamat. File belum ada → ditulis **hanya blok marker** |
+| `~/.claude/CLAUDE.md` | replace content **between the** `WORKFLOW-MAIN-AGENT` **markers** — handwritten text outside the markers is preserved. File does not exist yet → **only the marker block** is written |
 | `~/.claude/skills/*.md`, `~/.claude/commands/*.md` | replace (template) |
-| `~/.claude/hooks/*` | replace; satu set untuk semua OS: launcher `<hook>.sh`, logika `<hook>.py`, `workflow_hooks.py`, `intent-map.json`. `.ps1` dari rilis lama dihapus sebagai file stale (yang sudah diedit dibiarkan dan disebut) |
-| `~/.claude/settings.json` | tambah hook dan `statusLine` milik workflow; hook dan key user dipertahankan (lihat "Hook yang didaftarkan") |
-| `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md`, `~/.agy/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT`; file belum ada → hanya blok marker. Blok itu hanya berlaku untuk call runtime (instruksi dibuka `[WORKFLOW_AGENT]`); sesi provider yang dipakai user langsung mengabaikannya |
-| `~/.claude/.workflow-install-mode.json`, `~/.claude/.workflow-installed.json` | mode intent terpilih dan ledger file yang ditulis install (untuk membersihkan file basi) |
-| `~/.config/opencode/opencode.{json,jsonc}` | merge additive untuk config umum; permission `agent.plan` milik workflow ditegakkan, key user lain dipertahankan |
-| `~/.config/opencode/agents/*.md` | replace — satu roster subagent global, dipakai semua project yang dikelola workflow |
-| `<project_root>/opencode.json` | **bukan** tugas installer — dipasang dan di-refresh oleh `init`/`upgrade` (deny-rule file rahasia ditegakkan tiap kali) |
+| `~/.claude/hooks/*` | replace; one set for all OSes: `<hook>.sh` launcher, `<hook>.py` logic, `workflow_hooks.py`, `intent-map.json`. `.ps1` files from old releases are deleted as stale files (edited ones are left alone and reported) |
+| `~/.claude/settings.json` | add the workflow's hooks and `statusLine`; user hooks and keys are preserved (see "Registered hooks") |
+| `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md`, `~/.agy/AGENTS.md` | replace content between the `WORKFLOW-SECOND-AGENT` markers; file does not exist yet → only the marker block. That block applies only to runtime calls (instructions opened with `[WORKFLOW_AGENT]`); provider sessions the user runs directly ignore it |
+| `~/.claude/.workflow-install-mode.json`, `~/.claude/.workflow-installed.json` | the selected intent mode and the ledger of files written by install (for cleaning up stale files) |
+| `~/.config/opencode/opencode.{json,jsonc}` | additive merge for general config; the workflow's `agent.plan` permission is enforced, other user keys are preserved |
+| `~/.config/opencode/agents/*.md` | replace — one global subagent roster, used by every project managed by the workflow |
+| `<project_root>/opencode.json` | **not** the installer's job — installed and refreshed by `init`/`upgrade` (the secret-file deny rule is enforced every time) |
 
-Semua yang akan tertimpa di-backup dulu ke `~/.claude/backups/install_<timestamp>/`.
-Receipt schema v2 mencatat hash sebelum dan sesudah untuk setiap file yang dibuat atau
-diubah, termasuk `settings.json` dan file mode intent. Rollback memvalidasi seluruh
-destination dan backup sebelum menulis apa pun; satu perubahan setelah instalasi membuat
-rollback berhenti dengan konflik, bukan menimpa edit user atau melakukan rollback parsial.
-Receipt (`~/.claude/backups/install_<timestamp>/install_receipt.json`) ditulis **inkremental**:
-sekali sebelum destination apa pun berubah, lalu ulang setelah tiap langkah yang tercatat,
-dengan `complete: false` sampai tulis final. Tiap entry berisi `action`, `key`, `dest`,
-`backup`, `pre_sha256`, dan `post_sha256`, dan dicatat setelah file-nya selesai ditulis.
-Instalasi yang mati di tengah (file terkunci, disk penuh, Ctrl+C) tetap meninggalkan receipt:
-`--rollback` menerimanya, mencetak `NOTE: that install was interrupted; undoing the steps it
-recorded.`, dan membatalkan langkah yang tercatat saja. Langkah yang mati saat menulis tak
-punya entry — backup-nya tetap di direktori backup dan disalin balik manual. Apply yang tidak
-mengubah apa pun tidak meninggalkan receipt.
-Receipt mencakup target instalasi global dan bundle. Init/upgrade stateful pada `.workflow/`
-serta penambahan `.workflow/` ke `.gitignore` tidak masuk rollback installer karena dapat
-memuat session dan state project yang tidak aman dihapus otomatis.
+Everything that will be overwritten is backed up first to `~/.claude/backups/install_<timestamp>/`.
+Receipt schema v2 records the before and after hash of every file created or
+changed, including `settings.json` and the intent mode file. Rollback validates every
+destination and backup before writing anything; a single change after installation makes
+rollback stop with a conflict, rather than overwriting user edits or doing a partial rollback.
+The receipt (`~/.claude/backups/install_<timestamp>/install_receipt.json`) is written **incrementally**:
+once before any destination changes, then again after each recorded step,
+with `complete: false` until the final write. Each entry contains `action`, `key`, `dest`,
+`backup`, `pre_sha256`, and `post_sha256`, and is recorded after its file has finished writing.
+An install that dies midway (locked file, full disk, Ctrl+C) still leaves a receipt:
+`--rollback` accepts it, prints `NOTE: that install was interrupted; undoing the steps it
+recorded.`, and undoes only the recorded steps. A step that died while writing has no
+entry — its backup stays in the backup directory and is copied back manually. An apply that
+changes nothing leaves no receipt.
+The receipt covers the global install targets and the bundle. Stateful init/upgrade of `.workflow/`
+and adding `.workflow/` to `.gitignore` are not part of the installer rollback because they can
+hold session and project state that is unsafe to delete automatically.
 
 #### Seed `config/second_agent.seed.json`
 
-`config/second_agent.seed.json` ada di `.gitignore`. Installer **membangunnya ulang setiap
-`--apply`** dari `second_agent.example.json` — file inilah yang disalin `init` ke tiap
-`.workflow/second_agent.json` baru (`adapters/install/opencode_install._copy_provider_config`,
-dengan example sebagai fallback terakhir). Runtime sendiri tidak pernah membacanya: project
-tanpa `.workflow/second_agent.json` ditolak `provider_config_missing`, file yang rusak ditolak
-`provider_config_invalid`. Tidak ada lagi fallback diam-diam ke config level mesin.
+`config/second_agent.seed.json` is in `.gitignore`. The installer **rebuilds it on every
+`--apply`** from `second_agent.example.json` — this is the file `init` copies into each new
+`.workflow/second_agent.json` (`adapters/install/opencode_install._copy_provider_config`,
+with the example as the last fallback). The runtime itself never reads it: a project
+without `.workflow/second_agent.json` is rejected with `provider_config_missing`, a broken file is rejected with
+`provider_config_invalid`. There is no longer a silent fallback to machine-level config.
 
-Yang dibawa dari seed sebelumnya hanya PILIHAN (`provider`, `default_model`, model per
-route); semua key lain dibangun ulang dari example, jadi tak ada key basi yang terbawa.
-Urutan penentuan pilihan:
+Only the CHOICES (`provider`, `default_model`, per-route models) are carried over from the previous seed;
+every other key is rebuilt from the example, so no stale keys carry over.
+Order in which the choice is determined:
 
-| Kondisi | Yang terjadi |
+| Condition | What happens |
 |---|---|
-| `--provider NAME` (opsional `--model ID`) | dipakai apa adanya, nol pertanyaan |
-| seed sebelumnya ada | pilihan lamanya dipakai lagi di atas example baru |
-| `--apply` dari terminal, belum ada seed | installer **bertanya** provider lalu model |
-| non-interaktif, belum ada seed | `second_agent.example.json` disalin apa adanya |
+| `--provider NAME` (optional `--model ID`) | used as is, zero questions |
+| a previous seed exists | its old choice is reused on top of the new example |
+| `--apply` from a terminal, no seed yet | the installer **asks** for the provider, then the model |
+| non-interactive, no seed yet | `second_agent.example.json` is copied as is |
 
-`config/second_agent.json` lama (ditulis sekali, tak pernah di-refresh — sumber
-`opencode/mimo-v2.5-free` yang ikut tersalin ke project baru) di-rename jadi
-`second_agent.json.retired`; pilihannya **tidak** dibawa dan disebut di warning.
+The old `config/second_agent.json` (written once, never refreshed — the source of
+`opencode/mimo-v2.5-free` being copied into new projects) is renamed to
+`second_agent.json.retired`; its choice is **not** carried over and is mentioned in a warning.
 
-Jalur non-interaktif bukan kelalaian: `tools/e2e/e2e_installer.py` dan CI memanggil
-`install.py` tanpa stdin, dan prompt di sana akan **menggantung** run, bukan menggagalkannya.
+The non-interactive path is not an oversight: `tools/e2e/e2e_installer.py` and CI call
+`install.py` without stdin, and a prompt there would **hang** the run, not fail it.
 
-Prompt menampilkan tiap provider beserta apakah CLI-nya ada di `PATH` dan apakah ia butuh
-opt-in (`AI_PROXY_<PROVIDER>_OPT_IN`), lalu shortlist model provider terpilih beserta
-reasoning effort yang diterima masing-masing. Blank pada provider membatalkan pemilihan
-(example disalin). Blank pada model membiarkan `default_model` kosong — untuk opencode itu
-ditolak saat call (`model_unset`), karena tanpa `-m` opencode memakai model terakhir yang
-dipakai di mesin itu. Id model di luar shortlist tetap diterima dengan warning.
+The prompt shows each provider along with whether its CLI is on `PATH` and whether it requires
+opt-in (`AI_PROXY_<PROVIDER>_OPT_IN`), then a shortlist of the selected provider's models with
+the reasoning efforts each accepts. Blank on the provider cancels the selection
+(the example is copied). Blank on the model leaves `default_model` empty — for opencode that is
+rejected at call time (`model_unset`), because without `-m` opencode uses the last model
+used on that machine. Model ids outside the shortlist are still accepted with a warning.
 
-Model dipin ke `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`, `e2e_spec`);
-`sweep` dibiarkan. `routes` diedit per-key lewat `_merge_routes` supaya `timeout_seconds`
-dan `agent` per-route tidak ikut terbuang.
+The model is pinned to `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`, `e2e_spec`);
+`sweep` is left alone. `routes` is edited per key via `_merge_routes` so that per-route `timeout_seconds`
+and `agent` are not discarded.
 
-Seed **tidak** masuk install receipt, alasan sama dengan `--set-env`: entry receipt tanpa
-backup akan DIHAPUS saat `--rollback`, sedangkan file ini menampung editan user setelah
-dibuat.
+The seed is **not** part of the install receipt, for the same reason as `--set-env`: a receipt entry without a
+backup would be DELETED on `--rollback`, while this file holds user edits after it is
+created.
 
-`--check` melaporkannya sebagai baris `second agent default:` terpisah — `NOT SET`,
-`UNREADABLE`, atau `<provider>, model=<id>` — dan sengaja **di luar** hitungan drift:
-file ini nol padanan di `dist/` sehingga tak punya sumber untuk drift, dan ketiadaannya
-bukan kerusakan (init masih jalan lewat example).
+`--check` reports it as a separate `second agent default:` line — `NOT SET`,
+`UNREADABLE`, or `<provider>, model=<id>` — and it is deliberately **outside** the drift count:
+this file has no counterpart in `dist/`, so it has no source to drift from, and its absence
+is not breakage (init still works via the example).
 
-Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, ia menjalankan **upgrade in-place**: workspace layout lama dimigrasi ke `.workflow/data/` (dengan backup), scripts diregenerasi, stamp versi config diperbarui, `<project_root>/opencode.json` di-refresh, dan `sessions/` dipertahankan. Workspace baru tidak di-scaffold oleh installer — pakai `python main.py --command init --work-dir DIR` (skill `/.init`). Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
+When the installer is run from inside a project that already has `.workflow/`, it performs an **in-place upgrade**: the old workspace layout is migrated to `.workflow/data/` (with a backup), scripts are regenerated, the config version stamp is updated, `<project_root>/opencode.json` is refreshed, and `sessions/` is preserved. A new workspace is not scaffolded by the installer — use `python main.py --command init --work-dir DIR` (skill `/.init`). The workspace upgrade is refused while there is still an active job; the global install still completes and the warning must be checked.
 
-### Statusline (badge second agent)
+### Statusline (second agent badge)
 
-Installer memasang `~/.claude/hooks/workflow-statusline.sh` (beserta `.py`-nya) dan mendaftarkannya
-sebagai `statusLine` di `settings.json`.
+The installer installs `~/.claude/hooks/workflow-statusline.sh` (along with its `.py`) and registers it
+as `statusLine` in `settings.json`.
 
-`settings.json` **additive**: hanya key yang belum ada yang ditulis, dan template sejak 3.8.0
-hanya membawa `hooks` dan `statusLine` — `model`, `enabledPlugins`,
-`extraKnownMarketplaces`, `effortLevel`, dan `permissions.defaultMode` tidak lagi ditanam
-(itu preferensi, bukan kebutuhan workflow; yang sudah tertanam oleh rilis lama dibiarkan). Sudah punya
-`statusLine` sendiri → punyamu menang, badge tak muncul, dan tabrakannya dilaporkan di
-output install. Hapus key itu lalu jalankan ulang `install.py --apply` bila ingin memakai
-yang dikirim.
+`settings.json` is **additive**: only keys that do not exist yet are written, and since 3.8.0 the template
+carries only `hooks` and `statusLine` — `model`, `enabledPlugins`,
+`extraKnownMarketplaces`, `effortLevel`, and `permissions.defaultMode` are no longer planted
+(those are preferences, not workflow requirements; ones already planted by old releases are left alone). Already have
+your own `statusLine` → yours wins, the badge does not appear, and the collision is reported in the
+install output. Delete that key and rerun `install.py --apply` if you want to use
+the shipped one.
 
-File script-nya sendiri ikut aturan `~/.claude/hooks/*` di tabel di atas: **replace**,
-dengan backup lebih dulu. Punya `workflow-statusline.sh` buatan sendiri di sana → ia tertimpa
-(salinannya ada di `~/.claude/backups/install_<timestamp>/`). Yang dipertahankan adalah
-key `statusLine` di `settings.json`, bukan file di `hooks/`.
+The script file itself follows the `~/.claude/hooks/*` rule in the table above: **replace**,
+with a backup first. Have your own `workflow-statusline.sh` there → it is overwritten
+(its copy is in `~/.claude/backups/install_<timestamp>/`). What is preserved is the
+`statusLine` key in `settings.json`, not the file in `hooks/`.
 
 ```
 agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k tok
 ```
 
-| bagian | artinya |
+| part | meaning |
 |---|---|
-| `Second Agent` | seluruh token yang diproses provider untuk sesi ini, cache read termasuk. `actual_*` didahulukan, estimasi `chars//4` cuma cadangan pada baris yang tak terhitung provider |
-| `(… cached)` | porsi cache read di dalam angka itu. Dicetak karena pada run agentic ia ~95% dari total — konteks sama dikirim ulang tiap langkah internal — dan angka sebesar itu tanpa penjelasan di sebelahnya terbaca sebagai bug, bukan fakta |
-| `calls` | jumlah **command**, bukan baris. Continuation menulis satu baris per invocation; menghitung baris akan membuat angka melompat tiap kali ada retry |
-| `Saved` | yang ditangani second agent dan **tak pernah** sampai ke context main agent: input segar (file dan output tool yang ia baca) plus reasoning (ada di dalam output, tak pernah jadi teks). Cache read dikecualikan — itu konteks yang sama dikirim ulang, bukan material baru. Teks jawabannya juga dikecualikan, karena ia **memang** sampai ke sini |
-| `~` | ada baris yang jatuh ke estimasi `chars//4`. Sesi yang seluruh barisnya terhitung provider tak membawa tanda ini — tak ada yang ditebak di dalamnya |
+| `Second Agent` | all tokens processed by the provider for this session, cache reads included. `actual_*` takes precedence; the `chars//4` estimate is only a fallback for rows the provider did not count |
+| `(… cached)` | the cache-read share within that number. Printed because on agentic runs it is ~95% of the total — the same context is resent at every internal step — and a number that large without an explanation next to it reads as a bug, not a fact |
+| `calls` | the number of **commands**, not rows. A continuation writes one row per invocation; counting rows would make the number jump on every retry |
+| `Saved` | what the second agent handled that **never** reached the main agent's context: fresh input (files and tool output it read) plus reasoning (inside the output, never becomes text). Cache reads are excluded — that is the same context resent, not new material. Its answer text is also excluded, because it **does** reach here |
+| `~` | some row fell back to the `chars//4` estimate. A session whose rows were all counted by the provider does not carry this mark — nothing in it is guessed |
 
-Kedua angka selalu tampil, termasuk saat bernilai nol. Segmen yang hilang terbaca sebagai rusak, bukan sebagai kosong.
+Both numbers are always shown, including when they are zero. A missing segment reads as broken, not as empty.
 
-Angka diambil dari `<project_root>/.workflow/data/usage.jsonl` (atau `.workflow/usage.jsonl` pada workspace yang belum di-upgrade). Statusline menghitung
-ulang tiap render. Sesi Claude
-dipetakan ke `MAIN_SESSION_ID` lewat `~/.claude/session_registry.json` yang ditulis
-`session-bind`. Belum ada `usage.jsonl`, atau sesi belum terpetakan, badge cuma menampilkan
-nama project — tak pernah menggagalkan prompt.
+The numbers are taken from `<project_root>/.workflow/data/usage.jsonl` (or `.workflow/usage.jsonl` on a workspace that has not been upgraded). The statusline recomputes
+on every render. The Claude session
+is mapped to `MAIN_SESSION_ID` via `~/.claude/session_registry.json`, written by
+`session-bind`. No `usage.jsonl` yet, or the session is not mapped yet, the badge only shows
+the project name — it never fails the prompt.
 
-**Semua angka ber-cakupan sesi.** `/clear` dan `/compact` memberi `MAIN_SESSION_ID` baru
-(`resume` memakai ulang yang lama), jadi ketiganya kembali nol bersamaan. Itu disengaja:
-angka seumur project di sebelah angka sesi terbaca sebagai rasio yang tak pernah diukur —
-tepat setelah `/clear`, bar sempat berbunyi `Second Agent 0 | Saved 129.5k`.
+**All numbers are session-scoped.** `/clear` and `/compact` give a new `MAIN_SESSION_ID`
+(`resume` reuses the old one), so all three return to zero together. That is deliberate:
+a project-lifetime number next to a session number reads as a ratio that was never measured —
+right after `/clear`, the bar once read `Second Agent 0 | Saved 129.5k`.
 
-Soal besarnya angka: pada satu sesi nyata provider memproses 15,2M token, tetapi 14,5M di
-antaranya cache read — hanya 595k yang input segar. Angka itu jujur ke apa yang diproses,
-bukan ke biaya: cache read ditagih jauh lebih murah, dan runtime sengaja tak punya price
-table, jadi badge tak pernah menyebut nominal uang.
+On the size of the numbers: in one real session the provider processed 15.2M tokens, but 14.5M of
+them were cache reads — only 595k were fresh input. That number is honest about what was processed,
+not about cost: cache reads are billed far cheaper, and the runtime deliberately has no price
+table, so the badge never states a monetary amount.
 
-`Saved` mengukur kompresi **pekerjaan**, bukan kompresi jawaban. Pada sesi contoh: 594.684
-token input segar (file yang dibaca, output tool) plus 48.050 reasoning = 642.734 yang
-diproses second agent dan nol di antaranya masuk ke context main agent. Yang sampai ke sini
-cuma 34.018 token teks jawaban, dan itu sengaja **tidak** diklaim hemat — mengklaimnya
-berarti memuji main agent karena tak membaca apa yang baru saja ia baca.
+`Saved` measures compression of **work**, not compression of the answer. In the example session: 594,684
+fresh input tokens (files read, tool output) plus 48,050 reasoning = 642,734
+processed by the second agent, and none of it entered the main agent's context. What reached here
+was only 34,018 tokens of answer text, and that is deliberately **not** claimed as savings — claiming it
+would mean crediting the main agent for not reading what it just read.
 
-Cache read juga **tidak** masuk `Saved`, meski ia masuk `Second Agent`. Kedua angka memang
-menjawab pertanyaan berbeda: yang pertama "berapa yang diproses", yang kedua "berapa yang
-akan menempati jendela main agent bila ia mengerjakannya sendiri". Konteks yang sama
-dikirim ulang delapan puluh kali dihitung sekali pada pertanyaan kedua. Memasukkannya
-membuat `Saved` jadi 15,1M — 99,8% dari angka di sebelahnya, yakni satu angka dicetak dua
-kali. Sebagai 642,7k ia 4% dari total, dan dua angka itu berhenti saling membebek.
+Cache reads are also **not** included in `Saved`, even though they are included in `Second Agent`. The two numbers
+answer different questions: the first is "how much was processed", the second is "how much
+would occupy the main agent's window if it did the work itself". The same context
+resent eighty times counts once for the second question. Including it
+would make `Saved` 15.1M — 99.8% of the number next to it, i.e. one number printed
+twice. As 642.7k it is 4% of the total, and the two numbers stop parroting each other.
 
-Versi sebelumnya memakai `premium_context_avoided_tokens` (jawaban penuh dikurangi digest)
-dan menghasilkan 11,7k untuk sesi yang sama — 50× lebih kecil. Field itu kini jadi cadangan
-untuk baris yang tak terhitung provider, karena pada baris seperti itu estimasi `chars//4`
-mengukur panjang **prompt**, bukan berapa yang dibaca. Baris cadangan menyalakan `~`.
+The previous version used `premium_context_avoided_tokens` (full answer minus digest)
+and produced 11.7k for the same session — 50× smaller. That field is now the fallback
+for rows the provider did not count, because on such rows the `chars//4` estimate
+measures **prompt** length, not how much was read. Fallback rows turn on `~`.
 
-### Hook yang didaftarkan
+### Registered hooks
 
-| Event | Matcher | Script | Fungsi |
+| Event | Matcher | Script | Function |
 |---|---|---|---|
-| `SessionStart` | `startup\|resume\|clear\|compact` | `session-bind` | mengikat sesi Claude ke `MAIN_SESSION_ID` |
-| `UserPromptSubmit` | — | `intent-gate-set` | mode auto-intent saja: pasang marker gate untuk prompt delegated |
-| `UserPromptSubmit` | — | `task-events` | skill lokal dari prompt; snapshot HEAD |
-| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit` | `intent-gate-check` | blokir gather tool selama marker gate ada; Bash dan PowerShell lewat satu tokenizer dan satu aturan: hanya lolos untuk satu panggilan polos `[bash] <root>/.workflow/{run,check,inspect}.sh` (tiap kata polos atau `'...'`; `$`, backtick, `;`, `|`, `&`, redirect, newline hanya di dalam petik tunggal; petik ganda, `bash -c`, interpreter lain di depan, `run.ps1`, path di luar root, `..`, dan nama mirip ditolak); Write/Edit lolos kecuali ke script runner itu; marker berintent `verify` meloloskan jalur pilih-test (lihat "Mode intent") |
-| `PostToolUse` | `Skill\|Edit\|Write\|MultiEdit\|NotebookEdit` | `task-events` | skill via tool `Skill`, file diedit |
-| `Stop` | — | `graph-refresh` | regenerasi graph setelah turn yang mengimplementasi (detached) |
-| `Stop` | — | `task-events` | commit sejak snapshot HEAD |
+| `SessionStart` | `startup\|resume\|clear\|compact` | `session-bind` | binds the Claude session to `MAIN_SESSION_ID` |
+| `UserPromptSubmit` | — | `intent-gate-set` | auto-intent mode only: sets the gate marker for delegated prompts |
+| `UserPromptSubmit` | — | `task-events` | local skill from the prompt; HEAD snapshot |
+| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit` | `intent-gate-check` | blocks gather tools while the gate marker exists; Bash and PowerShell go through one tokenizer and one rule: only a single plain call `[bash] <root>/.workflow/{run,check,inspect}.sh` passes (each word plain or `'...'`; `$`, backtick, `;`, `|`, `&`, redirect, newline only inside single quotes; double quotes, `bash -c`, another interpreter in front, `run.ps1`, paths outside the root, `..`, and look-alike names are rejected); Write/Edit pass except to that runner script; a marker with intent `verify` lets the test-selection path through (see "Intent mode") |
+| `PostToolUse` | `Skill\|Edit\|Write\|MultiEdit\|NotebookEdit` | `task-events` | skill via the `Skill` tool, edited files |
+| `Stop` | — | `graph-refresh` | regenerates the graph after a turn that implemented something (detached) |
+| `Stop` | — | `task-events` | commits since the HEAD snapshot |
 
-Hook dikenali dari nama script-nya. Saat install, hook milik workflow di-refresh per event,
-hook user dibiarkan, dan command script workflow yang tidak lagi didaftarkan rilis ini di
-suatu event dicabut dari event itu (misalnya `task-events` di `PreToolUse` dari draft 3.8.0).
-Command di template sama untuk semua OS, `{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<hook>.sh"`;
-installer mengisi `{{HOOK_BASH}}` dengan `bash` di POSIX dan path absolut Git Bash (dikutip) di
-Windows, karena `bash` polos di sana bisa jatuh ke bash WSL di `System32`. Tanpa Git Bash di
-Windows, atau tanpa `bash` di PATH di POSIX, `--apply` ditolak (exit 6) sebelum menulis apa pun.
-Tool maintainer dan e2e yang menjalankan hook atau runner juga menolak (bukan menebak `bash`
-polos) saat bash tidak ditemukan. Command lama berbentuk
-`powershell ... .ps1` dikenali dari nama hook-nya dan diganti.
+Hooks are recognized by their script name. On install, the workflow's hooks are refreshed per event,
+user hooks are left alone, and workflow script commands that this release no longer registers on
+an event are removed from that event (for example `task-events` on `PreToolUse` from the 3.8.0 draft).
+The command in the template is the same for all OSes, `{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<hook>.sh"`;
+the installer fills `{{HOOK_BASH}}` with `bash` on POSIX and the absolute Git Bash path (quoted) on
+Windows, because a plain `bash` there can fall through to WSL bash in `System32`. Without Git Bash on
+Windows, or without `bash` on PATH on POSIX, `--apply` is refused (exit 6) before writing anything.
+Maintainer and e2e tools that run hooks or the runner also refuse (rather than guessing a plain
+`bash`) when bash is not found. Old commands of the form
+`powershell ... .ps1` are recognized by their hook name and replaced.
 
 ### Uninstall
 
-`python install.py --uninstall` (dry run) lalu `--uninstall --apply`:
+`python install.py --uninstall` (dry run), then `--uninstall --apply`:
 
-- blok `WORKFLOW-MAIN-AGENT` / `WORKFLOW-SECOND-AGENT` dipotong dari CLAUDE.md dan tiap
-  AGENTS.md; teks user di atas dan di bawahnya tetap. File yang isinya hanya blok itu dihapus;
-- skill, command, hook, dan agent provider dihapus **hanya** bila isinya masih persis yang
-  ditulis install (ledger atau receipt); file yang sudah diedit dibiarkan dan disebut;
-- `settings.json` kehilangan command hook yang menjalankan script workflow (dikirim atau
-  pensiun) dan `statusLine` workflow; key lain tetap, termasuk yang dulu ditanam rilis lama.
-  Sebuah command dianggap milik workflow hanya bila script-nya ada di folder hook terpasang,
-  `<home>/.claude/hooks/<nama>.sh` (atau `.ps1` dari rilis lama; `<home>` = home install, `~`, `$HOME`,
-  `%USERPROFILE%`, `$env:USERPROFILE`, atau path berbentuk home user), dan namanya dikirim atau
-  pensiun. Script user bernama sama di folder lain (`~/tools/task-events.sh`) tidak disentuh
-  install maupun uninstall; satu command yang menjalankan script kita plus script lain dianggap
-  milik user;
-- CLAUDE.md: hanya sambungan tempat blok dipotong yang dirapikan (satu baris kosong); baris
-  kosong di bagian lain file tetap byte-identik;
-- mode intent dan ledger dihapus.
+- the `WORKFLOW-MAIN-AGENT` / `WORKFLOW-SECOND-AGENT` block is cut from CLAUDE.md and each
+  AGENTS.md; user text above and below it stays. A file whose content is only that block is deleted;
+- skills, commands, hooks, and provider agents are deleted **only** if their content is still exactly what
+  install wrote (ledger or receipt); files that have been edited are left alone and reported;
+- `settings.json` loses the hook commands that run workflow scripts (shipped or
+  retired) and the workflow `statusLine`; other keys stay, including those planted by old releases.
+  A command is considered the workflow's only if its script is in the installed hook folder,
+  `<home>/.claude/hooks/<nama>.sh` (or `.ps1` from old releases; `<home>` = the install home, `~`, `$HOME`,
+  `%USERPROFILE%`, `$env:USERPROFILE`, or a user-home-shaped path), and its name is shipped or
+  retired. A user script with the same name in another folder (`~/tools/task-events.sh`) is touched by neither
+  install nor uninstall; a single command that runs our script plus another script is considered
+  the user's;
+- CLAUDE.md: only the seam where the block was cut is tidied (one blank line); blank
+  lines elsewhere in the file stay byte-identical;
+- the intent mode and ledger are deleted.
 
-`settings.json` dibersihkan **sebelum** script hook dihapus, dibaca longgar (BOM, cp1252). Bila
-tak bisa di-parse atau bukan object JSON, semua script `hooks/` dibiarkan dan uninstall
-memperingatkannya, sehingga tak ada hook yang menunjuk file hilang. File instruksi yang
-markernya tak berpasangan (START tanpa END, END tanpa START, END sebelum START, atau lebih dari
-satu blok) ditolak saat install (aksi `refused` + peringatan berisi path dan kedua marker) dan
-dibiarkan saat uninstall.
+`settings.json` is cleaned **before** hook scripts are deleted, and is read leniently (BOM, cp1252). If
+it cannot be parsed or is not a JSON object, all `hooks/` scripts are left alone and uninstall
+warns about it, so no hook ever points at a missing file. Instruction files whose
+markers are unpaired (START without END, END without START, END before START, or more than
+one block) are refused at install (action `refused` + a warning with the path and both markers) and
+left alone at uninstall.
 
-Tidak disentuh: `config/second_agent.seed.json`, `AGENT_PATH` dari `--set-env`, dan
-`.workflow/` di tiap project. Semua perubahan lewat backup + receipt yang sama dengan install,
-jadi `python install.py --rollback --apply` membatalkan uninstall.
+Not touched: `config/second_agent.seed.json`, `AGENT_PATH` from `--set-env`, and
+`.workflow/` in each project. All changes go through the same backup + receipt as install,
+so `python install.py --rollback --apply` undoes an uninstall.
 
-### Mode intent
+### Intent mode
 
-Default installer adalah **auto-intent**: bahasa natural dapat dipetakan ke command dan
-hook `UserPromptSubmit` mengaktifkan pre-flight gate. Seluruh blok workflow berlaku di
-setiap pesan.
+The installer default is **auto-intent**: natural language can be mapped to commands and
+the `UserPromptSubmit` hook activates the pre-flight gate. The entire workflow block applies to
+every message.
 
-`--only-command` membuat workflow **aktif hanya saat dipanggil**: blok yang terpasang dibuka
-stanza "Cakupan aktif" — aturan workflow (gaya caveman, Output Contract, gate, `[NEXT]`,
-Graphify, Global Forbidden) berlaku hanya setelah user memanggil `/.<command>` atau skill
-workflow dan selama command itu berjalan. Pesan tanpa prefix adalah chat biasa yang
-mengikuti instruksi user di luar blok (CLAUDE.md user, memory, project). Hook
-`intent-gate-set` tidak didaftarkan; hook pasif (`session-bind`, `task-events`,
-`graph-refresh`) dan `statusLine` tetap, karena hanya mencatat. Jalankan `--auto-intent`
-untuk memulihkan mode default. Tanpa kedua flag, upgrade mempertahankan mode sebelumnya.
+`--only-command` makes the workflow **active only when invoked**: the installed block opens with
+the "Cakupan aktif" ("active scope") stanza — the workflow rules (caveman style, Output Contract, gate, `[NEXT]`,
+Graphify, Global Forbidden) apply only after the user invokes `/.<command>` or a workflow
+skill, and for as long as that command runs. A message without a prefix is ordinary chat that
+follows the user's instructions outside the block (the user's CLAUDE.md, memory, project). The
+`intent-gate-set` hook is not registered; the passive hooks (`session-bind`, `task-events`,
+`graph-refresh`) and `statusLine` remain, because they only record. Run `--auto-intent`
+to restore the default mode. Without either flag, an upgrade keeps the previous mode.
 
-Prompt yang diawali `<task-notification>` (notifikasi background task yang Claude Code kirim
-lewat `UserPromptSubmit`) diabaikan `intent-gate-set`: tidak memasang marker dan tidak menghapus
-marker yang dipasang prompt user di turn yang sama (DEC-045). Sebelumnya nama task atau potongan
-output di notifikasi bisa cocok dengan NL map dan memasang gate yang tidak diminta.
+A prompt that starts with `<task-notification>` (a background-task notification that Claude Code sends
+via `UserPromptSubmit`) is ignored by `intent-gate-set`: it neither sets a marker nor removes
+a marker set by a user prompt in the same turn (DEC-045). Previously a task name or a snippet of
+output in the notification could match the NL map and set a gate nobody asked for.
 
-Sampai 3.8.0 `intent-gate-set` membaca prompt dari field `user_prompt`, yang tidak pernah
-dikirim Claude Code (field-nya `prompt`). Akibatnya gate runtime tidak pernah aktif dan hanya
-lapisan prompt yang bekerja. Sejak perbaikan itu, di mode auto-intent `intent-gate-check`
-benar-benar memblokir gather tool sesudah prompt yang terpetakan ke command delegated sampai
-`.workflow/run` dipanggil; escape-nya tetap `WORKFLOW_LOCAL_MODE=1` atau `local_mode.flag`.
+Up to 3.8.0, `intent-gate-set` read the prompt from the `user_prompt` field, which Claude Code never
+sends (the field is `prompt`). As a result the runtime gate was never active and only the
+prompt layer worked. Since that fix, in auto-intent mode `intent-gate-check`
+actually blocks gather tools after a prompt that maps to a delegated command until
+`.workflow/run` is called; the escape is still `WORKFLOW_LOCAL_MODE=1` or `local_mode.flag`.
 
-Runner hanya lolos bila ia command itu sendiri: kata pertama adalah path
-`.workflow/{run,check,inspect}.sh` milik project ini, atau kata kedua sesudah `bash` polos (tanpa
-flag). Tool Bash dan PowerShell dibaca oleh tokenizer yang sama: tiap kata harus polos (huruf, angka,
-`_ . / : = + % - ^`, dan `~` di tengah kata) atau dibungkus petik tunggal, yang literal di kedua
-shell. Karena itu task boleh memuat `$`, `;`, `|`, `&`, `<`, `>`, dan kurung asal di dalam
-`'...'`; petik ganda ditolak karena kedua shell mengekspansi `$` di dalamnya, dan apostrof di
-dalam task tidak bisa ditulis. Path runner yang muncul sebagai argumen command lain
-(`python -c "..." x/.workflow/run.sh`) dan `run.ps1` (pensiun) tetap diblokir.
+The runner passes only when it is the command itself: the first word is this project's
+`.workflow/{run,check,inspect}.sh` path, or the second word after a plain `bash` (no
+flags). The Bash and PowerShell tools are read by the same tokenizer: each word must be plain (letters, digits,
+`_ . / : = + % - ^`, and `~` mid-word) or wrapped in single quotes, which are literal in both
+shells. That is why a task may contain `$`, `;`, `|`, `&`, `<`, `>`, and parentheses as long as they are inside
+`'...'`; double quotes are rejected because both shells expand `$` inside them, and an apostrophe
+inside the task cannot be written. A runner path that appears as an argument of another command
+(`python -c "..." x/.workflow/run.sh`) and `run.ps1` (retired) are still blocked.
 
-Field `command` di marker memilih aturan lolos. Untuk `verify`, main_agent harus memilih test
-sebelum delegasi, jadi tiga hal lolos: `git diff` polos (aturan kata yang sama dengan runner)
-dengan `--name-only`, `--name-status`, atau `--stat[=N]`, plus opsional `--cached`, `--staged`,
-`--relative`, `--no-renames`, `--no-color`, `--`, ref, dan path (opsi lain seperti `-p` atau
-`--output` tetap diblokir); Read `<root>/.workflow/config.json`; Read/Write
-`sessions/<id>/verify/tests.json` milik sesi itu. Dependents hanya bisa disimpulkan dari nama
-file di diff. Matcher `PreToolUse` memuat `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, tetapi
-hook hanya menolak tulis ke script runner `.workflow/{run,check,inspect}` (ekstensi apa pun)
-selama marker ada (menulis ulang runner lalu menjalankannya akan membuat allowlist runner jadi command bebas);
-tulis ke file lain, termasuk `tests.json`, lolos.
-Hook diuji lewat launcher `.sh` yang benar-benar dipasang, di Windows lewat Git Bash dan di Linux.
+The `command` field in the marker selects the pass rule. For `verify`, main_agent must select tests
+before delegating, so three things pass: a plain `git diff` (same word rules as the runner)
+with `--name-only`, `--name-status`, or `--stat[=N]`, plus optional `--cached`, `--staged`,
+`--relative`, `--no-renames`, `--no-color`, `--`, refs, and paths (other options such as `-p` or
+`--output` are still blocked); Read of `<root>/.workflow/config.json`; Read/Write of
+that session's `sessions/<id>/verify/tests.json`. Dependents can only be inferred from the file
+names in the diff. The `PreToolUse` matcher includes `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, but
+the hook only rejects writes to the `.workflow/{run,check,inspect}` runner scripts (any extension)
+while the marker exists (rewriting the runner and then running it would turn the runner allowlist into a free command);
+writes to other files, including `tests.json`, pass.
+The hook is tested through the `.sh` launcher that is actually installed, on Windows through Git Bash and on Linux.
 
-Untuk semua `command` di marker, Read definisi skill juga lolos: path absolut tanpa segmen
-`..`, berakhiran `.md`, file-nya ada, dan path aslinya (semua symlink/junction diikuti) berada
-di dalam path asli `~/.claude/skills`. Symlink boleh menunjuk ke mana pun di dalam folder skill,
-tidak keluar darinya. Alasannya: tool Skill menyuruh agent membaca `~/.claude/skills/<name>.md`
-sesudah prompt yang memanggilnya mempersenjatai gate, sehingga instruksi cara dispatch terkunci
-sampai sesudah dispatch (DEC-039). Grep/Glob atas folder itu, file selain `.md`, dan path
-relatif tetap diblokir.
+For every `command` in the marker, Read of a skill definition also passes: an absolute path with no
+`..` segment, ending in `.md`, the file exists, and its real path (all symlinks/junctions followed) is
+inside the real path of `~/.claude/skills`. A symlink may point anywhere inside the skill folder,
+not outside it. The reason: the Skill tool tells the agent to read `~/.claude/skills/<name>.md`
+after the prompt that invoked it has armed the gate, so the dispatch instructions would be locked
+until after dispatch (DEC-039). Grep/Glob over that folder, non-`.md` files, and relative
+paths are still blocked.
 
-Untuk semua `command` di marker, **Read presisi** juga lolos (DEC-043): file yang ada di dalam
-project root (path relatif di-resolve terhadap root, symlink diikuti), bukan di bawah
-`.workflow/`, dengan bentang paling banyak 200 baris — `limit` berupa angka 1–200, atau tanpa
-`limit` pada file yang memang ≤ 200 baris (file > 1 MB tak dihitung, jadi tak lolos). Paling
-banyak 2 per marker; hitungannya di `runtime/delegated.reads`, dikunci ke `set_at` marker,
-sehingga marker baru mulai dari nol. Ini angka yang ditegakkan untuk pengecualian "slice
-kecil, satu/dua anchor" di aturan Pre-flight gate `CLAUDE.md`: atribusi file:line oleh main
-agent sendiri, bukan pengumpulan bukti. Read ke-3, bentang > 200 baris, file besar tanpa
-`limit`, file di luar root, Grep, Glob, MCP, dan shell tetap diblokir, dan pesan blokirnya
-menyebut aturan ini. Marker tanpa `set_at` (bukan tulisan `intent-gate-set`) tak membuka lane ini.
+For every `command` in the marker, a **precision Read** also passes (DEC-043): a file inside the
+project root (relative paths resolved against the root, symlinks followed), not under
+`.workflow/`, spanning at most 200 lines — `limit` a number 1–200, or no
+`limit` on a file that is itself ≤ 200 lines (files > 1 MB are not counted, so they do not pass). At
+most 2 per marker; the count is in `runtime/delegated.reads`, keyed to the marker's `set_at`,
+so a new marker starts from zero. This is the enforced number for the "small
+slice, one/two anchors" exception in the `CLAUDE.md` Pre-flight gate rule: file:line attribution by the main
+agent itself, not evidence gathering. A 3rd Read, a span > 200 lines, a large file without
+`limit`, a file outside the root, Grep, Glob, MCP, and shell are still blocked, and the block message
+cites this rule. A marker without `set_at` (not written by `intent-gate-set`) does not open this lane.
 
-`dist/config/claude/CLAUDE.md` sengaja memuat **kedua** stanza mode — `COMMAND-ONLY` dan
-`AUTO-INTENT`, masing-masing dibungkus marker `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->`.
-File itu sumber sebelum dipotong, bukan hasil instalasi. Saat `--apply`, installer
-(`_apply_intent_mode`) membuang stanza mode yang tidak dipilih beserta marker kedua mode,
-sehingga `~/.claude/CLAUDE.md` yang terpasang memuat tepat satu stanza. Dua stanza hidup di
-satu file, bukan dua varian file, supaya perbedaan keduanya terlihat saat review.
+`dist/config/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
+`AUTO-INTENT`, each wrapped in `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->` markers.
+That file is the source before trimming, not the installed result. On `--apply`, the installer
+(`_apply_intent_mode`) drops the unselected mode stanza along with both modes' markers,
+so the installed `~/.claude/CLAUDE.md` contains exactly one stanza. The two stanzas live in
+one file, not two file variants, so the difference between them is visible in review.
 
-`--check` menentukan scope dari cwd: dijalankan di dalam project yang punya `.workflow/`, ia
-ikut memeriksa boundary project (`<project_root>/opencode.json`). Di luar workspace, scope
-itu dilaporkan `SKIPPED` — bukan didiamkan lalu dilaporkan READY. Boundary yang diperiksa
-hanya milik provider yang dijalankan project (`provider` di `.workflow/second_agent.json`),
-sama dengan yang dipasang `init`: project codex tak diminta `opencode.json` dan dilaporkan
-`project scope: SKIPPED — the project runs codex ...`. Project yang tak menyebut provider
-jatuh ke default (opencode), jadi boundary-nya tetap diperiksa.
+`--check` determines scope from the cwd: run inside a project that has `.workflow/`, it
+also checks the project boundary (`<project_root>/opencode.json`). Outside a workspace, that scope
+is reported as `SKIPPED` — not silently left out and then reported READY. The boundary checked is
+only that of the provider the project runs (`provider` in `.workflow/second_agent.json`),
+the same one `init` installs: a codex project is not asked for `opencode.json` and is reported as
+`project scope: SKIPPED — the project runs codex ...`. A project that names no provider
+falls back to the default (opencode), so its boundary is still checked.
 
-### Extractor (sisi maintainer)
+### Extractor (maintainer side)
 
-`dist/` dihasilkan dari config live maintainer:
+`dist/` is generated from the maintainer's live config:
 
 ```bash
 python tools/maintain/extract_config.py --dry-run
 python tools/maintain/extract_config.py
 ```
 
-Postur keamanannya, berurutan menurut kepentingan:
+Its security posture, in order of importance:
 
-1. **Allowlist, bukan blocklist.** Home agent berisi `.credentials.json`, `history.jsonl` ratusan KB, transkrip sesi, dan path project. Blocklist mengirimkan apa pun yang lupa disebut; allowlist hanya mengirim yang disebut.
-2. **Gagal-tutup pada rahasia.** Setiap byte dipindai pola kredensial. Satu temuan **membatalkan seluruh run dan menulis nol** — peringatan akan dibaca, diabaikan, lalu ter-commit. Rahasia di git history praktis tak bisa dicabut.
-3. **Read-only.** Extractor tak pernah menulis di luar `dist/`.
+1. **Allowlist, not blocklist.** The agent home contains `.credentials.json`, a `history.jsonl` of hundreds of KB, session transcripts, and project paths. A blocklist ships anything it forgot to name; an allowlist ships only what is named.
+2. **Fail closed on secrets.** Every byte is scanned for credential patterns. A single hit **aborts the whole run and writes nothing** — a warning would be read, ignored, then committed. A secret in git history is practically impossible to revoke.
+3. **Read-only.** The extractor never writes outside `dist/`.
 
-Path absolut diredaksi jadi `{{HOME}}` / `{{PROJECT_ROOT}}`; installer yang mengembalikannya.
+Absolute paths are redacted to `{{HOME}}` / `{{PROJECT_ROOT}}`; the installer restores them.
 
 ### E2E
 
 ```bash
-python tools/e2e/e2e.py          # lokal + installer: tanpa delegated run/kuota
-python tools/e2e/e2e.py --full   # plus command delegated: menit + kuota nyata
+python tools/e2e/e2e.py          # local + installer: no delegated run/quota
+python tools/e2e/e2e.py --full   # plus delegated commands: minutes + real quota
 ```
 
-`--full` opt-in. Command delegated memakai anggaran rate-limit yang sama dengan yang dibutuhkan workflow itu sendiri; suite yang membakarnya diam-diam lebih buruk daripada tak ada suite.
+`--full` is opt-in. Delegated commands use the same rate-limit budget the workflow itself needs; a suite that silently burns it is worse than no suite.
 
-Installer diuji terhadap **HOME sementara**, bukan mesin yang menghasilkan `dist/` — meng-install ke mesin asal hanya membuktikan idempotensi, tak pernah menjalankan jalur *create* yang dihadapi user baru.
+The installer is tested against a **temporary HOME**, not the machine that produced `dist/` — installing onto the origin machine only proves idempotence, it never exercises the *create* path a new user faces.
 
-`SKIPPED` bukan `PASS`, dan dilaporkan terpisah.
+`SKIPPED` is not `PASS`, and is reported separately.
 
 ---
 
 ## Bootstrap
 
-`main.py` tinggal di repo ini, **bukan** di project target. Untuk init pertama, runtime perlu tahu letaknya. Sesudah init, `.workflow/config.json` menyimpan path absolutnya, jadi `AGENT_PATH` tak wajib lagi.
+`main.py` lives in this repo, **not** in the target project. For the first init, the runtime needs to know where it is. After init, `.workflow/config.json` stores its absolute path, so `AGENT_PATH` is no longer required.
 
-**Windows (persisten, jalankan sekali):**
+**Windows (persistent, run once):**
 
 ```powershell
 [Environment]::SetEnvironmentVariable("AGENT_PATH", "C:/path/to/agent-workflow/main.py", "User")
 ```
 
-Tutup dan buka kembali terminal supaya variabel aktif.
+Close and reopen the terminal so the variable takes effect.
 
-**Windows (sesi berjalan saja):**
+**Windows (current session only):**
 
 ```powershell
 $env:AGENT_PATH = "C:/path/to/agent-workflow/main.py"
 ```
 
-**macOS / Linux (persisten):**
+**macOS / Linux (persistent):**
 
 ```bash
-echo 'export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"' >> ~/.bashrc   # atau ~/.zshrc
+echo 'export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"' >> ~/.bashrc   # or ~/.zshrc
 source ~/.bashrc
 ```
 
-**macOS / Linux (sesi berjalan saja):**
+**macOS / Linux (current session only):**
 
 ```bash
 export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"
 ```
 
-Verifikasi:
+Verification:
 
 ```bash
 test -f "$AGENT_PATH" && echo OK
@@ -532,7 +533,7 @@ python $env:AGENT_PATH --help
 
 ---
 
-## Init di project target
+## Init in the target project
 
 ```bash
 python3 "$AGENT_PATH" --command init --work-dir /path/to/target-app --pretty
@@ -542,36 +543,36 @@ python3 "$AGENT_PATH" --command init --work-dir /path/to/target-app --pretty
 python $env:AGENT_PATH --command init --work-dir "C:/path/to/target-app" --pretty
 ```
 
-`init` bersifat idempoten: membuat scaffolding yang belum ada dan meregenerasi tiga runner script. Workspace yang dibuat build lama (versi berbeda atau layout lama) langsung di-upgrade oleh init; bila ada job hidup, upgrade dilewati dan perintahnya disebut.
+`init` is idempotent: it creates the scaffolding that does not exist yet and regenerates the three runner scripts. A workspace created by an old build (different version or old layout) is upgraded directly by init; if a live job exists, the upgrade is skipped and the command to run is named.
 
-- `.workflow/config.json` — path absolut `main.py`/`check.py`, sehingga runner dapat menemukan tool tanpa mengandalkan `AGENT_PATH`
-- `.workflow/second_agent.json` — salinan project-local, boleh kamu ubah
-- skrip runner `run.sh` `inspect.sh` `check.sh` — bash di semua OS (Git Bash di Windows); tak ada lagi `.ps1`
-- `.workflow/data/sessions/` kosong — state per-sesi dibuat lazy saat panggilan terdelegasi pertama. Semua file internal (stream, store, cache, sesi, report) ada di `.workflow/data/`; root `.workflow/` hanya berisi file yang kamu edit, script, dan `current/`
-- entri `.workflow/` ditambahkan ke `.gitignore` root project
+- `.workflow/config.json` — the absolute paths of `main.py`/`check.py`, so the runner can find the tool without relying on `AGENT_PATH`
+- `.workflow/second_agent.json` — a project-local copy, which you may edit
+- runner scripts `run.sh` `inspect.sh` `check.sh` — bash on all OSes (Git Bash on Windows); there is no `.ps1` any more
+- an empty `.workflow/data/sessions/` — per-session state is created lazily on the first delegated call. All internal files (streams, store, cache, sessions, reports) are in `.workflow/data/`; the `.workflow/` root holds only the files you edit, the scripts, and `current/`
+- a `.workflow/` entry is added to the project root `.gitignore`
 
-Skrip `.sh` diberi bit executable saat dibuat. Kalau repo dipindah lewat media yang membuang mode bit:
+The `.sh` scripts are given the executable bit when created. If the repo is moved via media that drops mode bits:
 
 ```bash
 chmod +x .workflow/*.sh
 ```
 
-**Batasan portabilitas.** Skrip memanggang **path absolut dari mesin tempat `init` dijalankan** — path ke `main.py`, `--work-dir`, dan interpreter Python yang terdeteksi. Tak ada satu pun yang portabel lintas mesin.
+**Portability limitation.** The scripts bake in **absolute paths from the machine where `init` was run** — the path to `main.py`, `--work-dir`, and the detected Python interpreter. None of them is portable across machines.
 
-Path ditulis dengan garis miring maju (`C:/...` di Windows), yang dibaca Git Bash maupun Python Windows. `init`/`upgrade` **menghapus** `run.ps1`/`inspect.ps1`/`check.ps1` yang tertinggal dari build lama: tak ada generator yang memeliharanya lagi dan gate tak meloloskan panggilan ke sana, jadi menyimpannya hanya membuatnya tampak dapat dipakai. Sebuah `run.sh` dari mesin lain tetap memuat path absolut mesin itu. Setiap anggota tim menjalankan `init` (atau `upgrade`) sendiri di environment masing-masing; itu juga berlaku saat berpindah antara WSL dan Windows asli.
+Paths are written with forward slashes (`C:/...` on Windows), which both Git Bash and Windows Python read. `init`/`upgrade` **delete** `run.ps1`/`inspect.ps1`/`check.ps1` left over from old builds: no generator maintains them any more and the gate does not let calls to them through, so keeping them only makes them look usable. A `run.sh` from another machine still contains that machine's absolute paths. Every team member runs `init` (or `upgrade`) themselves in their own environment; that also applies when moving between WSL and native Windows.
 
-`doctor` membandingkan isi skrip di disk dengan hasil generator dan melaporkannya di `run_script_drift` — `missing`, `content_differs`, atau `retired_leftover` (`.ps1` dari build lama). Semuanya dihitung sebagai issue: skrip inilah satu-satunya pintu masuk, dan yang sudah melenceng akan merutekan command yang sudah tidak diterima CLI.
+`doctor` compares the script contents on disk with the generator output and reports it in `run_script_drift` — `missing`, `content_differs`, or `retired_leftover` (`.ps1` from an old build). All of them count as issues: these scripts are the only entry point, and one that has drifted will route commands the CLI no longer accepts.
 
-## Upgrade workspace
+## Workspace upgrade
 
-Jalur yang direkomendasikan setelah menarik versi agent-workflow baru:
+The recommended path after pulling a new agent-workflow version:
 
 ```bash
 cd /path/to/target-app && python /path/to/agent-workflow/install.py --apply
 ```
 
-Command itu memperbarui config global dan meng-upgrade workspace di cwd. Project yang belum
-punya `.workflow/` di-scaffold lewat `init`, bukan installer. Untuk workspace saja:
+That command updates the global config and upgrades the workspace in the cwd. A project that does not
+have `.workflow/` yet is scaffolded via `init`, not the installer. For the workspace only:
 
 ```bash
 python3 "$AGENT_PATH" --command upgrade --work-dir /path/to/target-app --pretty
@@ -583,198 +584,200 @@ python $env:AGENT_PATH --command upgrade --work-dir "C:/path/to/target-app" --pr
 
 `upgrade`:
 
-- menolak berjalan ketika ada delegated job aktif;
-- meregenerasi runner scripts dan me-repoint path tool;
-- memigrasi kunci v3.4.2 (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) sekali, memindahkan nilainya;
-- **migrasi layout** (sekali): isi internal `.workflow/` dipindah ke `.workflow/data/` setelah backup ke `data/backups/<stamp>/` (3 terakhir disimpan), path evidence yang diarsipkan ditulis ulang, sisa lama (`state.json`, `runtime/`, `logs/`, lock) dihapus, `secrets.json` format objek dikonversi ke list. Isi dipindah dulu ke staging `.workflow/data.migrating/` lalu di-rename ke `data/` dalam satu langkah. Staging sisa percobaan yang terputus dikembalikan dulu; bila ia berisi nama yang juga ada di root `.workflow`, upgrade berhenti dengan `MigrationConflict` dan **tak memindah apa pun** — simpan satu salinan tiap entry (bandingkan dulu), hapus yang lain, lalu jalankan ulang `upgrade`. Setelah cek itu, kegagalan punya tiga hasil berbeda:
-  - **gagal sebelum rename, rollback bersih** → semua dikembalikan ke `.workflow/`, backup disimpan sebagai `.workflow/migration-backup-*`, pesan `workspace migration failed and was rolled back`;
-  - **gagal sebelum rename, rollback INCOMPLETE** (`MigrationRollbackIncomplete`) → tiap langkah balik tetap dicoba dan tiap kegagalan dicatat; entry yang tak bisa kembali tetap di `.workflow/data.migrating/` (staging dipertahankan, bukan dihapus), pesan `workspace migration failed and the rollback is INCOMPLETE: ...`. Pindahkan entry itu ke `.workflow/` manual, atau jalankan ulang `upgrade` — ia memulihkan staging sisa lebih dulu. Salinan pra-migrasi mungkin ada di `.workflow/migration-backup-*`;
-  - **gagal setelah rename** (`MigrationIncomplete`) → tak ada yang dikembalikan; workspace sudah di `data/` dan jalan. Pesan `workspace migration incomplete: ...` menyebut langkah yang belum selesai — perbaiki penyebabnya (biasanya file dipegang editor/antivirus) lalu jalankan ulang `upgrade`, ia melanjutkan dari langkah itu;
-- `config.json` dipangkas jadi **override saja**: nilai yang sama dengan default dan key pensiun/tak dikenal dibuang dan dilaporkan; `second_agent.json` tetap di-backfill additive;
-- mempertahankan nilai user dan seluruh `sessions/`;
-- tidak mengirim prompt, tidak memanggil second_agent, dan tidak menjalankan verify.
+- refuses to run while a delegated job is active;
+- regenerates the runner scripts and repoints the tool paths;
+- migrates the v3.4.2 keys (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) once, moving their values;
+- **layout migration** (once): the internal contents of `.workflow/` are moved to `.workflow/data/` after a backup to `data/backups/<stamp>/` (the last 3 are kept), archived evidence paths are rewritten, old leftovers (`state.json`, `runtime/`, `logs/`, locks) are deleted, an object-format `secrets.json` is converted to a list. Contents are first moved to the staging `.workflow/data.migrating/` and then renamed to `data/` in a single step. Staging left over from an interrupted attempt is restored first; if it contains a name that also exists in the `.workflow` root, the upgrade stops with `MigrationConflict` and **moves nothing** — keep one copy of each entry (compare them first), delete the other, then rerun `upgrade`. After that check, a failure has three distinct outcomes:
+  - **failure before the rename, clean rollback** → everything is returned to `.workflow/`, the backup is kept as `.workflow/migration-backup-*`, message `workspace migration failed and was rolled back`;
+  - **failure before the rename, INCOMPLETE rollback** (`MigrationRollbackIncomplete`) → every reverse step is still attempted and every failure is recorded; entries that cannot be returned stay in `.workflow/data.migrating/` (staging is kept, not deleted), message `workspace migration failed and the rollback is INCOMPLETE: ...`. Move those entries to `.workflow/` manually, or rerun `upgrade` — it restores leftover staging first. A pre-migration copy may exist in `.workflow/migration-backup-*`;
+  - **failure after the rename** (`MigrationIncomplete`) → nothing is returned; the workspace is already in `data/` and works. The message `workspace migration incomplete: ...` names the unfinished step — fix the cause (usually a file held by an editor/antivirus) and rerun `upgrade`; it resumes from that step;
+- `config.json` is trimmed to **overrides only**: values equal to the default and retired/unknown keys are dropped and reported; `second_agent.json` is still backfilled additively;
+- preserves user values and all of `sessions/`;
+- sends no prompt, does not call second_agent, and does not run verify.
 
-Command biasa tidak menjalankan **full workspace upgrade**. Delegated call dapat mem-backfill `.workflow/config.json` saat memuat state, tetapi tidak meregenerasi scripts atau mem-backfill `.workflow/second_agent.json`. Karena backfill itu juga memperbarui marker versi, warning runner dan status `doctor: NEEDS_UPGRADE` dapat hilang sesudah delegated call pertama walaupun dua bagian tadi masih stale. Karena itu jalankan `upgrade` secara eksplisit sebelum memakai workspace versi lama.
+Ordinary commands do not run a **full workspace upgrade**. A delegated call can backfill `.workflow/config.json` when loading state, but it does not regenerate scripts or backfill `.workflow/second_agent.json`. Because that backfill also updates the version marker, the runner warning and the `doctor: NEEDS_UPGRADE` status can disappear after the first delegated call even though those two parts are still stale. So run `upgrade` explicitly before using a workspace from an old version.
 
 ---
 
-## Pemakaian harian
+## Daily usage
 
-main_agent memanggil **satu** skrip runner — tidak merakit command Python sendiri — lewat tool
-Bash, di semua OS:
+main_agent calls **one** runner script — it does not assemble a Python command itself — via the
+Bash tool, on all OSes:
 
 ```bash
-bash '/path/to/target-app/.workflow/run.sh' explore 'cari entry point auth' '<MAIN_SESSION_ID>'
+bash '/path/to/target-app/.workflow/run.sh' explore 'find the auth entry point' '<MAIN_SESSION_ID>'
 ```
 
-Tiap argumen dibungkus petik tunggal: itu bentuk yang diloloskan pre-flight gate, dan isinya literal
-(`$`, `;`, `|`, kurung boleh; apostrof tidak). Di Windows path-nya `C:/...`.
+Each argument is wrapped in single quotes: that is the form the pre-flight gate lets through, and its content is literal
+(`$`, `;`, `|`, parentheses are allowed; apostrophes are not). On Windows the path is `C:/...`.
 
-Argumen ketiga adalah session id. **Wajib** diteruskan: tanpa itu runner memakai fallback `"default"` yang di-resolve melalui cache global tool, sehingga beberapa main_agent dapat berbagi ID efektif, saling menimpa state, dan saling memblokir job. Skrip mencetak peringatan ke stderr bila ini terjadi.
+The third argument is the session id. It **must** be passed: without it the runner uses the `"default"` fallback, which is resolved through the tool's global cache, so several main_agents can share an effective ID, overwrite each other's state, and block each other's jobs. The script prints a warning to stderr when this happens.
 
-Skrip bersifat blocking dan mengembalikan JSON yang sama seperti CLI.
+The script is blocking and returns the same JSON as the CLI.
 
 ### Auto-intent
 
-Prefix `/.` tetap didukung, tetapi tidak wajib. Main_agent memetakan bahasa natural ke command dan menampilkan satu baris transparansi sebelum menjalankannya:
+The `/.` prefix is still supported, but not required. Main_agent maps natural language to a command and shows one transparency line before running it:
 
 ```text
-[INTENT] analyze — user meminta audit logic
+[INTENT] analyze — user asks for a logic audit
 ```
 
-Contoh mapping: pertanyaan lokasi/alur → `explore`, sebab/penilaian → `analyze`, fitur baru → `plan`, implementasi → `execute -y`, hasil yang sudah dibuat → `verify`, uji alur di browser → `verify-browser`, dan blast radius diff → `sweep`.
+Mapping examples: location/flow questions → `explore`, cause/assessment → `analyze`, new feature → `plan`, implementation → `execute -y`, results already produced → `verify`, testing a flow in the browser → `verify-browser`, and diff blast radius → `sweep`.
 
-Batasnya:
+Its limits:
 
-- command eksplisit seperti `/.plan` selalu menang atas tebakan;
-- percakapan biasa tidak dipaksa menjadi command;
-- delegated intent yang ambigu dapat memicu satu pertanyaan klarifikasi;
-- aksi destruktif atau irreversible tidak boleh auto-fire tanpa konfirmasi.
+- an explicit command such as `/.plan` always wins over a guess;
+- ordinary conversation is not forced into a command;
+- an ambiguous delegated intent may trigger one clarifying question;
+- destructive or irreversible actions must not auto-fire without confirmation.
 
-Auto-intent adalah kontrak prompt main_agent, bukan fitur parser Python dan tidak memiliki key `auto_intent`.
+Auto-intent is a main_agent prompt contract, not a Python parser feature, and has no `auto_intent` key.
 
-### Opsi implementasi pada `/.plan`
+### Implementation options in `/.plan`
 
-Setelah `[PLAN]`, main_agent menambahkan `[OPTIONS]` berisi maksimal tiga pendekatan yang tetap berada dalam scope. Setiap opsi memuat kelebihan, kekurangan, effort, risiko, dan atribusi evidence; tepat satu opsi direkomendasikan. Bila hanya satu pendekatan yang feasible, alternatif tidak boleh dikarang.
+After `[PLAN]`, main_agent appends `[OPTIONS]` containing at most three approaches that stay within scope. Each option includes pros, cons, effort, risk, and evidence attribution; exactly one option is recommended. When only one approach is feasible, alternatives must not be invented.
 
-Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau memvalidasi blok `[OPTIONS]`.
+Second_agent only supplies evidence and reasoning. The runtime does not create or validate the `[OPTIONS]` block.
 
-### Kontrak lapisan prompt
+<a id="kontrak-lapisan-prompt"></a>
+### Prompt-layer contracts
 
-Kontrak di bawah hidup di `dist/config/claude/CLAUDE.md` dan skill-nya
-(`dist/config/claude/skills/*.md`), bukan di Python. Runtime tak pernah melihat pesan user
-mentah maupun jawaban akhir main_agent, jadi yang menegakkan kontrak ini adalah main_agent
-sendiri. Satu-satunya pengecualian sebagian adalah pre-flight gate, yang juga ditegakkan hook
-agent host. Alasan per kontrak kenapa Python tak bisa menegakkannya: `docs/runtime-contracts.md`,
-bagian "Contracts the runtime cannot enforce".
+The contracts below live in `dist/config/claude/CLAUDE.md` and its skills
+(`dist/config/claude/skills/*.md`), not in Python. The runtime never sees the raw user message
+or main_agent's final answer, so the one enforcing these contracts is main_agent
+itself. The only partial exception is the pre-flight gate, which is also enforced by the host
+agent's hooks. The per-contract reason why Python cannot enforce them: `docs/runtime-contracts.md`,
+section "Contracts the runtime cannot enforce".
 
-| Kontrak | Isi | Penegak | Sumber |
+| Contract | Content | Enforcer | Source |
 |---|---|---|---|
-| Mode intent | Satu dari dua, dipilih installer. `AUTO-INTENT`: bahasa natural dipetakan ke command dan diumumkan dengan satu baris `[INTENT]` tanpa menunggu jawaban. `COMMAND-ONLY`: command hanya jalan lewat prefix `/.`; tanpa prefix = percakapan biasa, boleh menyarankan satu baris lalu berhenti | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; lihat [Mode intent](#mode-intent) |
-| Pre-flight gate | Begitu intent resolve ke command terdelegasi (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), langkah berikutnya wajib `.workflow/run`. Tool gather (Read/Grep/Glob/Bash/MCP) dilarang sebelum itu, kecuali `[LOCAL_MODE]`, proxy gagal, atau slice presisi kecil | main_agent + hook `intent-gate-set` / `intent-gate-check` (hanya mode auto-intent; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `dist/config/claude/hooks/intent-map.json` |
-| Output contract | Explore dan `sweep`/`doctor` = RELAY hasil runtime apa adanya. Plan/analyze = SYNTHESIS oleh main_agent: confidence tiga bagian (`problem_understanding`, `root_cause`, `solution_path`), atribusi per klaim, `open_questions` dipisah dari `uncertainty`. Field wajib tetap tampil walau kosong, dengan alasannya | main_agent | `CLAUDE.md`, "Output Contract" dan "Plan/analysis output" |
-| `[OPTIONS]` | Lihat [Opsi implementasi pada `/.plan`](#opsi-implementasi-pada-plan) | main_agent | `skills/plan.md` |
-| Fitur baru lewat plan | Perintah yang menjelaskan perilaku baru ("buat agar …", "tambahkan …", daftar perbaikan) tanpa plan aktif dipetakan ke `plan`, bukan `execute`. Execute tanpa plan aktif berhenti dan menyarankan `/.plan`. Permintaan spec/penjelasan dijawab langsung, tanpa `/.verify` yang tak diminta (auto-verify sesudah `/.execute` bila `auto_verify_after_execute=true` dan sesudah `/.refactor` tetap berlaku) | main_agent | `CLAUDE.md`, NL map dan tie-break; `skills/execute.md` (DEC-046) |
-| `/.execute -y` | Tanpa `-y` hanya menampilkan `[EXECUTION SCOPE]` lalu berhenti. Dengan `-y` mengedit hanya file dalam scope; kebutuhan di luar scope = berhenti dan minta instruksi. Persetujuan hanya `/.execute -y` dari user setelah plan `proceed`; kalimat execute tanpa `-y` menampilkan scope dan meminta `-y`; jawaban AskUserQuestion atas `open_questions` bukan persetujuan | main_agent | `skills/execute.md`, `skills/plan.md` STEP 3 |
-| Verifikasi setelah execute | `commands.auto_verify_after_execute` dibaca ulang tiap `/.execute`. `false` (default): status `implemented`, `verification: not_run`, kata "done" dan sejenisnya dilarang. `true`: `/.verify` bagian dari `/.execute` | main_agent | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
-| Proxy failure | `ok:false`, `error_type` evidence tidak valid, atau content bukan evidence → berhenti, cetak `[PROXY GAGAL] …`, tanya lanjut ke `/.local` (yes/no), lalu tunggu. Fallback lokal otomatis dilarang | main_agent | `CLAUDE.md`, "Proxy failure" |
-| Aksi destruktif | Commit, hapus, atau tulis di luar project tidak boleh jalan dari intent tebakan; wajib konfirmasi. Menulis ke project lain (Edit/Write atau Bash/skrip) butuh persetujuan eksplisit untuk path itu; hook tidak menahannya (lihat [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" dan "Global Forbidden" |
+| Intent mode | One of two, chosen by the installer. `AUTO-INTENT`: natural language is mapped to a command and announced with one `[INTENT]` line without waiting for an answer. `COMMAND-ONLY`: commands run only via the `/.` prefix; no prefix = ordinary conversation, may suggest one line and then stop | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; see [Intent mode](#intent-mode) |
+| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `dist/config/claude/hooks/intent-map.json` |
+| Output contract | Explore and `sweep`/`doctor` = RELAY the runtime result as is. Plan/analyze = SYNTHESIS by main_agent: three-part confidence (`problem_understanding`, `root_cause`, `solution_path`), per-claim attribution, `open_questions` kept separate from `uncertainty`. Required fields are still shown even when empty, with the reason | main_agent | `CLAUDE.md`, "Output Contract" and "Plan/analysis output" |
+| `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
+| New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` and after `/.refactor` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` (DEC-046) |
+| `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent | `skills/execute.md`, `skills/plan.md` STEP 3 |
+| Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
+| Proxy failure | `ok:false`, an invalid-evidence `error_type`, or content that is not evidence → stop, print `[PROXY GAGAL] …`, ask whether to continue with `/.local` (yes/no), then wait. Automatic local fallback is forbidden | main_agent | `CLAUDE.md`, "Proxy failure" |
+| Destructive actions | Commit, delete, or writing outside the project must not run from a guessed intent; confirmation is required. Writing to another project (Edit/Write or Bash/script) needs explicit approval for that path; the hook does not stop it (see [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" and "Global Forbidden" |
 
-Isi persisnya tetap di file sumber; tabel ini peta, bukan salinan. Saat file sumber dan tabel
-ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
+The exact content stays in the source files; this table is a map, not a copy. When a source file and this
+table differ, fix one of them in the same change.
 
 ---
 
 ## Command
 
-| Command | Jenis | Butuh prompt | Keterangan |
+| Command | Kind | Needs prompt | Notes |
 |---|---|---|---|
-| `init` | lokal | — | scaffold `.workflow/`; regenerate runner script |
-| `upgrade` | lokal | — | migrasi layout `.workflow/data/`, refresh workspace, config override-only, preserve sessions |
-| `doctor` | lokal | — | cek kesiapan, tulis `reports/doctor.json` |
-| `clean` | lokal | — | prune job, fakta usang/duplikat, guard runtime-lock milik sesi tanpa lock hidup (`sessions/<id>/runtime/lock.guard`; guard yang sedang dipegang proses lain tetap), sesi lama |
-| `inspect` | lokal | — | daftar job untuk sesi berjalan |
-| `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort; picker tanpa argumen, langsung dengan `<provider> <model> [effort] [routes]` |
-| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run), `e2e.drafts` (draft), dan `graph_refresh` (biaya Stop hook graph per outcome), serta dari `usage.jsonl`: `evidence_reuse` (command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse, continuation dihitung sekali; `by_outcome` memecah per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, dan `unrecorded` untuk baris sebelum contract v3), `provider_cache` (share cached input dari input terukur provider: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; baris yang adapternya tidak melaporkan `resumed` tidak masuk dua bucket thread), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, dan `thread_changed` = call resume yang dijawab di thread lain, tanda sesi kehilangan state; baris sebelum contract v3 tidak dihitung), `by_effort` (per `<command>/<effort>`: jumlah command, median durasi, median input/output token — tiap median hanya dari command yang nilainya terukur, output tak terukur tidak dihitung nol; `default` = tanpa flag effort; baris sebelum contract v3 tidak dihitung), dan `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); serta dari `tasks.jsonl`: `tasks` (lihat [Task telemetry](#task-telemetry)); dan `provenance` (versi registry metrik, versi tiap metrik `runtime.*`, commit tool, hash isi stream — definisi di [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
-| `audit` | lokal | — | baca `audit.jsonl` sesi |
-| `graph-meta` | lokal | — | status snapshot graphify: segar, usang, atau tak ada |
-| `explore` | terdelegasi | ya | peta codebase, entry point, pemilik |
-| `plan` | terdelegasi | ya | evidence + jejak dependency terbalik |
-| `analyze` | terdelegasi | ya | analisis mendalam, nol perubahan kode |
-| `verify` | terdelegasi¹ | ya | verifikasi; kedalaman diatur `verify_mode` |
-| `verify-browser` | terdelegasi³ | ya | verifikasi lewat browser Playwright dari request per sesi; tahap `draft` lalu `run` |
-| `sweep` | lokal | — | pindai staged, unstaged, dan untracked diff tanpa OpenCode |
-| `promote-validate` | lokal | ya² | validasi dokumen knowledge; nol tulisan |
-| `promote-verify` | lokal | ya² | freshness tiap klaim + rekonsiliasi lawan dokumen existing |
-| `promote-write` | lokal | ya² | satu-satunya jalur tulis ke direktori knowledge |
-| `submit` | job | ya | jalankan asinkron, kembalikan `job_id` |
-| `await` | job | ya | submit lalu tunggu selesai |
-| `status` | job | — | butuh `--job-id` |
-| `result` | job | — | butuh `--job-id` |
-| `worker` | internal | — | dipakai proses worker, jangan dipanggil manual |
+| `init` | local | — | scaffold `.workflow/`; regenerate runner scripts |
+| `upgrade` | local | — | migrate the `.workflow/data/` layout, refresh the workspace, override-only config, preserve sessions |
+| `doctor` | local | — | readiness check, writes `reports/doctor.json` |
+| `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays), old sessions |
+| `inspect` | local | — | list jobs for the current session |
+| `provider` | local | — | read/change the second_agent provider and reasoning effort; picker with no arguments, direct with `<provider> <model> [effort] [routes]` |
+| `report` | local | — | summary of the workspace quality stream (`quality.jsonl`), including `e2e` (runs), `e2e.drafts` (drafts), and `graph_refresh` (Stop hook graph cost per outcome), and from `usage.jsonl`: `evidence_reuse` (explore/analyze/plan commands served by a stored artifact divided by commands eligible for reuse, continuations counted once; `by_outcome` breaks it down per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, and `unrecorded` for rows before contract v3), `provider_cache` (cached-input share of the provider's measured input: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; rows whose adapter does not report `resumed` are not included in the two thread buckets), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, and `thread_changed` = a resume call answered in a different thread, a sign the session lost state; rows before contract v3 are not counted), `by_effort` (per `<command>/<effort>`: command count, median duration, median input/output tokens — each median only from commands whose value was measured, unmeasured output is not counted as zero; `default` = no effort flag; rows before contract v3 are not counted), and `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); and from `tasks.jsonl`: `tasks` (see [Task telemetry](#task-telemetry)); and `provenance` (metric registry version, version of each `runtime.*` metric, tool commit, stream content hash — definitions in [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
+| `audit` | local | — | read the session's `audit.jsonl` |
+| `graph-meta` | local | — | graphify snapshot status: fresh, stale, or absent |
+| `explore` | delegated | yes | codebase map, entry points, owners |
+| `plan` | delegated | yes | evidence + reverse dependency trace |
+| `analyze` | delegated | yes | in-depth analysis, zero code changes |
+| `verify` | delegated¹ | yes | verification; depth set by `verify_mode` |
+| `verify-browser` | delegated³ | yes | verification through a Playwright browser from a per-session request; `draft` stage then `run` |
+| `sweep` | local | — | scan staged, unstaged, and untracked diff without OpenCode |
+| `promote-validate` | local | yes² | validate a knowledge document; zero writes |
+| `promote-verify` | local | yes² | freshness of each claim + reconciliation against existing documents |
+| `promote-write` | local | yes² | the only write path into the knowledge directory |
+| `submit` | job | yes | run asynchronously, return `job_id` |
+| `await` | job | yes | submit and then wait for completion |
+| `status` | job | — | requires `--job-id` |
+| `result` | job | — | requires `--job-id` |
+| `worker` | internal | — | used by the worker process, do not call manually |
 
-¹ `verify` melewati OpenCode sepenuhnya ketika `verify_mode` bernilai `syntax`.
+¹ `verify` bypasses OpenCode entirely when `verify_mode` is `syntax`.
 
-² Ketiga tahap `promote-*` menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah. Tahapnya dipisah karena persetujuan user terjadi di antaranya — CLI tak bisa bertanya apa pun, jadi verifikasi berhenti pada vonis, main_agent yang menjalankan review, dan penulisan adalah panggilan terpisah yang hanya bisa terjadi sesudahnya. `promote-write` menolak di luar `policies.production_branch`.
+² All three `promote-*` stages take a **path to a JSON file** via `--prompt`, not the document itself: a single knowledge document easily exceeds Windows' 8191-character argv limit. The stages are split because user approval happens between them — the CLI cannot ask anything, so verification stops at a verdict, main_agent runs the review, and writing is a separate call that can only happen afterwards. `promote-write` refuses outside `policies.production_branch`.
 
-³ `verify-browser` adalah command **terdelegasi**: ia terdaftar di registry DELEGATED dan ikut pre-flight gate seperti `explore`/`plan`/`analyze`/`verify`. Ia membaca **request per sesi** (`.workflow/data/sessions/<session>/e2e/request.json`) di atas default project dari section `e2e` di `config.json`. Pembagian kerjanya tiga tahap: second_agent menyusun draft spec (tahap 1) dan me-review bukti browser (tahap 3); di antaranya, **player runtime** — proses anak yang dijalankan runtime (`python -m core.evidence.e2e.player`) — menggerakkan Playwright (tahap 2). main_agent tidak menjalankan browser dan second_agent juga tidak (sandbox read-only). Wawancara terjadi di main_agent hanya sesudah draft melaporkan target belum dikonfigurasi. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Section `[E2E SPEC]` yang gagal validasi mendapat satu perbaikan di thread provider yang sama (`meta.e2e.repair`); satu-satunya atribut test adalah `data-e2e` lewat key selector `e2e` — `testid` ditolak (**breaking**); rem `repeat_failure` lepas sendiri bila project (di luar `.workflow/`, via Git) atau runtime (`TOOL_VERSION` + digest kode `core/evidence/e2e/`) berubah sejak kegagalan terakhir, streak bucket `app` hanya bertambah untuk kegagalan dengan signature sama (halaman, field, kondisi), dan tercatat sebagai knowledge `repeat_failure` untuk draft berikutnya. Nilai credential yang terketik literal di task, draft, atau `request.json` dicari lewat lookup `secrets.json` dan dikembalikan ke `${NAME}` (`request.json` ditulis ulang; nama key dilaporkan di `meta.e2e.secret_literals`, nilainya tidak pernah), dan `fill` ke field password tanpa placeholder → `spec_invalid`; kegagalan yang disebabkan scenario sendiri — selector tebakan yang meleset, selector apa pun yang cocok >1 elemen, write/navigasi yang ditolak policy run — ber-origin `scenario` dan berakhir `incomplete: scenario_error`, tidak di-retry dan tidak dihitung rem; tiap run non-pass dan tiap penolakan rem membawa `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), penyebab reusable disimpan sebagai knowledge `failure_hint`; tiap draft menulis baris `kind: e2e_draft` (kategori error validator, hasil repair) yang dirangkum `--command report` di `e2e.drafts`. Network: setiap run selalu mencatat metadata semua request halaman (urutan, URL tanpa query, tipe, status, timing, ukuran; tanpa body/header/cookie), 500 baris terbaru plus ringkasan atas semua request, di `report.json` → `network` dan `meta.e2e.page_requests`, termasuk `since_last_run` (perubahan dibanding run sebelumnya pada origin yang sama). Urutan selector: kandidat mengikuti role+name > label > e2e > text > css, kecuali dua jenis yang boleh memimpin — `e2e` ber-provenance `source` dengan ref `path:line`, dan selector `proven` yang tercatat di browser knowledge untuk origin, route (path `goto` terakhir, segmen identifier jadi `:id`: `/users/123` dan `/users/456` satu route), dan `within` step itu (dicek ke store; klaim `proven` tanpa dasar atau di route/scope lain → `spec_invalid`); selector `proven` yang meleset turun ke urutan biasa, dua run berturut yang meleset memensiunkannya (satu run melemahkan entry paling banyak sekali); step yang gagal sesudah selector-nya cocok bukan miss; pass hanya dicatat dari run yang lulus di percobaan pertama. URL network dibersihkan dari parameter path `;…` dan segmen berbentuk token (16+ huruf-angka tanpa pemisah, 16+ campuran huruf besar-kecil, 24+ dengan angka) jadi `:id`. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
+³ `verify-browser` is a **delegated** command: it is registered in the DELEGATED registry and goes through the pre-flight gate like `explore`/`plan`/`analyze`/`verify`. It reads the **per-session request** (`.workflow/data/sessions/<session>/e2e/request.json`) on top of the project defaults from the `e2e` section in `config.json`. The work is split into three stages: second_agent drafts the spec (stage 1) and reviews the browser evidence (stage 3); in between, the **runtime player** — a child process run by the runtime (`python -m core.evidence.e2e.player`) — drives Playwright (stage 2). Neither main_agent nor second_agent runs the browser (read-only sandbox). The interview happens in main_agent only after the draft reports that the target is not configured yet. The `draft` stage carries no verdict; the `run` stage is finalized as `verify`, so its verdict and exit code match other verifications. An `[E2E SPEC]` section that fails validation gets one repair in the same provider thread (`meta.e2e.repair`); the only test attribute is `data-e2e`, via the `e2e` selector key — `testid` is rejected (**breaking**); the `repeat_failure` brake releases by itself when the project (outside `.workflow/`, via Git) or the runtime (`TOOL_VERSION` + the code digest of `core/evidence/e2e/`) has changed since the last failure, the `app` bucket streak only grows for failures with the same signature (page, field, condition), and it is recorded as `repeat_failure` knowledge for the next draft. Credential values typed literally in the task, draft, or `request.json` are found via a `secrets.json` lookup and turned back into `${NAME}` (`request.json` is rewritten; key names are reported in `meta.e2e.secret_literals`, values never are), and a `fill` into a password field without a placeholder → `spec_invalid`; failures caused by the scenario itself — a guessed selector that misses, any selector that matches >1 element, a write/navigation rejected by the run policy — have origin `scenario` and end as `incomplete: scenario_error`, are not retried, and do not count toward the brake; every non-pass run and every brake refusal carries `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), and reusable causes are stored as `failure_hint` knowledge; every draft writes a `kind: e2e_draft` row (validator error category, repair result) that `--command report` summarizes in `e2e.drafts`. Network: every run always records metadata of all page requests (order, URL without query, type, status, timing, size; no body/headers/cookies), the latest 500 rows plus a summary over all requests, in `report.json` → `network` and `meta.e2e.page_requests`, including `since_last_run` (changes compared with the previous run on the same origin). Selector order: candidates follow role+name > label > e2e > text > css, except two kinds that may lead — an `e2e` with `source` provenance and a `path:line` ref, and a `proven` selector recorded in browser knowledge for the origin, the route (the last `goto` path, identifier segments become `:id`: `/users/123` and `/users/456` are one route), and that step's `within` (checked against the store; a `proven` claim without basis or on another route/scope → `spec_invalid`); a `proven` selector that misses drops to the normal order, two consecutive runs that miss retire it (one run weakens an entry at most once); a step that fails after its selector matched is not a miss; a pass is recorded only from a run that passed on the first attempt. Network URLs are cleaned of `;…` path parameters and token-shaped segments (16+ alphanumerics without separators, 16+ mixed upper/lower case, 24+ with digits) to `:id`. Full contract: `docs/runtime-contracts.md`, section `/.verify-browser`.
 
-Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
+There is no Python `execute` command. `/.execute -y` remains available as a user-facing command in main_agent; writing code is deliberately not delegated to the runtime or second_agent.
 
 ---
 
-## CLI langsung
+<a id="cli-langsung"></a>
+## Direct CLI
 
-Berguna untuk debugging; alur normal cukup lewat skrip runner. Untuk perilaku blocking yang sama dengan runner, gunakan `await`:
+Useful for debugging; the normal flow only needs the runner script. For the same blocking behavior as the runner, use `await`:
 
 ```bash
-python3 main.py -c await --job-command explore -p "cari entry point auth" -s "main_app_20260723_090000" -w /path/to/target-app --pretty
+python3 main.py -c await --job-command explore -p "find the auth entry point" -s "main_app_20260723_090000" -w /path/to/target-app --pretty
 ```
 
 ```powershell
-python main.py -c await --job-command explore -p "cari entry point auth" -s "main_app_20260723_090000" -w "C:/path/to/target-app" --pretty
+python main.py -c await --job-command explore -p "find the auth entry point" -s "main_app_20260723_090000" -w "C:/path/to/target-app" --pretty
 ```
 
-Memanggil `-c explore`, `plan`, `analyze`, `verify`, atau `verify-browser` secara langsung hanya melakukan
-`submit` dan segera mengembalikan payload job. Ambil hasilnya lewat `result`/`check`, atau
-gunakan `await` seperti contoh di atas. `sweep` dan command lokal lain selesai langsung.
+Calling `-c explore`, `plan`, `analyze`, `verify`, or `verify-browser` directly only performs
+`submit` and immediately returns the job payload. Fetch the result via `result`/`check`, or
+use `await` as in the example above. `sweep` and other local commands finish directly.
 
-| Argumen | Alias | Arti |
+| Argument | Alias | Meaning |
 |---|---|---|
-| `--command` | `-c` | lihat tabel command |
+| `--command` | `-c` | see the command table |
 | `--prompt` | `-p` | task |
-| `--prompt-file` | | baca task dari file (alternatif `--prompt`) |
-| `--session` | `-s` | id sesi main_agent |
-| `--fresh-session` | | paksa sesi baru, abaikan cache ID sesi dan evidence reuse |
-| `--work-dir` | `-w` | root project target (default: cwd) |
-| `--model` | `-m` | override model, format `provider/model_key` |
-| `--job-id` | | untuk `status`/`result`/`worker` |
-| `--job-command` | | command yang dijalankan `submit`/`await` |
-| `--poll-interval` | | detik antar polling saat `await` |
-| `--poll-timeout` | | batas tunggu `await`; `0` = tanpa batas |
-| `--pretty` | | JSON ber-indent |
+| `--prompt-file` | | read the task from a file (alternative to `--prompt`) |
+| `--session` | `-s` | main_agent session id |
+| `--fresh-session` | | force a new session, ignore the session ID cache and evidence reuse |
+| `--work-dir` | `-w` | target project root (default: cwd) |
+| `--model` | `-m` | model override, format `provider/model_key` |
+| `--job-id` | | for `status`/`result`/`worker` |
+| `--job-command` | | the command run by `submit`/`await` |
+| `--poll-interval` | | seconds between polls during `await` |
+| `--poll-timeout` | | `await` wait limit; `0` = unlimited |
+| `--pretty` | | indented JSON |
 
-`--prompt-file` menghindari masalah escaping shell pada task panjang atau multi-baris — persoalan yang bentuknya berbeda di PowerShell dan di POSIX shell.
+`--prompt-file` avoids shell escaping problems with long or multi-line tasks — a problem that takes a different shape in PowerShell and in POSIX shells.
 
 ---
 
-## Konfigurasi
+## Configuration
 
 ### `.workflow/config.json`
 
-Dibuat saat `init`, dan berisi **override saja**: section `commands`, `policies`, `e2e` kosong/tidak ada berarti semua key memakai default bawaan build yang sedang jalan. Tulis hanya key yang ingin kamu ubah; key yang tidak ada tidak pernah diisi otomatis, jadi default yang berubah di rilis berikutnya ikut sampai ke project ini.
+Created at `init`, and contains **overrides only**: an empty/absent `commands`, `policies`, `e2e` section means every key uses the default built into the running build. Write only the keys you want to change; absent keys are never filled in automatically, so defaults that change in a later release reach this project too.
 
-Sepuluh key berikut benar-benar mengubah perilaku runtime Python:
+The following ten keys actually change the Python runtime's behavior:
 
-| Key | Default | Arti |
+| Key | Default | Meaning |
 |---|---|---|
-| `commands.verify_mode` | `"delegated"` | `delegated` = verifikasi penuh second_agent. `syntax` = check parse lokal saja. Nilai tak dikenal jatuh ke `delegated` |
-| `commands.verify_test_commands` | `[]` | prefix command test yang boleh dijalankan runtime untuk `/.verify` (mis. `["python tests/run.py", "php artisan test"]`). Kosong = tak ada test yang jalan; test yang diminta dilaporkan tak dijalankan |
-| `commands.verify_test_timeout_seconds` | `900` | batas waktu per command test |
-| `policies.fact_relevant_limit` | `3` | maksimum fakta yang diinjeksi ke tiap prompt |
-| `policies.fact_recurrence_threshold` | `5` | jumlah sesi **lain** yang harus melaporkan klaim sebelum dipromosikan |
-| `policies.graph_leads_enabled` | `true` | injeksi shortlist dari `graphify-out/graph.json` |
-| `policies.subagent_fanout_enabled` | `true` | minta fan-out untuk role exploration/reasoning |
-| `policies.production_branch` | `"main"` | satu-satunya branch tempat `promote-write` mau menulis. Promoted knowledge menggambarkan yang hidup; hipotesis dari feature branch tak boleh masuk repo bersama membawa otoritas itu |
-| `policies.knowledge_dir` | `"docs/project-knowledge"` | lokasi dokumen knowledge, relatif project root. Satu-satunya artefak workflow yang **ter-Git** — seluruh nilainya ada pada bisa dibagi |
-| `policies.knowledge_relevant_limit` | `3` | maksimum dokumen knowledge yang ikut satu prompt terdelegasi. `0` mematikan sidecar knowledge |
+| `commands.verify_mode` | `"delegated"` | `delegated` = full second_agent verification. `syntax` = local parse check only. Unknown values fall back to `delegated` |
+| `commands.verify_test_commands` | `[]` | test command prefixes the runtime may run for `/.verify` (e.g. `["python tests/run.py", "php artisan test"]`). Empty = no tests run; requested tests are reported as not run |
+| `commands.verify_test_timeout_seconds` | `900` | time limit per test command |
+| `policies.fact_relevant_limit` | `3` | maximum facts injected into each prompt |
+| `policies.fact_recurrence_threshold` | `5` | number of **other** sessions that must report a claim before it is promoted |
+| `policies.graph_leads_enabled` | `true` | inject a shortlist from `graphify-out/graph.json` |
+| `policies.subagent_fanout_enabled` | `true` | request fan-out for the exploration/reasoning roles |
+| `policies.production_branch` | `"main"` | the only branch where `promote-write` will write. Promoted knowledge describes what is live; a hypothesis from a feature branch must not enter the shared repo carrying that authority |
+| `policies.knowledge_dir` | `"docs/project-knowledge"` | location of knowledge documents, relative to the project root. The only workflow artifact that is **tracked in Git** — its whole value lies in being shareable |
+| `policies.knowledge_relevant_limit` | `3` | maximum knowledge documents included in one delegated prompt. `0` turns off the knowledge sidecar |
 
-`commands.auto_verify_after_execute` dibaca dan dikembalikan di `meta.policy`, tetapi hanya main_agent yang bisa menjalankannya karena Python tidak memiliki jalur `execute`.
+`commands.auto_verify_after_execute` is read and returned in `meta.policy`, but only main_agent can act on it because Python has no `execute` path.
 
-Key instruksi main_agent lainnya: `commands.allow_analyze_to_plan`, `commands.allow_explore_to_plan`, `commands.auto_sweep_after_execute`, `policies.workflow_prefix`, `policies.chat_mode_for_plain_text`, `policies.fallback_requires_confirmation`, dan `policies.max_active_job_per_session`.
+Other main_agent instruction keys: `commands.allow_analyze_to_plan`, `commands.allow_explore_to_plan`, `commands.auto_sweep_after_execute`, `policies.workflow_prefix`, `policies.chat_mode_for_plain_text`, `policies.fallback_requires_confirmation`, and `policies.max_active_job_per_session`.
 
-Tidak ada key `auto_verify_method`. Dua key yang valid dan ortogonal adalah:
+There is no `auto_verify_method` key. The two valid and orthogonal keys are:
 
-- `commands.auto_verify_after_execute` — **kapan** verify dipanggil; default `false`. Saat false, `/.execute` harus melaporkan `verification: not_run`, berstatus `implemented`, lalu menawarkan `/.verify`.
-- `commands.verify_mode` — **seberapa dalam** verify berjalan ketika dipanggil.
+- `commands.auto_verify_after_execute` — **when** verify is called; default `false`. When false, `/.execute` must report `verification: not_run`, with status `implemented`, and then offer `/.verify`.
+- `commands.verify_mode` — **how deep** verify goes when called.
 
-Key pensiun `commands.autoverify` dimigrasikan saat upgrade. Salah ketik key lain tidak menimbulkan error dan akan jatuh ke default.
+The retired key `commands.autoverify` is migrated on upgrade. A typo in any other key causes no error and falls back to the default.
 
 ### `.workflow/second_agent.json`
 
-File adapter project-local ini boleh diubah per project. Namanya mengikuti PERAN, bukan vendor — sejak v3.4.3 provider second_agent dipilih lewat config, jadi file ini tidak lagi mengasumsikan OpenCode. Workspace v3.4.2 yang masih memakai `.workflow/opencode.json` dimigrasi sekali saat `upgrade` (nilainya dipindah, kunci lama dihapus). Jangan dikelirukan dengan `<project_root>/opencode.json` dan `~/.config/opencode/opencode.json`, yang memang milik OpenCode sendiri dan tetap bernama begitu.
+This project-local adapter file may be changed per project. Its name follows the ROLE, not the vendor — since v3.4.3 the second_agent provider is chosen through config, so this file no longer assumes OpenCode. A v3.4.2 workspace that still uses `.workflow/opencode.json` is migrated once on `upgrade` (values moved, old keys deleted). Do not confuse it with `<project_root>/opencode.json` and `~/.config/opencode/opencode.json`, which genuinely belong to OpenCode itself and keep those names.
 
-Saat `init`, source-nya adalah `config/second_agent.seed.json` bila ada, atau `config/second_agent.example.json` pada clone bersih. File ini WAJIB ada per project: tanpanya (atau bila tak ter-parse) command delegated ditolak, tanpa fallback ke config level mesin. Loader melengkapi key yang belum tersimpan dengan default source secara in-memory; `upgrade` menuliskannya ke file secara additive. Bentuk efektifnya:
+At `init`, its source is `config/second_agent.seed.json` if present, or `config/second_agent.example.json` on a clean clone. This file MUST exist per project: without it (or if it does not parse) delegated commands are rejected, with no fallback to machine-level config. The loader fills in keys not yet stored with the source defaults in memory; `upgrade` writes them to the file additively. Its effective shape:
 
 ```json
 {
@@ -798,336 +801,340 @@ Saat `init`, source-nya adalah `config/second_agent.seed.json` bila ada, atau `c
 }
 ```
 
-`model: null` berarti pakai model default OpenCode.
+`model: null` means use OpenCode's default model.
 
-#### Memilih provider — dan konsekuensi keamanannya
+<a id="memilih-provider--dan-konsekuensi-keamanannya"></a>
+#### Choosing a provider — and its security consequences
 
-`provider` menerima `opencode`, `codex`, atau `agy`. Ketiganya bukan pilihan setara:
+`provider` accepts `opencode`, `codex`, or `agy`. The three are not equivalent choices:
 
 | | `opencode` | `codex` | `agy` |
 | --- | --- | --- | --- |
-| Boundary baca file rahasia | **ditegakkan** lewat `<project_root>/opencode.json` | **tidak ada** | **tidak ada** |
-| Sandbox tulis | ya | ya (`--sandbox read-only` + `approval_policy="never"`) | **tidak** — tulis di working tree hanya *dideteksi* (`core/policy/agy_guard.py`), tidak dicegah |
-| Config boundary project-root | file, di-refresh tiap `init`/`upgrade` | tak ada layer-nya | tak ada layer-nya |
+| Secret-file read boundary | **enforced** via `<project_root>/opencode.json` | **none** | **none** |
+| Write sandbox | yes | yes (`--sandbox read-only` + `approval_policy="never"`) | **no** — writes in the working tree are only *detected* (`core/policy/agy_guard.py`), not prevented |
+| Project-root boundary config | file, refreshed on every `init`/`upgrade` | no such layer | no such layer |
 | `boundary` (`config/providers.py`) | `reads: secrets_denied`, `writes: denied` | `reads: unbounded`, `writes: sandboxed` | `reads: unbounded`, `writes: unbounded` |
 
-`codex` dan `agy` sama-sama dilaporkan `doctor` sebagai `not_enforceable` dengan `trusted: true`: keduanya bisa membaca tiap file project dan menerima environment proses penuh — boundary-nya kewajiban agent, bukan penegakan runtime. Memilih `agy` juga butuh acknowledgement eksplisit (`requires_opt_in`); `/.provider` menolak menulisnya tanpa itu.
+`codex` and `agy` are both reported by `doctor` as `not_enforceable` with `trusted: true`: both can read every project file and receive the full process environment — their boundary is the agent's obligation, not runtime enforcement. Choosing `agy` also requires explicit acknowledgement (`requires_opt_in`); `/.provider` refuses to write it without that.
 
-Sisi tulis dilaporkan terpisah. `doctor` menulis `checks.second_agent_write_boundary` (`{provider, writes}`) dan, hanya untuk `writes: unbounded` (`agy`), satu `WARNING: second_agent provider '<p>' can WRITE ...` tambahan di `recommended_fixes` — tetap bukan issue. Setiap hasil delegated yang sampai ke tahap provider (sukses atau gagal) membawa `meta.provider_boundary` (`{reads, writes}`), dan untuk `agy` juga `meta.provider_write_warning`.
+The write side is reported separately. `doctor` writes `checks.second_agent_write_boundary` (`{provider, writes}`) and, only for `writes: unbounded` (`agy`), one additional `WARNING: second_agent provider '<p>' can WRITE ...` in `recommended_fixes` — still not an issue. Every delegated result that reaches the provider stage (success or failure) carries `meta.provider_boundary` (`{reads, writes}`), and for `agy` also `meta.provider_write_warning`.
 
-**Codex: `--sandbox read-only` saja tidak menghentikan tulis.** Flag itu membatasi perintah shell. Tool edit file codex (`apply_patch`) diatur approval policy, bukan sandbox: diuji pada codex-cli 0.154.0 di Windows, panggilan read-only ditolak saat menulis lewat shell lalu berhasil membuat file lewat tool itu. Adapter karena itu mengirim `-c approval_policy="never"` di tiap panggilan, termasuk `exec resume`; dengan itu codex menolak patch ("writing is blocked by read-only sandbox"). Probe opt-in `WORKFLOW_CODEX_PROBE=1 python tests/run.py --only codex-write-probe` membuktikan ulang kedua jalur tulis di panggilan baru dan yang di-resume terhadap CLI sungguhan (memakai kuota codex).
+**Codex: `--sandbox read-only` alone does not stop writes.** That flag restricts shell commands. Codex's file-edit tool (`apply_patch`) is governed by the approval policy, not the sandbox: tested on codex-cli 0.154.0 on Windows, a read-only call was refused when writing through the shell and then succeeded in creating a file through that tool. The adapter therefore sends `-c approval_policy="never"` on every call, including `exec resume`; with that, codex rejects the patch ("writing is blocked by read-only sandbox"). The opt-in probe `WORKFLOW_CODEX_PROBE=1 python tests/run.py --only codex-write-probe` re-proves both write paths on new and resumed calls against the real CLI (uses codex quota).
 
-**Codex di Windows — sandbox OS-nya sendiri.** Sandbox Windows codex (backend `elevated`) bisa
-menolak memulai sesi: ``windows sandbox failed: elevated Windows sandbox requires effective
-`:root` read access``. Pada 3.8.0 ini teramati pada thread yang **di-resume** sementara thread
-baru jalan (CASE-015; regresi upstream openai/codex#46312, dan #46114 bila setiap thread
-gagal). Runtime mengklasifikasikannya dari stderr saja (teks serupa di output agent, mis. file yang ia baca, tidak memicunya) sebagai `error_type: sandbox_unavailable` — bukan `unknown` —
-dengan `next_action` berurutan: mulai sesi utama baru (`/clear` memberi `MAIN_SESSION_ID` dan
-thread codex baru) lalu jalankan ulang; bila thread baru juga gagal, perbarui codex dan jalankan
-`codex` sekali secara interaktif untuk menyetujui setup sandbox; sementara itu ganti second
-agent lewat `/.provider`. Bila yang gagal adalah resume, error yang sama membawa
-`meta.reason: resume_sandbox_failed` dan `next_action` khusus resume: rilis codex yang gagal,
-`/clear` (konteks thread lama tidak terbawa), lalu pin codex ke `stable_version` bila setiap
-resume tetap gagal. Resume mengirim sandbox sebagai `exec --sandbox read-only resume <id> …`
-(flag `exec` sebelum subcommand), bukan `-c sandbox_mode=…`: bentuk `-c` itu, bersama profil
-deny-read, yang membuat resume ditolak pada rilis codex yang tercantum di
-[Provider releases](#provider-releases) (CASE-021); bentuk flag me-resume di rilis yang diuji di
-sana, dan write probe membuktikan read-only tetap berlaku. Runtime **tidak** menurunkan sandbox: profil deny-read yang dikirim
-butuh backend `elevated`, dan memilih yang lebih lemah (`[windows] sandbox = "unelevated"` di
-`~/.codex/config.toml`) adalah keputusan user. Versi codex (`codex --version`, dibaca sekali per
-proses) tercatat di `meta.provider_version`, di baris usage (`provider_version`), dan di
+**Codex on Windows — its own OS sandbox.** Codex's Windows sandbox (`elevated` backend) can
+refuse to start a session: ``windows sandbox failed: elevated Windows sandbox requires effective
+`:root` read access``. In 3.8.0 this was observed on **resumed** threads while new threads
+worked (CASE-015; upstream regression openai/codex#46312, and #46114 when every thread
+fails). The runtime classifies it from stderr only (similar text in the agent's output, e.g. a file it read, does not trigger it) as `error_type: sandbox_unavailable` — not `unknown` —
+with an ordered `next_action`: start a new main session (`/clear` gives a new `MAIN_SESSION_ID` and a new
+codex thread) and rerun; if a new thread also fails, update codex and run
+`codex` once interactively to approve the sandbox setup; in the meantime switch the second
+agent via `/.provider`. When what failed is a resume, the same error carries
+`meta.reason: resume_sandbox_failed` and a resume-specific `next_action`: the failing codex release,
+`/clear` (the old thread's context is not carried over), then pin codex to `stable_version` if every
+resume keeps failing. Resume sends the sandbox as `exec --sandbox read-only resume <id> …`
+(the `exec` flag before the subcommand), not `-c sandbox_mode=…`: that `-c` form, together with the
+deny-read profile, is what made resume get rejected on the codex releases listed in
+[Provider releases](#provider-releases) (CASE-021); the flag form resumes on the releases tested
+there, and the write probe proves read-only still holds. The runtime does **not** downgrade the sandbox: the deny-read profile it sends
+needs the `elevated` backend, and choosing a weaker one (`[windows] sandbox = "unelevated"` in
+`~/.codex/config.toml`) is the user's decision. The codex version (`codex --version`, read once per
+process) is recorded in `meta.provider_version`, in the usage row (`provider_version`), and in
 `doctor` (`checks.provider_version`).
 
-Codex mengirim daftar deny yang sama sebagai flag `-c permissions.workflow.filesystem` di tiap panggilan, tetapi flag itu tidak menghentikan apa pun. Diuji terhadap codex-cli 0.147.0 mode `exec`: men-deny `**` dan `**/*` untuk `:workspace_roots` lalu meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan menjalankan shell, dan `--sandbox read-only` (bersama `approval_policy="never"`, lihat di atas) membatasi **tulis**, bukan baca.
+Codex sends the same deny list as a `-c permissions.workflow.filesystem` flag on every call, but that flag stops nothing. Tested against codex-cli 0.147.0 in `exec` mode: denying `**` and `**/*` for `:workspace_roots` and then asking for a file in that root still returned its contents, exit 0. Codex reads by running a shell, and `--sandbox read-only` (together with `approval_policy="never"`, see above) restricts **writes**, not reads.
 
-Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `.env` termasuk. `init` melaporkan ini sebagai `status: not_enforceable` dengan `permissions_enforced: 0`, dan `dist/config/codex/AGENTS.md` menyatakan ke agent-nya bahwa menghindari file rahasia adalah kewajibannya sendiri — instruksi, bukan penegakan.
+This means a codex second_agent can read every file in the project you point it at, `.env` included. `init` reports this as `status: not_enforceable` with `permissions_enforced: 0`, and `dist/config/codex/AGENTS.md` tells its agent that avoiding secret files is its own obligation — an instruction, not enforcement.
 
-Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu menerima risikonya. Untuk project yang rahasianya harus tetap tak terbaca second_agent, pakai `opencode`.
+Use `codex` when the project holds no secrets, or when you accept the risk. For a project whose secrets must stay unreadable to second_agent, use `opencode`.
 
-Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
+Since v3.7.1 this position is explicit: `codex` and `agy` are treated as **trusted providers**. Besides having no read boundary, both adapters pass the full process environment to the provider CLI (credentials in env become visible). That is accepted as a risk, not fixed with an allowlist — an allowlist could break the provider CLI's auth, and a provider that can already read `.env` is protected by nothing through a trimmed env. Instead, the risk is always visible: `/.doctor` writes a `second_agent_read_boundary` check and one `WARNING` in `recommended_fixes` whenever the active provider is `codex`/`agy` (not an issue — readiness stays READY), and `/.provider` mentions it when selecting.
 
-#### Katalog model `/.provider`
+#### `/.provider` model catalog
 
-`/.provider` menawarkan model dari CLI provider yang terpasang saat itu
-(`core/provider/model_catalog.py`), bukan dari shortlist `config/providers.py`. Tiap entri
-`meta.providers[]` membawa `models` (maks 20, terbaru dulu), `newest`, dan `models_source`
-(`live` | `cache` | `static`). Picker menaruh `newest` sebagai opsi pertama "(Recommended)";
-model tetap dikonfirmasi user, tidak ditulis otomatis.
+`/.provider` offers models from the provider CLI installed at that moment
+(`core/provider/model_catalog.py`), not from the `config/providers.py` shortlist. Each
+`meta.providers[]` entry carries `models` (max 20, newest first), `newest`, and `models_source`
+(`live` | `cache` | `static`). The picker puts `newest` as the first "(Recommended)" option;
+the model is still confirmed by the user, not written automatically.
 
-| Provider | Sumber | "Terbaru" |
+| Provider | Source | "Newest" |
 | --- | --- | --- |
-| `opencode` | `opencode models` + cache models.dev `~/.cache/opencode/models.json` (`family`, `release_date`, `reasoning_options`) | `release_date` terbaru dalam `family` model aktif; tanpa model aktif → terbaru dari semua |
-| `codex` | `~/.codex/models_cache.json` (`$CODEX_HOME`), hanya `visibility: list` | `priority` terkecil |
-| `agy` | `agy models` | versi tertinggi dalam keluarga model aktif; tanpa model aktif → urutan CLI |
+| `opencode` | `opencode models` + the models.dev cache `~/.cache/opencode/models.json` (`family`, `release_date`, `reasoning_options`) | latest `release_date` within the active model's `family`; no active model → newest of all |
+| `codex` | `~/.codex/models_cache.json` (`$CODEX_HOME`), only `visibility: list` | smallest `priority` |
+| `agy` | `agy models` | highest version within the active model family; no active model → CLI order |
 
-Varian agy (`<model>-low|medium|high`) dilipat jadi satu model dengan `efforts` = suffix
-yang ada (`effort_in_id: true`). Apply menyusun id varian (`claude-opus-5-5` + `high` →
-`claude-opus-5-5-high`) dan menulis `effort: null`; model bervarian tanpa effort ditolak.
-Route yang menyebut model dasar agy memakai varian dengan effort yang sama.
+Agy variants (`<model>-low|medium|high`) are folded into one model with `efforts` = the suffixes
+present (`effort_in_id: true`). Apply builds the variant id (`claude-opus-5-5` + `high` →
+`claude-opus-5-5-high`) and writes `effort: null`; a variant-bearing model without an effort is rejected.
+A route that names an agy base model uses the variant with the same effort.
 
-Validasi effort saat apply memakai katalog live (fallback ke shortlist), jadi model yang
-lebih baru dari shortlist diterima tanpa warning. Router dan `validate_provider_config`
-tetap memakai shortlist: keduanya jalan di tiap panggilan delegated, tempat spawn CLI terlalu
-mahal; model di luar shortlist di sana diperlakukan sebagai "unknown" (effort dipertahankan).
+Effort validation at apply uses the live catalog (falling back to the shortlist), so a model
+newer than the shortlist is accepted without a warning. The Router and `validate_provider_config`
+still use the shortlist: both run on every delegated call, where spawning the CLI is too
+expensive; a model outside the shortlist is treated there as "unknown" (effort kept).
 
-CLI hilang, timeout (30 dtk), atau format tak dikenali → `models_source: static`, shortlist
-dipakai. Hasil live di-cache 10 menit di `<cache user>/agent-workflow/model-catalog.json`
-supaya katalog dan apply dalam satu sesi picker melihat daftar yang sama.
-`AI_PROXY_MODEL_CATALOG=static` mematikan pembacaan live.
+CLI missing, timeout (30 s), or unrecognized format → `models_source: static`, the shortlist
+is used. Live results are cached for 10 minutes in `<cache user>/agent-workflow/model-catalog.json`
+so that the catalog and apply within one picker session see the same list.
+`AI_PROXY_MODEL_CATALOG=static` turns off live reading.
 
-Mode langsung: `/.provider <provider> <model> [effort] [routes]` (mis. `/.provider codex
-gpt-6-luna low`) melewati picker. Payload tanpa `|` dipecah per spasi — aman karena tak ada
-provider, id model, atau effort yang memuat spasi — lalu divalidasi sama persis dengan
-payload `provider|model|effort|routes`.
+Direct mode: `/.provider <provider> <model> [effort] [routes]` (e.g. `/.provider codex
+gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — safe because no
+provider, model id, or effort contains a space — and is then validated exactly like the
+`provider|model|effort|routes` payload.
 
-Kunci reliability (v3.8.3):
+Reliability keys (v3.8.4):
 
-| Kunci | Default | Arti |
+| Key | Default | Meaning |
 | --- | --- | --- |
-| `timeout_seconds` | `1800` | Batas satu panggilan agent. `0` = tanpa batas (tidak lagi default). `null` = warisi default, **bukan** tanpa batas. |
-| `bootstrap_timeout_seconds` | `180` | Anggaran terpisah untuk `init_session`. Bootstrap hanya membalas "READY", jadi tak boleh mewarisi anggaran task panjang. |
-| `idle_stall_seconds` | `240` | Tidak ada byte baru di stdout/stderr selama ini → `alive-stalled`. |
-| `stall_threshold_seconds` | `360` | Tidak ada heartbeat selama ini padahal PID hidup → `alive-stalled`. |
-| `probe_timeout_seconds` | `45` | Batas probe PING itu sendiri. Tanpa ini watchdog ikut menggantung seperti pasiennya. |
-| `probe_recheck_seconds` | `120` | Cadence probe ulang selama job tetap stalled; minimum jalur `await` adalah 10 detik. |
-| `job_poll_interval_seconds` | `2.0` | Interval heartbeat/poll adapter. |
+| `timeout_seconds` | `1800` | Limit for one agent call. `0` = unlimited (no longer the default). `null` = inherit the default, **not** unlimited. |
+| `bootstrap_timeout_seconds` | `180` | A separate budget for `init_session`. Bootstrap only replies "READY", so it must not inherit the long-task budget. |
+| `idle_stall_seconds` | `240` | No new bytes on stdout/stderr for this long → `alive-stalled`. |
+| `stall_threshold_seconds` | `360` | No heartbeat for this long while the PID is alive → `alive-stalled`. |
+| `probe_timeout_seconds` | `45` | Limit of the PING probe itself. Without it the watchdog hangs just like its patient. |
+| `probe_recheck_seconds` | `120` | Re-probe cadence while the job stays stalled; the minimum for the `await` path is 10 seconds. |
+| `job_poll_interval_seconds` | `2.0` | Adapter heartbeat/poll interval. |
 
-Per-route juga bisa: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
+Per route is also possible: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 
-**Role tidak dibaca dari file ini.** Pemetaan command → role ditentukan di kode (`config/routing.py`), jadi tak bisa ditumpuk lewat config.
+**Roles are not read from this file.** The command → role mapping is defined in code (`config/routing.py`), so it cannot be overridden via config.
 
-**Tiga key pensiun.** `job_max_runtime_seconds`, `job_poll_timeout_seconds`, dan
-`agent_workflow_path` dulu ditulis ke file ini dan tidak pernah dibaca siapa pun. Ketiganya
-sudah berhenti ditulis; nilainya diambil dari `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`, CLI
-`--poll-timeout`, dan `.workflow/config.json → runtime.agent_workflow_path` (atau `AGENT_PATH`).
-Upgrade ke layout `data/` (v3.6.0) membuang key pensiun dari `config.json`; sebelum itu `doctor` menandainya
-`retired — never read` dan aman dihapus manual.
+**Three retired keys.** `job_max_runtime_seconds`, `job_poll_timeout_seconds`, and
+`agent_workflow_path` used to be written to this file and were never read by anyone. All three
+are no longer written; their values come from `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`, the CLI
+`--poll-timeout`, and `.workflow/config.json → runtime.agent_workflow_path` (or `AGENT_PATH`).
+The upgrade to the `data/` layout (v3.6.0) drops retired keys from `config.json`; before that, `doctor` flags them
+`retired — never read` and they are safe to delete manually.
 
 ### Sub-agent fan-out (default ON)
 
-`policies.subagent_fanout_enabled` berlaku untuk `explore`, `plan`, dan `analyze`. `verify` tetap memakai satu reviewer agar seluruh diff dilihat sebagai satu perubahan.
+`policies.subagent_fanout_enabled` applies to `explore`, `plan`, and `analyze`. `verify` keeps using a single reviewer so the whole diff is seen as one change.
 
-Upgrade mempertahankan nilai existing. Workspace lama yang sudah menyimpan `false` tetap nonaktif sampai kamu mengubahnya sendiri.
+Upgrade preserves the existing value. An old workspace that already stores `false` stays disabled until you change it yourself.
 
-Ketika aktif, prompt membawa anchor `[EVIDENCE_SIDECARS]`; cluster fan-out berada di
-`.workflow/data/sessions/<id>/runtime/leads.json` agar tidak ikut membesarkan prompt:
+When active, the prompt carries the `[EVIDENCE_SIDECARS]` anchor; the fan-out clusters live in
+`.workflow/data/sessions/<id>/runtime/leads.json` so they do not inflate the prompt:
 
-- graph memiliki ≥2 community → satu slice per community;
-- graph tidak ada atau hanya menghasilkan 0–1 community → tetap fan-out ke empat sudut investigasi: entry point, core flow, reverse dependencies, serta config/tests.
+- the graph has ≥2 communities → one slice per community;
+- no graph, or it yields only 0–1 communities → still fan out to four investigation angles: entry points, core flow, reverse dependencies, and config/tests.
 
-Second_agent wajib memakai custom agent `wf-slice` melalui tool `task` bila tersedia,
-menjalankan slice secara paralel, lalu menggabungkan klaim dengan tag `[cN]`. Jika tool
-spawn tidak tersedia, ia harus menyebutkan daftar tool yang benar-benar tersedia sebelum
-membaca slice secara berurutan.
+Second_agent must use the custom agent `wf-slice` via the `task` tool when available,
+run the slices in parallel, then merge the claims with `[cN]` tags. If the spawn
+tool is not available, it must state the list of tools that are actually available before
+reading the slices sequentially.
 
-**Pemakaian dilaporkan apa adanya.** Runtime mengecek dua sinyal yang harus sepakat: baris `subagents:` yang dideklarasikan, dan tag `[cN]` pada klaim hasil merge.
+**Usage is reported as it is.** The runtime checks two signals that must agree: the declared `subagents:` line, and the `[cN]` tags on the merged claims.
 
-| Kondisi | `meta` |
+| Condition | `meta` |
 |---|---|
-| deklarasi + tag cocok | `subagent_used: true`, `subagent_fanout_clusters: [...]` |
-| deklarasi tanpa tag | `subagent_used: false` + `subagent_warning` |
-| `subagents: none (...)` jujur | `subagent_used: false`, `covered_clusters` tetap dapat berisi tag yang dibaca |
+| declaration + tags match | `subagent_used: true`, `subagent_fanout_clusters: [...]` |
+| declaration without tags | `subagent_used: false` + `subagent_warning` |
+| honest `subagents: none (...)` | `subagent_used: false`, `covered_clusters` may still contain the tags that were read |
 
-Deklarasi tanpa klaim bertag adalah pengakuan kerja, bukan bukti kerja — dan tidak dihitung sukses.
+A declaration without tagged claims is a claim of work, not proof of work — and is not counted as success.
 
 ---
 
 ## Graphify
 
-Dengan `policies.graph_leads_enabled: true`, runtime membaca `graphify-out/graph.json` **langsung** tanpa memanggil CLI atau MCP Graphify. Ia meranking maksimal 12 candidate file berdasarkan keyword dan weighted dependency degree, membawa maksimal empat community, lalu menyuntikkannya sebagai **starting points, bukan evidence**.
+With `policies.graph_leads_enabled: true`, the runtime reads `graphify-out/graph.json` **directly** without calling the Graphify CLI or MCP. It ranks at most 12 candidate files by keyword and weighted dependency degree, carries at most four communities, then injects them as **starting points, not evidence**.
 
-- `explore`/`plan`/`analyze` menerima leads lengkap dan community untuk fan-out;
-- `verify` menerima shortlist ringkas maksimal enam file tanpa community;
-- graph yang lebih tua daripada source `.py` tetap dipakai, tetapi prompt membawa warning stale;
-- graph tidak ada, rusak, atau sedang di-refresh (`graphify-out/.refresh.lock` dipegang worker yang masih berdetak) → delegated flow tetap berjalan tanpa leads dan tidak menunggu lock. Baris `usage.jsonl` mencatat `graph_status` (`used`, `empty`, `absent`, `refreshing`, `disabled`) dan `graph_ms`. `verify-browser` tidak memakai leads, jadi tidak melakukan lookup; ia hanya mencatat sekali per command apakah refresh sedang berjalan: `refreshing`, `available` (graph ada, tidak dibaca), atau `absent`.
+- `explore`/`plan`/`analyze` receive the full leads and communities for fan-out;
+- `verify` receives a compact shortlist of at most six files without communities;
+- a graph older than the `.py` sources is still used, but the prompt carries a stale warning;
+- graph absent, broken, or being refreshed (`graphify-out/.refresh.lock` held by a worker that is still beating) → the delegated flow still runs without leads and does not wait for the lock. The `usage.jsonl` row records `graph_status` (`used`, `empty`, `absent`, `refreshing`, `disabled`) and `graph_ms`. `verify-browser` does not use leads, so it does no lookup; it only records once per command whether a refresh is running: `refreshing`, `available` (graph exists, not read), or `absent`.
 
-Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Satu-satunya pemicu `graphify update` adalah Stop hook `graph-refresh` di bundle Claude (launcher `.sh` + `graph-refresh.py`); `CLAUDE.md` dan skill `refactor` tidak lagi meminta main agent menjalankannya. Hook jalan setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, lebih tua dari source, dan binary tersedia:
+The Python runtime never runs `graphify init`, `build`, `watch`, or `update`. The only trigger of `graphify update` is the `graph-refresh` Stop hook in the Claude bundle (`.sh` launcher + `graph-refresh.py`); `CLAUDE.md` and the `refactor` skill no longer ask the main agent to run it. The hook runs after `[EXECUTION RESULT]` or `[REFACTOR RESULT]`, only when the graph already exists, is older than the sources, and the binary is available:
 
-- scan mtime melewati direktori skip (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, `target`, ...) sebelum masuk, jadi biayanya mengikuti jumlah source, bukan jumlah dependency; nama direktori dan ekstensi dicocokkan tanpa peduli huruf besar-kecil;
-- graph basi → hook membuat `graphify-out/.refresh.lock` (`pid`, `token`, `started`, `beat`), menjalankan worker terpisah, lalu kembali. Turn tidak menunggu graphify. Worker menjalankan `graphify update` **tanpa batas waktu** dan tak pernah membunuhnya (DEC-042); selama graphify jalan, worker menulis ulang `beat` (dan `graphify_pid`) tiap 15 detik, lalu mencatat satu baris dan menghapus lock miliknya. `GRAPH_REFRESH_LIMIT_S` tak lagi dibaca. Lock diserahkan hook ke worker hanya selama masih membawa token hook itu, dan bila worker sudah selesai dan menghapusnya, lock tidak dibuat ulang. Lock basi hanya dihapus bila isinya masih sama saat dibaca ulang tepat sebelum dihapus; lock yang berubah dianggap `skipped_running`, sehingga dua sesi tak menjalankan dua refresh bersamaan;
-- graphify menulis ulang `graph.json` di tempat, jadi selama lock dipegang runtime memperlakukan graph sebagai tidak tersedia, dan main agent diminta menganggapnya basi. Lock dipegang selama `beat`-nya berumur < 120 detik, berapa pun umur lock itu; refresh sepanjang apa pun tak pernah terbaca basi. Lock tanpa `beat` (ditulis sebelum DEC-042) memakai aturan lama: pid hidup dan berumur < 15 menit. Lock yang ada tetapi tak terbaca dianggap dipegang selama mtime-nya < 120 detik. Setiap penulisan lock ditulis ke file sementara lalu di-rename;
-- graphify yang hang menahan graph selama worker-nya hidup. `--command doctor` melaporkan lock itu (`checks.graph_refresh_lock`: `state`, `age`, `beat_age`, `pid`, `graphify_pid`) dan memberi saran bila refresh sudah berjalan ≥ 1 jam atau lock-nya basi; ini saran, bukan issue, karena delegated flow tetap jalan tanpa leads. `--command clean` hanya menghapus lock yang basi (tak ada `beat` dalam 120 detik) dan tak pernah membunuh proses: hentikan proses graphify-nya sendiri, tunggu lock basi, lalu jalankan `clean`. Bila worker mati sementara graphify masih hidup, lock basi dalam 120 detik walau graphify mungkin masih menulis;
-- refresh dihitung `refreshed` bila `graph.json` ditulis ulang dan bisa di-parse sebagai JSON, apa pun exit code-nya (graphify exit 1 pada graph besar karena visualisasi HTML); tulisan ulang yang tak bisa di-parse tercatat `corrupt`;
-- tiap run yang lolos gate pertama pada project yang sudah punya `graph.json` menulis baris `kind: graph_refresh` ke `.workflow/data/quality.jsonl` (bila direktori itu ada) dengan `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `corrupt`, `error`; `timeout` hanya muncul di baris dari sebelum DEC-042 dan tetap dihitung), `hook_ms` (yang dibayar turn), `scan_ms`, `files_visited`, `dirs_skipped`, dan untuk refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` merangkumnya di `graph_refresh`.
+- the mtime scan skips the skip directories (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, `target`, ...) before entering them, so its cost follows the number of sources, not the number of dependencies; directory names and extensions are matched case-insensitively;
+- stale graph → the hook creates `graphify-out/.refresh.lock` (`pid`, `token`, `started`, `beat`), starts a separate worker, then returns. The turn does not wait for graphify. The worker runs `graphify update` **with no time limit** and never kills it (DEC-042); while graphify runs, the worker rewrites `beat` (and `graphify_pid`) every 15 seconds, then records one row and deletes its own lock. `GRAPH_REFRESH_LIMIT_S` is no longer read. The hook hands the lock to the worker only while it still carries that hook's token, and if the worker has already finished and deleted it, the lock is not recreated. A stale lock is deleted only if its content is still the same when reread right before deletion; a lock that changed is treated as `skipped_running`, so two sessions do not run two refreshes at once;
+- graphify rewrites `graph.json` in place, so while the lock is held the runtime treats the graph as unavailable, and the main agent is asked to treat it as stale. The lock counts as held while its `beat` is < 120 seconds old, whatever the lock's age; a refresh of any length never reads as stale. A lock without `beat` (written before DEC-042) uses the old rule: pid alive and < 15 minutes old. A lock that exists but cannot be read counts as held while its mtime is < 120 seconds old. Every lock write goes to a temporary file and is then renamed;
+- a hung graphify holds the graph for as long as its worker lives. `--command doctor` reports that lock (`checks.graph_refresh_lock`: `state`, `age`, `beat_age`, `pid`, `graphify_pid`) and gives advice when the refresh has been running ≥ 1 hour or the lock is stale; this is advice, not an issue, because the delegated flow still runs without leads. `--command clean` only deletes a stale lock (no `beat` within 120 seconds) and never kills a process: stop the graphify process yourself, wait for the lock to go stale, then run `clean`. If the worker dies while graphify is still alive, the lock goes stale within 120 seconds even though graphify may still be writing;
+- a refresh counts as `refreshed` when `graph.json` was rewritten and parses as JSON, whatever the exit code (graphify exits 1 on large graphs because of the HTML visualization); a rewrite that does not parse is recorded as `corrupt`;
+- every run that passes the first gate on a project that already has `graph.json` writes a `kind: graph_refresh` row to `.workflow/data/quality.jsonl` (when that directory exists) with `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `corrupt`, `error`; `timeout` only appears in rows from before DEC-042 and is still counted), `hook_ms` (what the turn paid), `scan_ms`, `files_visited`, `dirs_skipped`, and for a refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` summarizes it in `graph_refresh`.
 
-Hook fail-open, tidak pernah menolak response, tidak pernah membuat graph baru atau menjalankan `init`/`build`/`watch`. Outer timeout Stop hook tetap 60 detik.
+The hook fails open, never rejects a response, never creates a new graph or runs `init`/`build`/`watch`. The Stop hook's outer timeout stays 60 seconds.
 
-Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran seluruh source
-`.py`. Perubahan isi, penambahan, atau penghapusan source menginvalidasi cache walaupun
-`graph.json` tidak berubah.
+The graph verdict cache uses a fingerprint of the path, nanosecond mtime, and size of every `.py`
+source. A content change, addition, or deletion of a source invalidates the cache even if
+`graph.json` did not change.
 
 ---
 
 ## Task telemetry
 
-`--command report` → `tasks` membaca `.workflow/data/tasks.jsonl` (DEC-015, direvisi DEC-020). Satu task = rangkaian event dalam satu MAIN_SESSION_ID, dari event pertamanya sampai verify yang verdict **turunan** runtime-nya `pass` setelah task itu mengedit file. Commit adalah langkah berikut yang dianjurkan, bukan penutup. Event ditulis dua pihak, tanpa instruksi tambahan di prompt:
+`--command report` → `tasks` reads `.workflow/data/tasks.jsonl` (DEC-015, revised by DEC-020). One task = a series of events within one MAIN_SESSION_ID, from its first event until a verify whose runtime-**derived** verdict is `pass` after that task edited files. A commit is the recommended next step, not the closer. Events are written by two parties, with no additional instructions in the prompt:
 
-- runtime: satu event per command delegated (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). Event verify membawa `verdict` (yang **dideklarasikan** reply; `DONE` dengan blocking finding dihitung `NEEDS FIX`) dan `derived` (verdict turunan runtime: `pass`, `incomplete`, atau `fail`). Hanya `derived: pass` yang menutup task; `DONE` yang oleh runtime dianggap `incomplete`, termasuk karena `not_verified`, membiarkan task tetap `open`;
-- hook `task-events` (launcher `.sh` + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): skill lokal yang dipanggil dari prompt (`/.<name>`) atau lewat tool `Skill`, file di dalam project diedit (bukan `.workflow/`/`.git/`), dan commit sebagai HEAD yang **berpindah antar turn**. Event pertama sesi menyimpan snapshot HEAD di `.workflow/data/task-hook/<claude_session_id>.head`; tiap `Stop` (atau prompt berikutnya, untuk commit yang dibuat di terminal di antara turn) mencatat commit sejak snapshot — first-parent, urut terlama dulu, masing-masing dengan `paths` — lalu memajukan snapshot. Event v2 (`v: 2`). Sebelum 3.8.0 hook ini jalan di setiap `Read` dan `Bash` (dua kali untuk `Bash`); satu spawn PowerShell ~450 ms di Windows, sementara skill dan commit cukup dibaca sekali per turn. Konsekuensi: skill yang dimuat lewat `Read` tanpa prefix (auto-intent bahasa natural) tidak tercatat, dan commit tercatat di akhir turn yang membuatnya, sesudah verify di turn itu.
+- runtime: one event per delegated command (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). A verify event carries `verdict` (the one **declared** by the reply; `DONE` with a blocking finding counts as `NEEDS FIX`) and `derived` (the runtime-derived verdict: `pass`, `incomplete`, or `fail`). Only `derived: pass` closes a task; a `DONE` that the runtime considers `incomplete`, including because of `not_verified`, leaves the task `open`;
+- the `task-events` hook (`.sh` launcher + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): local skills invoked from the prompt (`/.<name>`) or via the `Skill` tool, files inside the project that were edited (not `.workflow/`/`.git/`), and commits as HEAD **moving between turns**. The session's first event stores a HEAD snapshot in `.workflow/data/task-hook/<claude_session_id>.head`; each `Stop` (or the next prompt, for commits made in a terminal between turns) records the commits since the snapshot — first-parent, oldest first, each with `paths` — then advances the snapshot. Events are v2 (`v: 2`). Before 3.8.0 this hook ran on every `Read` and `Bash` (twice for `Bash`); one PowerShell spawn is ~450 ms on Windows, while skills and commits only need to be read once per turn. Consequence: a skill loaded via `Read` without a prefix (natural-language auto-intent) is not recorded, and a commit is recorded at the end of the turn that made it, after the verify in that turn.
 
-State: `completed` (verify `derived: pass` tanpa edit sesudahnya, di-commit atau belum), `open` (ada edit, belum `pass` — di-commit atau belum), `read_only` (tidak ada edit), `unknown` (event tanpa identitas sesi). Edit sesudah `pass` membuka task baru. Commit yang memuat file task yang baru `completed` masuk ke `sequence` task itu; commit di task `open` masuk ke `sequence`-nya tanpa mengubah state. Event sebelum DEC-020 tidak membawa `derived`, sehingga task-nya tetap `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (commit berbeda yang tak satu pun salinannya diklaim task; commit baru ditandai terpakai saat diklaim, sehingga salinan yang dicatat sesi lain lebih dulu tidak menyembunyikannya dari sesi pembuatnya), dan `recent` (10 task terakhir dengan `sequence`). Stream ini terpisah dari `usage.jsonl`: skill lokal dan edit bukan call delegated dan tidak boleh masuk budget governance.
+States: `completed` (verify `derived: pass` with no edit afterwards, committed or not), `open` (has edits, not yet `pass` — committed or not), `read_only` (no edits), `unknown` (events without a session identity). An edit after `pass` opens a new task. A commit containing files of a task that just became `completed` goes into that task's `sequence`; a commit in an `open` task goes into its `sequence` without changing its state. Events from before DEC-020 do not carry `derived`, so their task stays `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (distinct commits none of whose copies is claimed by a task; a commit is marked as used only when claimed, so a copy recorded earlier by another session does not hide it from the session that made it), and `recent` (the last 10 tasks with `sequence`). This stream is separate from `usage.jsonl`: local skills and edits are not delegated calls and must not enter budget governance.
 
-`--command report` → `rework` dihitung dari `usage.jsonl`, bukan dari stream ini: per `correlation_id`, ronde verify yang dinilai diurutkan menurut `recorded_at`, dan grup dihitung rework hanya bila ronde yang tidak `pass` (`fail` atau `incomplete`) diikuti ronde lain; `extra_verification_rounds` = ronde sesudah kegagalan pertama. Plan yang diverifikasi per fase dengan semua ronde `pass` bukan rework (DEC-051, `runtime.rework@1` di [metrics](evaluation/metrics.md)).
+`--command report` → `rework` is computed from `usage.jsonl`, not from this stream: per `correlation_id`, the assessed verify rounds are ordered by `recorded_at`, and a group counts as rework only when a round that is not `pass` (`fail` or `incomplete`) is followed by another round; `extra_verification_rounds` = the rounds after the first failure. A plan verified per phase with all rounds `pass` is not rework (DEC-051, `runtime.rework@1` in [metrics](evaluation/metrics.md)).
 
 ---
 
-## Mode verify
+<a id="mode-verify"></a>
+## Verify mode
 
-Kontrak konfigurasi yang dimaksud memisahkan dua pengaturan:
+The configuration contract in question separates two settings:
 
-- `auto_verify_after_execute` menentukan apakah main_agent otomatis memanggil `/.verify` setelah implementasi; default `false`;
-- `verify_mode` menentukan kedalaman pemeriksaan bila verify benar-benar dipanggil.
+- `auto_verify_after_execute` determines whether main_agent automatically calls `/.verify` after implementation; default `false`;
+- `verify_mode` determines the depth of the check when verify is actually called.
 
-Jadi `auto_verify_after_execute: false` tidak mematikan `/.verify`; ia hanya mencegah pemanggilan otomatis.
+So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prevents the automatic call.
 
-`verify_mode` mengatur **sedalam apa** `/.verify` bekerja:
+`verify_mode` controls **how deep** `/.verify` goes:
 
-- **`delegated`** (default) — second_agent memverifikasi dan mengembalikan kontrak berlabel. Tiap temuan wajib membawa tiga tag: `severity` (critical/high/medium/low), `origin` (introduced/regression/pre_existing/unknown), `scope_relation` (in_scope/out_of_scope). Blocking ditentukan kombinasi ketiganya, bukan severity saja — cacat pre-existing tidak menyandera verdict perubahan berjalan, dan `origin: unknown` gagal-tertutup. Section tanpa temuan wajib berisi `none` eksplisit; runtime juga menerima `none.`, `none (…)` (keterangan bebas tanpa tag), `n/a`, `not applicable`, `nothing found`/`nothing to report`, `no (blocking) findings`, `tidak ada`, `tidak ada temuan`, dan sentinel diikuti separator (`;`, `:`, `,`, `—`, `-`) dengan keterangan yang seluruhnya frasa netral (`clean`, `all clean`, `ok`, `nothing found`/`nothing blocking`/`nothing to report`, `no issues`, `bersih`, `semua bersih`, `tidak ada temuan`). Penjelasan bebas ditaruh dalam kurung. Selain itu — `none of …`, `none - caller X fails`, `none; all inspected paths are clean`, keterangan bertag, teks multi-baris — dibaca sebagai temuan; continuation lalu meminta entrinya ditulis `- none`. Pengecualian di reviewer E2E (`verify-browser`): item dengan baris lanjutan tetap kosong bila baris pertamanya `none` polos atau `none (…)`, seperti sebelumnya.
-  **Test pada mode `delegated`.** Second agent memverifikasi dengan membaca dan menelusur; ia
-  tidak menjalankan test runner. Test dipilih main_agent dari diff dan dependents, ditulis ke
+- **`delegated`** (default) — second_agent verifies and returns a labeled contract. Every finding must carry three tags: `severity` (critical/high/medium/low), `origin` (introduced/regression/pre_existing/unknown), `scope_relation` (in_scope/out_of_scope). Blocking is determined by the combination of all three, not severity alone — a pre-existing defect does not hold the verdict of the current change hostage, and `origin: unknown` fails closed. A section without findings must contain an explicit `none`; the runtime also accepts `none.`, `none (…)` (free remark without a tag), `n/a`, `not applicable`, `nothing found`/`nothing to report`, `no (blocking) findings`, `tidak ada`, `tidak ada temuan`, and a sentinel followed by a separator (`;`, `:`, `,`, `—`, `-`) with a remark that consists entirely of neutral phrases (`clean`, `all clean`, `ok`, `nothing found`/`nothing blocking`/`nothing to report`, `no issues`, `bersih`, `semua bersih`, `tidak ada temuan`). Free explanation goes in parentheses. Anything else — `none of …`, `none - caller X fails`, `none; all inspected paths are clean`, a tagged remark, multi-line text — is read as a finding; a continuation then asks for the entry to be written as `- none`. Exception in the E2E reviewer (`verify-browser`): an item with continuation lines is still empty when its first line is a plain `none` or `none (…)`, as before.
+  **Tests in `delegated` mode.** The second agent verifies by reading and tracing; it
+  does not run a test runner. Tests are selected by main_agent from the diff and dependents, written to
   `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json` —
-  `{"commands": [...], "reason": "..."}`, maksimal 5 — lalu dijalankan **runtime** sesudah
-  review kembali (`core/evidence/verify_tests.py`). Command hanya jalan bila diawali salah satu
-  prefix di `commands.verify_test_commands`, tanpa shell (`&&`, pipe, redirect, `$(` ditolak),
-  satu per satu, masing-masing di bawah `commands.verify_test_timeout_seconds`. Hasilnya
-  ditulis ke blok `[VERIFICATION]` yang tak pernah dilihat second agent: tiap command jadi baris
-  `checks_run` `runtime: ...`; yang gagal, timeout, atau tak bisa dijalankan jadi blocking
-  finding (`origin: unknown`, gagal-tertutup); command yang ditolak, dan verify **tanpa**
-  `tests.json`, jadi gap `not_verified` sehingga verdict-nya `incomplete`. `commands: []` dengan
-  alasan menyatakan tak ada test yang relevan dan tidak menambah gap; baris
-  `runtime: no test requested — <alasan>` tetap tertulis di `checks_run` tetapi **tidak dihitung**
-  sebagai check, jadi verdict bergantung pada check review itu sendiri (tanpa check →
-  `incomplete`, `checks_missing`). Project tanpa test suite memakai jalur yang sama: skill
-  verify meminta `commands: []` dengan alasan itu, bukan melewatkan `tests.json`. Gap yang ditulis runtime (prefix `tests:`: tanpa request,
-  request tak terpakai, command ditolak, crash) berjenis `runtime_gap` dan membuat exit 2;
-  kelonggaran exit 0 untuk `incomplete` hanya berlaku bagi gap yang dideklarasikan agent
-  (`verification_gap`). Command berisi karakter kontrol (C0 selain tab, DEL) ditolak sebelum
-  dijalankan; error spawn jadi blocking finding; exception lain di langkah ini mengembalikan
-  review apa adanya plus gap `tests: runtime tests crashed: <tipe>` (request tetap dipakai).
-  Selama test runtime berjalan, heartbeat job ditulis sebelum tiap command dan tiap 20 s
-  (`phase: runtime_tests`), sehingga suite panjang tidak terbaca `alive-stalled`. `reason` wajib satu baris
-  (yang berisi newline membuat request tak terpakai); `command` dan `detail` dirapatkan jadi satu
-  baris sebelum masuk blok, sehingga teks request tak bisa memalsukan section. File request
-  dipakai sekali, diganti nama `tests.used.json` **sesudah** hasilnya digabung, sehingga run
-  pemulihan dari job yang sama masih menemukannya. Run selesai saat proses command itu exit, bukan saat pipe-nya EOF: sesudah
-  exit, pipe ditunggu paling lama 5 s lalu sisa proses yang masih memegangnya dibunuh (process
-  group di POSIX, job object di Windows) dan exit code aslinya dipakai, sehingga runner yang
-  meninggalkan server/watcher tidak lagi terbaca timeout. Timeout membunuh seluruh pohon proses
-  command (process group + `taskkill /T` / `killpg`), lalu output dikumpulkan paling lama 5 s; timeout
-  bernilai boolean diabaikan (default 900). Baris prompt "jangan jalankan test runner" hanya
-  dikirim bila `verify_test_commands` terisi; selama kosong, `doctor` memberi peringatan
-  (`checks.verify_test_commands: empty`) karena verify tak menjalankan test dan tak bisa `pass`.
-  Saat intent verify, gate hook mengizinkan main_agent membaca `git diff --name-only`/`--stat`,
-  `.workflow/config.json`, dan menulis `verify/tests.json` sebelum `.workflow/run`. Alasannya: saat second agent ikut menjalankan test, codex
-  menjalankan seluruh suite (verify median sampai 366 s, CASE-010) sementara opencode tak bisa
-  menjalankan satu pun dan verify-nya jadi `incomplete` (CASE-009).
-- **`syntax`** — dijawab lokal, tanpa memanggil OpenCode sama sekali. Memeriksa staged, unstaged, dan untracked files, termasuk repository tanpa commit: `.py` via `compile()` in-process, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. File Python juga memerlukan name check `pyflakes`; bila tool tidak tersedia, hasilnya `incomplete`. Kegagalan discovery Git juga menghasilkan `incomplete`, bukan `skipped`.
+  `{"commands": [...], "reason": "..."}`, at most 5 — and then run by the **runtime** after the
+  review returns (`core/evidence/verify_tests.py`). A command only runs when it starts with one of the
+  prefixes in `commands.verify_test_commands`, without a shell (`&&`, pipe, redirect, `$(` are rejected),
+  one at a time, each under `commands.verify_test_timeout_seconds`. The results are
+  written to a `[VERIFICATION]` block the second agent never sees: each command becomes a
+  `checks_run` `runtime: ...` line; one that fails, times out, or cannot be run becomes a blocking
+  finding (`origin: unknown`, fail closed); a rejected command, and a verify **without**
+  `tests.json`, become a `not_verified` gap, so the verdict is `incomplete`. `commands: []` with
+  a reason states that no test is relevant and adds no gap; the line
+  `runtime: no test requested — <alasan>` is still written in `checks_run` but is **not counted**
+  as a check, so the verdict depends on the review's own checks (no checks →
+  `incomplete`, `checks_missing`). A project without a test suite uses the same path: the verify
+  skill asks for `commands: []` with that reason, rather than skipping `tests.json`. Gaps written by the runtime (prefix `tests:`: no request,
+  unused request, rejected command, crash) are of type `runtime_gap` and cause exit 2;
+  the exit 0 allowance for `incomplete` applies only to gaps declared by the agent
+  (`verification_gap`). A command containing control characters (C0 other than tab, DEL) is rejected before
+  it runs; a spawn error becomes a blocking finding; any other exception in this step returns the
+  review as is plus a `tests: runtime tests crashed: <tipe>` gap (the request is still consumed).
+  While runtime tests run, the job heartbeat is written before each command and every 20 s
+  (`phase: runtime_tests`), so a long suite does not read as `alive-stalled`. `reason` must be a single line
+  (one containing a newline makes the request unusable); `command` and `detail` are collapsed onto one
+  line before entering the block, so request text cannot forge a section. The request file
+  is used once, renamed to `tests.used.json` **after** its results are merged, so a recovery
+  run of the same job still finds it. A run finishes when that command's process exits, not when its pipe hits EOF: after
+  exit, the pipe is waited on for at most 5 s and then any remaining processes still holding it are killed (process
+  group on POSIX, job object on Windows) and the original exit code is used, so a runner that
+  leaves a server/watcher behind no longer reads as a timeout. A timeout kills the command's whole process
+  tree (process group + `taskkill /T` / `killpg`), then output is collected for at most 5 s; a boolean
+  timeout value is ignored (default 900). The prompt line "jangan jalankan test runner" ("do not run the test runner") is only
+  sent when `verify_test_commands` is set; while it is empty, `doctor` gives a warning
+  (`checks.verify_test_commands: empty`) because verify runs no tests and cannot `pass`.
+  Under a verify intent, the gate hook lets main_agent read `git diff --name-only`/`--stat`,
+  `.workflow/config.json`, and write `verify/tests.json` before `.workflow/run`. The reason: when the second agent also ran tests, codex
+  ran the whole suite (verify median up to 366 s, CASE-010) while opencode could not
+  run a single one and its verify became `incomplete` (CASE-009).
+- **`syntax`** — answered locally, without calling OpenCode at all. Checks staged, unstaged, and untracked files, including a repository with no commits: `.py` via in-process `compile()`, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. Python files also require the `pyflakes` name check; if the tool is not available, the result is `incomplete`. A Git discovery failure also yields `incomplete`, not `skipped`.
 
-Semua yang tak bisa diperiksa dilaporkan apa adanya, tidak pernah dihitung lulus:
+Everything that cannot be checked is reported as it is, never counted as passing:
 
-| Keluaran | Arti |
+| Output | Meaning |
 |---|---|
-| `not_checked` | tak ada checker untuk ekstensi itu, atau file > 2 MB |
-| `skipped` | toolchain bahasa tak ada di `PATH` |
-| `name_check: unavailable` | `pyflakes` tak terpasang; file Python masuk `skipped` dan verdict `incomplete` |
+| `not_checked` | no checker for that extension, or file > 2 MB |
+| `skipped` | the language toolchain is not on `PATH` |
+| `name_check: unavailable` | `pyflakes` is not installed; Python files go to `skipped` and the verdict is `incomplete` |
 
-Python diperiksa in-process, bukan lewat `py_compile`, supaya tak ada `.pyc` yang tertinggal di pohon kerjamu. Direktori `__pycache__`, `node_modules`, `.git`, `vendor`, `.venv`, `venv` dilewati.
+Python is checked in-process, not via `py_compile`, so no `.pyc` is left behind in your working tree. The directories `__pycache__`, `node_modules`, `.git`, `vendor`, `.venv`, `venv` are skipped.
 
-`verdict: pass` berarti semua checker yang berlaku selesai tanpa finding dan tidak ada gap.
-**Bukan** berarti fiturnya bekerja atau test perilaku telah dijalankan.
+`verdict: pass` means every applicable checker finished without findings and there is no gap.
+It does **not** mean the feature works or that behavior tests were run.
 
 ---
 
 ## Provider releases
 
-Tiap provider di `config/providers.py` menyebut rilis CLI tempat versi workflow ini diuji
-(`stable_version`): opencode `1.18.34`, codex `0.154.0`, agy `1.1.13`. Runtime membaca
-`<cli> --version` (`core/provider/versions.py`; baris pertama yang memuat semver, dari stdout
-lalu stderr) paling banyak sekali per proses dan menyimpannya per user (`%LOCALAPPDATA%` atau
-`$XDG_CACHE_HOME`/`~/.cache`, file `agent-workflow/provider-versions.json`), dikunci path,
-mtime, dan ukuran executable, kedaluwarsa 24 jam; CLI tanpa versi dicache `null`, timeout tidak
-dicache. Tiap usage row yang mencapai provider (call tunggal maupun tiap baris continuation,
-semua provider) membawa `provider_version` serta `provider_version_status`: `stable` (sama), `untested` (rilis
-lain, termasuk pre-release), `unreadable` (CLI tak menjawab). `doctor` melaporkan
-`checks.provider_version` `{provider, version, status, stable}` dan memberi peringatan saat
-`untested`. Sifatnya advisori: call tetap jalan; tak ada yang memblokir provider, dan installer
-hanya mengubah provider bila diminta dengan `--update-providers`.
+Each provider in `config/providers.py` names the CLI release this workflow version was tested on
+(`stable_version`): opencode `1.19.3`, codex `0.163.0`, agy `1.1.13`. The runtime reads
+`<cli> --version` (`core/provider/versions.py`; the first line containing a semver, from stdout
+then stderr) at most once per process and stores it per user (`%LOCALAPPDATA%` or
+`$XDG_CACHE_HOME`/`~/.cache`, file `agent-workflow/provider-versions.json`), keyed by the executable's path,
+mtime, and size, expiring after 24 hours; a CLI without a version is cached as `null`, a timeout is not
+cached. Every usage row that reaches the provider (single calls as well as each continuation row,
+all providers) carries `provider_version` and `provider_version_status`: `stable` (same), `untested` (another
+release, including pre-releases), `unreadable` (the CLI did not answer). `doctor` reports
+`checks.provider_version` `{provider, version, status, stable}` and warns on
+`untested`. It is advisory: the call still runs; nothing blocks the provider, and the installer
+only changes providers when asked to with `--update-providers`.
 
-`install.py --update-providers` (opt-in, DEC-057) membawa tiap CLI ke `stable_version`, tak
-pernah ke rilis yang lebih baru. Dry run mencetak rencana per provider; `--apply` menjalankannya
-sesudah semua file terpasang. Provider diubah hanya bila bundle-nya menyebut cara update
-(`update` di `config/providers.py`: codex `@openai/codex`, opencode `opencode-ai`, keduanya npm),
-CLI-nya ada di PATH, belum di rilis stabil, merupakan instalasi npm global (shim di bin global npm
-atau resolve ke `node_modules` global, dan direktori paketnya ada), dan registry npm punya rilis
-stabil itu. Selain itu provider dilaporkan dan dibiarkan: agy (`unsupported`, installer-nya tak
-terdokumentasi), CLI yang tak terpasang (tak dipasang baru), CLI dari Homebrew/installer lain
-(milik yang memasangnya), npm tak ada, atau registry tak terjangkau. Tanpa `sudo`. Tiap update
-diverifikasi dengan membaca `--version` lagi sesudah cache versi dan cache katalog model provider
-itu dibuang. Update tidak atomik dan bukan bagian receipt (`--rollback` tidak mengembalikannya):
-provider yang gagal diberi peringatan dengan error npm dan perintah pin-back ke rilis sebelumnya,
-provider lain tetap jalan, dan `~/.claude/backups/install_<stamp>/provider_update.json` mencatat
-rilis sebelum dan sesudah tiap provider.
+`install.py --update-providers` (opt-in, DEC-057) brings each CLI to `stable_version`, never
+to a newer release. The dry run prints the plan per provider; `--apply` executes it
+after all files are installed. A provider is changed only when its bundle names an update method
+(`update` in `config/providers.py`: codex `@openai/codex`, opencode `opencode-ai`, both npm),
+its CLI is on PATH, is not already on the stable release, is a global npm install (a shim in npm's global bin
+or resolving to the global `node_modules`, and its package directory exists), and the npm registry has that stable
+release. Otherwise the provider is reported and left alone: agy (`unsupported`, its installer is not
+documented), a CLI that is not installed (not freshly installed), a CLI from Homebrew/another installer
+(belongs to whoever installed it), npm missing, or the registry unreachable. No `sudo`. Each update
+is verified by reading `--version` again after that provider's version cache and model catalog cache
+are discarded. Updates are not atomic and not part of the receipt (`--rollback` does not revert them):
+a provider that fails gets a warning with the npm error and a pin-back command to the previous release,
+the other providers continue, and `~/.claude/backups/install_<stamp>/provider_update.json` records
+the release before and after for each provider.
 
-Kembali ke rilis stabil bila call gagal setelah provider di-update:
+Going back to the stable release if calls fail after a provider is updated:
 
 | Provider | Pin |
 |---|---|
 | codex | `npm i -g @openai/codex@<stable>` |
-| opencode | `npm i -g opencode-ai@<stable>` (atau installer opencode dengan versi itu) |
-| agy | installer agy dengan versi itu |
+| opencode | `npm i -g opencode-ai@<stable>` (or the opencode installer with that version) |
+| agy | the agy installer with that version |
 
-Rilis codex 0.155.0 sampai 0.160.0 gagal me-resume thread di Windows dengan
-`sandbox_unavailable` (CASE-016) selama sandbox resume dikirim lewat `-c sandbox_mode`;
-adapter kini mengirim `exec --sandbox`, dan resume jalan di rilis yang diuji dalam rentang itu
-(codex-cli 0.155.1 dan 0.160.0, CASE-021).
-`stable_version` tidak berubah sampai rilis lain diuji penuh.
+Codex releases 0.155.0 through 0.160.0 failed to resume threads on Windows with
+`sandbox_unavailable` (CASE-016) while the resume sandbox was sent via `-c sandbox_mode`;
+the adapter now sends `exec --sandbox`, and resume works on the releases tested within that range
+(codex-cli 0.155.1 and 0.160.0, CASE-021).
+`stable_version` moves only to a release that passed the live probe: codex 0.163.0 passed
+`codex-write-probe` (writes refused on a new and a resumed thread) and opencode 1.19.3 refused
+writes on a new and a resumed session, both on Windows (DEC-058).
 
 ---
 
 ## Fact store
 
-`.workflow/data/facts.jsonl` menyimpan pengetahuan yang bertahan lintas sesi. Sebuah klaim masuk lewat salah satu dari dua jalur:
+`.workflow/data/facts.jsonl` stores knowledge that persists across sessions. A claim enters through one of two paths:
 
-1. ditandai eksplisit `[config]`/`[pattern]`/`[invariant]` oleh second_agent, atau
-2. dilaporkan secara mandiri oleh ≥ `fact_recurrence_threshold` sesi **lain**.
+1. explicitly tagged `[config]`/`[pattern]`/`[invariant]` by second_agent, or
+2. reported independently by ≥ `fact_recurrence_threshold` **other** sessions.
 
-Sesi yang sedang berjalan dikecualikan dari hitungan recurrence. Tanpa itu, sebuah fakta yang diinjeksi ke prompt lalu sekadar digemakan kembali bisa menaikkan hitungannya sendiri sampai ambang promosi — pengulangan menyamar jadi bukti.
+The current session is excluded from the recurrence count. Without that, a fact injected into the prompt and then merely echoed back could raise its own count up to the promotion threshold — repetition masquerading as evidence.
 
-Tiap fakta ditambatkan ke hash isi baris `file:line`. Ketika baris itu berubah, fakta dianggap usang saat dibaca dan tak pernah disajikan sebagai segar.
+Each fact is anchored to the content hash of its `file:line` line. When that line changes, the fact is considered stale when read and is never served as fresh.
 
-Dua klaim dilebur hanya bila **semua** pagar setuju: `file` sama, `category` sama, `anchor_hash` identik, polaritas negasi sama, kemiripan Jaccard ≥ 0.5, dan kedua klaim ≥ 6 kata. Satu pagar menolak → dua-duanya disimpan. Duplikat itu murah; fakta yang hilang tak bisa dikembalikan.
+Two claims are merged only when **all** guards agree: same `file`, same `category`, identical `anchor_hash`, same negation polarity, Jaccard similarity ≥ 0.5, and both claims ≥ 6 words. One guard refuses → both are kept. Duplicates are cheap; a lost fact cannot be recovered.
 
-## Evidence reuse dan boundary
+## Evidence reuse and boundary
 
-Evidence lintas sesi diindeks di `.workflow/data/evidence.jsonl` dengan lock lintas proses dan
-atomic rewrite. Entry hanya boleh menunjuk artifact immutable
-`sessions/<id>/logs/<prompt_id>/output.raw.md`; hash artifact dan seluruh anchor `file:line`
-harus tetap cocok. Anchor yang tidak resolve atau melebihi batas membuat evidence tidak
-eligible untuk reuse. Entry lama yang menunjuk `response.last.md` dibuang.
-Query cache bersifat case-sensitive dan juga mengikat effective route/model, versi config,
-mode fan-out, graph leads, serta facts yang dipakai. `--fresh-session` menonaktifkan lookup
-reuse untuk invocation tersebut.
+Cross-session evidence is indexed in `.workflow/data/evidence.jsonl` with a cross-process lock and
+atomic rewrite. An entry may only point to an immutable artifact
+`sessions/<id>/logs/<prompt_id>/output.raw.md`; the artifact hash and every `file:line` anchor
+must still match. An anchor that does not resolve or exceeds the limit makes the evidence
+ineligible for reuse. Old entries pointing to `response.last.md` are discarded.
+The cache query is case-sensitive and also binds the effective route/model, config version,
+fan-out mode, graph leads, and the facts used. `--fresh-session` disables the reuse
+lookup for that invocation.
 
-Sebelum delegasi, path relatif di-resolve terhadap project root; traversal, path absolut
-di luar root, home-relative path, dan bare sensitive file seperti `credentials.json`
-ditolak. OpenCode memakai `external_directory: deny` di level root `opencode.json` project
-(berlaku untuk agent apa pun, termasuk override `AI_PROXY_OPENCODE_AGENT`) dan di
-`agent.plan`; file discovery harus melalui Read/Grep/Glob built-in. Bash hanya mengizinkan
-command Git read-only yang terdaftar.
+Before delegation, relative paths are resolved against the project root; traversal, absolute paths
+outside the root, home-relative paths, and bare sensitive files such as `credentials.json`
+are rejected. OpenCode uses `external_directory: deny` at the root level of the project's `opencode.json`
+(applying to any agent, including the `AI_PROXY_OPENCODE_AGENT` override) and in
+`agent.plan`; file discovery must go through the built-in Read/Grep/Glob. Bash only allows
+the registered read-only Git commands.
 
-Environment proses OpenCode (bootstrap, probe, run) tidak lagi mewarisi `os.environ`.
-Child mendapat allowlist variabel OS/jaringan (`PATH`, temp, locale, proxy/CA,
-`HOME`/`USERPROFILE`/`APPDATA`/`XDG_*`, `OPENCODE_*`) ditambah key dari `.env` di project
-root aktif (`adapters/shared/child_env.py`). Auth `opencode auth login` tetap terbaca dari
-`~/.local/share/opencode/auth.json`; key provider yang dirujuk config sebagai `{env:NAME}`
-harus ada di `.env` project. Call meta mencatat `env_policy`, `project_dotenv`,
-`project_dotenv_keys`, `parent_env_dropped` (jumlah, tanpa nilai). Codex/agy tidak berubah.
+The OpenCode process environment (bootstrap, probe, run) no longer inherits `os.environ`.
+The child gets an allowlist of OS/network variables (`PATH`, temp, locale, proxy/CA,
+`HOME`/`USERPROFILE`/`APPDATA`/`XDG_*`, `OPENCODE_*`) plus the keys from `.env` in the active project
+root (`adapters/shared/child_env.py`). `opencode auth login` auth is still read from
+`~/.local/share/opencode/auth.json`; provider keys referenced in config as `{env:NAME}`
+must be in the project `.env`. Call meta records `env_policy`, `project_dotenv`,
+`project_dotenv_keys`, `parent_env_dropped` (counts, no values). Codex/agy are unchanged.
 
-Semua content dan metadata adapter, termasuk error, timeout, bootstrap, probe, dan
-`call.meta.json`, melewati redaksi recursive. Argumen proses mentah tidak disimpan;
-telemetry hanya membawa jumlah, panjang, dan hash argv.
+All adapter content and metadata, including errors, timeouts, bootstrap, probe, and
+`call.meta.json`, go through recursive redaction. Raw process arguments are not stored;
+telemetry only carries the count, length, and hash of argv.
 
-Bersihkan yang usang dan duplikat:
+Clean up stale entries and duplicates:
 
 ```bash
 python3 main.py --command clean --work-dir /path/to/target-app --pretty
@@ -1135,27 +1142,28 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 
 ---
 
-## Layout workspace
+<a id="layout-workspace"></a>
+## Workspace layout
 
 ```text
 <target-app>/.workflow/
-├─ config.json              # override saja; default diisi saat dibaca
-├─ second_agent.json        # salinan project-local, config provider
-├─ e2e/secrets.json         # opsional, profil credential verify-browser
-├─ current/                 # cermin dispatch terakhir (tanpa credential)
+├─ config.json              # overrides only; defaults filled in on read
+├─ second_agent.json        # project-local copy, provider config
+├─ e2e/secrets.json         # optional, verify-browser credential profiles
+├─ current/                 # mirror of the last dispatch (no credentials)
 ├─ .gitignore
-├─ run.sh                  # entry point 1-panggilan (bash di semua OS)
-├─ inspect.sh              # daftar job
-├─ check.sh                # status/hasil job
-└─ data/                    # semua yang bukan file edit manusia (layout 2)
-   ├─ facts.jsonl           # fact store lintas sesi
-   ├─ evidence.jsonl        # index artifact immutable lintas sesi
+├─ run.sh                  # 1-call entry point (bash on every OS)
+├─ inspect.sh              # job list
+├─ check.sh                # job status/result
+└─ data/                    # everything that is not a human-edited file (layout 2)
+   ├─ facts.jsonl           # cross-session fact store
+   ├─ evidence.jsonl        # cross-session immutable artifact index
    ├─ audit.jsonl  usage.jsonl  quality.jsonl
-   ├─ provider-sessions/    # ID sesi provider, terisolasi per project
-   ├─ backups/<stamp>/      # salinan pra-migrasi, 3 terakhir disimpan
+   ├─ provider-sessions/    # provider session IDs, isolated per project
+   ├─ backups/<stamp>/      # pre-migration copies, last 3 kept
    ├─ reports/
    │  └─ doctor.json
-   └─ sessions/<session_id>/   # dibuat lazy per sesi
+   └─ sessions/<session_id>/   # created lazily per session
       ├─ state.json
       ├─ scope.json
       ├─ command-cache.json
@@ -1172,95 +1180,95 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
       └─ reports/sweep.last.md
 ```
 
-State yang berubah-ubah (`state`/`scope`/`cache`/`runtime`/`logs`) hidup di bawah `data/sessions/<id>/`, sehingga dua main_agent pada project yang sama tak pernah saling menimpa. Root `.workflow/` hanya berisi file yang diedit manusia plus script.
+Mutable state (`state`/`scope`/`cache`/`runtime`/`logs`) lives under `data/sessions/<id>/`, so two main_agents on the same project never overwrite each other. The `.workflow/` root holds only human-edited files plus scripts.
 
-Workspace layout v3.5.x (layout 1) menyimpan isi `data/` langsung di root `.workflow/`; runtime tetap membacanya sampai `upgrade` memindahkannya. Langkah pasca-pindah (rewrite path evidence, hapus sisa lama, strip config, konversi `secrets.json`, prune backup) dicatat di `data/.migration-pending.json`; bila salah satu gagal, `upgrade` berikutnya melanjutkan dari langkah itu dan `doctor` melaporkannya sebagai `migration incomplete`. Sisa `data.migrating/` yang namanya bentrok dengan root ditolak tanpa memindahkan apa pun.
+The v3.5.x workspace layout (layout 1) stored the contents of `data/` directly in the `.workflow/` root; the runtime still reads it until `upgrade` moves it. Post-move steps (rewrite evidence paths, delete old leftovers, strip config, convert `secrets.json`, prune backups) are recorded in `data/.migration-pending.json`; if any of them fails, the next `upgrade` resumes from that step and `doctor` reports it as `migration incomplete`. A leftover `data.migrating/` whose names collide with the root is refused without moving anything.
 
-Job asinkron tetap disimpan di repo tool pada `storage/jobs/`. Cache ID sesi default berada
-di `storage/main-sessions/` dan dipisah dengan hash project root; pemetaan ke ID sesi
-OpenCode berada project-local di `.workflow/data/provider-sessions/` sehingga ID yang sama pada
-dua project tidak dapat me-resume provider session satu sama lain.
+Async jobs are still stored in the tool repo under `storage/jobs/`. The default session ID cache is
+in `storage/main-sessions/` and is separated by a hash of the project root; the mapping to OpenCode
+session IDs is project-local in `.workflow/data/provider-sessions/`, so the same ID on
+two projects cannot resume each other's provider sessions.
 
 ---
 
-## Job asinkron & pemulihan
+## Async jobs & recovery
 
-Command terdelegasi otomatis berjalan lewat worker terpisah. Pada Claude Code, runner
-harus diluncurkan sebagai background tool task sehingga tool call foreground segera
-mengembalikan task ID; Claude kemudian mengambil hasil task itu. Runtime tetap
-agent-agnostic—caller lain boleh memakai runner blocking biasa.
+Delegated commands automatically run through a separate worker. On Claude Code, the runner
+must be launched as a background tool task so the foreground tool call immediately
+returns a task ID; Claude then fetches that task's result. The runtime stays
+agent-agnostic—other callers may use the ordinary blocking runner.
 
-Kalau background task hilang atau pemanggilan terputus, panggil runner lagi dengan
-session, command, dan task yang identik. Runtime akan attach bila worker masih hidup.
-Jika worker sudah mati, job yang sama dipulihkan satu kali melalui thread provider lama (opencode, codex, atau agy)
-dengan prompt continuation terstruktur. Kematian kedua menghasilkan
-`recovery_exhausted`, melepas lock, dan tidak memicu loop otomatis.
+If the background task is lost or the call is interrupted, call the runner again with an
+identical session, command, and task. The runtime attaches if the worker is still alive.
+If the worker is already dead, the same job is recovered once through the old provider thread (opencode, codex, or agy)
+with a structured continuation prompt. A second death yields
+`recovery_exhausted`, releases the lock, and does not trigger an automatic loop.
 
 ```bash
 bash .workflow/inspect.sh
 bash .workflow/check.sh <job_id> --wait --result
 ```
 
-Exit code status `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `3` tak
-ditemukan. Dengan `--result` untuk job verify, `0` hanya berarti verdict `pass`; verdict
-`fail` atau `incomplete` mengembalikan `2`.
+`check` status exit codes: `0` finished · `1` failed · `2` still running/queued · `3` not
+found. With `--result` for a verify job, `0` only means verdict `pass`; a verdict of
+`fail` or `incomplete` returns `2`.
 
-Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/data/sessions/<id>/runtime/response.last.md`. Yang sedang berjalan terlihat di `.workflow/current/session.json` dan `progress.jsonl`.
+If no matching job exists, the last result is still in `.workflow/data/sessions/<id>/runtime/response.last.md`. What is currently running is visible in `.workflow/current/session.json` and `progress.jsonl`.
 
-Recovery bersifat best-effort, bukan process survival: jika thread provider lama tidak
-pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run diperlukan.
-Hasil yang membawa `meta.session_persisted: false` berarti thread itu tidak tersimpan —
-recovery maupun continuation untuknya tidak tersedia.
-Request berbeda pada session yang masih terkunci tetap ditolak sebagai
-`job_already_running`, kecuali worker job pemegang lock terbukti `dead` (PID hilang atau
-dipakai ulang proses lain). Dalam kasus itu job lama ditandai `failed` + `reaped`, lock
-sesi itu saja dilepas, dan request baru diproses sebagai job baru. Job yang sedang
-recovery (belum punya worker PID) dan worker yang hidup atau stalled tidak pernah diambil.
-Request identik tetap memakai jalur recovery di atas.
+Recovery is best-effort, not process survival: if the old provider thread was never
+recorded, the runtime fails with `session_capture_failed` and a clean run is needed.
+A result carrying `meta.session_persisted: false` means that thread was not stored —
+neither recovery nor continuation is available for it.
+A different request on a session that is still locked is still rejected as
+`job_already_running`, unless the worker of the job holding the lock is proven `dead` (PID gone or
+reused by another process). In that case the old job is marked `failed` + `reaped`, only that
+session's lock is released, and the new request is processed as a new job. A job that is
+recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
+An identical request still uses the recovery path above.
 
-### Liveness worker (v3.8.3)
+### Liveness worker (v3.8.4)
 
-PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
+A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 
-| Keadaan | Arti | Tindakan |
+| State | Meaning | Action |
 | --- | --- | --- |
-| `alive-progressing` | PID hidup, heartbeat segar, stream belum melewati batas idle | tunggu |
-| `alive-stalled` | stream idle > `idle_stall_seconds` atau heartbeat basi > `stall_threshold_seconds` | probe fresh session |
-| `dead` | PID hilang | reap → `worker_died` |
+| `alive-progressing` | PID alive, heartbeat fresh, stream has not crossed the idle limit | wait |
+| `alive-stalled` | stream idle > `idle_stall_seconds` or heartbeat stale > `stall_threshold_seconds` | probe a fresh session |
+| `dead` | PID gone | reap → `worker_died` |
 
-Saat `alive-stalled`, runtime mengirim PING ke **sesi OpenCode baru**, bukan sesi yang dicurigai menggantung. Probe pertama berjalan segera setelah status stalled terlihat, lalu diulang sesuai `probe_recheck_seconds` selama job masih stalled. Default source saat ini `120` detik, bukan satu menit.
+When `alive-stalled`, the runtime sends a PING to a **new OpenCode session**, not the session suspected of hanging. The first probe runs as soon as the stalled status is seen, then repeats per `probe_recheck_seconds` while the job is still stalled. The current source default is `120` seconds, not one minute.
 
-Jalur normal `await` membaca `stall_threshold_seconds`, `idle_stall_seconds`, dan `probe_recheck_seconds` dari config project. Jalur attach `check.py --wait` saat ini memakai default tool untuk ketiganya dan cadence probe tetap 120 detik; tuning project belum diteruskan ke proses attach.
+The normal `await` path reads `stall_threshold_seconds`, `idle_stall_seconds`, and `probe_recheck_seconds` from the project config. The `check.py --wait` attach path currently uses the tool defaults for all three and a fixed probe cadence of 120 seconds; project tuning is not yet passed to the attach process.
 
-- probe menjawab → simpan `stalled_no_progress`, lanjut menunggu;
-- provider menolak karena quota/rate limit → terminate process tree, reap sebagai `rate_limited`;
-- stream probe terputus → terminate/reap sebagai `streaming_failed`;
-- probe gagal karena alasan lain → terminate/reap sebagai `second_agent_unavailable`;
-- PID hilang kapan pun → reap sebagai `worker_died`.
+- probe answers → store `stalled_no_progress`, keep waiting;
+- provider refuses because of quota/rate limit → terminate the process tree, reap as `rate_limited`;
+- probe stream cut off → terminate/reap as `streaming_failed`;
+- probe fails for another reason → terminate/reap as `second_agent_unavailable`;
+- PID gone at any time → reap as `worker_died`.
 
-Plafon keras JobManager tetap ada sebagai jaring pengaman: default 5400 detik dan dapat diubah lewat env `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`. Job yang melewatinya gagal sebagai `job_expired` meski PID tampak hidup. Key project-local bernama sama belum mengubah nilai ini.
+The JobManager hard ceiling remains as a safety net: default 5400 seconds, changeable via the env `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`. A job that exceeds it fails as `job_expired` even if the PID appears alive. A project-local key with the same name does not yet change this value.
 
-Setiap panggilan yang mencapai `OpenCodeAdapter` menuliskan `call.meta.json` yang sudah
-diredaksi (exit code, durasi, timeout, cara kill, ekor stderr aman, dan agregat argv) ke
-`.workflow/data/sessions/<id>/logs/<prompt_id>/`. `verify_mode: syntax` tidak membuat file ini.
+Every call that reaches `OpenCodeAdapter` writes a redacted `call.meta.json`
+(exit code, duration, timeout, kill method, safe stderr tail, and argv aggregates) to
+`.workflow/data/sessions/<id>/logs/<prompt_id>/`. `verify_mode: syntax` does not create this file.
 
 ---
 
-## Sesi
+## Sessions
 
-`--session` adalah otoritas tunggal untuk binding sesi. Panggilan pertama bootstrap sesi OpenCode:
+`--session` is the single authority for session binding. The first call bootstraps an OpenCode session:
 
 ```text
 opencode run <prompt> --print-logs --log-level INFO
 ```
 
-Runtime mengurai `session.id=ses_...` dari log dan menyimpannya. Panggilan berikutnya memakai ulang sesi itu:
+The runtime parses `session.id=ses_...` from the log and stores it. Subsequent calls reuse that session:
 
 ```text
 opencode run <prompt> -s <provider_session_id>
 ```
 
-Baris log OpenCode dan banner model dibuang dari `content`; isi jawaban asisten dipertahankan utuh.
+OpenCode log lines and the model banner are stripped from `content`; the assistant's answer is kept intact.
 
 ---
 
@@ -1274,13 +1282,13 @@ python3 tests/run.py
 python tests/run.py
 ```
 
-Suite default tidak memanggil OpenCode sungguhan; alur agent memakai adapter palsu,
-sedangkan jalur subprocess, heartbeat, timeout, kill-tree, installer, rollback, dan
-kontrak persistence diuji secara lokal.
+The default suite does not call the real OpenCode; agent flows use a fake adapter,
+while the subprocess path, heartbeat, timeout, kill-tree, installer, rollback, and
+persistence contracts are tested locally.
 
-Gunakan `python tools/e2e/e2e.py --full` bila ingin menambahkan smoke test OpenCode nyata; mode itu opt-in karena memakai quota.
+Use `python tools/e2e/e2e.py --full` if you want to add a real OpenCode smoke test; that mode is opt-in because it uses quota.
 
-Pemeriksaan tambahan:
+Additional checks:
 
 ```bash
 python3 main.py --help
@@ -1291,15 +1299,15 @@ python3 main.py --command doctor --work-dir . --pretty
 
 ## CI
 
-Dua workflow GitHub Actions menjalankan gerbang yang tanpanya seseorang harus ingat
-menjalankannya sendiri.
+Two GitHub Actions workflows run the gates that someone would otherwise have to remember
+to run themselves.
 
-| File | Pemicu |
+| File | Trigger |
 |---|---|
-| `.github/workflows/ci.yml` | push ke `main`/`dev`, pull request, manual |
-| `.github/workflows/e2e-full.yml` | manual saja |
+| `.github/workflows/ci.yml` | push to `main`/`dev`, pull request, manual |
+| `.github/workflows/e2e-full.yml` | manual only |
 
-Gerbang yang dijalankan jalur gratis, berurutan:
+Gates run by the free path, in order:
 
 ```
 python tools/maintain/stamp_version.py --check
@@ -1309,61 +1317,62 @@ python tests/run.py --keep-going --record .
 python tools/e2e/e2e.py
 ```
 
-`--only deps` berdiri sebagai step tersendiri, bukan hanya di dalam suite: itu gerbang yang
-memutuskan apakah ketiadaan lockfile masih benar, dan pembaca yang menyapu daftar step harus
-bisa melihatnya berlaku. `--keep-going` supaya satu kegagalan tak menyembunyikan sisanya;
-`--record .` menulis hasilnya ke stream kualitas workspace, jadi `--command report` bisa
-menunjukkan pass rate lintas waktu alih-alih hanya run terakhir. `e2e.py` tanpa `--full`:
-nol provider CLI dipanggil, nol kuota dibakar — itu sebabnya ia boleh jalan di tiap push.
+`--only deps` stands as its own step, not only inside the suite: it is the gate that
+decides whether the absence of a lockfile is still correct, and a reader scanning the step list must
+be able to see it applied. `--keep-going` so that one failure does not hide the rest;
+`--record .` writes the results to the workspace quality stream, so `--command report` can
+show the pass rate over time instead of only the last run. `e2e.py` without `--full`:
+zero provider CLIs called, zero quota burned — which is why it may run on every push.
 
-Jalur terdelegasi manual dan tak pernah otomatis: ia memanggil second_agent sungguhan,
-memakan kuota nyata, dan butuh provider CLI plus kredensial yang sengaja tidak dipegang
-pipeline. Ia workflow `workflow_dispatch` terpisah, dengan session id dan runner sebagai
-input dispatch — default `e2e-dispatch` dan `self-hosted`.
+The delegated path is manual and never automatic: it calls the real second_agent,
+consumes real quota, and needs a provider CLI plus credentials the pipeline deliberately does
+not hold. It is a separate `workflow_dispatch` workflow, with the session id and runner as
+dispatch inputs — defaults `e2e-dispatch` and `self-hosted`.
 
-### Toolchain dan matrix
+### Toolchain and matrix
 
-Python dipaku ke `3.13` lewat `actions/setup-python`, jadi workflow MENYEDIAKAN interpreter
-alih-alih berharap runner membawanya. Matrix `runs-on` mencakup `ubuntu-latest` dan
-`windows-latest` dengan `fail-fast: false`: hook dan runner adalah bash di kedua OS (Git Bash di
-Windows, diperiksa di langkah pertama job), tetapi penanganan path paling berbeda persis di tempat
-yang penting (lock, direktori sesi, path ber-backslash yang diterima launcher) — run satu-OS akan
-lolos sementara separuh produk tak teruji, dan satu platform yang merah tak boleh menyembunyikan
-hasil platform lain.
+Python is pinned to `3.13` via `actions/setup-python`, so the workflow PROVIDES the interpreter
+instead of hoping the runner has it. The `runs-on` matrix covers `ubuntu-latest` and
+`windows-latest` with `fail-fast: false`: hooks and the runner are bash on both OSes (Git Bash on
+Windows, checked in the job's first step), but path handling differs most exactly where
+it matters (locks, session directories, backslash paths accepted by the launcher) — a single-OS run would
+pass while half the product went untested, and one red platform must not hide
+the other platform's results.
 
-`on: push` (`main`/`dev`) + `pull_request` + `workflow_dispatch`, dengan
-`concurrency: cancel-in-progress` supaya pipeline yang tersalip di ref yang sama dibatalkan
-alih-alih dibiarkan selesai melawan commit basi. Permission job dikunci ke `contents: read`.
+`on: push` (`main`/`dev`) + `pull_request` + `workflow_dispatch`, with
+`concurrency: cancel-in-progress` so that a pipeline overtaken on the same ref is cancelled
+instead of being left to finish against a stale commit. Job permissions are locked to `contents: read`.
 
-Yang **tidak** dilakukan CI: bump, tag, publish. Langkah yang tetap milik
-manusia ada di `RELEASE.md`.
+What CI does **not** do: bump, tag, publish. The steps that remain human-owned
+are in `RELEASE.md`.
 
 ---
 
-## Batasan yang diketahui
+<a id="batasan-yang-diketahui"></a>
+## Known limitations
 
-Dipindah ke [`docs/limitations.md`](limitations.md). Heading ini dipertahankan supaya tautan
-lama ke `#batasan-yang-diketahui` tetap berfungsi.
+Moved to [`docs/limitations.md`](limitations.md). This heading is kept so that old
+links to `#batasan-yang-diketahui` keep working.
 
 ---
 
 ## Benchmark
 
-Dipindah ke [`docs/evaluation/benchmark.md`](evaluation/benchmark.md). Hasil pemakaian nyata
-(task yang masuk `main`, perbaikan, prompt, context) ada di
-[`docs/evaluation/real-use-benchmark.md`](evaluation/real-use-benchmark.md); telemetry status
-line di [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md).
+Moved to [`docs/evaluation/benchmark.md`](evaluation/benchmark.md). Real-use results
+(tasks that landed in `main`, fixes, prompts, context) are in
+[`docs/evaluation/real-use-benchmark.md`](evaluation/real-use-benchmark.md); status line
+telemetry in [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md).
 
 ---
 
-## Referensi
+## References
 
-- Catatan rilis: [`CHANGELOG.md`](../CHANGELOG.md)
-- Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
-- Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
+- Release notes: [`CHANGELOG.md`](../CHANGELOG.md)
+- Canonical main_agent contract: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
+- Canonical second_agent contract: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](../main.py)
-- Benchmark: [`docs/evaluation/benchmark.md`](evaluation/benchmark.md) (metode sebagai `H` + `EXP` di `docs/research/`)
-- Arsitektur (diagram terverifikasi): [`docs/architecture/`](architecture/README.md)
-- Batasan: [`docs/limitations.md`](limitations.md)
-- Evaluasi (benchmark dan telemetry): [`docs/evaluation/`](evaluation/README.md)
-- Catatan riset dan keputusan desain: [`docs/research/`](research/README.md); pertanyaan riset (`RQ`): [`docs/research/questions.md`](research/questions.md)
+- Benchmark: [`docs/evaluation/benchmark.md`](evaluation/benchmark.md) (method as `H` + `EXP` in `docs/research/`)
+- Architecture (verified diagrams): [`docs/architecture/`](architecture/README.md)
+- Limitations: [`docs/limitations.md`](limitations.md)
+- Evaluation (benchmark and telemetry): [`docs/evaluation/`](evaluation/README.md)
+- Research notes and design decisions: [`docs/research/`](research/README.md); research questions (`RQ`): [`docs/research/questions.md`](research/questions.md)

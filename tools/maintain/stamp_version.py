@@ -36,7 +36,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "docs/reference.md": (
         "# agent-workflow v",
         "## Install (v",
-        "Kunci reliability (v",
+        "Reliability keys (v",
         "### Liveness worker (v",
     ),
     "dist/config/claude/CLAUDE.md": (
@@ -82,25 +82,28 @@ SCAN_PATHS: tuple[str, ...] = ("README.md", "docs/reference.md", "dist/config")
 EXEMPT: dict[str, tuple[str, ...]] = {
     "docs/reference.md": (
         # The v3.4.2 -> v3.4.3 provider-key migration, described in the past tense.
-        "memigrasi kunci v",
-        "sejak v3.4.3 provider second_agent",
+        "migrates the v3.4.2 keys",
+        "since v3.4.3 the second_agent provider",
         # codex-cli's version, not ours.
         "codex-cli",
         # The benchmark's frozen SUT, stated in prose. Same freeze as the TARGETS note.
         "System under test dibekukan",
         # The v3.6.0 `data/` layout upgrade, described as history.
-        "Upgrade ke layout `data/`",
+        "The upgrade to the `data/` layout",
         # The v3.7.1 trusted-provider stance for codex/agy, described as history.
-        "Sejak v3.7.1 posisi ini",
+        "Since v3.7.1 this position",
         # Provider CLI releases (config/providers.py stable_version), not ours.
         "(`stable_version`): opencode",
-        "Rilis codex 0.155.0 sampai",
+        "Codex releases 0.155.0 through",
+        # DEC-058: the probe that moved the pins, naming provider releases.
+        "passed the live probe: codex",
+        "(writes refused on a new and a resumed thread) and opencode",
         # v3.8.0 behavior described as history once 3.8.1 shipped.
-        "dan template sejak 3.8.0",
-        "dari draft 3.8.0)",
-        "Sampai 3.8.0 `intent-gate-set`",
-        "Pada 3.8.0 ini teramati",
-        "Sebelum 3.8.0 hook ini jalan",
+        "and since 3.8.0 the template",
+        "from the 3.8.0 draft)",
+        "Up to 3.8.0, `intent-gate-set`",
+        "In 3.8.0 this was observed",
+        "Before 3.8.0 this hook ran",
     ),
     "dist/config/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.

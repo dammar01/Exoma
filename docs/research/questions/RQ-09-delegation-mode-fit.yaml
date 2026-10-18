@@ -6,7 +6,7 @@ status: unanswered
 what_exists: |
   Direct and assisted exist; `/.execute` always requires explicit approval, so autonomous does
   not.
-records: [DEC-028, CASE-016, DEC-034, CASE-021, DEC-053, DEC-057]
+records: [DEC-028, CASE-016, DEC-034, CASE-021, DEC-053, DEC-057, DEC-058]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
