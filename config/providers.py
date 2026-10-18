@@ -116,7 +116,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # Declared, but deliberately NOT shipped in dist/config/codex/. Codex's config is
         # TOML and every value in it is overridable per invocation (`-c key=value`, `-s`),
         # so the adapter asserts the read-only boundary on every call instead of merging a
-        # file once — see adapters/codex_install.py. The keys stay because install.py and
+        # file once — see adapters/install/codex_install.py. The keys stay because install.py and
         # installer/check.py index them directly; both guard the FILE with .exists(), so an
         # unshipped template is a supported "this provider has none".
         "global_config": ("codex.template.toml", "config.toml"),
@@ -222,7 +222,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # tool — writes AND reads — leaving a second_agent that cannot gather evidence.
         # So the adapter takes the permissive side and pairs it with `core/agy_guard.py`,
         # which diffs the working tree around each call. That DETECTS a write; it does not
-        # stop one. `adapters/agy_install.py` reports `not_enforceable` with both counts at
+        # stop one. `adapters/install/agy_install.py` reports `not_enforceable` with both counts at
         # zero and says all of this where a user installing a workspace will read it.
         #
         # The full list from `agy models` — eleven entries, short enough to mirror whole

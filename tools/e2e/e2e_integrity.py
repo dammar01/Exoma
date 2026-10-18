@@ -166,7 +166,7 @@ def integrity_checks(report: Report) -> None:
         # report it. Reporting was the old contract: init handed back a stale workspace and
         # said so in a return field nobody read, so every fix reached only the users who
         # remembered to run upgrade as a separate step. init now runs that upgrade itself
-        # (core/workflow_runtime.py:1021-1032), which is why the assertion below is the
+        # (core/runtime/state.py ensure_workflow_workspace), which is why the assertion below is the
         # inverse of the one it replaces — the config IS rewritten, on purpose.
         stale_config = json.loads(cfg_path.read_text(encoding="utf-8"))
         stale_config["version"] = "0.0.0"

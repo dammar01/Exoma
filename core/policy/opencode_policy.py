@@ -1,7 +1,7 @@
 """Shared OpenCode config merge policy.
 
 Both writers of an opencode config go through here: `install.py` (global
-~/.config/opencode) and `core.runtime.workflow_runtime` (the project boundary at
+~/.config/opencode) and `core.runtime.upgrade._install_project_boundary` (the project boundary at
 <project_root>/opencode.json). The rules are a security boundary, so they live in one
 module rather than being reimplemented on each side — a second copy is a second thing to
 forget when the deny-list changes.

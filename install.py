@@ -603,7 +603,7 @@ def main() -> int:
             )
     # <project_root>/opencode.json (the secret-file boundary) is NOT installed here. It
     # belongs to a workspace, so init/upgrade owns it — see
-    # core.runtime.workflow_runtime._install_project_boundary. The upgrade call below reaches it.
+    # core.runtime.upgrade._install_project_boundary. The upgrade call below reaches it.
     _seed_second_agent_config(plan, apply, args.provider, args.model)
     agent_path = REPO_ROOT / "main.py"
     if os.environ.get("AGENT_PATH") != str(agent_path):

@@ -21,7 +21,7 @@ So the patterns live here in one canonical form, and each provider gets a transl
   file returns that file at exit 0 — codex reads by spawning a shell, and `--sandbox
   read-only` bounds writes rather than reads. The flags stay because they are four argv
   elements and become real the day codex gates shell reads, but the enforced boundary today
-  is opencode's alone. `adapters/codex_install.py` reports this as `not_enforceable`.
+  is opencode's alone. `adapters/install/codex_install.py` reports this as `not_enforceable`.
 
 Verified against codex-cli 0.147.0: `[permissions.<profile>.filesystem]` is a real config
 section, an access value of `"none"` is accepted, `"read-write"` is not (the enum rejects

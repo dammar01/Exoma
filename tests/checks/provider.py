@@ -892,7 +892,7 @@ def _test_agy_provider() -> None:
         "agy spells effort with --effort, and says nothing when unset",
     )
     # An install module that reports the absence of a boundary, rather than no module at
-    # all. `core/workflow_runtime.py` and `installer/settings.py` both dispatch through
+    # all. `core/runtime/upgrade.py` and `installer/settings.py` both dispatch through
     # `provider_install_module`, which RAISES on a bundle that declares none — so a
     # provider without one crashes the install path instead of being skipped by it.
     from config.providers import provider_install_module

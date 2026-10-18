@@ -46,7 +46,7 @@ not a rename of it:
    codex gates shell reads, and codex has no project-scoped config layer to install them
    into anyway (a `.codex/config.toml` in a project root is not loaded at all), so argv is
    not merely the tidier route here, it is the only one. What must not happen again is
-   anyone reading their presence as protection: `adapters/codex_install.py` reports
+   anyone reading their presence as protection: `adapters/install/codex_install.py` reports
    `not_enforceable` with `permissions_enforced: 0`, and `dist/config/codex/AGENTS.md` tells
    the agent that avoiding secret files is its own obligation. A codex second_agent can read
    every file in the project it is pointed at.
