@@ -28,6 +28,7 @@ Second agent cuma baca + telusur; runtime yang menjalankan test. Kamu yang memil
 Gate: selama marker verify aktif (sebelum `.workflow/run verify`) yang lolos HANYA `git diff --name-only|--name-status|--stat [ref] [-- path]`
 (bersih, nol pipe/`&&`/redirect), Read `.workflow/config.json` + tests.json sesi ini, dan Write tests.json itu. Baca isi file src/test → ke-block; cukup nama file dari diff.
 Tanpa tests.json → verify jadi `incomplete` (gap `tests:`, exit nonzero). `commands: []` eksplisit ≠ tanpa tests.json. Test gagal → blocking.
+tests.json milik SATU job verify (runtime mengklaimnya saat job dibuat). Rerun sesudah verify gagal = job baru → tulis tests.json lagi; pilihan lama tidak dipakai ulang.
 
 ## Protocol (verify_mode=delegated)
 1. Logic: solve problem? assumptions valid? konsisten pola codebase? → PASS/FAIL + reason

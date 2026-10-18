@@ -198,8 +198,9 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-018](real-cases/CASE-018-real-use-execute-without-plan-or-approval.yaml) | Real use of 3.8.1 — feature requests executed without a plan, plan answers taken as approval | negative | implemented | observed | 4a09c04 |
 | [CASE-019](real-cases/CASE-019-codex-writes-through-apply-patch-under-read-only-sandbox.yaml) | codex wrote a file through apply_patch under --sandbox read-only | negative | implemented | observed | 895aa6f |
 | [CASE-020](real-cases/CASE-020-headless-simulation-of-dec-046-scenarios.yaml) | Headless simulation of DEC-046 scenarios A, C and D — routing holds, delegated calls cannot finish | inconclusive | implemented | observed | 58db760, 895aa6f |
-| [CASE-021](real-cases/CASE-021-codex-resume-sandbox-fails-on-config-sandbox-mode.yaml) | Codex resume fails on Windows only when the sandbox rides `-c sandbox_mode`; `exec --sandbox` before `resume` works on 0.154.0 through 0.160.0 | positive | implemented | observed | 8dcb6bb |
-| [CASE-022](real-cases/CASE-022-subagent-hand-backs-arm-the-intent-gate.yaml) | Native subagent hand-backs armed the intent gate during /.execute and blocked the main agent and its subagents | negative | implemented | observed | 0a43309 |
+| [CASE-021](real-cases/CASE-021-codex-resume-sandbox-fails-on-config-sandbox-mode.yaml) | Codex resume fails on Windows only when the sandbox rides `-c sandbox_mode`; `exec --sandbox` before `resume` works on 0.154.0 through 0.160.0 | positive | implemented | observed | — |
+| [CASE-022](real-cases/CASE-022-subagent-hand-backs-arm-the-intent-gate.yaml) | Native subagent hand-backs armed the intent gate during /.execute and blocked the main agent and its subagents | negative | implemented | observed | 3a4ba3e |
+| [CASE-023](real-cases/CASE-023-a-failed-verify-left-its-test-request-for-the-next-one.yaml) | A verify whose provider call failed left its test request, and the next verify ran that old choice | negative | implemented | observed | 6097f05 |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -259,6 +260,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-059](decisions/DEC-059-the-gate-ignores-every-turn-the-user-did-not-write.yaml) | The intent gate ignores every turn the user did not write, and a real marker still binds subagents | accepted | implemented | not_validated | 0a43309 |
 | [DEC-060](decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml) | /.commit stages targeted paths itself, skips secret-looking names, and commits only on yes | accepted | implemented | observed | 1d43cbe |
 | [DEC-061](decisions/DEC-061-commit-skips-the-canonical-secret-file-list.yaml) | /.commit skips the canonical secret-file list instead of name substrings | accepted | implemented | observed | 251acd7 |
+| [DEC-062](decisions/DEC-062-the-verify-test-request-belongs-to-one-job.yaml) | The verify test request belongs to the job created for it | accepted | implemented | not_validated | uncommitted |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
@@ -270,10 +272,10 @@ Proposed hypotheses, planned experiments, syntheses, and decisions without a res
 kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
 only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held (2026-10-05): H-004, H-008..H-016 and EXP-004..EXP-009 (YAML, each
-naming its research question; H-016 is the charter's CH1), CASE-004 (moved back on
-2026-09-28: the records it relates to are all drafts), and H-005, EXP-002, CASE-002, SYN-002,
-DEC-002 (Markdown, still referenced).
+Drafts currently held (2026-10-19): H-004, H-008..H-020 and EXP-004..EXP-012 (YAML, each
+naming its research question; H-016 is the charter's CH1), DEC-063 and SYN-003 (YAML),
+CASE-004 (moved back on 2026-09-28: the records it relates to are all drafts), and H-005,
+EXP-002, CASE-002, SYN-002, DEC-002 (Markdown, still referenced).
 H-001..H-003, H-006, H-007, EXP-001, EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
 kept in `docs/research-drafts/_archive/`, which the check does not read. Drafts use the
 same YAML format; the Markdown ones are listed by `check_research.py --drafts` until

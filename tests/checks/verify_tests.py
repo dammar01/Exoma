@@ -128,6 +128,7 @@ def _test_verify_runtime_tests() -> None:
     _check_request_text_cannot_forge_sections()
     _check_timeout_kills_the_tree()
     _check_request_survives_until_merged()
+    _check_a_new_job_never_reruns_an_old_request()
     _check_prompt_tests_line_follows_allowlist()
     _check_doctor_verify_warnings()
     _check_no_test_line_is_not_a_check()
@@ -453,6 +454,139 @@ def _check_request_survives_until_merged() -> None:
             "the request is consumed once its results are merged",
         )
     finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_a_new_job_never_reruns_an_old_request() -> None:
+    """CASE-023: a verify whose provider call failed returned before its tests ran and left
+    its request, and the next verify ran that old choice. The request is now claimed by the
+    job created for it; the next job drops it, a recovered run of the same job keeps it."""
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} -c"])
+    try:
+        _request(root, {"commands": [f"{python} -c pass"], "reason": "job 1"})
+        verify_tests.claim(root, "s1")  # job 1; its provider call fails, nothing consumes
+        verify_tests.claim(root, "s1")  # job 2; main_agent wrote no new request
+        with verify_tests.job("job-2"):
+            result, verdict = _verify(root)
+        assert_true(
+            not result["meta"]["runtime_tests"]["requested"] and verdict["verdict"] == "incomplete",
+            f"a new job does not run an earlier job's request: {result['meta']['runtime_tests']}",
+        )
+
+        _request(root, {"commands": [f"{python} -c pass"], "reason": "job 3"})
+        verify_tests.claim(root, "s1")
+        with verify_tests.job("job-3"):
+            found = verify_tests.read_request(root, "s1") or {}
+        assert_true(found.get("reason") == "job 3", "a recovered run of the same job still finds its claimed request")
+        assert_true(
+            verify_tests.read_request(root, "s1") is None,
+            "a run without a job never reads a claim; it was left by a job, not written for this run",
+        )
+        _request(root, {"commands": [f"{python} -c pass"], "reason": "job 4"})
+        verify_tests.claim(root, "s1")
+        with verify_tests.job("job-4"):
+            found = verify_tests.read_request(root, "s1") or {}
+            _verify(root)
+        assert_true(found.get("reason") == "job 4", "a request written for the next job replaces the earlier claim")
+        verify_dir = verify_tests.request_path(root, "s1").parent
+        assert_true(
+            sorted(p.name for p in verify_dir.iterdir()) == ["tests.used.json"],
+            f"the claimed request is consumed once merged: {sorted(p.name for p in verify_dir.iterdir())}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    _check_submit_claims_only_for_a_new_job()
+    _check_failed_provider_call_does_not_feed_the_next_job()
+
+
+class _FailThenReviewAdapter:
+    """A provider whose first call fails (ok:false) and whose later calls return a review."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run(self, prompt: str, session: dict, model: str | None = None, work_dir: str | None = None) -> dict:
+        self.calls += 1
+        if self.calls == 1:
+            return {"ok": False, "content": "simulated provider failure", "meta": {"simulated": True}}
+        return {"ok": True, "content": _REVIEW, "meta": {"simulated": True, "provider_session_id": "ses_verify"}}
+
+
+def _check_failed_provider_call_does_not_feed_the_next_job() -> None:
+    """CASE-023 end to end: a verify job whose provider call returns ok:false through the real
+    Executor leaves its claim; the next verify job, with no new request, runs no test."""
+    import main
+    from core.jobs.job_manager import JobManager
+    from core.provider.executor import Executor
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} -c"])
+    saved = (main.SESSION_MANAGER, main.JOB_MANAGER, main.EXECUTOR, main._spawn_worker)
+    main.SESSION_MANAGER = main.SessionManager(root / "sessions")
+    main.JOB_MANAGER = manager = JobManager(root / "jobs")
+    main.EXECUTOR = Executor(adapter=_FailThenReviewAdapter(), session_manager=main.SESSION_MANAGER)
+    main._spawn_worker = lambda job_id, work_dir=None: {
+        "ok": True, "content": "worker started", "meta": {"pid": os.getpid()},
+    }
+    try:
+        main.subprocess.run(["git", "init", "-q", str(root)], capture_output=True, text=True)
+        _request(root, {"commands": [f"{python} -c pass"], "reason": "job 1"})
+        first = main.submit("verify", "check it", "s1", str(root), None)
+        failed = main.run_worker(first["job_id"])
+        assert_true(
+            not failed["ok"] and verify_tests.claimed_path(root, "s1").is_file(),
+            f"a provider ok:false leaves the job's claim unconsumed: {failed.get('content')}",
+        )
+        second = main.submit("verify", "check it", "s1", str(root), None)
+        result = main.run_worker(second["job_id"])
+        tests = (result.get("meta") or {}).get("runtime_tests") or {}
+        assert_true(
+            second["job_id"] != first["job_id"] and tests.get("requested") is False,
+            f"the next job runs no test chosen for the failed one: {tests} / {result.get('content', '')[:200]}",
+        )
+    finally:
+        main.SESSION_MANAGER, main.JOB_MANAGER, main.EXECUTOR, main._spawn_worker = saved
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_submit_claims_only_for_a_new_job() -> None:
+    """The claim happens where the job is created: a new verify job claims, a recovery of
+    the same job does not, and a job after a failed one drops the leftover."""
+    import main
+    from core.jobs.job_manager import JobManager
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} -c"])
+    original_manager, original_spawn = main.JOB_MANAGER, main._spawn_worker
+    main.JOB_MANAGER = manager = JobManager(root / "jobs")
+    main._spawn_worker = lambda job_id, work_dir=None: {
+        "ok": True, "content": "worker started", "meta": {"pid": os.getpid()},
+    }
+    claimed = verify_tests.claimed_path(root, "s1")
+    try:
+        _request(root, {"commands": [f"{python} -c pass"], "reason": "r"})
+        first = main.submit("verify", "check it", "s1", str(root), None)
+        assert_true(
+            first["ok"] and claimed.is_file() and not verify_tests.request_path(root, "s1").exists(),
+            f"a new verify job claims the request: {first}",
+        )
+        manager.set_worker_pid(first["job_id"], 999999999)
+        recovered = main.submit("verify", "check it", "s1", str(root), None)
+        assert_true(
+            recovered["ok"] and recovered["meta"]["recovery"] and claimed.is_file(),
+            f"recovering the same job keeps its claim: {recovered}",
+        )
+        manager.fail_job(recovered["job_id"], "provider call failed")
+        again = main.submit("verify", "check it", "s1", str(root), None)
+        assert_true(
+            again["ok"] and again["job_id"] != first["job_id"] and not claimed.exists(),
+            f"the job after a failed one drops the leftover claim: {again}",
+        )
+        manager.fail_job(again["job_id"], "cleanup")
+    finally:
+        main.JOB_MANAGER, main._spawn_worker = original_manager, original_spawn
         shutil.rmtree(root, ignore_errors=True)
 
 

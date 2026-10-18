@@ -22,6 +22,7 @@ from config.settings import (
     MAIN_PY,
     load_provider_config_for,
 )
+from core.evidence import verify_tests
 from core.evidence.contract import make_error
 from core.jobs.job_manager import DEAD
 from core.evidence.result_shaping import _finalize_verify_result
@@ -183,6 +184,10 @@ def submit(
                         model,
                         allow_reuse,
                     )
+                    if normalized_command == "verify":
+                        # A new job, not a recovery or an attach: the test request is this
+                        # job's from here on, and an earlier job's leftover is dropped.
+                        verify_tests.claim(detect_project_root(work_dir), session_id)
                 except ValueError as exc:
                     active = _main().JOB_MANAGER.active_job_for_session(session_id)
                     active_id = active["job_id"] if active else None
@@ -575,16 +580,17 @@ def run_worker(job_id: str) -> dict:
                 "do not repeat completed findings. Return the normal evidence contract."
             )
 
-        output = _main().run(
-            job["command"],
-            effective_task,
-            job["session_id"],
-            job.get("work_dir"),
-            job.get("model"),
-            on_progress=_beat,
-            allow_reuse=bool(job.get("allow_reuse", True)),
-            require_provider_session=require_provider_session,
-        )
+        with verify_tests.job(job_id):
+            output = _main().run(
+                job["command"],
+                effective_task,
+                job["session_id"],
+                job.get("work_dir"),
+                job.get("model"),
+                on_progress=_beat,
+                allow_reuse=bool(job.get("allow_reuse", True)),
+                require_provider_session=require_provider_session,
+            )
         output.setdefault("meta", {}).setdefault("job_id", job_id)
         if output.get("ok"):
             _main().JOB_MANAGER.complete_job(job_id, output)

@@ -1,0 +1,60 @@
+schema_version: 3
+id: CASE-023
+title: A verify whose provider call failed left its test request, and the next verify ran that old choice
+recorded_on: 2026-10-19
+visibility: public
+environment: maintainer_development
+repository_identity: undisclosed
+evidence_tier: creator_observation
+
+context: |
+  Real use of /.verify in delegated mode during fullstack work. main_agent writes the tests it
+  chose to the session's `verify/tests.json` before calling `.workflow/run verify`; the runtime
+  runs them after the provider call and renames the request to `tests.used.json` (DEC-025,
+  DEC-029).
+task: |
+  Re-run /.verify after a verify that did not complete, on a working tree that had changed.
+workflow: |
+  The request was consumed only inside `verify_tests.apply`, which the executor calls after the
+  provider call returned `ok: true`. A provider call that returned `ok: false` (proxy failure,
+  invalid evidence) returned first, and so did a refused run or a syntax-mode verify. The
+  request was keyed by session only, not by job.
+observation: |
+  The maintainer reported that after a verify failed, a rerun used the old request file and
+  produced additional failures. Reproduced on the working tree at 6097f05: a request written for
+  one verify, left unconsumed as a failed provider call leaves it, was read and run by the next
+  verify (`runtime_tests.requested: true`, the first verify's reason, the command executed),
+  although no request had been written for the second one.
+
+evidence:
+  source: |
+    The maintainer's report of the rerun, and a reproduction against core/evidence/verify_tests.py
+    at 6097f05 using the harness of tests/checks/verify_tests.py (`_workspace`, `_request`,
+    `_verify`): one request, no apply for the first verify, `apply` for the second.
+  counted_by: maintainer
+  counted_on: 2026-10-19
+  notes: |
+    The reported exit code 2 of the failed verify was not mapped to a runtime path; every path
+    that returns before `apply` leaves the request in the same way.
+
+outcome: negative
+unexpected_behavior:
+  - A verify ran tests that main_agent had chosen for an earlier verify, without saying so
+limitations:
+  - One maintainer report and one reproduction; the frequency in real use was not counted
+  - The reproduction exercises the request lifecycle, not a live provider failure
+related: [DEC-029, DEC-062]
+related_notes: |
+  DEC-029 moved consumption after the merge so a recovered run keeps its request; that made a
+  run that ended before the merge leave it too. DEC-062 binds the request to the job.
+
+implementation:
+  version: 3.8.4
+  commits: [6097f05]
+  commits_note: the tree the reproduction ran on (a docs commit on top of the observed runtime), not a change to it
+  feature: verify runtime tests (verify/tests.json)
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+questions: [RQ-11]

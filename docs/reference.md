@@ -1022,9 +1022,14 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   While runtime tests run, the job heartbeat is written before each command and every 20 s
   (`phase: runtime_tests`), so a long suite does not read as `alive-stalled`. `reason` must be a single line
   (one containing a newline makes the request unusable); `command` and `detail` are collapsed onto one
-  line before entering the block, so request text cannot forge a section. The request file
-  is used once, renamed to `tests.used.json` **after** its results are merged, so a recovery
-  run of the same job still finds it. A run finishes when that command's process exits, not when its pipe hits EOF: after
+  line before entering the block, so request text cannot forge a section. The request belongs
+  to one job: creating a verify job moves `tests.json` to `tests.claimed.json` and drops any claim
+  an earlier job left (its provider call failed or its run was refused before the tests ran), so
+  a new verify without a new `tests.json` gets the `tests:` gap, never an earlier choice. A
+  recovery run of the same job is not a new job and still finds its claim. Only a job's own
+  run reads a claim; a run without a job (an in-process `main.run`, as the test harnesses use)
+  reads `tests.json` alone. The claim is used once, renamed to `tests.used.json` **after** its
+  results are merged. A run finishes when that command's process exits, not when its pipe hits EOF: after
   exit, the pipe is waited on for at most 5 s and then any remaining processes still holding it are killed (process
   group on POSIX, job object on Windows) and the original exit code is used, so a runner that
   leaves a server/watcher behind no longer reads as a timeout. A timeout kills the command's whole process

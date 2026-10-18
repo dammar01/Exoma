@@ -26,15 +26,22 @@ The tests run after the provider has finished, when nothing else beats the job's
 `apply` takes the delegated call's progress callback and beats it (phase `runtime_tests`)
 before each command and every `HEARTBEAT_SECONDS` while one runs.
 
-The request is consumed: it is renamed to `tests.used.json` once its results are written
-into the verify result, so a later verify never reruns an old choice silently.
+The request belongs to one verify job. When the job is created, `claim` moves it to
+`tests.claimed.json` and drops whatever an earlier job left there; a recovered run of the
+same job is not a new job and finds its request still claimed. It is consumed, renamed to
+`tests.used.json`, once its results are written into the verify result. A job that ended
+before that (the provider call failed, the run was refused) leaves its claim for the next
+job to drop, so a later verify never reruns an old choice silently (CASE-023, DEC-062). Only
+a job's own run reads a claim (`job`); a direct `main.run` reads tests.json alone.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 from core.evidence.contract import RUNTIME_GAP_PREFIX, RUNTIME_NO_TEST_ITEM
@@ -57,6 +64,47 @@ HEARTBEAT_SECONDS = 20.0
 
 def request_path(project_root, session_id: str) -> Path:
     return workflow_paths(Path(project_root), session_id)["session_dir"] / "verify" / "tests.json"
+
+
+def claimed_path(project_root, session_id: str) -> Path:
+    return request_path(project_root, session_id).with_name("tests.claimed.json")
+
+
+def claim(project_root, session_id: str) -> None:
+    """Bind the request main_agent wrote to the verify job being created. An unconsumed
+    claim is an earlier job's: the provider call failed or the run was refused before the
+    tests ran. Before this, it stayed as tests.json and the next verify ran it (CASE-023)."""
+    request = request_path(project_root, session_id)
+    claimed = claimed_path(project_root, session_id)
+    try:
+        claimed.unlink(missing_ok=True)
+        if request.is_file():
+            request.replace(claimed)
+    except OSError:
+        pass
+
+
+# The job whose worker is running this verify; None for a direct `main.run` (harnesses, sim).
+_JOB: ContextVar[str | None] = ContextVar("verify_job", default=None)
+
+
+@contextlib.contextmanager
+def job(job_id: str):
+    """Mark the calls inside as the run of `job_id`, so they read that job's claim."""
+    token = _JOB.set(job_id)
+    try:
+        yield
+    finally:
+        _JOB.reset(token)
+
+
+def _request_file(project_root, session_id: str) -> Path:
+    """Inside a job, its claimed request. A run without a job reads tests.json only: a
+    claim it finds was left by a job that ended early, never written for this run."""
+    claimed = claimed_path(project_root, session_id)
+    if _JOB.get() is not None and claimed.is_file():
+        return claimed
+    return request_path(project_root, session_id)
 
 
 def _policy(project_root) -> tuple[list[list[str]], int]:
@@ -99,7 +147,7 @@ def _split(command: str) -> list[str]:
 
 def read_request(project_root, session_id: str) -> dict | None:
     """The request as written, or None when there is none. Not consumed here: see `apply`."""
-    path = request_path(project_root, session_id)
+    path = _request_file(project_root, session_id)
     if not path.is_file():
         return None
     try:
@@ -114,7 +162,7 @@ def read_request(project_root, session_id: str) -> dict | None:
 
 
 def _consume(project_root, session_id: str) -> None:
-    path = request_path(project_root, session_id)
+    path = _request_file(project_root, session_id)
     try:
         path.replace(path.with_name("tests.used.json"))
     except OSError:

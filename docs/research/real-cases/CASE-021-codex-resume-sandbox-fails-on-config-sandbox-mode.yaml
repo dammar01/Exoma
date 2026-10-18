@@ -62,7 +62,6 @@ related_notes: |
 
 implementation:
   version: 3.8.2
-  commits: [8dcb6bb]
   feature: codex adapter, resumed threads
 
 disposition:

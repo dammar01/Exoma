@@ -9,7 +9,7 @@ what_exists: |
   fail-closed verdict from the review's required sections, checks and gaps, and runs the tests
   the main agent chose (DEC-025, DEC-033); it does not judge the review's reasoning. `syntax`
   mode proves only that files parse.
-records: [CASE-009, DEC-018, CASE-014, DEC-022, DEC-025, DEC-029, CASE-017, DEC-033]
+records: [CASE-009, DEC-018, CASE-014, DEC-022, DEC-025, DEC-029, CASE-017, DEC-033, CASE-023, DEC-062]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
