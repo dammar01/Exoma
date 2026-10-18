@@ -1,7 +1,9 @@
 """The v3.4.3 provider seam: registry selection and key migration."""
 
+import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1955,6 +1957,37 @@ def _assert_codex_provider() -> None:
             allowed == set(SECRET_READ_ALLOWLIST),
             f"the permission.{name} allowlist must agree too: {sorted(allowed)} vs {sorted(SECRET_READ_ALLOWLIST)}",
         )
+
+    # /.commit skips the same names when it stages on its own (DEC-061): the skill carries the
+    # list as prose for main_agent, so the list is checked here, in order, and so is what it means.
+    skill = (Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "skills" / "commit.md").read_text(encoding="utf-8")
+    block = re.search(r"<!-- secret-patterns:.*?-->(.*?)<!-- /secret-patterns -->", skill, re.S)
+    assert_true(block is not None, "commit.md marks its secret-pattern block")
+    lists = {key: re.findall(r"`([^`]+)`", body) for key, body in re.findall(r"(skip|keep):(.*?)(?=\n\s*(?:skip|keep):|\Z)", block.group(1), re.S)}
+    assert_true(
+        tuple(lists.get("skip", ())) == SECRET_READ_PATTERNS and tuple(lists.get("keep", ())) == SECRET_READ_ALLOWLIST,
+        f"commit.md skip/keep must equal SECRET_READ_PATTERNS/ALLOWLIST: {lists}",
+    )
+
+    def _commit_skips(path: str) -> bool:
+        name = path.replace("\\", "/").lower()
+        return any(fnmatch.fnmatchcase(name, p) for p in SECRET_READ_PATTERNS) and not any(
+            fnmatch.fnmatchcase(name, p) for p in SECRET_READ_ALLOWLIST
+        )
+
+    for path, skipped in (
+        ("docs/research/decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml", False),
+        ("docs/secret-handling.md", False),
+        ("src/credential_store.py", False),
+        (".env", True),
+        ("app/.ENV.local", True),
+        (".env.example", False),
+        ("deploy\\id_RSA", True),
+        ("config/credentials.json", True),
+        ("home/.ssh/known_hosts", True),
+        ("certs/Server.PEM", True),
+    ):
+        assert_true(_commit_skips(path) is skipped, f"/.commit skip decision for {path}: expected skipped={skipped}")
 
     # The boundary is only real if it is on the argv of BOTH call shapes. A resumed thread
     # that dropped it would leave a hole that opens on the second call of a session.
