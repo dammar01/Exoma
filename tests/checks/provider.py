@@ -1663,40 +1663,52 @@ def _assert_codex_provider() -> None:
     import adapters.providers.codex_adapter as codex_module
     from core.provider import versions as versions_module
 
-    versions_module._CACHE[codex_module.osutil.resolve_exe("codex")] = "codex-cli 9.9.9"
-    sandboxed = _SandboxCodex(command="codex")
-    refused = sandboxed.run("task", {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"}, None, None)
-    assert_true(
-        not refused["ok"]
-        and refused["meta"]["error_type"] == "sandbox_unavailable"
-        and "/clear" in refused["meta"]["next_action"]
-        and "/.provider" in refused["meta"]["next_action"],
-        f"a sandbox refusal names itself and its fix: {refused['meta'].get('error_type')} / {refused['meta'].get('next_action')}",
-    )
-    assert_true(
-        refused["meta"].get("provider_version") == "codex-cli 9.9.9"
-        and sandboxed.last_call_meta.get("provider_version") == "codex-cli 9.9.9",
-        "the codex release travels with the failure, to the usage row too",
-    )
-    # A resumed thread refused by the sandbox is told apart from a fresh one (CASE-016): its
-    # own reason, the failing release and the pin named in the advice, the type unchanged.
-    from config.providers import provider_stable_version
+    # The live codex-write-probe runs later in this process and reports this cache, so the
+    # fake release is put back however the block ends.
+    codex_exe = codex_module.osutil.resolve_exe("codex")
+    saved_version = versions_module._CACHE.get(codex_exe, KeyError)
+    versions_module._CACHE[codex_exe] = "codex-cli 9.9.9"
+    try:
+        sandboxed = _SandboxCodex(command="codex")
+        refused = sandboxed.run("task", {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"}, None, None)
+        assert_true(
+            not refused["ok"]
+            and refused["meta"]["error_type"] == "sandbox_unavailable"
+            and "/clear" in refused["meta"]["next_action"]
+            and "/.provider" in refused["meta"]["next_action"],
+            f"a sandbox refusal names itself and its fix: {refused['meta'].get('error_type')} / {refused['meta'].get('next_action')}",
+        )
+        assert_true(
+            refused["meta"].get("provider_version") == "codex-cli 9.9.9"
+            and sandboxed.last_call_meta.get("provider_version") == "codex-cli 9.9.9",
+            "the codex release travels with the failure, to the usage row too",
+        )
+        # A resumed thread refused by the sandbox is told apart from a fresh one (CASE-016): its
+        # own reason, the failing release and the pin named in the advice, the type unchanged.
+        from config.providers import provider_stable_version
 
-    assert_true(
-        refused["meta"].get("reason") == "resume_sandbox_failed"
-        and "Resuming the codex thread failed" in refused["meta"]["next_action"]
-        and "codex-cli 9.9.9" in refused["meta"]["next_action"]
-        and provider_stable_version("codex") in refused["meta"]["next_action"],
-        f"a resume refusal names itself: {refused['meta'].get('reason')} / {refused['meta'].get('next_action')}",
-    )
-    fresh_refused = _SandboxCodex(command="codex").run("task", {}, None, None)
-    assert_true(
-        not fresh_refused["ok"]
-        and fresh_refused["meta"]["error_type"] == "sandbox_unavailable"
-        and "reason" not in fresh_refused["meta"]
-        and fresh_refused["meta"]["next_action"] == codex_module._SANDBOX_NEXT_ACTION,
-        f"a fresh thread refused keeps the general advice: {fresh_refused['meta'].get('reason')} / {fresh_refused['meta'].get('next_action')}",
-    )
+        assert_true(
+            refused["meta"].get("reason") == "resume_sandbox_failed"
+            and "Resuming the codex thread failed" in refused["meta"]["next_action"]
+            and "codex-cli 9.9.9" in refused["meta"]["next_action"]
+            and provider_stable_version("codex") in refused["meta"]["next_action"],
+            f"a resume refusal names itself: {refused['meta'].get('reason')} / {refused['meta'].get('next_action')}",
+        )
+        fresh_refused = _SandboxCodex(command="codex").run("task", {}, None, None)
+        assert_true(
+            not fresh_refused["ok"]
+            and fresh_refused["meta"]["error_type"] == "sandbox_unavailable"
+            and "reason" not in fresh_refused["meta"]
+            and fresh_refused["meta"]["next_action"] == codex_module._SANDBOX_NEXT_ACTION,
+            f"a fresh thread refused keeps the general advice: {fresh_refused['meta'].get('reason')} / {fresh_refused['meta'].get('next_action')}",
+        )
+    finally:
+        if saved_version is KeyError:
+            versions_module._CACHE.pop(codex_exe, None)
+        else:
+            versions_module._CACHE[codex_exe] = saved_version
+    assert_true(versions_module._CACHE.get(codex_exe) != "codex-cli 9.9.9",
+                "the fake codex release does not outlive its block")
 
     # stdout is the agent's JSONL, tool output included: a file it read that mentions a
     # sandbox failure must not turn an unrelated exit into `sandbox_unavailable`.
