@@ -92,6 +92,7 @@ from tests.checks.e2e_hardening import _test_e2e_hardening
 from tests.checks.e2e_knowledge import _test_e2e_knowledge
 from tests.checks.installer import (
     _test_installer_check_reports_second_agent_default,
+    _test_provider_update,
     _test_installer_drift_check,
     _test_installer_e2e_deps_are_opt_in,
     _test_installer_rollback_receipt,
@@ -1292,6 +1293,7 @@ confidence: high — all requested checks ran
         _test_installer_seed_prompt_answers()
         _test_installer_seed_reports_unenforced_provider()
         _test_installer_check_reports_second_agent_default()
+        _test_provider_update()
         _test_installer_e2e_deps_are_opt_in()
         _test_runtime_is_stdlib_only()
         _test_every_spawn_hides_its_console()

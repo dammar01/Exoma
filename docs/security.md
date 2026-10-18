@@ -22,4 +22,8 @@ provider you select.
 
 For projects holding secrets the secondary agent must not read, use `opencode`.
 
+The installer changes a provider CLI only when asked (`--update-providers`), and then only an
+npm-global install, only to the release the workflow was tested on, and never with `sudo`
+([provider releases](reference.md#provider-releases)).
+
 What each provider enforces, in detail, and how to switch: [reference, "Memilih provider"](reference.md#memilih-provider--dan-konsekuensi-keamanannya).

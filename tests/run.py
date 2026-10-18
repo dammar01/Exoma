@@ -98,6 +98,7 @@ from tests.checks.installer import (  # noqa: E402
     _test_installer_settings_are_additive,
     _test_installer_settings_merge,
     _test_installer_text_merging,
+    _test_provider_update,
 )
 from tests.checks.jobs import _test_submit_admission  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
@@ -253,6 +254,7 @@ SUITES: dict[str, tuple] = {
     "installer-seed-tty": (_test_installer_seed_is_non_interactive_without_a_tty, "no tty, no prompt: CI and e2e cannot hang"),
     "installer-seed-prompt": (_test_installer_seed_prompt_answers, "every answer the provider/model picker accepts"),
     "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
+    "provider-update": (_test_provider_update, "DEC-057: --update-providers pins npm-global CLIs to stable_version only, verified, failures named"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
     "metrics-contract": (_test_metrics_contract, "every benchmark metric has an ID, version and method, is documented, and its producers stamp provenance"),

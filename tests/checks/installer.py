@@ -895,3 +895,92 @@ def _test_installer_check_reports_second_agent_default() -> None:
     finally:
         check_mod.REPO_ROOT = original_root
         shutil.rmtree(root.parent, ignore_errors=True)
+
+
+def _test_provider_update() -> None:
+    """--update-providers (DEC-057): to the stable release only, npm-global installs only,
+    nothing changed while planning, each update verified, a failure named with its pin-back."""
+    from core.provider import model_catalog, versions
+    from installer import provider_update as pu
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prefix = Path(tmp) / "npm"
+        modules = prefix / "node_modules"
+        (modules / "@openai" / "codex").mkdir(parents=True)
+        (modules / "opencode-ai").mkdir()
+        foreign = Path(tmp) / "brew" / "opencode"
+        foreign.parent.mkdir()
+        paths = {
+            "codex": str(prefix / "codex.cmd"),
+            "opencode": str(foreign),
+            "npm": str(prefix / "npm.cmd"),
+        }
+        installed = {"codex": "codex-cli 0.150.0", "opencode": "1.10.0"}
+        registry_has = {"@openai/codex@0.154.0", "opencode-ai@1.18.34"}
+        calls: list[list[str]] = []
+        forgotten: list[str] = []
+
+        def run(args, timeout):
+            calls.append(args)
+            if args[1:] == ["root", "-g"]:
+                return 0, f"{modules}\n", ""
+            if args[1] == "view":
+                return (0, args[2].rsplit("@", 1)[1] + "\n", "") if args[2] in registry_has else (1, "", "E404")
+            if args[1] == "install" and "codex" in args[3]:
+                installed["codex"] = "codex-cli 0.154.0"
+                return 0, "", ""
+            if args[1] == "install":
+                return 1, "", "npm error EACCES: permission denied"
+            raise AssertionError(f"unexpected call {args}")
+
+        real = (pu.osutil.provider_callable, pu.osutil.resolve_exe, versions.read_version, versions.forget, model_catalog.forget)
+        try:
+            pu.osutil.provider_callable = lambda name: (name in paths, paths.get(name, "missing"))
+            pu.osutil.resolve_exe = lambda name: paths.get(name, name)
+            versions.read_version = lambda command: installed.get(command)
+            versions.forget = lambda command: forgotten.append(command)
+            model_catalog.forget = lambda provider: forgotten.append(f"catalog:{provider}")
+
+            def plan():
+                return {e["provider"]: e for e in pu.plan_updates(run=run, getenv=lambda _k, d: d)}
+
+            entries = plan()
+            assert_true(entries["agy"]["action"] == "unsupported", f"agy declares no installer: {entries['agy']}")
+            codex = entries["codex"]
+            assert_true(
+                codex["action"] == "update" and codex["argv"][1:] == ["install", "-g", "@openai/codex@0.154.0"],
+                f"codex goes to its stable release, never latest: {codex}",
+            )
+            assert_true(codex["pin_back"] == "npm install -g @openai/codex@0.150.0", f"pin-back names the release before: {codex}")
+            assert_true(
+                entries["opencode"]["action"] == "skip" and "not npm's global" in entries["opencode"]["reason"],
+                f"a CLI npm did not install is left to whoever did: {entries['opencode']}",
+            )
+            assert_true(not any(a[1] == "install" for a in calls), "planning installs nothing")
+
+            registry_has.discard("@openai/codex@0.154.0")
+            assert_true(plan()["codex"]["action"] == "skip", "no stable release on the registry, no update")
+            registry_has.add("@openai/codex@0.154.0")
+
+            paths["opencode"] = str(prefix / "opencode.cmd")
+            entries = plan()
+            assert_true(entries["opencode"]["action"] == "update", f"an npm-global opencode is updated: {entries['opencode']}")
+            done = {e["provider"]: e for e in pu.apply_updates(list(entries.values()), run=run)}
+            assert_true(done["codex"]["result"] == "updated" and done["codex"]["after"] == "0.154.0", f"verified by --version: {done['codex']}")
+            assert_true(
+                done["opencode"]["result"] == "failed" and "EACCES" in done["opencode"]["error"]
+                and done["opencode"]["pin_back"] == "npm install -g opencode-ai@1.10.0",
+                f"a failed update is named with npm's error and its pin-back, the other still ran: {done['opencode']}",
+            )
+            assert_true(
+                {"codex", "catalog:codex", "opencode", "catalog:opencode"} <= set(forgotten),
+                f"each update drops the cached version and model listing: {forgotten}",
+            )
+            assert_true("result" not in done["agy"], "an unsupported provider is never run")
+            assert_true(plan()["codex"]["action"] == "current", "a CLI on its stable release is current")
+
+            journal = pu.write_journal(list(done.values()), Path(tmp) / "backup")
+            data = json.loads(journal.read_text(encoding="utf-8"))
+            assert_true(len(data["providers"]) == 3, f"the journal holds every provider: {data}")
+        finally:
+            pu.osutil.provider_callable, pu.osutil.resolve_exe, versions.read_version, versions.forget, model_catalog.forget = real

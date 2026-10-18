@@ -1,0 +1,103 @@
+schema_version: 3
+id: DEC-057
+title: On request, the installer pins npm-global provider CLIs to their stable release, never a newer one
+date: 2026-10-18
+status: accepted
+provenance:
+  type: direct
+  confidence: medium
+  basis: Maintainer request to keep every provider on a current release through the installer, narrowed by the maintainer to the opt-in, tested-release option after CASE-016 was shown
+problem: |
+  DEC-028 gave every provider a tested `stable_version` and a warning when the installed CLI
+  differs, and left the remedy to the user: the reference lists one pin command per provider.
+  Bringing three CLIs back to the tested releases meant reading doctor, finding each pin
+  command and running it by hand, and nothing recorded what had been there before. The
+  maintainer asked for the installer to keep the providers current. A newest-release update
+  was the literal ask; codex releases 0.155.0 to 0.160.0 failed every resumed thread on
+  Windows (CASE-016), so "newest" is not "works".
+decision: |
+  `install.py --update-providers` (dry run unless `--apply`) brings each provider CLI to its
+  `stable_version` and to nothing else. A provider bundle declares how in `update`
+  (`{"method": "npm", "package": ...}`: codex `@openai/codex`, opencode `opencode-ai`); agy
+  declares none and is reported `unsupported`. A provider is changed only when its CLI is on
+  PATH, is not already on the stable release, is npm's global install of that package (its
+  shim sits in npm's global bin or it resolves into npm's global node_modules, and the package
+  directory exists) and the registry has the stable release; otherwise it is reported and
+  left alone. Planning runs only `--version`, `npm root -g` and `npm view`. `--apply` runs
+  after every file write, one provider at a time, without `sudo`; each update drops the
+  cached version reading and the cached model listing for that provider and is verified by
+  reading `--version` again. A failure is a warning naming npm's error and the command that
+  pins back to the previous release, and the other providers still run.
+  `~/.claude/backups/install_<stamp>/provider_update.json` records every provider before and
+  after. The update is outside the install receipt, so `--rollback` does not undo it.
+  DEC-028 otherwise stands: version status stays advisory and nothing blocks a call.
+rationale: |
+  The maintainer chose this over keeping DEC-028 unchanged and over updating to the newest
+  release. Research question: does pinning on request keep delegated calls on a tested
+  release without the installer breaking a CLI the user also runs elsewhere (RQ-07a, RQ-09)?
+  Hypothesis: with a one-flag remedy, `untested` usage rows become rarer and no install leaves
+  a provider on a release neither stable nor the one before. Variable changed: provider
+  release policy at install time, from report-only to pin-on-request. Experiment enabled: a
+  per-provider, per-OS install matrix (npm global, Homebrew, standalone, Windows shim,
+  unwritable prefix) followed by fresh and resumed codex calls. Expected measurement: share of
+  usage rows with `provider_version_status: untested`, update failures per provider, and
+  resume success after an update. Why existing mechanisms are insufficient: the version check
+  only observes drift, and the live catalog reads whatever release is installed. The stable
+  release, not the newest, is the only one this workflow version was run against. npm-global
+  is the only install method whose ownership the installer can prove and whose pin the
+  repository has exercised (CASE-016); touching a CLI another package manager owns is the
+  harm DEC-028 rejected.
+alternatives:
+  - option: Keep DEC-028 as it is; the installer only reports the version and prints the pin command
+    rejected_because: The maintainer chose the opt-in update after seeing it.
+  - option: Update every provider to its newest release on each install
+    rejected_because: CASE-016 shows a newer codex release breaking every resumed thread on Windows; newest is not tested.
+  - option: Also update CLIs installed by Homebrew, standalone installers or agy's installer
+    rejected_because: Ownership cannot be proven from the installer and agy's pin command is not documented; such a CLI is reported instead.
+  - option: Record provider updates in the install receipt so --rollback reverts them
+    rejected_because: The receipt restores files by hash; npm has no undo, so a recorded pin-back command is what can honestly be offered.
+evidence: [DEC-028, CASE-016, DEC-053]
+evidence_notes: |
+  tests/checks/installer.py (`provider-update`, also run by `scenario`): with npm and the CLIs
+  mocked, agy reads unsupported; codex is planned to `@openai/codex@0.154.0` with a pin-back
+  to the release before; an opencode outside npm's global prefix is skipped; planning runs no
+  install; no stable release on the registry means no update; an apply updates codex
+  (verified by --version), names opencode's EACCES with its pin-back while codex still runs,
+  drops both caches per provider, and never runs agy; the journal holds every provider. A dry
+  run on the maintainer's Windows machine read codex 0.154.0 and opencode 1.18.34 as current
+  and agy as unsupported; `npm view` resolved both stable releases. No real update was applied.
+implementation:
+  version: 3.8.3
+  commits: [uncommitted]
+  components:
+    - installer/provider_update.py (plan_updates, apply_updates, write_journal)
+    - install.py (--update-providers, _update_providers after the file install)
+    - config/providers.py (`update` for codex and opencode, provider_update())
+    - core/provider/versions.py (forget)
+    - core/provider/model_catalog.py (forget)
+    - docs/reference.md, docs/installation.md, docs/security.md
+    - tests/checks/installer.py, tests/run.py, tests/scenario.py (provider-update)
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+validation:
+  summary: |
+    Covered by mocked unit checks and one dry run. No update has been applied to a real CLI,
+    on any OS.
+  runs: []
+trade_offs:
+  better:
+    - One flag brings codex and opencode back to the tested release, with what was there before recorded
+    - A CLI the installer cannot prove it owns is named, not changed
+  worse:
+    - The installer can now change a tool the user also runs outside the workflow, when asked
+    - An update is not undone by --rollback; the pin-back is a printed command
+    - agy is still pinned by hand
+limitations:
+  - Ownership detection assumes npm's default global layout; a custom prefix with shims elsewhere reads as not npm's and is skipped
+  - A stable_version bumped before the new release is tested would be pinned by this flag as well
+revisit_when:
+  - agy documents a versioned installer
+  - A real update leaves a provider on a release that is neither stable nor the previous one
+questions: [RQ-07a, RQ-09]
+revises: [DEC-028]

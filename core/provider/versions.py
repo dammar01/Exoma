@@ -147,6 +147,28 @@ def read_version(command: str) -> str | None:
     return version
 
 
+def forget(command: str) -> None:
+    """Drop every reading of `command`'s executable, in this process and on disk.
+
+    For a caller that just changed the release (install.py --update-providers): a `.cmd`
+    shim can keep its path, mtime and size across an npm update, and its old reading would
+    otherwise answer for `_CACHE_MAX_AGE_SECONDS`.
+    """
+    exe = osutil.resolve_exe(command)
+    _CACHE.pop(exe, None)
+    path = _cache_path()
+    if path is None:
+        return
+    try:
+        prefix = os.path.normcase(os.path.abspath(exe)) + "|"
+        data = _load_disk()
+        kept = {k: v for k, v in data.items() if not k.startswith(prefix)}
+        if len(kept) != len(data):
+            atomic_write_text(path, json.dumps(kept, indent=1))
+    except Exception:
+        pass
+
+
 def release(version: str | None) -> str | None:
     """The semantic version inside a `--version` line (`codex-cli 0.160.0` -> `0.160.0`)."""
     match = _SEMVER.search(version or "")

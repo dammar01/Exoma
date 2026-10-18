@@ -347,6 +347,35 @@ def _seed_second_agent_config(
         dest.write_text(payload, encoding="utf-8")
 
 
+def _update_providers(plan: Plan, apply: bool, backup_root: Path) -> None:
+    """--update-providers: each provider CLI to its `stable_version`, npm-global installs
+    only (installer/provider_update.py, DEC-057). After every file write, and outside the
+    receipt: --rollback restores files, and a provider release is not one."""
+    from installer.provider_update import apply_updates, plan_updates, write_journal
+
+    entries = plan_updates()
+    if apply and any(e["action"] == "update" for e in entries):
+        apply_updates(entries)
+        plan.add("journal", write_journal(entries, backup_root), "provider releases before and after")
+    for e in entries:
+        target = f"provider {e['provider']}"
+        result = e.get("result")
+        if e["action"] == "current":
+            plan.add("current", target, e["reason"])
+        elif e["action"] != "update":
+            plan.warn(f"{e['provider']} not updated ({e['action']}): {e['reason']}")
+        elif result is None:
+            plan.add("update", target, f"{e['reason']} ({' '.join(e['argv'][1:])})")
+        elif result == "updated":
+            plan.add("updated", target, e["reason"])
+        else:
+            back = f"; pin back: {e['pin_back']}" if e["pin_back"] else ""
+            plan.warn(
+                f"{e['provider']} update failed (rc={e['returncode']}, now "
+                f"{e['after'] or 'unreadable'}): {e.get('error') or 'no output'}{back}"
+            )
+
+
 def _persist_agent_path(agent_path, apply: bool) -> None:
     """Set AGENT_PATH for future shells. Opt-in, because it writes outside the repo.
 
@@ -458,6 +487,13 @@ def main() -> int:
         metavar="ID",
         help="pin this model in config/second_agent.seed.json. Requires --provider. "
         "An id outside the provider's shortlist is accepted with a warning",
+    )
+    parser.add_argument(
+        "--update-providers",
+        action="store_true",
+        help="also bring each provider CLI to the release this workflow version was tested "
+        "on (stable_version), never a newer one. Only npm-global installs are touched; agy "
+        "and anything else are reported, not changed. Dry run unless --apply is also given",
     )
     parser.add_argument(
         "--check",
@@ -642,6 +678,9 @@ def main() -> int:
         _flush_receipt(complete=True)
     elif apply:
         _discard_empty_receipt()
+
+    if args.update_providers:
+        _update_providers(plan, apply, backup_root)
 
     counts: dict[str, int] = {}
     for verb, target, detail in plan.actions:

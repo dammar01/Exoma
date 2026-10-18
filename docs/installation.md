@@ -129,7 +129,9 @@ Without Claude Code, or from a script, the skills run the same command:
 
 4. Run `/.doctor` in each project. `NEEDS_UPGRADE` or `run_script_drift` means step 3 was
    missed there; a provider warning names the CLI release this workflow version was tested
-   on.
+   on. `python install.py --update-providers --apply` brings an npm-installed codex or
+   opencode to that release; anything else is reported, not changed
+   ([provider releases](reference.md#provider-releases)).
 
 Read the release notes ([CHANGELOG](../CHANGELOG.md)) before step 2: a release can change
 behavior you rely on, and the notes say what to set afterwards.

@@ -397,3 +397,20 @@ def _cache_store(provider: str, entries: list[dict]) -> None:
         atomic_write_text(path, json.dumps(data, indent=1))
     except Exception:
         pass
+
+
+def forget(provider: str) -> None:
+    """Drop `provider`'s cached listing: a CLI that changed release can list other models.
+
+    For a caller that just changed the release (install.py --update-providers), so the next
+    picker reads the CLI instead of the old release's listing.
+    """
+    path = _cache_path()
+    if path is None:
+        return
+    try:
+        data = _read_json(path) or {}
+        if data.pop(_cache_key(provider), None) is not None:
+            atomic_write_text(path, json.dumps(data, indent=1))
+    except Exception:
+        pass

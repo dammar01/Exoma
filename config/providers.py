@@ -60,6 +60,10 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # `untested` (core/provider/versions.py). Provider releases have broken the workflow
         # before (CASE-015); this is the release to pin back to when one does.
         "stable_version": "1.18.34",
+        # How `install.py --update-providers` brings this CLI to `stable_version` (DEC-057):
+        # opt-in, npm-global installs only, never a release other than the stable one.
+        # A bundle without it is reported unsupported and left alone.
+        "update": {"method": "npm", "package": "opencode-ai"},
         # `plan` is opencode's own read-only primary; the workflow adds no second primary.
         "default_agent": "plan",
         "agent_env": "AI_PROXY_OPENCODE_AGENT",
@@ -142,6 +146,10 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # `untested` (core/provider/versions.py). Provider releases have broken the workflow
         # before (CASE-015); this is the release to pin back to when one does.
         "stable_version": "0.154.0",
+        # How `install.py --update-providers` brings this CLI to `stable_version` (DEC-057):
+        # opt-in, npm-global installs only, never a release other than the stable one.
+        # A bundle without it is reported unsupported and left alone.
+        "update": {"method": "npm", "package": "@openai/codex"},
         # Codex selects no named persona; `exec` runs the model directly.
         "default_agent": None,
         "agent_env": None,
@@ -448,6 +456,11 @@ def provider_boundary(provider: str | None) -> dict:
 def provider_stable_version(provider: str) -> str | None:
     """The provider CLI release this workflow version was tested against, or None."""
     return PROVIDER_BUNDLES.get(provider, {}).get("stable_version")
+
+
+def provider_update(provider: str) -> dict | None:
+    """How `install.py --update-providers` pins this CLI, or None when it cannot (DEC-057)."""
+    return PROVIDER_BUNDLES.get(provider, {}).get("update")
 
 
 def bundled_providers() -> tuple[str, ...]:

@@ -156,6 +156,7 @@ Semua flag `install.py`:
 | `--provider NAME` / `--model ID` | pilihan second agent untuk seed (`--model` butuh `--provider`) | dengan `--apply` |
 | `--with-e2e` | juga pasang extra Playwright + Chromium untuk `/.verify-browser` | dengan `--apply` |
 | `--set-env` | permanenkan `AGENT_PATH` (Windows: `HKCU\Environment`; POSIX: `~/.bashrc`/`~/.zshrc`) | dengan `--apply` |
+| `--update-providers` | bawa tiap CLI provider ke `stable_version`-nya, hanya instalasi npm global (lihat "Provider releases") | dengan `--apply` |
 | `--check` | laporan drift bundle, instalasi global, dan project bila cwd punya `.workflow/` | tidak |
 | `--rollback [ID]` | batalkan satu install/uninstall dari receipt-nya (default: terbaru) | dengan `--apply` |
 | `--uninstall` | cabut yang dipasang workflow (lihat "Uninstall") | dengan `--apply` |
@@ -1049,7 +1050,23 @@ dicache. Tiap usage row yang mencapai provider (call tunggal maupun tiap baris c
 semua provider) membawa `provider_version` serta `provider_version_status`: `stable` (sama), `untested` (rilis
 lain, termasuk pre-release), `unreadable` (CLI tak menjawab). `doctor` melaporkan
 `checks.provider_version` `{provider, version, status, stable}` dan memberi peringatan saat
-`untested`. Sifatnya advisori: call tetap jalan; tak ada yang memblokir atau menginstal provider.
+`untested`. Sifatnya advisori: call tetap jalan; tak ada yang memblokir provider, dan installer
+hanya mengubah provider bila diminta dengan `--update-providers`.
+
+`install.py --update-providers` (opt-in, DEC-057) membawa tiap CLI ke `stable_version`, tak
+pernah ke rilis yang lebih baru. Dry run mencetak rencana per provider; `--apply` menjalankannya
+sesudah semua file terpasang. Provider diubah hanya bila bundle-nya menyebut cara update
+(`update` di `config/providers.py`: codex `@openai/codex`, opencode `opencode-ai`, keduanya npm),
+CLI-nya ada di PATH, belum di rilis stabil, merupakan instalasi npm global (shim di bin global npm
+atau resolve ke `node_modules` global, dan direktori paketnya ada), dan registry npm punya rilis
+stabil itu. Selain itu provider dilaporkan dan dibiarkan: agy (`unsupported`, installer-nya tak
+terdokumentasi), CLI yang tak terpasang (tak dipasang baru), CLI dari Homebrew/installer lain
+(milik yang memasangnya), npm tak ada, atau registry tak terjangkau. Tanpa `sudo`. Tiap update
+diverifikasi dengan membaca `--version` lagi sesudah cache versi dan cache katalog model provider
+itu dibuang. Update tidak atomik dan bukan bagian receipt (`--rollback` tidak mengembalikannya):
+provider yang gagal diberi peringatan dengan error npm dan perintah pin-back ke rilis sebelumnya,
+provider lain tetap jalan, dan `~/.claude/backups/install_<stamp>/provider_update.json` mencatat
+rilis sebelum dan sesudah tiap provider.
 
 Kembali ke rilis stabil bila call gagal setelah provider di-update:
 
