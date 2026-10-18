@@ -257,7 +257,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-057](decisions/DEC-057-installer-pins-npm-providers-to-stable-on-request.yaml) | On request, the installer pins npm-global provider CLIs to their stable release, never a newer one | accepted | implemented | not_validated | f72ef8b |
 | [DEC-058](decisions/DEC-058-provider-stable-pins-move-to-releases-that-pass-the-live-probe.yaml) | Provider stable pins move to opencode 1.19.3 and codex 0.163.0 after both pass the live boundary probe | accepted | implemented | observed | 769dc20 |
 | [DEC-059](decisions/DEC-059-the-gate-ignores-every-turn-the-user-did-not-write.yaml) | The intent gate ignores every turn the user did not write, and a real marker still binds subagents | accepted | implemented | not_validated | 0a43309 |
-| [DEC-060](decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml) | /.commit stages targeted paths itself, skips secret-looking names, and commits only on yes | accepted | implemented | not_validated | uncommitted |
+| [DEC-060](decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml) | /.commit stages targeted paths itself, skips secret-looking names, and commits only on yes | accepted | implemented | not_validated | 1d43cbe |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
