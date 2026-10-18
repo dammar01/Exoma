@@ -50,7 +50,7 @@ evidence_notes: |
   nothing about the release. The live model catalog read both CLIs (`source=live`).
 implementation:
   version: 3.8.4
-  commits: [uncommitted]
+  commits: [769dc20]
   components:
     - config/providers.py (stable_version for opencode and codex)
     - adapters/providers/codex_adapter.py (resume comment names 0.163.0)

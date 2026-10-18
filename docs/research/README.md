@@ -254,7 +254,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-055](decisions/DEC-055-hooks-and-runner-are-bash-on-every-os.yaml) | Hooks and the workspace runner are bash on every OS, one Python source each, and the gate reads Bash and PowerShell with one tokeniser | accepted | implemented | observed | 2e41ffc |
 | [DEC-056](decisions/DEC-056-provider-picker-reads-the-installed-cli-catalog.yaml) | The provider picker offers what the installed CLI lists, newest first, and accepts a typed selection | accepted | implemented | not_validated | ce97c4f |
 | [DEC-057](decisions/DEC-057-installer-pins-npm-providers-to-stable-on-request.yaml) | On request, the installer pins npm-global provider CLIs to their stable release, never a newer one | accepted | implemented | not_validated | f72ef8b |
-| [DEC-058](decisions/DEC-058-provider-stable-pins-move-to-releases-that-pass-the-live-probe.yaml) | Provider stable pins move to opencode 1.19.3 and codex 0.163.0 after both pass the live boundary probe | accepted | implemented | observed | uncommitted |
+| [DEC-058](decisions/DEC-058-provider-stable-pins-move-to-releases-that-pass-the-live-probe.yaml) | Provider stable pins move to opencode 1.19.3 and codex 0.163.0 after both pass the live boundary probe | accepted | implemented | observed | 769dc20 |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
