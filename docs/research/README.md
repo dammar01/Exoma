@@ -260,7 +260,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-059](decisions/DEC-059-the-gate-ignores-every-turn-the-user-did-not-write.yaml) | The intent gate ignores every turn the user did not write, and a real marker still binds subagents | accepted | implemented | not_validated | 0a43309 |
 | [DEC-060](decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml) | /.commit stages targeted paths itself, skips secret-looking names, and commits only on yes | accepted | implemented | observed | 1d43cbe |
 | [DEC-061](decisions/DEC-061-commit-skips-the-canonical-secret-file-list.yaml) | /.commit skips the canonical secret-file list instead of name substrings | accepted | implemented | observed | 251acd7 |
-| [DEC-062](decisions/DEC-062-the-verify-test-request-belongs-to-one-job.yaml) | The verify test request belongs to the job created for it | accepted | implemented | not_validated | uncommitted |
+| [DEC-062](decisions/DEC-062-the-verify-test-request-belongs-to-one-job.yaml) | The verify test request belongs to the job created for it | accepted | implemented | not_validated | f2e967d |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

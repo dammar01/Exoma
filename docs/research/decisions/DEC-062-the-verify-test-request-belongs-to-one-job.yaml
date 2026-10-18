@@ -43,7 +43,7 @@ evidence_notes: |
   the next job runs no test (`runtime_tests.requested: false`). The suite passes on Windows.
 implementation:
   version: 3.8.4
-  commits: [uncommitted]
+  commits: [f2e967d]
   components:
     - core/evidence/verify_tests.py (claim, job context, claimed request file, consume)
     - core/jobs/job_lifecycle.py (claim on new verify job, job context around the worker's run)
