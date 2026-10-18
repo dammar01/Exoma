@@ -1,25 +1,23 @@
 # Known limitations
 
-Moved from `docs/reference.md` ("Batasan yang diketahui"), where the old anchor still
-points here. The list below is kept in its original language (Bahasa Indonesia).
+Moved from `docs/reference.md` ("Known limitations"), where the old anchor still
+points here.
 
 Provider-specific security boundaries (write prevention, secret-file reads, shell
 restriction) are summarized in the [security page](security.md) and
 detailed in [`reference.md`](reference.md).
 
-## Batasan yang diketahui
+Stated openly because staying silent about them would make the runtime look like it guarantees more than it does:
 
-Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjamin daripada kenyataannya:
-
-- **Mutasi main_agent tak terlihat oleh runtime ini.** `/.execute` tak punya jalur Python sama sekali. Audit scope, penjaga operasi destruktif, dan atribusi perubahan file karena itu belum ada — perlu lapisan hook di sisi main_agent.
-- **Tulis ke project lain tidak ditahan, dan edit lewat Bash tidak tercatat.** Hook `intent-gate-check` hanya menolak tulis ke script runner; Edit/Write ke path di luar project root sesi — termasuk repo tetangga — lolos. Edit yang dilakukan lewat Bash atau skrip patch tidak melewati hook Edit/Write, jadi `task-events` tidak mencatatnya (DEC-021 sengaja tak memasang hook pada Bash), dan edit ke project lain dibuang karena di luar root. Larangan menulis ke project lain tanpa persetujuan eksplisit user ada di kontrak prompt (`CLAUDE.md`, DEC-046), bukan di hook. Teramati di pemakaian nyata (CASE-018).
-- **Agy dapat menulis ke project.** Boundary Agy adalah `writes: unbounded`: CLI-nya tidak punya mode read-only yang bisa dipaksakan runtime, jadi write/edit second_agent tidak dicegah. Mutasi hanya terdeteksi sesudah terjadi lewat diff `git status`, sehingga file yang di-`.gitignore` (termasuk `.env`) tak terlihat; `doctor` serta setiap result Agy memberi peringatan. Bila write harus dicegah, pakai OpenCode (boundary ditegakkan); Codex `sandboxed` tetapi efek runtime flag-nya belum terbukti. Detail per provider di [security page](security.md).
-- **Kontrak masih sebagian berbasis prompt.** Runtime memvalidasi struktur dan routing finding verify, tetapi kebenaran semantik klaim serta output kontrak milik main_agent tetap tidak dapat dibuktikan hanya dari penanda.
-- **Telemetry masih parsial.** Durasi, exit code, hasil kill, ukuran prompt/output, dan estimasi token dicatat per panggilan di `call.meta.json`; jumlah pemanggilan tool dan token provider aktual belum selalu tersedia.
-- **OpenCode nyata hanya diuji opt-in.** Suite default mensimulasikan provider; jalur `Popen`, persistence, installer, dan process lifecycle tetap dijalankan lokal. Gunakan `tools/e2e/e2e.py --full` untuk smoke test berkuota.
-- **Probe PING memakai kuota.** Job yang terus stalled dapat diprobe berulang sesuai cadence; default `await` adalah 120 detik.
-- **Tuning liveness belum seragam di jalur attach.** `check.py --wait` memakai default tool untuk ambang stalled dan probe ulang, bukan nilai project-local.
-- **Deteksi upgrade dapat tertutupi stamp parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `second_agent.json`, sehingga warning berikutnya dapat menganggap workspace current. Layout lama tetap terdeteksi dari isinya, bukan dari stamp.
-- **Deteksi staleness graph hanya mengikuti source `.py`.** Perubahan bahasa lain tidak masuk fingerprint runtime; Stop hook Graphify merupakan layer Claude terpisah dan tidak tersedia di semua main agent.
-- **Path graph lintas-OS belum dinormalisasi penuh.** Snapshot yang dibuat di Windows lalu dibaca dari POSIX/WSL dapat tetap menghasilkan candidate path ber-backslash; refresh graph secara manual dari environment aktif bila ini terjadi.
-- **Skrip runner tidak portabel lintas-OS.** Path absolut dipanggang saat init/upgrade; pindah repo, path, atau OS berarti jalankan upgrade dari environment baru.
+- **main_agent mutations are invisible to this runtime.** `/.execute` has no Python path at all. Scope auditing, a guard for destructive operations, and attribution of file changes therefore do not exist yet — they need a hook layer on the main_agent side.
+- **Writes to other projects are not held back, and edits through Bash are not recorded.** The `intent-gate-check` hook only rejects writes to runner scripts; Edit/Write to paths outside the session's project root — including a neighboring repo — pass. Edits made through Bash or a patch script do not go through the Edit/Write hook, so `task-events` does not record them (DEC-021 deliberately installs no hook on Bash), and edits to other projects are discarded because they are outside the root. The prohibition on writing to another project without the user's explicit approval lives in the prompt contract (`CLAUDE.md`, DEC-046), not in a hook. Observed in real use (CASE-018).
+- **Agy can write to the project.** Agy's boundary is `writes: unbounded`: its CLI has no read-only mode the runtime can enforce, so second_agent writes/edits are not prevented. Mutations are only detected after they happen, through the `git status` diff, so files that are `.gitignore`d (including `.env`) are invisible; `doctor` and every Agy result give a warning. If writes must be prevented, use OpenCode (boundary enforced); Codex is `sandboxed`, but the runtime effect of its flag is not yet proven. Per-provider details in the [security page](security.md).
+- **The contract is still partly prompt-based.** The runtime validates the structure and routing of verify findings, but the semantic correctness of claims and of the contract output owned by main_agent still cannot be proven from markers alone.
+- **Telemetry is still partial.** Duration, exit code, kill result, prompt/output size, and estimated tokens are recorded per call in `call.meta.json`; the number of tool calls and the provider's actual tokens are not always available.
+- **Real OpenCode is only tested opt-in.** The default suite simulates the provider; the `Popen` path, persistence, installer, and process lifecycle are still run locally. Use `tools/e2e/e2e.py --full` for a quota-consuming smoke test.
+- **The PING probe uses quota.** A job that stays stalled can be probed repeatedly according to the cadence; the default `await` is 120 seconds.
+- **Liveness tuning is not yet uniform on the attach path.** `check.py --wait` uses the tool defaults for the stalled threshold and re-probe, not project-local values.
+- **Upgrade detection can be masked by a partial stamp.** A delegated load updates the `config.json` version marker without regenerating scripts or `second_agent.json`, so the next warning can treat the workspace as current. Old layouts are still detected from their contents, not from the stamp.
+- **Graph staleness detection only follows `.py` sources.** Changes in other languages do not enter the runtime fingerprint; the Graphify Stop hook is a separate Claude layer and is not available in every main agent.
+- **Cross-OS graph paths are not fully normalized yet.** A snapshot built on Windows and then read from POSIX/WSL can still produce backslashed candidate paths; refresh the graph manually from the active environment if this happens.
+- **Runner scripts are not portable across OSes.** Absolute paths are baked in at init/upgrade; moving the repo, path, or OS means running upgrade from the new environment.

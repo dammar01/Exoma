@@ -1,170 +1,170 @@
-# Rencana Revisi: `verify_mode=e2e` Berbasis Playwright
+# Revision Plan: Playwright-Based `verify_mode=e2e`
 
-Status: **Fase 1–4 diimplementasikan (1 dan 4 terverifikasi `/.verify`; 2 dan 3 lolos suite lokal + smoke Chromium, belum `/.verify`); tooling Fase 5 ada; evaluasi Fase 0/5 menunggu dataset project nyata** — detail di §1.2 dan §1.3  
-Tanggal: 2026-09-14 (status terakhir diperbarui 2026-09-14, setelah batch implementasi 1–8)  
+Status: **Phases 1–4 implemented (1 and 4 verified by `/.verify`; 2 and 3 pass the local suite + Chromium smoke, not yet `/.verify`); Phase 5 tooling exists; Phase 0/5 evaluation awaits a real project dataset** — details in §1.2 and §1.3  
+Date: 2026-09-14 (status last updated 2026-09-14, after implementation batches 1–8)  
 Project: `dammar01/agent-workflow`
 
-> **Catatan historis (2026-09-15).** Dokumen ini merekam rancangan awal berbasis `verify_mode=e2e` dan blok `commands.e2e`. Implementasi akhirnya berbeda: pembuktian browser adalah command eksplisit `/.verify-browser` yang **tidak membaca `config.json`** — semua setting per-run ada di request session, dan `e2e` bukan nilai `verify_mode`. Kontrak yang berlaku ada di `docs/runtime-contracts.md` §/.verify-browser, termasuk write guard `allow_side_effects` + `allowed_mutation_paths` yang tidak ada di rencana ini. Sebutan `verify_mode=e2e`, `commands.e2e.*`, dan `meta.verify_mode = "e2e"` di bawah dibiarkan sebagai jejak keputusan, bukan instruksi.
+> **Historical note (2026-09-15).** This document records the initial design based on `verify_mode=e2e` and the `commands.e2e` block. The final implementation differs: browser verification is an explicit `/.verify-browser` command that **does not read `config.json`** — all per-run settings live in the session request, and `e2e` is not a `verify_mode` value. The contract in force is in `docs/runtime-contracts.md` §/.verify-browser, including the `allow_side_effects` + `allowed_mutation_paths` write guard that does not exist in this plan. The mentions of `verify_mode=e2e`, `commands.e2e.*`, and `meta.verify_mode = "e2e"` below are left as a decision trail, not as instructions.
 
-## 1. Ringkasan keputusan
+## 1. Decision summary
 
-Tambahkan `verify_mode=e2e` sebagai lapisan pembuktian perilaku runtime untuk aplikasi web. Mode ini tidak menggunakan model sebagai operator browser berbasis screenshot. Model menganalisis codebase dan menyusun kontrak pengujian, sedangkan Playwright menjalankan interaksi serta assertion secara lokal dan deterministik.
+Add `verify_mode=e2e` as a runtime behavior verification layer for web applications. This mode does not use the model as a screenshot-driven browser operator. The model analyzes the codebase and builds a test contract, while Playwright runs the interactions and assertions locally and deterministically.
 
-Prinsip utama:
+Core principle:
 
 > **Code-first, browser-second, visual-last.**
 
-Urutan kerjanya:
+Workflow order:
 
-1. Tentukan scope perubahan dari Git dan task pengguna.
-2. Eksplorasi bagian codebase yang terdampak.
-3. Turunkan perilaku yang harus dibuktikan menjadi `verification claims`.
-4. Gunakan existing E2E test milik project jika tersedia dan relevan.
-5. Jika terdapat coverage gap, hasilkan scenario JSON deklaratif.
-6. Jalankan scenario melalui Playwright player lokal.
-7. Evaluasi DOM, URL, browser error, dan network evidence.
-8. Kirim report ringkas ke hybrid reviewer.
-9. Buka screenshot atau trace hanya jika bukti terstruktur tidak cukup.
+1. Determine the change scope from Git and the user's task.
+2. Explore the affected parts of the codebase.
+3. Derive the behavior to be proven into `verification claims`.
+4. Use the project's existing E2E tests if available and relevant.
+5. If there is a coverage gap, generate declarative scenario JSON.
+6. Run the scenario through the local Playwright player.
+7. Evaluate DOM, URL, browser errors, and network evidence.
+8. Send a compact report to the hybrid reviewer.
+9. Open screenshots or traces only if structured evidence is insufficient.
 
-Implementasi dilakukan sebagai MVP terlebih dahulu. Self-healing kompleks, boot aplikasi, visual reasoning otomatis, dan dukungan lintas-browser ditunda sampai MVP terbukti memberikan nilai.
+Implementation is done as an MVP first. Complex self-healing, application boot, automated visual reasoning, and cross-browser support are deferred until the MVP is shown to deliver value.
 
-### 1.1 Keputusan arsitektur (2026-09-14)
+### 1.1 Architecture decisions (2026-09-14)
 
-Tiga keputusan berikut diambil setelah rencana ini dianalisis terhadap codebase verify saat ini. Keputusan ini mengikat seluruh bagian di bawah.
+The following three decisions were made after this plan was analyzed against the current verify codebase. These decisions bind every section below.
 
-| # | Keputusan | Alasan |
+| # | Decision | Reason |
 |---|---|---|
-| D1 | **Orkestrasi three-stage di runtime Python.** Stage 1: delegated call ke second_agent menghasilkan claims + scenario JSON (`[E2E SPEC]`). Stage 2: player Playwright lokal. Stage 3: hybrid review delegated membaca `[E2E EVIDENCE]` compact, lalu normalizer menggabungkan report browser dan hasil review menjadi `[VERIFICATION]` canonical. Stage 1 dan 3 **tidak** memanggil ulang `Executor.execute("verify")` dengan config apa adanya — lihat aturan dispatch §5.1. | Branch lokal `Executor.execute()` untuk mode `syntax` early-return sebelum router/provider — tidak ada tempat bagi model membentuk claims. Menempatkan claim builder di runtime membuat seluruh lifecycle dapat diuji dengan fake player, bukan bergantung disiplin prompt main agent. |
-| D2 | **Hasil E2E dinormalisasi ke kontrak `[VERIFICATION]` yang sudah ada.** Tidak ada jalur bypass verdict baru seperti mode `quick`. | `_finalize_verify_result`, predicate continuation, dan invalid-evidence guard semuanya memvalidasi output verify sebagai delegated contract; satu-satunya pengecualian adalah metadata quick (`meta.mode == "quick"` atau `meta.quick_verify`). Raw JSONL/report E2E tanpa normalisasi akan dinilai `INCOMPLETE` atau memicu continuation. Satu parser verdict berarti nol drift dan exit code otomatis benar. |
-| D3 | **Playwright sebagai optional extra dengan lazy import.** Runtime tetap stdlib-only; `core/evidence/e2e/` mengimpor Playwright saat dipakai; absen → `incomplete` dengan reason `playwright_missing`. Test invariant dependency hanya mengizinkan import ber-guard di paket e2e. Pemasangan: `requirements-e2e.txt` terpin + `python install.py --apply --with-e2e` (pip, lalu `playwright install chromium`). | `tests/checks/deps.py` menegakkan runtime stdlib-only, dan repo tidak punya `requirements.txt` sama sekali. Menambahkan Playwright ke dependency wajib memberatkan semua instalasi yang tidak memakai E2E; flag opt-in memisahkannya tanpa mengubah instalasi default. |
+| D1 | **Three-stage orchestration in the Python runtime.** Stage 1: a delegated call to second_agent produces claims + scenario JSON (`[E2E SPEC]`). Stage 2: local Playwright player. Stage 3: delegated hybrid review reads the compact `[E2E EVIDENCE]`, then the normalizer combines the browser report and the review result into a canonical `[VERIFICATION]`. Stages 1 and 3 do **not** re-call `Executor.execute("verify")` with the config as-is — see the dispatch rules in §5.1. | The local `Executor.execute()` branch for `syntax` mode early-returns before the router/provider — there is no place for the model to form claims. Placing the claim builder in the runtime makes the whole lifecycle testable with a fake player, rather than depending on main agent prompt discipline. |
+| D2 | **E2E results are normalized into the existing `[VERIFICATION]` contract.** There is no new verdict bypass path like `quick` mode. | `_finalize_verify_result`, the continuation predicate, and the invalid-evidence guard all validate verify output as a delegated contract; the only exception is quick metadata (`meta.mode == "quick"` or `meta.quick_verify`). Raw E2E JSONL/report without normalization would be judged `INCOMPLETE` or trigger continuation. One verdict parser means zero drift and an automatically correct exit code. |
+| D3 | **Playwright as an optional extra with lazy import.** The runtime stays stdlib-only; `core/evidence/e2e/` imports Playwright when used; absent → `incomplete` with reason `playwright_missing`. The dependency invariant test only allows guarded imports in the e2e package. Installation: pinned `requirements-e2e.txt` + `python install.py --apply --with-e2e` (pip, then `playwright install chromium`). | `tests/checks/deps.py` enforces a stdlib-only runtime, and the repo has no `requirements.txt` at all. Adding Playwright as a required dependency burdens every installation that does not use E2E; an opt-in flag separates it without changing the default installation. |
 
-Perkiraan risiko rencana: sebelum keputusan ini `high` (tabrakan dengan contract delegated + tidak ada rumah untuk claim builder); setelah ketiganya masuk, `medium` (sisa risiko: player supervisor baru, dependency browser, kalibrasi timeout).
+Plan risk estimate: before these decisions `high` (collision with the delegated contract + no home for the claim builder); after all three are in, `medium` (remaining risk: new player supervisor, browser dependency, timeout calibration).
 
-Keputusan tambahan saat implementasi (Q1): stage 1 dan stage 3 memanggil `Executor._run_delegated()` / `_build_delegated_prompt()` yang diekstrak dari `execute()`, bukan `execute()` ulang. Lihat §5.1.
+Additional decision during implementation (Q1): stage 1 and stage 3 call `Executor._run_delegated()` / `_build_delegated_prompt()` extracted from `execute()`, not `execute()` again. See §5.1.
 
-Keputusan tambahan batch implementasi: packaging lewat `requirements-e2e.txt` + `--with-e2e` yang juga mengunduh Chromium; existing test project hanya dijalankan lewat `commands.e2e.existing_test_command` yang ditulis user (§8, §18); dataset evaluasi Fase 0/5 diambil dari project nyata.
+Additional implementation-batch decision: packaging via `requirements-e2e.txt` + `--with-e2e`, which also downloads Chromium; the project's existing tests are only run via a user-written `commands.e2e.existing_test_command` (§8, §18); the Phase 0/5 evaluation dataset is taken from real projects.
 
-### 1.2 Status implementasi
+### 1.2 Implementation status
 
-Posisi per 2026-09-14. **Terverifikasi** = lolos `/.verify` delegated dan suite lokal. **Diimplementasikan** = kode dan test ada, `python tests/run.py` PASS, `python -m tools.sim.sim_flows` 34/34, smoke Chromium nyata PASS di Windows (`WORKFLOW_E2E_SMOKE=1`), tetapi belum melewati `/.verify`. Seluruh perubahan belum di-commit.
+Position as of 2026-09-14. **Verified** = passes delegated `/.verify` and the local suite. **Implemented** = code and tests exist, `python tests/run.py` PASS, `python -m tools.sim.sim_flows` 34/34, real Chromium smoke PASS on Windows (`WORKFLOW_E2E_SMOKE=1`), but has not yet passed `/.verify`. None of the changes are committed yet.
 
-| Fase | Status | Bukti | Catatan |
+| Phase | Status | Evidence | Notes |
 |---|---|---|---|
-| 0 — Baseline dan validasi kebutuhan | **belum (menunggu data)** | tooling: label dataset `WORKFLOW_E2E_LABEL`, baseline delegated verify di `report` | Butuh 3–5 perubahan web nyata, `base_url` non-production, akun test via `${ENV}`. Tidak bisa dikerjakan tanpa project target. |
-| 1 — Kontrak tanpa browser | **selesai, terverifikasi** | `e2e_spec.py`, `e2e_normalize.py`, `e2e_supervisor.py`, `e2e_routing.py`; sim S22–S22c; re-verify batch 2 DONE | — |
-| 2 — Playwright MVP | **diimplementasikan** | batch 1–5: policy `spec.py`, `browser.py`, kebijakan artifact, `e2e_browser.py`, `e2e_redact.py`, `e2e_doctor.py`, `installer-e2e`, `e2e_smoke.py` (10 kasus Chromium nyata) | Exit criteria (pass, app failure, harness failure terklasifikasi benar) terpenuhi di smoke. Linux, Firefox, dan WebKit belum diuji. |
-| 3 — Stage 1: claim builder | **diimplementasikan** | batch 6: grounding `source_refs`, replay `last_spec.json`, existing test via config, uji source tidak diteruskan; `e2e_existing_tests.py`, sim S22d | Existing test baru diuji dengan runner Python pengganti, belum `npx playwright test` nyata. |
-| 4 — Stage 3: hybrid review | **selesai, terverifikasi** | `[E2E EVIDENCE]`; normalizer fail-closed; exhaustive agreement normalizer dan validator | Evidence block kini juga memuat probe, existing test, dan daftar artifact (batch 4 dan 6). |
-| 5 — Evaluasi MVP | **tooling diimplementasikan; evaluasi belum** | batch 7: baris `kind: e2e_run` di `quality.jsonl`, `telemetry.e2e_metrics` di `main.py --command report`; `e2e_metrics.py` | Angka evaluasi bergantung dataset Fase 0. Baseline loop browser visual tidak diukur dan tidak diestimasi. |
+| 0 — Baseline and requirements validation | **not yet (awaiting data)** | tooling: dataset label `WORKFLOW_E2E_LABEL`, delegated verify baseline in `report` | Needs 3–5 real web changes, a non-production `base_url`, test accounts via `${ENV}`. Cannot be done without a target project. |
+| 1 — Contract without browser | **done, verified** | `e2e_spec.py`, `e2e_normalize.py`, `e2e_supervisor.py`, `e2e_routing.py`; sim S22–S22c; re-verify batch 2 DONE | — |
+| 2 — Playwright MVP | **implemented** | batches 1–5: policy `spec.py`, `browser.py`, artifact policy, `e2e_browser.py`, `e2e_redact.py`, `e2e_doctor.py`, `installer-e2e`, `e2e_smoke.py` (10 real Chromium cases) | Exit criteria (pass, app failure, harness failure correctly classified) met in smoke. Linux, Firefox, and WebKit not yet tested. |
+| 3 — Stage 1: claim builder | **implemented** | batch 6: `source_refs` grounding, `last_spec.json` replay, existing tests via config, test that source is not forwarded; `e2e_existing_tests.py`, sim S22d | Existing tests have only been tested with a substitute Python runner, not real `npx playwright test`. |
+| 4 — Stage 3: hybrid review | **done, verified** | `[E2E EVIDENCE]`; fail-closed normalizer; exhaustive agreement between normalizer and validator | The evidence block now also contains probes, existing tests, and the artifact list (batches 4 and 6). |
+| 5 — MVP evaluation | **tooling implemented; evaluation not yet** | batch 7: `kind: e2e_run` rows in `quality.jsonl`, `telemetry.e2e_metrics` in `main.py --command report`; `e2e_metrics.py` | Evaluation numbers depend on the Phase 0 dataset. The visual browser loop baseline is neither measured nor estimated. |
 
-### 1.3 Celah
+### 1.3 Gaps
 
-Celah G1–G14 dari revisi sebelumnya dan batch yang menutupnya:
+Gaps G1–G14 from the previous revision and the batches that close them:
 
-| # | Celah | Status | Ditutup oleh |
+| # | Gap | Status | Closed by |
 |---|---|---|---|
-| G1 | Player browser nyata, observer, `page_stable` | tertutup | batch 3 (`browser.py`), batch 5 (smoke) |
-| G2 | DOM probe bounded | sebagian | batch 3 dan 4: action `probe`, probe otomatis saat selector miss, ringkasan di evidence. Cache probe (§11) belum ada. |
-| G3 | Kebijakan screenshot/HTML/trace | tertutup | batch 4 |
-| G4 | Existing test dijalankan | tertutup (opt-in) | batch 6, lewat `existing_test_command` |
-| G5 | Validasi origin navigasi | tertutup | batch 1 (validator), batch 3 (route guard runtime) |
-| G6 | Metadata action destruktif | tertutup | batch 1 (`side_effect` + `allow_side_effects`) |
-| G7 | Selector candidates | tertutup | batch 1 (schema), batch 3 (eksekusi) |
-| G8 | Grounding `source_refs` | tertutup | batch 1 (format), batch 6 (file dan baris ada) |
-| G9 | Config belum dikonsumsi | tertutup | batch 3 dan 4 |
-| G10 | Replay spec stage 1 | **terbuka** — tidak ada di kode (`runner.py` mencatat `replay_used: false`, tanpa `last_spec.json`/`commands.e2e.replay`). Pengganti parsial sejak v3.6.0: knowledge browser (`core/evidence/e2e/knowledge.py`) menawarkan alur yang terbukti ke draft berikutnya, bukan replay spec | batch 6 (klaim awal, dikoreksi) |
-| G11 | Retensi artifact berbasis ukuran | tertutup | batch 4 (`artifact_max_mb`) |
-| G12 | Metrik evaluasi e2e | tooling tertutup, data belum | batch 7 |
-| G13 | Token dibanding loop browser visual | sebagian | batch 7: token per run dan baseline delegated verify; baseline loop visual belum diukur |
-| G14 | Test §22 yang belum ada | tertutup | batch 4 (retensi), batch 5 (smoke), batch 6 (existing test reuse, source tidak diteruskan) |
+| G1 | Real browser player, observer, `page_stable` | closed | batch 3 (`browser.py`), batch 5 (smoke) |
+| G2 | Bounded DOM probe | partial | batches 3 and 4: `probe` action, automatic probe on selector miss, summary in evidence. Probe cache (§11) not yet present. |
+| G3 | Screenshot/HTML/trace policy | closed | batch 4 |
+| G4 | Existing tests run | closed (opt-in) | batch 6, via `existing_test_command` |
+| G5 | Navigation origin validation | closed | batch 1 (validator), batch 3 (runtime route guard) |
+| G6 | Destructive action metadata | closed | batch 1 (`side_effect` + `allow_side_effects`) |
+| G7 | Selector candidates | closed | batch 1 (schema), batch 3 (execution) |
+| G8 | `source_refs` grounding | closed | batch 1 (format), batch 6 (file and line exist) |
+| G9 | Config not yet consumed | closed | batches 3 and 4 |
+| G10 | Stage 1 spec replay | **open** — not in the code (`runner.py` records `replay_used: false`, without `last_spec.json`/`commands.e2e.replay`). Partial substitute since v3.6.0: browser knowledge (`core/evidence/e2e/knowledge.py`) offers proven flows to the next draft, not spec replay | batch 6 (initial claim, corrected) |
+| G11 | Size-based artifact retention | closed | batch 4 (`artifact_max_mb`) |
+| G12 | e2e evaluation metrics | tooling closed, data not yet | batch 7 |
+| G13 | Tokens compared with the visual browser loop | partial | batch 7: tokens per run and delegated verify baseline; visual loop baseline not yet measured |
+| G14 | §22 tests not yet present | closed | batch 4 (retention), batch 5 (smoke), batch 6 (existing test reuse, source not forwarded) |
 
-Masih terbuka:
+Still open:
 
-- Dataset Fase 0 dan evaluasi Fase 5 pada project nyata (butuh input user).
-- Baseline loop browser visual untuk acceptance #13.
-- Cache probe (§11); bounded outer HTML target pada step sukses (§12).
-- Smoke di Linux; Firefox dan WebKit; job CI yang memasang extra dan menyetel `WORKFLOW_E2E_SMOKE=1`.
-- Existing test command dengan runner nyata (mis. `npx playwright test`).
-- Batch 1–7 belum melewati `/.verify`; seluruh perubahan belum di-commit; skill terpasang di `~/.claude/` belum di-upgrade dari `dist/` (`python install.py --apply`).
-- Self-healing (§15.2) ditunda sesuai rencana, bukan utang.
+- Phase 0 dataset and Phase 5 evaluation on real projects (needs user input).
+- Visual browser loop baseline for acceptance #13.
+- Probe cache (§11); bounded target outer HTML on successful steps (§12).
+- Smoke on Linux; Firefox and WebKit; a CI job that installs the extra and sets `WORKFLOW_E2E_SMOKE=1`.
+- Existing test command with a real runner (e.g. `npx playwright test`).
+- Batches 1–7 have not yet passed `/.verify`; none of the changes are committed; the skills installed in `~/.claude/` have not been upgraded from `dist/` (`python install.py --apply`).
+- Self-healing (§15.2) is deferred as planned, not debt.
 
-## 2. Masalah yang hendak diselesaikan
+## 2. Problem to be solved
 
-Mode verifikasi yang membaca kode dapat menilai apakah implementasi terlihat benar, tetapi belum membuktikan bahwa perilaku tersebut benar-benar terjadi ketika aplikasi dijalankan.
+A verification mode that reads code can judge whether an implementation looks correct, but does not yet prove that the behavior actually happens when the application runs.
 
-Contoh masalah yang dapat lolos dari syntax check dan code review:
+Examples of problems that can slip past syntax checks and code review:
 
-- route atau redirect salah;
-- tombol tidak dapat diklik karena state atau overlay;
+- wrong route or redirect;
+- button cannot be clicked because of state or an overlay;
 - JavaScript runtime exception;
-- request API menghasilkan HTTP 5xx;
-- state UI tidak diperbarui setelah respons berhasil;
-- form tidak mengirim nilai yang diharapkan;
-- integrasi frontend dan backend tidak tersambung;
-- build berjalan, tetapi workflow pengguna gagal.
+- API request returns HTTP 5xx;
+- UI state not updated after a successful response;
+- form does not submit the expected values;
+- frontend and backend integration not wired up;
+- build runs, but the user workflow fails.
 
-Tujuan mode E2E bukan menggantikan syntax test, unit test, atau delegated review. Mode ini menambahkan bukti runtime ketika perubahan memang menyentuh perilaku aplikasi web.
+The goal of E2E mode is not to replace syntax tests, unit tests, or delegated review. This mode adds runtime evidence when a change actually touches web application behavior.
 
-## 3. Sasaran dan non-sasaran
+## 3. Goals and non-goals
 
-### 3.1 Sasaran MVP
+### 3.1 MVP goals
 
-- Membuktikan satu atau beberapa perilaku penting melalui browser.
-- Menghasilkan hasil `pass`, `fail`, atau `incomplete` yang dapat dipertanggungjawabkan.
-- Menjaga penggunaan token rendah dengan memindahkan interaksi browser ke proses lokal.
-- Menghasilkan evidence yang terstruktur, bounded, dan dapat dijalankan ulang.
-- Membedakan kegagalan aplikasi, kegagalan test harness, dan kondisi ambigu.
-- Menggunakan ulang test milik project target jika sudah tersedia.
-- Menjaga secret dan data sensitif agar tidak masuk prompt maupun report.
+- Prove one or more important behaviors through the browser.
+- Produce accountable `pass`, `fail`, or `incomplete` results.
+- Keep token usage low by moving browser interaction into a local process.
+- Produce evidence that is structured, bounded, and re-runnable.
+- Distinguish application failures, test harness failures, and ambiguous conditions.
+- Reuse the target project's tests if they already exist.
+- Keep secrets and sensitive data out of both prompts and reports.
 
-### 3.2 Non-sasaran MVP
+### 3.2 MVP non-goals
 
-- Menjadi browser agent visual serbaguna.
-- Menjalankan eksplorasi UI lewat screenshot berulang.
-- Menulis arbitrary Playwright/Python/JavaScript dari model.
-- Menyalakan atau mematikan aplikasi target.
-- Menjalankan test terhadap production secara default.
-- Mendukung semua action Playwright.
-- Memperbaiki aplikasi secara otomatis berdasarkan hasil E2E.
-- Melakukan self-healing bebas terhadap expected behavior.
-- Menggantikan seluruh test suite milik project target.
+- Becoming a general-purpose visual browser agent.
+- Running UI exploration through repeated screenshots.
+- Writing arbitrary Playwright/Python/JavaScript from the model.
+- Starting or stopping the target application.
+- Running tests against production by default.
+- Supporting every Playwright action.
+- Automatically fixing the application based on E2E results.
+- Performing free-form self-healing against expected behavior.
+- Replacing the target project's entire test suite.
 
-## 4. Kapan mode E2E digunakan
+## 4. When E2E mode is used
 
-Mode E2E hanya relevan jika semua kondisi berikut terpenuhi:
+E2E mode is only relevant if all of the following conditions are met:
 
-1. Target memiliki aplikasi web yang dapat diakses dari environment verifikasi.
-2. Perubahan memengaruhi route, form, interaksi, state UI, atau integrasi frontend–backend.
-3. Terdapat perilaku pengguna yang dapat dinyatakan sebagai assertion.
-4. Environment dan test data cukup stabil untuk pengujian ulang.
+1. The target has a web application reachable from the verification environment.
+2. The change affects routes, forms, interactions, UI state, or frontend–backend integration.
+3. There is user behavior that can be expressed as an assertion.
+4. The environment and test data are stable enough for repeated testing.
 
-Mode E2E tidak wajib untuk perubahan seperti:
+E2E mode is not required for changes such as:
 
-- dokumentasi saja;
-- refactor internal tanpa perubahan perilaku;
-- library non-web;
-- perubahan yang sudah dibuktikan secara cukup oleh unit/integration test;
-- aplikasi yang tidak memiliki environment aman untuk browser test.
+- documentation only;
+- internal refactors with no behavior change;
+- non-web libraries;
+- changes already sufficiently proven by unit/integration tests;
+- applications that have no safe environment for browser tests.
 
-Resolver awal yang disarankan:
+Suggested initial resolver:
 
-| Kondisi | Mode utama |
+| Condition | Primary mode |
 |---|---|
-| Perubahan parse/config sederhana | `syntax` |
-| Perubahan logika tanpa surface web | `delegated` + existing tests |
-| Perubahan workflow aplikasi web | `e2e` |
-| Project memiliki E2E test relevan | jalankan existing test terlebih dahulu |
-| Browser/environment tidak tersedia | `incomplete`, bukan fallback `pass` |
+| Simple parse/config change | `syntax` |
+| Logic change with no web surface | `delegated` + existing tests |
+| Web application workflow change | `e2e` |
+| Project has relevant E2E tests | run existing tests first |
+| Browser/environment unavailable | `incomplete`, not a `pass` fallback |
 
-Catatan runtime: reader `verify_mode()` saat ini adalah allowlist murni — nilai yang tidak dikenal hanya diberi warning lalu **fallback diam ke `delegated`** (`core/runtime/config_defaults.py`, fungsi `verify_mode` dan validasi `commands.verify_mode`). Jika `e2e` hanya ditambahkan ke allowlist tanpa preflight, konfigurasi `e2e` pada environment tanpa Playwright akan diam-diam berjalan sebagai delegated review, bukan `incomplete`. Karena itu:
+Runtime note: the `verify_mode()` reader is currently a pure allowlist — unknown values only get a warning and then **silently fall back to `delegated`** (`core/runtime/config_defaults.py`, the `verify_mode` function and `commands.verify_mode` validation). If `e2e` is only added to the allowlist without a preflight, an `e2e` configuration in an environment without Playwright would silently run as a delegated review, not `incomplete`. Therefore:
 
-- reader tetap allowlist murni (`delegated | syntax | e2e`), tidak melakukan pengecekan dependency;
-- preflight dependency/browser/base URL dilakukan di branch `e2e` executor, sebelum stage apa pun berjalan;
-- preflight gagal → hasil `incomplete` dengan reason eksplisit (`playwright_missing`, `browser_missing`, `base_url_unreachable`), tidak pernah turun ke `delegated` tanpa instruksi pengguna.
+- the reader stays a pure allowlist (`delegated | syntax | e2e`) and does no dependency checking;
+- the dependency/browser/base URL preflight runs in the executor's `e2e` branch, before any stage runs;
+- preflight failure → an `incomplete` result with an explicit reason (`playwright_missing`, `browser_missing`, `base_url_unreachable`), never dropping to `delegated` without user instruction.
 
-## 5. Arsitektur konseptual
+## 5. Conceptual architecture
 
-Sesuai D1, mode `e2e` adalah runner three-stage di dalam `Executor.execute()`. Branch `e2e` masuk di sebelah branch `syntax` (early local branch), tetapi berbeda dengan `syntax`, branch ini memanggil provider dua kali (stage 1 dan stage 3) melalui jalur delegated yang sudah ada.
+Per D1, `e2e` mode is a three-stage runner inside `Executor.execute()`. The `e2e` branch enters next to the `syntax` branch (early local branch), but unlike `syntax`, this branch calls the provider twice (stage 1 and stage 3) through the existing delegated path.
 
 ```text
 Task + Git scope
@@ -176,7 +176,7 @@ Task + Git scope
 │   output: [E2E SPEC] = claims + scenario JSON + existing tests   │
 └──────────────────────────────┬───────────────────────────────────┘
                                ▼
-                     spec validator (lokal, deterministik)
+                     spec validator (local, deterministic)
                                │
              ┌─────────────────┴─────────────────┐
              ▼                                   ▼
@@ -185,68 +185,68 @@ Task + Git scope
              └─────────────────┬─────────────────┘
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ STAGE 2 — player Playwright (child process lokal)                │
+│ STAGE 2 — Playwright player (local child process)                │
 │   stdout JSONL: progress, heartbeat, result                      │
 │   evidence classifier: app / harness / unknown                   │
 └──────────────────────────────┬───────────────────────────────────┘
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ STAGE 3 — normalizer + hybrid review                             │
-│   normalizer: hasil player ─▶ [E2E EVIDENCE] compact             │
+│   normalizer: player result ─▶ [E2E EVIDENCE] compact            │
 │   delegated call: reviewer ─▶ [VERIFICATION] canonical           │
-│   combine fail-closed ─▶ verdict efektif ─▶ validator existing   │
+│   combine fail-closed ─▶ effective verdict ─▶ existing validator │
 └──────────────────────────────────────────────────────────────────┘
                                │
                                ▼
-              validate_verification_contract (tidak berubah)
+              validate_verification_contract (unchanged)
                                │
                                ▼
                   _finalize_verify_result / exit code
 ```
 
-Visual fallback (screenshot/trace) tetap ada di stage 3 dan hanya dibuka bila bukti terstruktur tidak cukup (lihat §16).
+The visual fallback (screenshot/trace) still exists in stage 3 and is only opened when structured evidence is insufficient (see §16).
 
-Komponen utama:
+Main components:
 
-| Komponen | Stage | Tanggung jawab | Status di codebase |
+| Component | Stage | Responsibility | Status in the codebase |
 |---|---|---|---|
-| Scope resolver | 1 | Menentukan perubahan yang sedang diverifikasi | reuse — prompt verify sudah meminta changed files + consumers (`core/prompt/prompt_builder.py`, section verify) |
-| Code explorer | 1 | Menemukan route, komponen, selector, API, dan expected behavior | reuse — kemampuan explore second_agent |
-| Claim builder | 1 | Mengubah hasil eksplorasi menjadi perilaku yang dapat dibuktikan | baru — prompt + kontrak output `[E2E SPEC]` |
-| Coverage resolver | 1 | Menentukan apakah existing test sudah cukup | baru |
-| Spec validator | lokal | Memvalidasi scenario dan membatasi action yang diizinkan | baru — `core/evidence/e2e/spec.py` |
-| Player supervisor | 2 | Menjalankan child process, JSONL parse, heartbeat, idle/total timeout, tree kill | baru; reuse `utils.osutil.terminate_tree()` dan pola bounded capture dari adapter provider |
-| Playwright player | 2 | Menjalankan browser dan menghasilkan event terstruktur | baru — `core/evidence/e2e/player.py`, lazy import Playwright |
-| Evidence classifier | 2 | Mengklasifikasikan `app`, `harness`, atau `unknown` | baru |
-| Normalizer | 3 | Memetakan hasil player ke `[E2E EVIDENCE]` + finding canonical | baru — `core/evidence/e2e/normalize.py` |
-| Hybrid reviewer | 3 | Mencocokkan evidence runtime dengan kode dan claim, output `[VERIFICATION]` | reuse — jalur delegated verify existing + section prompt baru |
-| Contract validator | akhir | Menentukan verdict runtime + exit code | reuse tanpa perubahan — `core/evidence/contract.py`, `core/evidence/result_shaping.py` |
+| Scope resolver | 1 | Determines the change being verified | reuse — the verify prompt already asks for changed files + consumers (`core/prompt/prompt_builder.py`, verify section) |
+| Code explorer | 1 | Finds routes, components, selectors, APIs, and expected behavior | reuse — second_agent's explore capability |
+| Claim builder | 1 | Turns exploration results into provable behavior | new — prompt + `[E2E SPEC]` output contract |
+| Coverage resolver | 1 | Determines whether existing tests are sufficient | new |
+| Spec validator | local | Validates scenarios and restricts the allowed actions | new — `core/evidence/e2e/spec.py` |
+| Player supervisor | 2 | Runs the child process, JSONL parsing, heartbeat, idle/total timeout, tree kill | new; reuses `utils.osutil.terminate_tree()` and the bounded capture pattern from the provider adapters |
+| Playwright player | 2 | Runs the browser and produces structured events | new — `core/evidence/e2e/player.py`, lazy Playwright import |
+| Evidence classifier | 2 | Classifies `app`, `harness`, or `unknown` | new |
+| Normalizer | 3 | Maps player results to `[E2E EVIDENCE]` + canonical findings | new — `core/evidence/e2e/normalize.py` |
+| Hybrid reviewer | 3 | Matches runtime evidence against code and claims, outputs `[VERIFICATION]` | reuse — existing delegated verify path + new prompt section |
+| Contract validator | final | Determines the runtime verdict + exit code | reuse without changes — `core/evidence/contract.py`, `core/evidence/result_shaping.py` |
 
-### 5.1 Aturan dispatch stage 1 dan stage 3 (anti-rekursi)
+### 5.1 Stage 1 and stage 3 dispatch rules (anti-recursion)
 
-`Executor.execute()` hanya memiliki satu entry point publik, dan mode verify dibaca dari config **sebelum** routing (`mode = verify_mode(project_root) if normalized_command == "verify"`). Bila stage 1 atau stage 3 memanggil `Executor.execute("verify", ...)` secara naif ketika config masih `verify_mode=e2e`, panggilan itu masuk lagi ke branch E2E — rekursi, dan provider tidak pernah tercapai. Selain itu, invalid-evidence guard menolak output command `verify` yang tidak memuat `[VERIFICATION]`, sehingga stage 1 (output `[E2E SPEC]`) tidak boleh berjalan sebagai command `verify` sama sekali.
+`Executor.execute()` has only one public entry point, and the verify mode is read from config **before** routing (`mode = verify_mode(project_root) if normalized_command == "verify"`). If stage 1 or stage 3 naively calls `Executor.execute("verify", ...)` while the config is still `verify_mode=e2e`, that call re-enters the E2E branch — recursion, and the provider is never reached. In addition, the invalid-evidence guard rejects `verify` command output that does not contain `[VERIFICATION]`, so stage 1 (output `[E2E SPEC]`) must not run as a `verify` command at all.
 
-Keputusan implementasi (Q1 plan Fase 1, 2026-09-14): inti provider-call `execute()` — handoff, bind adapter, `_adapter_run`, satu bounded continuation, archive call meta, snapshot, persist session, audit, `_record_failed_call`, guard `[VERIFICATION]` dan guard evidence — diekstrak menjadi `Executor._run_delegated(route, command, task, session, session_id, project_root, work_dir, on_progress, session_manager, *, prompt, prompt_meta, lock_claim)`; sizing prompt menjadi `Executor._build_delegated_prompt(route, command, task, session_id, project_root, *, ..., e2e_evidence=None)`. Jalur publik `execute()` memakai keduanya lalu tetap melakukan bookkeeping role (facts, index, fan-out, cache). Stage E2E memanggil kedua helper itu **langsung** — nol re-entry `execute()`, nol lock ulang, nol reset `_call_metas`, nol side-effect role. Orkestrasi stage ada di modul `core/evidence/e2e/runner.py`, dipanggil dari branch `e2e` di `execute()` setelah lock dimiliki.
+Implementation decision (Q1 of the Phase 1 plan, 2026-09-14): the provider-call core of `execute()` — handoff, adapter binding, `_adapter_run`, one bounded continuation, call meta archive, snapshot, session persistence, audit, `_record_failed_call`, the `[VERIFICATION]` guard and the evidence guard — is extracted into `Executor._run_delegated(route, command, task, session, session_id, project_root, work_dir, on_progress, session_manager, *, prompt, prompt_meta, lock_claim)`; prompt sizing becomes `Executor._build_delegated_prompt(route, command, task, session_id, project_root, *, ..., e2e_evidence=None)`. The public `execute()` path uses both and then still does the role bookkeeping (facts, index, fan-out, cache). The E2E stages call both helpers **directly** — zero `execute()` re-entry, zero re-locking, zero `_call_metas` reset, zero role side effects. Stage orchestration lives in the `core/evidence/e2e/runner.py` module, called from the `e2e` branch in `execute()` after the lock is held.
 
-Aturan:
+Rules:
 
-| Stage | Command | Route | Kontrak output | Cara dispatch |
+| Stage | Command | Route | Output contract | Dispatch method |
 |---|---|---|---|---|
-| 1 | `e2e_spec` (internal, baru) | entri baru di `COMMAND_ROUTES` (`config/routing.py`), role `ROLE_EXPLORATION` — read-only, tanpa validator `[VERIFICATION]`; terdaftar di `INTERNAL_COMMANDS` | format evidence exploration standar (`[EVIDENCE]` … `[DIGEST]`) dengan section tambahan `[E2E SPEC]` di dalamnya | `executor._run_delegated(route_e2e_spec, "e2e_spec", ...)` dari `runner.py`; bukan command `verify`, jadi tidak menyentuh `verify_mode` |
+| 1 | `e2e_spec` (internal, new) | new entry in `COMMAND_ROUTES` (`config/routing.py`), role `ROLE_EXPLORATION` — read-only, without the `[VERIFICATION]` validator; registered in `INTERNAL_COMMANDS` | standard exploration evidence format (`[EVIDENCE]` … `[DIGEST]`) with an additional `[E2E SPEC]` section inside it | `executor._run_delegated(route_e2e_spec, "e2e_spec", ...)` from `runner.py`; not a `verify` command, so it does not touch `verify_mode` |
 
-Catatan guard stage 1: executor memiliki generic evidence guard untuk semua role `exploration|reasoning` yang menolak output tanpa marker evidence (`_EVIDENCE_MARKERS` di `core/provider/continuation.py`: `[evidence]`, `[digest]`, `entry_points`, `grounded:`, dll.) sebagai `invalid_evidence`, terpisah dari guard `[VERIFICATION]`. Karena itu output stage 1 **wajib** berbentuk evidence exploration standar — `[EVIDENCE]` (grounded/assumptions/scope) + `[DIGEST]` — dan `[E2E SPEC]` hanyalah section tambahan di dalamnya, bukan format pengganti. Konsekuensinya: guard, continuation exploration, dan digest-first existing berlaku apa adanya untuk stage 1; `_EVIDENCE_MARKERS` tidak perlu diubah. Parser `[E2E SPEC]` bekerja di atas `content` yang sudah lolos guard; section hilang atau JSON rusak → `incomplete` reason `spec_invalid` (satu continuation terstruktur bila `[EVIDENCE]` ada tetapi `[E2E SPEC]` tidak).
-| 2 | — | lokal | JSONL player | supervisor, tanpa provider |
-| 3 | `verify` | route `verify` existing (sudah di-resolve `execute()`), role `ROLE_VERIFICATION` | `[VERIFICATION]` canonical | `executor._run_delegated(route_verify, "verify", ..., prompt=<prompt verify + [E2E EVIDENCE]>)` dari `runner.py`; tidak lewat `execute()`, jadi `verify_mode` tidak dibaca ulang — tidak ada override, tidak ada rekursi |
+Stage 1 guard note: the executor has a generic evidence guard for all `exploration|reasoning` roles that rejects output without evidence markers (`_EVIDENCE_MARKERS` in `core/provider/continuation.py`: `[evidence]`, `[digest]`, `entry_points`, `grounded:`, etc.) as `invalid_evidence`, separate from the `[VERIFICATION]` guard. Therefore stage 1 output **must** take the form of standard exploration evidence — `[EVIDENCE]` (grounded/assumptions/scope) + `[DIGEST]` — and `[E2E SPEC]` is only an additional section inside it, not a replacement format. Consequence: the existing guard, exploration continuation, and digest-first apply as-is to stage 1; `_EVIDENCE_MARKERS` does not need to change. The `[E2E SPEC]` parser works on `content` that has already passed the guard; missing section or broken JSON → `incomplete` with reason `spec_invalid` (one structured continuation if `[EVIDENCE]` is present but `[E2E SPEC]` is not).
+| 2 | — | local | player JSONL | supervisor, no provider |
+| 3 | `verify` | existing `verify` route (already resolved by `execute()`), role `ROLE_VERIFICATION` | canonical `[VERIFICATION]` | `executor._run_delegated(route_verify, "verify", ..., prompt=<prompt verify + [E2E EVIDENCE]>)` from `runner.py`; does not go through `execute()`, so `verify_mode` is not re-read — no override, no recursion |
 
-Batas internal:
+Internal boundaries:
 
-- `e2e_spec` tidak tersedia sebagai command publik: tidak ada di `choices` argparse `main.py`, dan `main.run()` menolaknya lewat `config.routing.INTERNAL_COMMANDS` (`routing_error`). `COMMAND_ROUTES` memuatnya karena router hanya menentukan role. `provider_select.SELECTABLE_ROUTES` tidak memuatnya.
-- Stage tidak pernah memanggil `execute()`; tidak ada parameter override dan tidak ada recursion guard karena tidak ada jalur untuk rekursi.
-- Test Fase 1 (`tests/checks/e2e_routing.py`): fake adapter mencatat setiap panggilan provider; stage 1 tercatat sebagai `e2e_spec`, stage 3 sebagai `verify`, tidak ada panggilan ketiga; stage 3 dilewati saat browser `incomplete`.
+- `e2e_spec` is not available as a public command: it is not in the `main.py` argparse `choices`, and `main.run()` rejects it via `config.routing.INTERNAL_COMMANDS` (`routing_error`). `COMMAND_ROUTES` contains it because the router only determines the role. `provider_select.SELECTABLE_ROUTES` does not contain it.
+- Stages never call `execute()`; there is no override parameter and no recursion guard because there is no path for recursion.
+- Phase 1 test (`tests/checks/e2e_routing.py`): a fake adapter records every provider call; stage 1 is recorded as `e2e_spec`, stage 3 as `verify`, there is no third call; stage 3 is skipped when the browser result is `incomplete`.
 
-Metadata hasil akhir: `meta.verify_mode = "e2e"`, `meta.verdict` (efektif, diset sebelum `_finalize_verify_result`), `meta.e2e = {browser_verdict, reason, stages: [{stage, command, prompt_id|returncode, ...}], artifacts, preflight, spec_source, fake}` agar `await`/`result` dapat menampilkan jejak ketiga stage.
+Final result metadata: `meta.verify_mode = "e2e"`, `meta.verdict` (effective, set before `_finalize_verify_result`), `meta.e2e = {browser_verdict, reason, stages: [{stage, command, prompt_id|returncode, ...}], artifacts, preflight, spec_source, fake}` so that `await`/`result` can show the trail of all three stages.
 
-Kontrak output stage 1 (usulan; bentuk final ditetapkan pada Fase 1 mengikuti pola parser section `[VERIFICATION]`). Bagian `[EVIDENCE]`/`[DIGEST]` mengikuti format exploration yang sudah ada; `[E2E SPEC]` adalah section tambahan:
+Stage 1 output contract (proposal; the final form is set in Phase 1 following the `[VERIFICATION]` section parser pattern). The `[EVIDENCE]`/`[DIGEST]` parts follow the existing exploration format; `[E2E SPEC]` is an additional section:
 
 ```text
 [EVIDENCE]
@@ -254,7 +254,7 @@ confidence: high
 entry_points:
 - src/pages/Login.tsx:12-80
 grounded:
-- Form login submit ke POST /api/login, sukses redirect /dashboard [src/routes/auth.ts:40-58]
+- Login form submits to POST /api/login, redirects to /dashboard on success [src/routes/auth.ts:40-58]
 assumptions:
 - none
 scope_covered:
@@ -271,65 +271,65 @@ existing_tests:
 - path: e2e/login.spec.ts | covers: login-valid-user | confidence: high
 scenario_json: <blok JSON sesuai §9>
 coverage_gap:
-- claim_id yang belum dicakup existing test
+- claim_id not yet covered by an existing test
 
 [DIGEST]
-summary: 1 claim blocking, existing test mencakup login valid; gap: redirect setelah error.
+summary: 1 claim blocking, existing test covers valid login; gap: redirect after an error.
 key_findings:
 - ...
 risk_level: medium
 confidence: high
 ```
 
-## 6. Scope eksplorasi codebase
+## 6. Codebase exploration scope
 
-Eksplorasi tidak boleh memindai seluruh repository tanpa batas. Urutan scope:
+Exploration must not scan the whole repository without bounds. Scope order:
 
-1. Task atau nama fitur yang diberikan pengguna.
-2. Working-tree diff jika ada perubahan belum di-commit.
-3. Commit range terhadap merge-base untuk feature branch.
-4. Changed symbols dan dependency langsungnya.
-5. Route, component, template, handler, API, dan test terkait.
-6. APP_MAP, feature registry, atau dokumentasi internal jika tersedia.
+1. The task or feature name given by the user.
+2. The working-tree diff if there are uncommitted changes.
+3. The commit range against the merge-base for a feature branch.
+4. Changed symbols and their direct dependencies.
+5. Related routes, components, templates, handlers, APIs, and tests.
+6. APP_MAP, feature registry, or internal documentation if available.
 
-Data yang dicari:
+Data sought:
 
 - entry URL;
-- prerequisite dan authentication;
-- user-visible role, label, heading, atau `data-testid`;
-- action utama;
-- request API yang relevan;
-- expected redirect atau state akhir;
+- prerequisites and authentication;
+- user-visible role, label, heading, or `data-testid`;
+- main action;
+- relevant API requests;
+- expected redirect or final state;
 - error state;
-- existing test dan fixture;
-- environment variable yang dibutuhkan, hanya namanya;
-- risiko tindakan destruktif.
+- existing tests and fixtures;
+- required environment variables, names only;
+- risk of destructive actions.
 
-Output eksplorasi harus berupa digest ringkas, bukan salinan file penuh:
+Exploration output must be a compact digest, not a copy of whole files:
 
 ```text
 Feature: login
-Scope: perubahan form login dan redirect
+Scope: login form and redirect changes
 Entry route: /login
 Primary component: src/pages/Login.tsx
 Success route: /dashboard
-Stable selector: role=button, name=Masuk
+Stable selector: role=button, name=Sign in
 Existing coverage: unit validation only
-Runtime gap: redirect dan session cookie belum dibuktikan
+Runtime gap: redirect and session cookie not yet proven
 ```
 
 ## 7. Verification claims
 
-Sebelum membuat langkah browser, sistem harus menentukan perilaku yang hendak dibuktikan.
+Before creating browser steps, the system must determine the behavior to be proven.
 
-Contoh:
+Example:
 
 ```json
 {
   "claims": [
     {
       "id": "login-valid-user",
-      "description": "Pengguna dengan kredensial valid masuk ke dashboard",
+      "description": "A user with valid credentials reaches the dashboard",
       "severity": "blocking",
       "source_refs": [
         "src/pages/Login.tsx",
@@ -340,31 +340,31 @@ Contoh:
 }
 ```
 
-Aturan claim:
+Claim rules:
 
-- Setiap scenario minimal memiliki satu claim.
-- Setiap assertion harus menunjuk satu claim.
-- Claim harus berasal dari task, requirement, code contract, atau existing test.
-- Step interaksi tanpa assertion tidak cukup untuk menghasilkan `pass`.
-- Jumlah step bukan ukuran coverage; claim kritis yang terbukti adalah ukuran utamanya.
+- Every scenario has at least one claim.
+- Every assertion must point to one claim.
+- A claim must come from the task, a requirement, a code contract, or an existing test.
+- Interaction steps without assertions are not enough to produce `pass`.
+- Step count is not a measure of coverage; proven critical claims are the main measure.
 
-## 8. Strategi coverage
+## 8. Coverage strategy
 
-Urutan pemilihan test:
+Test selection order:
 
-1. Cari existing Playwright/Cypress/Webdriver test yang sesuai.
-2. Periksa apakah test tersebut mencakup claim yang sedang diverifikasi.
-3. Jalankan test relevan saja, bukan seluruh suite tanpa alasan.
-4. Jika coverage sebagian, jalankan existing test lalu buat scenario hanya untuk gap.
-5. Jika tidak ada coverage, buat scenario baru melalui format deklaratif.
+1. Look for matching existing Playwright/Cypress/Webdriver tests.
+2. Check whether those tests cover the claim being verified.
+3. Run only the relevant tests, not the whole suite without reason.
+4. If coverage is partial, run the existing tests and then create a scenario only for the gap.
+5. If there is no coverage, create a new scenario in the declarative format.
 
-Existing test tidak otomatis dipercaya. Exit code, report, dan relevansinya terhadap claim tetap harus diperiksa.
+Existing tests are not automatically trusted. Exit code, report, and relevance to the claim must still be checked.
 
-Implementasi (batch 6): runtime tidak pernah menebak cara menjalankan test project. Test hanya dijalankan lewat `commands.e2e.existing_test_command` yang ditulis user (argv tanpa shell; `{files}` dan `{base_url}` diekspansi), untuk file berpath polos yang ada dan cocok `existing_test_allowlist`, dengan timeout dan kill process tree. Test yang lulus membuktikan claim yang di-cover-nya (claim itu tidak wajib di-assert di scenario); test yang gagal membuat claim `unknown`. Tanpa command, test yang di-list hanya dicatat dan claim-nya wajib di-assert.
+Implementation (batch 6): the runtime never guesses how to run the project's tests. Tests are only run via a user-written `commands.e2e.existing_test_command` (argv without a shell; `{files}` and `{base_url}` are expanded), for plain-path files that exist and match `existing_test_allowlist`, with a timeout and process tree kill. A passing test proves the claims it covers (those claims need not be asserted in the scenario); a failing test makes its claims `unknown`. Without a command, listed tests are only recorded and their claims must be asserted.
 
-## 9. Scenario deklaratif
+## 9. Declarative scenario
 
-Model menghasilkan JSON scenario. Runtime tetap berisi implementasi Playwright yang sudah ditentukan dan diuji.
+The model produces scenario JSON. The runtime still contains the predefined and tested Playwright implementation.
 
 ```json
 {
@@ -374,7 +374,7 @@ Model menghasilkan JSON scenario. Runtime tetap berisi implementasi Playwright y
   "claims": [
     {
       "id": "login-valid-user",
-      "description": "Login valid membuka dashboard",
+      "description": "A valid login opens the dashboard",
       "severity": "blocking"
     }
   ],
@@ -407,7 +407,7 @@ Model menghasilkan JSON scenario. Runtime tetap berisi implementasi Playwright y
       "action": "click",
       "selector": {
         "role": "button",
-        "name": "Masuk"
+        "name": "Sign in"
       }
     },
     {
@@ -419,7 +419,7 @@ Model menghasilkan JSON scenario. Runtime tetap berisi implementasi Playwright y
 }
 ```
 
-Action MVP:
+MVP actions:
 
 - `goto`
 - `click`
@@ -432,57 +432,57 @@ Action MVP:
 - `expect_title`
 - `probe`
 
-Tidak tersedia pada MVP:
+Not available in the MVP:
 
 - arbitrary `evaluate`;
 - raw JavaScript/Python;
-- command shell;
-- upload/download file;
-- browser extension;
-- cross-origin navigation tanpa allowlist;
-- action destruktif tanpa deklarasi eksplisit.
+- shell commands;
+- file upload/download;
+- browser extensions;
+- cross-origin navigation without an allowlist;
+- destructive actions without explicit declaration.
 
-## 10. Selector dan provenance
+## 10. Selectors and provenance
 
-Urutan selector yang dianjurkan:
+Recommended selector order:
 
 1. `role + accessible name`
 2. `label`
 3. `data-testid`
-4. text yang stabil
-5. CSS sebagai fallback terakhir
+4. stable text
+5. CSS as the last fallback
 
-Setiap selector sebaiknya memiliki provenance:
+Every selector should have a provenance:
 
-| Provenance | Makna |
+| Provenance | Meaning |
 |---|---|
-| `source` | Ditemukan langsung dari codebase |
-| `existing_test` | Diambil dari test yang sudah ada |
-| `runtime_probe` | Ditemukan dari DOM aktual |
-| `heuristic` | Diperkirakan model, confidence rendah |
+| `source` | Found directly in the codebase |
+| `existing_test` | Taken from an existing test |
+| `runtime_probe` | Found from the actual DOM |
+| `heuristic` | Estimated by the model, low confidence |
 
-Provenance ikut menentukan klasifikasi error. Stable selector dari source yang hilang memiliki bobot berbeda dibanding selector heuristic yang gagal.
+Provenance contributes to error classification. A missing stable selector from source carries different weight than a failed heuristic selector.
 
 ## 11. DOM probe
 
-Probe adalah fallback discovery, bukan langkah wajib setiap run.
+A probe is a discovery fallback, not a required step on every run.
 
-Probe dijalankan jika:
+A probe runs if:
 
-- selector dari kode tidak ditemukan;
-- aplikasi membangun elemen secara dinamis;
-- accessible name tidak dapat disimpulkan dari source;
-- existing test menggunakan selector yang sudah tidak valid.
+- a selector from the code is not found;
+- the application builds elements dynamically;
+- the accessible name cannot be inferred from source;
+- an existing test uses a selector that is no longer valid.
 
-Output probe dibatasi, misalnya:
+Probe output is bounded, for example:
 
 ```json
 {
   "url": "http://localhost:8000/login",
   "title": "Login",
-  "headings": ["Masuk"],
+  "headings": ["Sign in"],
   "buttons": [
-    {"role": "button", "name": "Masuk", "testid": null}
+    {"role": "button", "name": "Sign in", "testid": null}
   ],
   "inputs": [
     {"role": "textbox", "label": "Email", "type": "email"}
@@ -490,20 +490,20 @@ Output probe dibatasi, misalnya:
 }
 ```
 
-Ketentuan:
+Provisions:
 
-- jumlah elemen dibatasi;
-- text dipotong;
-- hidden element diabaikan kecuali diminta;
-- value input tidak direkam;
-- secret direduksi sebelum ditulis;
-- full DOM tidak dimasukkan ke prompt.
+- the number of elements is bounded;
+- text is truncated;
+- hidden elements are ignored unless requested;
+- input values are not recorded;
+- secrets are redacted before being written;
+- the full DOM is not put into the prompt.
 
-Probe dapat di-cache berdasarkan kombinasi commit/tree hash, route, viewport, dan auth profile. Cache tidak digunakan jika source atau route terkait berubah.
+Probes can be cached by the combination of commit/tree hash, route, viewport, and auth profile. The cache is not used if the related source or route changed.
 
-## 12. Evidence runtime
+## 12. Runtime evidence
 
-Evidence per step dibuat dalam bentuk JSONL agar runner dapat menerima heartbeat dan progress tanpa menunggu proses selesai.
+Per-step evidence is produced as JSONL so the runner can receive heartbeat and progress without waiting for the process to finish.
 
 ```json
 {
@@ -519,62 +519,62 @@ Evidence per step dibuat dalam bentuk JSONL agar runner dapat menerima heartbeat
 }
 ```
 
-Evidence yang dikumpulkan:
+Evidence collected:
 
-- status dan durasi step;
-- selector yang berhasil digunakan;
-- URL dan title;
-- bounded outer HTML target;
+- step status and duration;
+- the selector that was successfully used;
+- URL and title;
+- bounded target outer HTML;
 - assertion expected vs actual;
-- same-origin HTTP 5xx yang relevan;
-- uncaught page error;
-- console error terfilter;
-- artifact reference.
+- relevant same-origin HTTP 5xx;
+- uncaught page errors;
+- filtered console errors;
+- artifact references.
 
-Evidence yang tidak otomatis dikirim ke model:
+Evidence not automatically sent to the model:
 
 - full page HTML;
-- seluruh stdout/stderr;
-- screenshot;
-- trace;
-- nilai credential;
-- request/response body sensitif.
+- all of stdout/stderr;
+- screenshots;
+- traces;
+- credential values;
+- sensitive request/response bodies.
 
-## 13. Klasifikasi kegagalan
+## 13. Failure classification
 
-Gunakan tiga origin, bukan dua:
+Use three origins, not two:
 
-| Origin | Definisi | Verdict umum | Boleh di-heal? |
+| Origin | Definition | Typical verdict | May be healed? |
 |---|---|---|---|
-| `app` | Evidence cukup bahwa aplikasi melanggar claim | `fail` | tidak |
-| `harness` | Evidence cukup bahwa scenario/runtime test bermasalah | `incomplete` | terbatas |
-| `unknown` | Evidence belum cukup menentukan penyebab | `incomplete` | tidak otomatis |
+| `app` | Sufficient evidence that the application violates the claim | `fail` | no |
+| `harness` | Sufficient evidence that the scenario/test runtime is at fault | `incomplete` | limited |
+| `unknown` | Evidence not yet sufficient to determine the cause | `incomplete` | not automatically |
 
-Contoh klasifikasi:
+Classification examples:
 
-| Kondisi | Origin | Hasil |
+| Condition | Origin | Result |
 |---|---|---|
-| Assertion grounded tidak terpenuhi | `app` | `fail` |
-| HTTP 5xx pada navigasi/request utama | `app` | `fail` |
+| Grounded assertion not satisfied | `app` | `fail` |
+| HTTP 5xx on the main navigation/request | `app` | `fail` |
 | Uncaught same-origin page error | `app` | `fail` |
-| Browser tidak terpasang | `harness` | `incomplete` |
-| Base URL tidak dapat dijangkau | `harness` | `incomplete` |
-| Selector heuristic tidak ditemukan | `harness` | `incomplete` |
-| Stable selector hilang tetapi halaman juga belum stabil | `unknown` | `incomplete` |
-| Background analytics menghasilkan 5xx | observasi | warning, bukan otomatis `fail` |
-| Console error pihak ketiga | observasi | warning atau filter |
+| Browser not installed | `harness` | `incomplete` |
+| Base URL unreachable | `harness` | `incomplete` |
+| Heuristic selector not found | `harness` | `incomplete` |
+| Stable selector missing but the page is also not yet stable | `unknown` | `incomplete` |
+| Background analytics returns 5xx | observation | warning, not automatically `fail` |
+| Third-party console error | observation | warning or filter |
 
-Nilai `unknown` tidak boleh otomatis diubah menjadi `harness`, karena hal tersebut dapat menyembunyikan regresi aplikasi.
+An `unknown` value must not be automatically changed to `harness`, because that could hide an application regression.
 
 ## 14. Verdict
 
-### 14.1 Verdict browser
+### 14.1 Browser verdict
 
-- `pass`: seluruh blocking claim terbukti, tidak ada gap, dan tidak ada app error.
-- `fail`: minimal satu blocking claim gagal dengan evidence app-origin.
-- `incomplete`: verifikasi tidak dapat diselesaikan atau origin masih ambigu.
+- `pass`: all blocking claims are proven, there are no gaps, and there are no app errors.
+- `fail`: at least one blocking claim failed with app-origin evidence.
+- `incomplete`: verification could not be completed or the origin is still ambiguous.
 
-Reason untuk `incomplete` antara lain:
+Reasons for `incomplete` include:
 
 - `playwright_missing`
 - `browser_missing`
@@ -587,70 +587,70 @@ Reason untuk `incomplete` antara lain:
 - `launch_failed`
 - `output_truncated`
 
-### 14.2 Kombinasi hybrid
+### 14.2 Hybrid combination
 
 | Browser | Delegated review | Final |
 |---|---|---|
-| `fail` | apa pun | `fail` |
-| `pass` | bersih | `pass` |
-| `pass` | menemukan blocking issue | `fail` |
-| `pass` | tidak lengkap | `incomplete` |
-| `incomplete` | apa pun | `incomplete` |
+| `fail` | anything | `fail` |
+| `pass` | clean | `pass` |
+| `pass` | finds a blocking issue | `fail` |
+| `pass` | incomplete | `incomplete` |
+| `incomplete` | anything | `incomplete` |
 
-Browser pass bukan bukti bahwa coverage sudah cukup. Hybrid reviewer bertugas menilai apakah claim dan scenario memang mewakili risiko perubahan.
+A browser pass is not proof that coverage is sufficient. The hybrid reviewer's job is to judge whether the claims and scenarios actually represent the change's risk.
 
-### 14.3 Normalisasi ke kontrak canonical (D2)
+### 14.3 Normalization to the canonical contract (D2)
 
-Runtime verify saat ini memiliki tiga titik yang memperlakukan output verify sebagai delegated contract dan hanya mengecualikan mode quick (`meta.mode == "quick"` atau `meta.quick_verify`):
+The verify runtime currently has three points that treat verify output as a delegated contract and only exempt quick mode (`meta.mode == "quick"` or `meta.quick_verify`):
 
-1. `_finalize_verify_result` di `core/evidence/result_shaping.py` — memanggil `validate_verification_contract` dan menulis `meta.verdict`; dipanggil dua kali (worker di `main.run` dan `await_job` di `core/jobs/job_lifecycle.py`).
-2. Predicate continuation di `core/provider/continuation.py` — meminta `[VERIFICATION]` ulang bila shape tidak memenuhi contract.
-3. Invalid-evidence guard di `core/provider/executor.py` — menolak output verify tanpa `[VERIFICATION]`.
+1. `_finalize_verify_result` in `core/evidence/result_shaping.py` — calls `validate_verification_contract` and writes `meta.verdict`; called twice (the worker in `main.run` and `await_job` in `core/jobs/job_lifecycle.py`).
+2. The continuation predicate in `core/provider/continuation.py` — asks for `[VERIFICATION]` again if the shape does not satisfy the contract.
+3. The invalid-evidence guard in `core/provider/executor.py` — rejects verify output without `[VERIFICATION]`.
 
-Mode `e2e` **tidak** menambah pengecualian baru pada ketiga titik tersebut. Sebagai gantinya, normalizer stage 3 menjamin bahwa `result.content` yang keluar dari branch `e2e` sudah berbentuk `[VERIFICATION]` canonical lengkap (`verdict`, seluruh section finding, `checks_run`, `not_verified`, `confidence`). Raw JSONL player, report player, dan `[E2E EVIDENCE]` tidak pernah menjadi `result.content` akhir; mereka tersimpan sebagai artifact dan ikut ke prompt reviewer saja.
+`e2e` mode does **not** add new exemptions at any of these three points. Instead, the stage 3 normalizer guarantees that the `result.content` leaving the `e2e` branch is already a complete canonical `[VERIFICATION]` (`verdict`, all finding sections, `checks_run`, `not_verified`, `confidence`). Raw player JSONL, the player report, and `[E2E EVIDENCE]` never become the final `result.content`; they are stored as artifacts and only go into the reviewer prompt.
 
-Aturan pemetaan hasil player ke kontrak canonical:
+Rules for mapping player results to the canonical contract:
 
-| Hasil player | Ke kontrak canonical |
+| Player result | To the canonical contract |
 |---|---|
-| Claim blocking gagal, origin `app` | finding pada section blocking, `severity` sesuai claim, tag `origin` **temporal** (`introduced`/`regression`/`pre_existing`/`unknown`, ditentukan reviewer dari kode + git scope), plus field `evidence_source: e2e_runtime` |
-| Claim non-blocking gagal, origin `app` | finding non-blocking dengan field yang sama |
-| Step/claim gagal, origin `harness` | entri `not_verified` dengan reason (`selector_missing`, `harness_error`, ...) — runtime otomatis menahan verdict di `incomplete` |
-| Step/claim gagal, origin `unknown` | entri `not_verified` dengan reason `unknown_origin` — tidak boleh dipromosikan ke `harness` |
-| Preflight gagal (`playwright_missing`, `browser_missing`, `base_url_unreachable`, `spec_invalid`) | seluruh claim masuk `not_verified` dengan reason tersebut; `checks_run` kosong dengan alasan |
-| Step sukses / claim terbukti | baris pada `checks_run` (`e2e:<claim_id>: pass`) |
-| Observasi (5xx background, console error pihak ketiga) | warning non-blocking, bukan finding |
+| Blocking claim failed, origin `app` | finding in the blocking section, `severity` per the claim, **temporal** `origin` tag (`introduced`/`regression`/`pre_existing`/`unknown`, determined by the reviewer from code + git scope), plus the field `evidence_source: e2e_runtime` |
+| Non-blocking claim failed, origin `app` | non-blocking finding with the same fields |
+| Step/claim failed, origin `harness` | `not_verified` entry with a reason (`selector_missing`, `harness_error`, ...) — the runtime automatically holds the verdict at `incomplete` |
+| Step/claim failed, origin `unknown` | `not_verified` entry with reason `unknown_origin` — must not be promoted to `harness` |
+| Preflight failed (`playwright_missing`, `browser_missing`, `base_url_unreachable`, `spec_invalid`) | all claims go to `not_verified` with that reason; `checks_run` empty with a reason |
+| Step succeeded / claim proven | a line in `checks_run` (`e2e:<claim_id>: pass`) |
+| Observation (background 5xx, third-party console error) | non-blocking warning, not a finding |
 
-Field `origin` pada finding tetap berarti temporal seperti sekarang; klasifikasi `app/harness/unknown` dari player **tidak pernah** ditulis ke `origin`. Klasifikasi itu hidup di `[E2E EVIDENCE]` dan di `evidence_source`/reason `not_verified`.
+The `origin` field on a finding keeps its current temporal meaning; the player's `app/harness/unknown` classification is **never** written to `origin`. That classification lives in `[E2E EVIDENCE]` and in `evidence_source`/the `not_verified` reason.
 
-Combine matrix §14.2 diterapkan oleh normalizer setelah reviewer menjawab: bila browser `fail` tetapi reviewer menulis `verdict: pass`, normalizer menurunkan verdict efektif ke `fail` dan mencatat warning `reviewer_verdict_overridden`. Ini harus terjadi **sebelum** `validate_verification_contract` dan `_verify_exit_code` dijalankan, karena kontrak saat ini mengizinkan `DONE` dengan hanya warning verification-gap tetap exit `0` (`core/evidence/contract.py`, bagian exit status). Verdict efektif yang sudah `fail`/`incomplete` menjamin exit code non-nol tanpa mengubah pemetaan exit yang ada.
+The §14.2 combine matrix is applied by the normalizer after the reviewer answers: if the browser result is `fail` but the reviewer writes `verdict: pass`, the normalizer lowers the effective verdict to `fail` and records the warning `reviewer_verdict_overridden`. This must happen **before** `validate_verification_contract` and `_verify_exit_code` run, because the current contract allows `DONE` with only verification-gap warnings to still exit `0` (`core/evidence/contract.py`, exit status section). An effective verdict that is already `fail`/`incomplete` guarantees a non-zero exit code without changing the existing exit mapping.
 
 ## 15. Self-healing
 
-### 15.1 Keputusan MVP
+### 15.1 MVP decision
 
-MVP tidak memiliki healing berbasis reasoning berulang. Runtime hanya mencoba candidate selector deterministik yang sudah ada di spec.
+The MVP has no repeated reasoning-based healing. The runtime only tries the deterministic candidate selectors already in the spec.
 
-Alasannya:
+Reasons:
 
-- mengurangi kompleksitas;
-- mencegah expected behavior berubah diam-diam;
-- memudahkan pengukuran false failure yang sebenarnya;
-- menjaga penggunaan token tetap rendah.
+- reduce complexity;
+- prevent expected behavior from silently changing;
+- make it easier to measure real false failures;
+- keep token usage low.
 
-### 15.2 Fase lanjutan
+### 15.2 Later phase
 
-Jika data MVP menunjukkan selector failure signifikan, tambahkan healing terbatas.
+If MVP data shows significant selector failures, add limited healing.
 
-Yang boleh berubah:
+What may change:
 
 - selector;
-- urutan candidate;
+- candidate order;
 - wait strategy;
-- timeout dalam batas konfigurasi;
-- bootstrap route yang semantik hasilnya sama.
+- timeout within configured limits;
+- bootstrap route with the same semantic result.
 
-Yang tidak boleh berubah:
+What must not change:
 
 - claim;
 - expected URL;
@@ -659,52 +659,52 @@ Yang tidak boleh berubah:
 - assertion type;
 - expected business outcome.
 
-Setiap healing harus memiliki before/after, alasan, evidence source, dan iteration counter. Default maksimum ditentukan setelah data smoke test tersedia, bukan sebagai angka asumsi permanen.
+Every healing must have a before/after, a reason, an evidence source, and an iteration counter. The default maximum is set after smoke test data is available, not as a permanent assumed number.
 
-## 16. Screenshot, HTML, dan trace
+## 16. Screenshots, HTML, and traces
 
-Perlu dibedakan antara menyimpan artefak dan meminta model menganalisis artefak.
+A distinction is needed between storing artifacts and asking the model to analyze artifacts.
 
-| Kondisi | Screenshot disimpan | Dibaca model otomatis |
+| Condition | Screenshot stored | Read by the model automatically |
 |---|---:|---:|
-| Pass | tidak | tidak |
-| App failure jelas | opsional satu | tidak |
-| Harness selector failure | opsional | tidak; gunakan probe dahulu |
-| Unknown/stuck | ya | hanya jika DOM/report tidak cukup |
-| Navigasi timeout | ya | jika dibutuhkan untuk klasifikasi |
+| Pass | no | no |
+| Clear app failure | optionally one | no |
+| Harness selector failure | optional | no; use a probe first |
+| Unknown/stuck | yes | only if DOM/report is insufficient |
+| Navigation timeout | yes | if needed for classification |
 
-Full HTML hanya disimpan pada failure, stuck, atau unknown. Pada step sukses cukup menyimpan digest dan bounded outer HTML target.
+Full HTML is only stored on failure, stuck, or unknown. On successful steps it is enough to store a digest and the bounded target outer HTML.
 
-Trace dapat dimulai sejak awal tetapi hanya dipertahankan ketika run gagal dan bukti lain belum cukup. Retention artifact harus dibatasi berdasarkan jumlah run atau ukuran.
+A trace may be started from the beginning but is only kept when the run fails and other evidence is insufficient. Artifact retention must be bounded by run count or size.
 
-Lokasi dan indexing (keputusan MVP):
+Location and indexing (MVP decision):
 
-- artifact E2E disimpan run-local di `sessions/<session>/logs/<run>/e2e/` (spec final ter-redact, events JSONL, report, screenshot/HTML/trace sesuai policy), memakai archive dan redaction audit yang sudah ada di `core/evidence/runtime_io.py`;
-- artifact E2E **tidak** dimasukkan ke `evidence.jsonl`. Index evidence saat ini hanya menerima artifact immutable berformat `sessions/<session>/logs/<run>/output.raw.md` dengan hash dan anchor freshness (`core/evidence/evidence_store.py`), dan executor hanya melakukan `record()`/reuse untuk role `exploration|reasoning` — verify hari ini pun tidak di-index;
-- `output.raw.md` untuk run `e2e` berisi `[VERIFICATION]` canonical hasil stage 3, sama seperti run delegated;
-- pruning mengikuti retention archive yang ada; direktori `e2e/` ikut terhapus bersama run-nya;
-- implementasi (batch 4): HTML ber-batas dan satu screenshot per step gagal, `trace.zip` hanya untuk run gagal; nilai input dikosongkan sebelum capture; tidak ada screenshot maupun trace bila scenario me-resolve `${ENV}`; `commands.e2e.artifact_max_mb` memangkas trace, lalu screenshot, lalu HTML.
+- E2E artifacts are stored run-local in `sessions/<session>/logs/<run>/e2e/` (redacted final spec, events JSONL, report, screenshot/HTML/trace per policy), using the existing archive and redaction audit in `core/evidence/runtime_io.py`;
+- E2E artifacts are **not** put into `evidence.jsonl`. The evidence index currently only accepts immutable artifacts in the format `sessions/<session>/logs/<run>/output.raw.md` with a hash and anchor freshness (`core/evidence/evidence_store.py`), and the executor only does `record()`/reuse for `exploration|reasoning` roles — verify is not indexed today either;
+- `output.raw.md` for an `e2e` run contains the canonical `[VERIFICATION]` from stage 3, the same as a delegated run;
+- pruning follows the existing archive retention; the `e2e/` directory is deleted together with its run;
+- implementation (batch 4): bounded HTML and one screenshot per failed step, `trace.zip` only for failed runs; input values are cleared before capture; no screenshots or traces if the scenario resolves `${ENV}`; `commands.e2e.artifact_max_mb` trims traces, then screenshots, then HTML.
 
-Reuse/indexing artifact E2E dievaluasi ulang setelah Fase 5 bila ada kebutuhan replay lintas run.
+Reuse/indexing of E2E artifacts is re-evaluated after Phase 5 if there is a need for cross-run replay.
 
-## 17. Hybrid review hemat token
+## 17. Token-efficient hybrid review
 
-Hybrid reviewer menerima:
+The hybrid reviewer receives:
 
-- task dan scope perubahan;
-- daftar verification claims;
-- changed symbols atau source references;
-- ringkasan step;
-- assertion result;
+- the task and change scope;
+- the list of verification claims;
+- changed symbols or source references;
+- a step summary;
+- assertion results;
 - error classification;
-- path artifact;
-- potongan kode relevan yang bounded.
+- artifact paths;
+- bounded relevant code excerpts.
 
-Hybrid reviewer tidak menerima full DOM, raw log, screenshot, atau trace secara otomatis.
+The hybrid reviewer does not automatically receive the full DOM, raw logs, screenshots, or traces.
 
-Mekanisme (D1 + D2): reviewer adalah delegated call verify biasa. Prompt builder verify (`core/prompt/prompt_builder.py`, branch penyisipan section verify) mendapat satu section tambahan `[E2E EVIDENCE]` yang berisi ringkasan di atas dalam bentuk compact. Format output yang diminta dari reviewer **tidak berubah**: `[VERIFICATION]` canonical dengan finding tags yang sama. Reviewer tidak diminta mengulang klasifikasi `app/harness/unknown`; ia menerima klasifikasi itu sebagai input dan menambah dimensi temporal (`origin`) serta penilaian coverage.
+Mechanism (D1 + D2): the reviewer is an ordinary delegated verify call. The verify prompt builder (`core/prompt/prompt_builder.py`, the verify section insertion branch) gets one additional `[E2E EVIDENCE]` section containing the summary above in compact form. The output format requested from the reviewer **does not change**: canonical `[VERIFICATION]` with the same finding tags. The reviewer is not asked to redo the `app/harness/unknown` classification; it receives that classification as input and adds the temporal dimension (`origin`) and a coverage assessment.
 
-Bentuk compact `[E2E EVIDENCE]` (usulan):
+Compact form of `[E2E EVIDENCE]` (proposal):
 
 ```text
 [E2E EVIDENCE]
@@ -723,15 +723,15 @@ not_verified:
 artifacts: sessions/<session>/logs/<run>/e2e/
 ```
 
-Tanggung jawab reviewer:
+Reviewer responsibilities:
 
-1. Memeriksa apakah claim sesuai dengan perubahan.
-2. Memeriksa apakah blocking behavior sudah tercakup.
-3. Mencocokkan browser failure dengan kode terkait.
-4. Mendeteksi false pass akibat assertion terlalu lemah.
-5. Menghasilkan finding menggunakan contract verify yang sudah ada.
+1. Check whether the claims match the change.
+2. Check whether blocking behavior is covered.
+3. Match browser failures with the related code.
+4. Detect false passes caused by assertions that are too weak.
+5. Produce findings using the existing verify contract.
 
-Jika field `origin` pada finding sudah memiliki arti temporal seperti `introduced`, `regression`, `pre_existing`, atau `unknown`, jangan gunakan `origin=behavior`. Tambahkan field evidence terpisah, misalnya:
+If the `origin` field on a finding already has a temporal meaning such as `introduced`, `regression`, `pre_existing`, or `unknown`, do not use `origin=behavior`. Add a separate evidence field, for example:
 
 ```json
 {
@@ -740,23 +740,23 @@ Jika field `origin` pada finding sudah memiliki arti temporal seperti `introduce
 }
 ```
 
-## 18. Keamanan dan isolasi
+## 18. Security and isolation
 
-Default keamanan:
+Security defaults:
 
-- hanya izinkan loopback/local development;
-- remote host membutuhkan opt-in dan allowlist;
-- production ditolak secara default;
-- navigasi lintas origin ditolak kecuali diizinkan;
-- credential hanya melalui `${ENV_NAME}` atau auth state lokal;
-- environment value tidak masuk spec final, report, log, atau prompt;
-- input sensitif dibersihkan sebelum screenshot;
-- storage state disimpan di area runtime yang diabaikan Git;
-- request/response body tidak direkam secara default;
-- action destruktif membutuhkan metadata dan konfigurasi eksplisit;
-- tidak mengeksekusi start command atau shell command dari project target, kecuali existing test command yang ditulis user sendiri di `commands.e2e.existing_test_command` (argv tanpa shell, file allowlist, timeout, output di-scrub).
+- only allow loopback/local development;
+- remote hosts require opt-in and an allowlist;
+- production is rejected by default;
+- cross-origin navigation is rejected unless allowed;
+- credentials only via `${ENV_NAME}` or local auth state;
+- environment values do not enter the final spec, report, log, or prompt;
+- sensitive inputs are cleared before screenshots;
+- storage state is stored in a Git-ignored runtime area;
+- request/response bodies are not recorded by default;
+- destructive actions require metadata and explicit configuration;
+- no start commands or shell commands from the target project are executed, except an existing test command written by the user themselves in `commands.e2e.existing_test_command` (argv without a shell, file allowlist, timeout, scrubbed output).
 
-Untuk action yang dapat mengubah data, scenario perlu mendeklarasikan:
+For actions that can change data, the scenario must declare:
 
 ```json
 {
@@ -766,9 +766,9 @@ Untuk action yang dapat mengubah data, scenario perlu mendeklarasikan:
 }
 ```
 
-## 19. Konfigurasi awal
+## 19. Initial configuration
 
-Nama dan struktur final harus mengikuti pola konfigurasi project saat implementasi. Bentuk konseptual:
+The final names and structure must follow the project's configuration pattern at implementation time. Conceptual form:
 
 ```json
 {
@@ -799,22 +799,22 @@ Nama dan struktur final harus mengikuti pola konfigurasi project saat implementa
 }
 ```
 
-Nilai timeout dan batas probe adalah nilai awal untuk smoke test, bukan keputusan permanen. Kalibrasi berdasarkan data beberapa project nyata.
+Timeout values and probe limits are initial values for smoke testing, not permanent decisions. Calibrate based on data from several real projects.
 
-Reader konfigurasi: `verify_mode` di `core/runtime/config_defaults.py` diperluas menjadi `delegated | syntax | e2e` (allowlist murni, lihat catatan §4). Blok `commands.e2e` membutuhkan reader bertipe baru dengan default per field dan validasi nested (saat ini tidak ada reader untuk struktur bersarang di bawah `commands`); nilai tidak valid diberi warning dan jatuh ke default field, bukan mematikan mode.
+Configuration reader: `verify_mode` in `core/runtime/config_defaults.py` is extended to `delegated | syntax | e2e` (pure allowlist, see the note in §4). The `commands.e2e` block needs a new typed reader with per-field defaults and nested validation (there is currently no reader for nested structures under `commands`); invalid values get a warning and fall back to the field default, rather than disabling the mode.
 
-### 19.1 Kebijakan dependency (D3)
+### 19.1 Dependency policy (D3)
 
-- Playwright adalah **optional extra**, dipin di `requirements-e2e.txt` (`playwright==1.60.0`) dan hanya dipasang oleh `python install.py --apply --with-e2e`, yang juga menjalankan `python -m playwright install chromium`. Instalasi default tidak berubah.
-- Runtime inti tetap stdlib-only. Hanya modul di `core/evidence/e2e/` yang mengimpor `playwright`, dan hanya secara lazy di dalam fungsi yang menjalankan player — bukan pada import modul.
-- Test invariant dependency (`tests/checks/deps.py`) mengecualikan `core/evidence/e2e/` dari pemindaian stdlib-only, atau mengizinkan `playwright` sebagai import opsional yang dibungkus `try/except ImportError`.
-- Preflight branch `e2e`: (1) import Playwright, (2) cek browser Chromium terpasang, (3) cek `base_url` dapat dijangkau. Gagal pada salah satunya → `incomplete` dengan reason terkait; tidak ada instalasi otomatis.
-- Perintah instalasi (`--with-e2e`) didokumentasikan di skill `verify.md` dan `docs/runtime-contracts.md`; `/.doctor` melaporkan `e2e_readiness` (interpreter, versi terpasang dibanding versi pin, package, browser, URL). Versi 1.60.0 dipakai di smoke Chromium Windows.
-- Manifest/bundle tidak membawa binary browser.
+- Playwright is an **optional extra**, pinned in `requirements-e2e.txt` (`playwright==1.60.0`) and only installed by `python install.py --apply --with-e2e`, which also runs `python -m playwright install chromium`. The default installation does not change.
+- The core runtime stays stdlib-only. Only modules in `core/evidence/e2e/` import `playwright`, and only lazily inside the functions that run the player — not at module import.
+- The dependency invariant test (`tests/checks/deps.py`) excludes `core/evidence/e2e/` from the stdlib-only scan, or allows `playwright` as an optional import wrapped in `try/except ImportError`.
+- `e2e` branch preflight: (1) import Playwright, (2) check that the Chromium browser is installed, (3) check that `base_url` is reachable. Failure on any of them → `incomplete` with the related reason; no automatic installation.
+- The installation command (`--with-e2e`) is documented in the `verify.md` skill and `docs/runtime-contracts.md`; `/.doctor` reports `e2e_readiness` (interpreter, installed version compared with the pinned version, package, browser, URL). Version 1.60.0 is used in the Windows Chromium smoke.
+- The manifest/bundle does not carry browser binaries.
 
-## 20. Model proses
+## 20. Process model
 
-Player dijalankan sebagai child process:
+The player runs as a child process:
 
 ```text
 runner
@@ -825,168 +825,168 @@ runner
        └─ artifact directory
 ```
 
-Runner bertanggung jawab atas:
+The runner is responsible for:
 
-- validasi path dan config;
+- path and config validation;
 - environment redaction;
-- stdout/stderr bounded capture;
+- bounded stdout/stderr capture;
 - heartbeat;
 - idle timeout;
 - total timeout;
-- penghentian process tree;
-- parsing report;
-- klasifikasi output rusak atau terpotong.
+- process tree termination;
+- report parsing;
+- classifying broken or truncated output.
 
-Player bertanggung jawab atas:
+The player is responsible for:
 
-- membuka browser;
-- menjalankan action;
-- mengevaluasi assertion;
-- mengumpulkan browser events;
-- membuat probe;
-- membuat artifact sesuai policy;
-- menulis event JSONL.
+- opening the browser;
+- running actions;
+- evaluating assertions;
+- collecting browser events;
+- creating probes;
+- creating artifacts per policy;
+- writing JSONL events.
 
-### 20.1 Reuse vs baru
+### 20.1 Reuse vs new
 
-Yang sudah ada dan dipakai ulang:
+What already exists and is reused:
 
-| Kebutuhan | Sumber existing |
+| Need | Existing source |
 |---|---|
-| Process-tree termination lintas platform | `utils.osutil.terminate_tree()`, `hidden_run_kwargs()` |
-| Pola bounded stdout/stderr capture, polling timeout, heartbeat callback | adapter provider (`adapters/providers/opencode_adapter.py`, bagian run subprocess) — pola ditiru, bukan dipanggil langsung |
-| Heartbeat outer, idle stall detection, recovery worker | `core/jobs/job_manager.py`, `core/jobs/job_lifecycle.py` — membungkus seluruh job verify, termasuk stage 2 |
-| Archive artifact, pruning, redaction audit, call metadata | `core/evidence/runtime_io.py` |
-| Delegated call untuk stage 1 dan stage 3 | jalur provider existing di `Executor.execute()` |
+| Cross-platform process-tree termination | `utils.osutil.terminate_tree()`, `hidden_run_kwargs()` |
+| Bounded stdout/stderr capture pattern, polling timeout, heartbeat callback | provider adapters (`adapters/providers/opencode_adapter.py`, the subprocess run section) — the pattern is copied, not called directly |
+| Outer heartbeat, idle stall detection, recovery worker | `core/jobs/job_manager.py`, `core/jobs/job_lifecycle.py` — wraps the whole verify job, including stage 2 |
+| Artifact archive, pruning, redaction audit, call metadata | `core/evidence/runtime_io.py` |
+| Delegated call for stage 1 and stage 3 | the existing provider path in `Executor.execute()` |
 
-Yang baru (`core/evidence/e2e/`):
+What is new (`core/evidence/e2e/`):
 
-| Modul | Isi |
+| Module | Contents |
 |---|---|
-| `spec.py` | schema scenario + claims, action allowlist, selector provenance, `${ENV_NAME}` substitution, validasi |
-| `preflight.py` | lazy import Playwright, cek browser, cek base URL, safe-URL/allowed-origin policy |
-| `supervisor.py` | spawn player, parse JSONL, heartbeat child, idle timeout, total timeout, panggil `terminate_tree`, klasifikasi output rusak/terpotong |
-| `player.py` | implementasi Playwright: action, assertion, observer console/pageerror/response, probe, artifact policy |
-| `classify.py` | taksonomi `app/harness/unknown` |
-| `normalize.py` | hasil player → `[E2E EVIDENCE]` + finding/`not_verified`/`checks_run` canonical; combine fail-closed |
-| `redact.py` | redaction rekursif spec/event/report (dapat memakai helper redaction runtime_io bila cocok) |
+| `spec.py` | scenario + claims schema, action allowlist, selector provenance, `${ENV_NAME}` substitution, validation |
+| `preflight.py` | lazy Playwright import, browser check, base URL check, safe-URL/allowed-origin policy |
+| `supervisor.py` | spawn player, parse JSONL, child heartbeat, idle timeout, total timeout, call `terminate_tree`, classify broken/truncated output |
+| `player.py` | Playwright implementation: actions, assertions, console/pageerror/response observers, probe, artifact policy |
+| `classify.py` | `app/harness/unknown` taxonomy |
+| `normalize.py` | player result → `[E2E EVIDENCE]` + canonical finding/`not_verified`/`checks_run`; fail-closed combine |
+| `redact.py` | recursive redaction of spec/event/report (may use the runtime_io redaction helper if suitable) |
 
-Heartbeat player dilaporkan ke JobManager melalui mekanisme heartbeat job yang sudah ada, sehingga stall detection outer tetap berlaku selama stage 2 tanpa penambahan jalur baru.
+The player heartbeat is reported to JobManager through the existing job heartbeat mechanism, so outer stall detection still applies during stage 2 without adding a new path.
 
-## 21. Rencana implementasi bertahap
+## 21. Phased implementation plan
 
-Posisi tiap fase ada di §1.2; batch implementasi 1–8 tercatat di §28.
+The position of each phase is in §1.2; implementation batches 1–8 are recorded in §28.
 
-### Fase 0 — Baseline dan validasi kebutuhan
+### Phase 0 — Baseline and requirements validation
 
-1. Pilih 3–5 perubahan web nyata yang sebelumnya hanya diverifikasi melalui kode.
-2. Catat expected behavior dan bug runtime yang pernah lolos.
-3. Tetapkan baseline token, waktu, dan kualitas verdict saat ini.
-4. Pastikan terdapat environment non-production yang dapat diuji.
+1. Pick 3–5 real web changes that were previously verified only through code.
+2. Record the expected behavior and runtime bugs that have slipped through.
+3. Establish the current baseline for tokens, time, and verdict quality.
+4. Make sure there is a testable non-production environment.
 
-Output: dataset kecil untuk menilai apakah mode E2E memberikan nilai.
+Output: a small dataset to judge whether E2E mode delivers value.
 
-### Fase 1 — Kontrak tanpa browser
+### Phase 1 — Contract without browser
 
-1. Tambahkan `e2e` ke allowlist `verify_mode` dan buat reader bertipe `commands.e2e` dengan default + validasi nested (`core/runtime/config_defaults.py`).
-2. Tambahkan branch `e2e` di `Executor.execute()` di sebelah branch `syntax`, dengan preflight yang menghasilkan `incomplete` ber-reason; uji bahwa mode `e2e` tanpa dependency **tidak** jatuh ke `delegated`.
-2a. Ekstrak `Executor._run_delegated()` dan `Executor._build_delegated_prompt()` dari `execute()` tanpa perubahan perilaku (suite + sim hijau sebelum lanjut); tambahkan route internal `e2e_spec` (`config/routing.py`, role exploration) dan `INTERNAL_COMMANDS`; `e2e_spec` tidak masuk `choices` argparse `main.py` dan `main.run()` menolaknya; uji urutan dispatch §5.1 dengan fake adapter (`e2e_spec` → `verify`, tidak ada panggilan ketiga).
-3. Buat schema scenario dan verification claims (`spec.py`), termasuk selector provenance.
-4. Buat kontrak output stage 1: prompt `e2e_spec` meminta format evidence exploration standar + section `[E2E SPEC]`; parser section + fixture; uji bahwa fixture lolos generic evidence guard (`_EVIDENCE_MARKERS` tidak diubah), bahwa `[EVIDENCE]` tanpa `[E2E SPEC]` memicu satu continuation terstruktur lalu `incomplete:spec_invalid`, dan bahwa parser tidak bertabrakan dengan parser `[VERIFICATION]` existing.
-5. Buat taksonomi `app/harness/unknown` (`classify.py`).
-6. Buat normalizer (`normalize.py`): pemetaan §14.3, `[E2E EVIDENCE]` compact, combine matrix fail-closed, penetapan verdict efektif sebelum validator.
-7. Buat redaction contract (`redact.py`).
-8. Buat fake player yang mengirim JSONL deterministik (pass, app fail, harness fail, unknown, malformed, stall, crash).
-9. Buat supervisor (`supervisor.py`) dan uji dengan fake player: heartbeat, idle timeout, total timeout, process-tree termination, stdout/stderr besar, report terpotong.
-10. Uji jalur akhir: `result.content` dari branch `e2e` selalu lolos `validate_verification_contract` tanpa warning shape; raw JSONL/report tidak pernah menjadi `content`; predicate continuation mengembalikan `None`; invalid-evidence guard tidak menolak; exit code sesuai verdict efektif untuk seluruh kombinasi §14.2.
-11. Kecualikan `core/evidence/e2e/` dari test invariant stdlib-only dan pastikan `python -c "import core"` tetap tidak menyentuh Playwright.
+1. Add `e2e` to the `verify_mode` allowlist and create a typed `commands.e2e` reader with defaults + nested validation (`core/runtime/config_defaults.py`).
+2. Add an `e2e` branch in `Executor.execute()` next to the `syntax` branch, with a preflight that produces a reasoned `incomplete`; test that `e2e` mode without dependencies does **not** fall to `delegated`.
+2a. Extract `Executor._run_delegated()` and `Executor._build_delegated_prompt()` from `execute()` without behavior change (suite + sim green before continuing); add the internal route `e2e_spec` (`config/routing.py`, exploration role) and `INTERNAL_COMMANDS`; `e2e_spec` is not in the `main.py` argparse `choices` and `main.run()` rejects it; test the §5.1 dispatch order with a fake adapter (`e2e_spec` → `verify`, no third call).
+3. Create the scenario and verification claims schema (`spec.py`), including selector provenance.
+4. Create the stage 1 output contract: the `e2e_spec` prompt asks for the standard exploration evidence format + an `[E2E SPEC]` section; section parser + fixture; test that the fixture passes the generic evidence guard (`_EVIDENCE_MARKERS` unchanged), that `[EVIDENCE]` without `[E2E SPEC]` triggers one structured continuation and then `incomplete:spec_invalid`, and that the parser does not collide with the existing `[VERIFICATION]` parser.
+5. Create the `app/harness/unknown` taxonomy (`classify.py`).
+6. Create the normalizer (`normalize.py`): the §14.3 mapping, compact `[E2E EVIDENCE]`, fail-closed combine matrix, setting the effective verdict before the validator.
+7. Create the redaction contract (`redact.py`).
+8. Create a fake player that emits deterministic JSONL (pass, app fail, harness fail, unknown, malformed, stall, crash).
+9. Create the supervisor (`supervisor.py`) and test it with the fake player: heartbeat, idle timeout, total timeout, process-tree termination, large stdout/stderr, truncated report.
+10. Test the final path: `result.content` from the `e2e` branch always passes `validate_verification_contract` without shape warnings; raw JSONL/report never becomes `content`; the continuation predicate returns `None`; the invalid-evidence guard does not reject; the exit code matches the effective verdict for every §14.2 combination.
+11. Exclude `core/evidence/e2e/` from the stdlib-only invariant test and make sure `python -c "import core"` still does not touch Playwright.
 
-Exit criteria: seluruh lifecycle dapat diuji tanpa dependency browser, dan tidak ada perubahan pada `core/evidence/contract.py`, `core/evidence/result_shaping.py` (selain meta), maupun `core/provider/continuation.py`.
+Exit criteria: the whole lifecycle can be tested without a browser dependency, and there are no changes to `core/evidence/contract.py`, `core/evidence/result_shaping.py` (other than meta), or `core/provider/continuation.py`.
 
-### Fase 2 — Playwright MVP
+### Phase 2 — Playwright MVP
 
-1. Implementasikan action MVP.
-2. Implementasikan assertion MVP.
-3. Tambahkan console, page error, dan network observation terfilter.
-4. Implementasikan DOM probe bounded.
-5. Terapkan screenshot/HTML/trace policy.
-6. Terapkan same-origin dan secret policy.
-7. Jalankan smoke test pada aplikasi lokal nyata.
+1. Implement the MVP actions.
+2. Implement the MVP assertions.
+3. Add filtered console, page error, and network observation.
+4. Implement the bounded DOM probe.
+5. Apply the screenshot/HTML/trace policy.
+6. Apply the same-origin and secret policies.
+7. Run a smoke test on a real local application.
 
-Exit criteria: minimal satu alur pass, satu app failure, dan satu harness failure terklasifikasi benar.
+Exit criteria: at least one passing flow, one app failure, and one harness failure correctly classified.
 
-### Fase 3 — Stage 1: claim builder via delegated call
+### Phase 3 — Stage 1: claim builder via delegated call
 
-Sesuai D1, claim builder adalah delegated call second_agent, bukan modul lokal terpisah.
+Per D1, the claim builder is a second_agent delegated call, not a separate local module.
 
-1. Tambahkan section prompt stage 1 di `core/prompt/prompt_builder.py`: scope dari task + Git, instruksi menemukan route, component, API, selector, existing tests, dan menghasilkan `[E2E SPEC]`.
-2. Reuse mekanisme scope existing pada prompt verify (changed files + consumers).
-3. Bangun verification claims dan coverage resolver di dalam kontrak `[E2E SPEC]`.
-4. Hasilkan scenario hanya untuk coverage gap.
-5. Validasi `[E2E SPEC]` secara lokal (`spec.py`); spec tidak valid → `incomplete` reason `spec_invalid`, dengan satu continuation terstruktur bila shape hampir benar (pola continuation existing).
-6. Uji bahwa full source tidak diteruskan ke player atau reviewer; hanya digest + source references.
+1. Add the stage 1 prompt section in `core/prompt/prompt_builder.py`: scope from task + Git, instructions to find routes, components, APIs, selectors, existing tests, and to produce `[E2E SPEC]`.
+2. Reuse the existing scope mechanism in the verify prompt (changed files + consumers).
+3. Build verification claims and the coverage resolver inside the `[E2E SPEC]` contract.
+4. Generate scenarios only for coverage gaps.
+5. Validate `[E2E SPEC]` locally (`spec.py`); invalid spec → `incomplete` with reason `spec_invalid`, with one structured continuation if the shape is almost correct (existing continuation pattern).
+6. Test that full source is not forwarded to the player or reviewer; only digest + source references.
 
-Exit criteria: scenario dapat dijelaskan asal-usulnya melalui claim dan source references; stage 1 dapat disimulasikan dengan fake adapter yang mengembalikan `[E2E SPEC]` fixture.
+Exit criteria: the origin of a scenario can be explained through claims and source references; stage 1 can be simulated with a fake adapter that returns an `[E2E SPEC]` fixture.
 
-### Fase 4 — Stage 3: hybrid review
+### Phase 4 — Stage 3: hybrid review
 
-1. Tambahkan section `[E2E EVIDENCE]` compact ke prompt verify (§17).
-2. Reviewer diminta output `[VERIFICATION]` canonical; tidak ada format output baru.
-3. Normalizer menerapkan combine matrix fail-closed dan menetapkan verdict efektif sebelum `_finalize_verify_result`.
-4. Uji browser `fail` + reviewer `pass` → final `fail` dengan warning `reviewer_verdict_overridden`.
-5. Uji browser `pass` + reviewer tidak lengkap → `incomplete`; browser `incomplete` + apa pun → `incomplete`.
-6. Uji bahwa `_finalize_verify_result` dipanggil dua kali (worker + `await`) tanpa menggandakan warning atau mengubah verdict.
+1. Add the compact `[E2E EVIDENCE]` section to the verify prompt (§17).
+2. The reviewer is asked for canonical `[VERIFICATION]` output; no new output format.
+3. The normalizer applies the fail-closed combine matrix and sets the effective verdict before `_finalize_verify_result`.
+4. Test browser `fail` + reviewer `pass` → final `fail` with warning `reviewer_verdict_overridden`.
+5. Test browser `pass` + incomplete reviewer → `incomplete`; browser `incomplete` + anything → `incomplete`.
+6. Test that `_finalize_verify_result` is called twice (worker + `await`) without duplicating warnings or changing the verdict.
 
-Exit criteria: verdict akhir konsisten untuk seluruh kombinasi browser/reviewer, dengan validator existing tidak dimodifikasi.
+Exit criteria: the final verdict is consistent for every browser/reviewer combination, with the existing validator unmodified.
 
-### Fase 5 — Evaluasi MVP
+### Phase 5 — MVP evaluation
 
-Ukur pada dataset Fase 0:
+Measure on the Phase 0 dataset:
 
-- tambahan bug runtime yang ditemukan;
-- false failure akibat harness;
-- jumlah `incomplete`;
-- jumlah probe;
-- jumlah screenshot yang benar-benar dibaca model;
-- token per verifikasi;
-- durasi per verifikasi;
-- kemampuan menjalankan ulang scenario;
-- stabilitas pada Windows/Linux yang didukung.
+- additional runtime bugs found;
+- false failures caused by the harness;
+- number of `incomplete` results;
+- number of probes;
+- number of screenshots actually read by the model;
+- tokens per verification;
+- duration per verification;
+- ability to re-run scenarios;
+- stability on the supported Windows/Linux.
 
-Keputusan setelah evaluasi:
+Decisions after evaluation:
 
-- lanjutkan jika E2E menemukan gap bermakna dengan tingkat false failure yang dapat diterima;
-- perbaiki classifier/probe jika `incomplete` terlalu tinggi;
-- hentikan atau pertahankan sebagai opt-in jika manfaatnya kecil;
-- baru pertimbangkan self-healing setelah terdapat data penyebab harness failure.
+- continue if E2E finds meaningful gaps with an acceptable false failure rate;
+- fix the classifier/probe if `incomplete` is too high;
+- stop, or keep as opt-in, if the benefit is small;
+- only consider self-healing once there is data on the causes of harness failures.
 
-## 22. Strategi test
+## 22. Test strategy
 
 ### Unit tests
 
-- spec valid dan invalid;
+- valid and invalid specs;
 - action allowlist;
-- claim wajib;
-- assertion wajib memiliki `claim_id`;
+- required claims;
+- assertions must have a `claim_id`;
 - selector provenance;
 - `${ENV_NAME}` substitution;
-- redaction recursive;
+- recursive redaction;
 - error classification;
 - verdict matrix;
 - hybrid combination;
-- safe URL dan allowed origin;
-- immutable assertion saat healing fase lanjutan;
-- normalizer: setiap kombinasi origin × severity × preflight reason menghasilkan finding/`not_verified`/`checks_run` yang benar;
-- normalizer: output selalu lolos `validate_verification_contract` tanpa warning shape;
-- `[E2E SPEC]` parser: valid, section hilang, JSON rusak;
-- `verify_mode=e2e` + preflight gagal → `incomplete`, bukan `delegated`;
-- pengecualian `core/evidence/e2e/` pada invariant stdlib-only, dan import `core` tanpa Playwright terpasang.
+- safe URL and allowed origin;
+- immutable assertions during later-phase healing;
+- normalizer: every origin × severity × preflight reason combination produces the correct finding/`not_verified`/`checks_run`;
+- normalizer: output always passes `validate_verification_contract` without shape warnings;
+- `[E2E SPEC]` parser: valid, missing section, broken JSON;
+- `verify_mode=e2e` + failed preflight → `incomplete`, not `delegated`;
+- the `core/evidence/e2e/` exclusion in the stdlib-only invariant, and importing `core` without Playwright installed.
 
-### Process tests dengan fake player
+### Process tests with a fake player
 
 - progress JSONL;
 - heartbeat;
-- stdout/stderr besar;
+- large stdout/stderr;
 - malformed event;
 - idle timeout;
 - total timeout;
@@ -996,15 +996,15 @@ Keputusan setelah evaluasi:
 
 ### Real browser smoke tests
 
-- halaman sederhana berhasil;
-- assertion DOM gagal;
-- redirect salah;
-- selector heuristic gagal;
+- a simple page succeeds;
+- DOM assertion fails;
+- wrong redirect;
+- heuristic selector fails;
 - page error;
 - main request HTTP 5xx;
-- third-party error tidak menyebabkan false fail;
-- secret tidak muncul di artifact;
-- screenshot hanya dibuat sesuai policy.
+- third-party errors do not cause a false fail;
+- secrets do not appear in artifacts;
+- screenshots are only created per policy.
 
 ### Integration tests
 
@@ -1014,157 +1014,157 @@ Keputusan setelah evaluasi:
 - exit code;
 - artifact retention;
 - existing target test reuse;
-- coverage gap menghasilkan scenario tambahan.
+- a coverage gap produces an additional scenario.
 
-## 23. Acceptance criteria MVP
+## 23. MVP acceptance criteria
 
-MVP dinyatakan berhasil jika semua kriteria di bawah terpenuhi. Kolom status = posisi 2026-09-14 setelah batch 1–8; "smoke" berarti terbukti dengan Chromium nyata terhadap `tests/fixtures/e2e_app/` di Windows.
+The MVP is declared successful if all the criteria below are met. Status column = position as of 2026-09-14 after batches 1–8; "smoke" means proven with real Chromium against `tests/fixtures/e2e_app/` on Windows.
 
-| # | Kriteria | Status | Dasar |
+| # | Criterion | Status | Basis |
 |---|---|---|---|
-| 1 | Test pass dapat selesai tanpa screenshot analysis. | terpenuhi (smoke) | Run pass tidak menyimpan screenshot atau trace; tidak ada stage yang mengirim screenshot ke model (`screenshots_sent_to_model` selalu 0). |
-| 2 | Setiap scenario mempunyai minimal satu grounded claim. | terpenuhi | `source_refs` wajib dan harus menunjuk file serta baris yang ada, atau `req:<id>` (`ground_claims`). |
-| 3 | Setiap assertion terhubung ke claim. | terpenuhi | `validate_scenario`. |
-| 4 | Existing E2E test digunakan lebih dahulu jika relevan. | terpenuhi (opt-in) | Test yang dapat dijalankan menggantikan assertion atas claim yang di-cover-nya dan dijalankan sebelum player, hanya bila user mengisi `existing_test_command`. |
-| 5 | Selector heuristic yang gagal tidak langsung menjadi app failure. | terpenuhi (smoke) | Diklasifikasi `harness`, dengan probe sebagai pengganti screenshot. |
-| 6 | Grounded assertion yang gagal tidak dapat di-heal menjadi pass. | terpenuhi | Tidak ada healing; app failure fail-closed. |
-| 7 | Browser/dependency/environment failure menghasilkan `incomplete`. | terpenuhi (smoke) | Preflight, launch, navigasi keluar origin, halaman macet (`stuck`). |
-| 8 | Full DOM dan screenshot tidak otomatis masuk prompt. | terpenuhi | Prompt stage 3 hanya berisi `[E2E EVIDENCE]` terstruktur; uji marker source tidak muncul di prompt maupun artifact. |
-| 9 | Secret tidak muncul dalam report atau artifact yang diperiksa. | terpenuhi, dengan batas | Scrub raw, URL-encoded, HTML- dan JSON-escaped; HTML artifact di-scrub; tanpa screenshot/trace bila `${ENV}` dipakai; smoke memindai byte seluruh artifact. Batas: nilai di bawah 4 karakter dan encoding lain (mis. base64). |
-| 10 | Browser `fail` tidak dapat diubah menjadi `pass` oleh reviewer. | terpenuhi | Combine fail-closed. |
-| 11 | Scenario dapat dijalankan ulang pada state aplikasi yang sama. | sebagian | request `phase: run` dengan scenario yang sama bisa dijalankan ulang; replay (`last_spec.json`) tidak diimplementasikan; reproducibility diukur per `scenario_hash`. |
-| 12 | Process browser dihentikan dengan benar ketika timeout. | terpenuhi (Windows) | Smoke: halaman macet, idle timeout, nol proses Chromium tersisa. Linux belum diuji. |
-| 13 | Penggunaan token lebih rendah dibanding loop browser visual untuk alur yang sama. | belum | Token per run dan rasio terhadap delegated verify tersedia di `report`; baseline loop visual belum diukur. |
+| 1 | A passing test can complete without screenshot analysis. | met (smoke) | A passing run stores no screenshot or trace; no stage sends screenshots to the model (`screenshots_sent_to_model` is always 0). |
+| 2 | Every scenario has at least one grounded claim. | met | `source_refs` is required and must point to an existing file and line, or `req:<id>` (`ground_claims`). |
+| 3 | Every assertion is linked to a claim. | met | `validate_scenario`. |
+| 4 | Existing E2E tests are used first if relevant. | met (opt-in) | Runnable tests replace assertions on the claims they cover and run before the player, only if the user fills in `existing_test_command`. |
+| 5 | A failed heuristic selector does not immediately become an app failure. | met (smoke) | Classified as `harness`, with a probe instead of a screenshot. |
+| 6 | A failed grounded assertion cannot be healed into a pass. | met | No healing; app failure is fail-closed. |
+| 7 | Browser/dependency/environment failures produce `incomplete`. | met (smoke) | Preflight, launch, navigation outside the origin, hung page (`stuck`). |
+| 8 | Full DOM and screenshots do not automatically enter the prompt. | met | The stage 3 prompt only contains structured `[E2E EVIDENCE]`; a test checks that source markers appear in neither the prompt nor artifacts. |
+| 9 | Secrets do not appear in the inspected report or artifacts. | met, with limits | Scrub of raw, URL-encoded, HTML- and JSON-escaped values; HTML artifacts are scrubbed; no screenshot/trace if `${ENV}` is used; smoke scans the bytes of all artifacts. Limits: values under 4 characters and other encodings (e.g. base64). |
+| 10 | A browser `fail` cannot be changed to `pass` by the reviewer. | met | Fail-closed combine. |
+| 11 | A scenario can be re-run on the same application state. | partial | a `phase: run` request with the same scenario can be re-run; replay (`last_spec.json`) is not implemented; reproducibility is measured per `scenario_hash`. |
+| 12 | The browser process is stopped correctly on timeout. | met (Windows) | Smoke: hung page, idle timeout, zero Chromium processes left. Linux not yet tested. |
+| 13 | Token usage is lower than a visual browser loop for the same flow. | not yet | Tokens per run and the ratio against delegated verify are available in `report`; the visual loop baseline is not yet measured. |
 
-## 24. Metrik evaluasi
+## 24. Evaluation metrics
 
-Tidak menetapkan angka keberhasilan tanpa baseline. Kumpulkan terlebih dahulu:
+Do not set success numbers without a baseline. Collect first:
 
-| Metrik | Tujuan |
+| Metric | Purpose |
 |---|---|
-| Runtime bugs found | Mengukur nilai tambahan dibanding code review |
-| False failure rate | Mengukur kualitas selector dan classifier |
-| Incomplete rate | Mengukur kesiapan environment dan harness |
-| Tokens per verification | Membandingkan dengan browser visual |
-| Browser runs per claim | Mengukur efisiensi probe/rerun |
-| Screenshot-analysis rate | Harus menjadi pengecualian |
-| Median execution time | Mengukur dampak terhadap workflow |
-| Reproducibility rate | Mengukur determinisme scenario |
+| Runtime bugs found | Measures added value compared with code review |
+| False failure rate | Measures selector and classifier quality |
+| Incomplete rate | Measures environment and harness readiness |
+| Tokens per verification | Compares with visual browser |
+| Browser runs per claim | Measures probe/rerun efficiency |
+| Screenshot-analysis rate | Must be the exception |
+| Median execution time | Measures impact on the workflow |
+| Reproducibility rate | Measures scenario determinism |
 
-Metrik harus dipisahkan berdasarkan penyebab: app, harness, environment, dan unknown.
+Metrics must be separated by cause: app, harness, environment, and unknown.
 
-Implementasi (batch 7): tiap run e2e menulis satu baris `kind: e2e_run` ke `.workflow/quality.jsonl` berisi hitungan mentah; semua rate diturunkan saat dibaca (`core/audit/telemetry.py`, bagian `e2e` pada `main.py --command report`). Run dipisah per `run_kind` (`project`, `smoke`, `fake`) sebelum diagregasi, agar run test suite tidak terbaca sebagai bukti nilai. Pemetaan:
+Implementation (batch 7): each e2e run writes one `kind: e2e_run` row to `.workflow/quality.jsonl` containing raw counts; all rates are derived at read time (`core/audit/telemetry.py`, the `e2e` part of `main.py --command report`). Runs are split by `run_kind` (`project`, `smoke`, `fake`) before aggregation, so that test suite runs are not read as evidence of value. Mapping:
 
-- false failure rate → kandidat berupa `harness_failure_rate` dan `unknown_origin_rate`; penilaian false failure tetap butuh manusia;
-- incomplete rate → `incomplete_rate` dan `incomplete_by_reason`;
-- tokens per verification → `tokens_per_run` (join prompt id stage ke `usage.jsonl`) dan `project_vs_baseline_token_ratio` terhadap delegated verify di workspace yang sama;
+- false failure rate → candidates are `harness_failure_rate` and `unknown_origin_rate`; judging false failures still needs a human;
+- incomplete rate → `incomplete_rate` and `incomplete_by_reason`;
+- tokens per verification → `tokens_per_run` (joins stage prompt ids to `usage.jsonl`) and `project_vs_baseline_token_ratio` against delegated verify in the same workspace;
 - browser runs per claim → `browser_runs_per_claim`;
 - screenshot-analysis rate → `screenshot_analysis_rate`;
 - median execution time → `duration_seconds.median`;
-- reproducibility rate → run berulang per `scenario_hash` dengan browser verdict sama;
-- runtime bugs found → butuh label manusia per perubahan dataset (`WORKFLOW_E2E_LABEL`).
+- reproducibility rate → repeated runs per `scenario_hash` with the same browser verdict;
+- runtime bugs found → needs a human label per dataset change (`WORKFLOW_E2E_LABEL`).
 
-## 25. Risiko utama dan mitigasi
+## 25. Main risks and mitigations
 
-| Risiko | Dampak | Mitigasi |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| Selector rapuh | false failure | provenance, role/testid, probe bounded |
-| Assertion terlalu lemah | false pass | verification claim + hybrid coverage review |
-| Healing mengubah ekspektasi | bug tersembunyi | MVP tanpa reasoning heal; immutable claims |
-| Error pihak ketiga | false fail | same-origin filtering dan warning policy |
-| Secret masuk artifact | kebocoran data | env reference, redaction, bounded evidence |
-| Test menyentuh production | kerusakan data | local-only default, allowlist, destructive guard |
-| Hybrid boros token | biaya meningkat | compact evidence, pointer-first |
-| App/environment tidak stabil | banyak incomplete | environment preflight dan reason terpisah |
-| Browser process macet | job hang | heartbeat, idle/total timeout, terminate tree |
-| DSL terlalu terbatas | coverage rendah | perluas action berdasarkan data, bukan asumsi |
+| Brittle selectors | false failure | provenance, role/testid, bounded probe |
+| Assertions too weak | false pass | verification claims + hybrid coverage review |
+| Healing changes expectations | hidden bugs | MVP without reasoning heal; immutable claims |
+| Third-party errors | false fail | same-origin filtering and warning policy |
+| Secrets enter artifacts | data leak | env references, redaction, bounded evidence |
+| Tests touch production | data damage | local-only default, allowlist, destructive guard |
+| Hybrid wastes tokens | increased cost | compact evidence, pointer-first |
+| Unstable app/environment | many incompletes | environment preflight and separate reasons |
+| Hung browser process | job hang | heartbeat, idle/total timeout, terminate tree |
+| DSL too limited | low coverage | expand actions based on data, not assumptions |
 
-Risiko residual per 2026-09-14 (setelah batch 1–8):
+Residual risks as of 2026-09-14 (after batches 1–8):
 
-| Risiko | Dampak | Status / mitigasi |
+| Risk | Impact | Status / mitigation |
 |---|---|---|
-| Nilai `${ENV}` di bawah 4 karakter, atau echo dalam encoding selain raw, URL, HTML, JSON (mis. base64), tidak di-scrub | nilai bisa sampai ke events, HTML, atau prompt stage 3 | Diterima: scrub substring pendek merusak URL dan selector. Screenshot dan trace tidak dibuat bila `${ENV}` dipakai. |
-| Replay memakai spec lama setelah kode di file yang sama berubah | selector atau alur usang, hasil `harness` atau `unknown` | Opt-in (`replay: false` default); `code_changed_since_saved` dilaporkan. |
-| `existing_test_command` menjalankan kode project target | kode target berjalan di mesin user | Hanya dari config user; argv tanpa shell, path polos + allowlist, timeout + kill tree, output di-scrub. Belum diuji dengan runner nyata. |
-| Klik atau aksi yang mengubah data tanpa deklarasi `side_effect` | data test berubah tanpa izin | Tidak dapat dideteksi otomatis; mitigasi: default loopback, instruksi prompt stage 1, `allow_side_effects: false`. |
-| Smoke hanya di Windows + Chromium | perilaku Linux, Firefox, WebKit belum terbukti | Uji saat ada job CI atau mesin Linux. |
-| `_guarded_imports` di `tests/checks/deps.py` menganggap import dalam fungsi di blok `try` sebagai guarded | false-negative untuk deferred import non-stdlib | Belum diperbaiki (sejak Fase 1). |
-| Parser kontrak verify menghitung `- none — <penjelasan>` sebagai finding | verdict `fail` palsu pada review | Pre-existing, di luar rencana ini. |
-| Usage row run e2e dicatat saat finalisasi dengan `prompt_id`, `command`, dan `role` stage terakhir; row stage 1 terlabel `verify` (ditemukan batch 7) | `calls_by_command` dan metrik per role salah label untuk run e2e; total token per run tetap benar | Join token metrik e2e memakai semua prompt id stage sehingga tiap row terhitung sekali. Perbaikan atribusi per invocation ada di `core/provider/executor.py` (kode Fase 1), belum dikerjakan. |
+| `${ENV}` values under 4 characters, or echoes in encodings other than raw, URL, HTML, JSON (e.g. base64), are not scrubbed | the value can reach events, HTML, or the stage 3 prompt | Accepted: scrubbing short substrings breaks URLs and selectors. Screenshots and traces are not created if `${ENV}` is used. |
+| Replay uses an old spec after code in the same file changed | stale selectors or flows, `harness` or `unknown` result | Opt-in (`replay: false` default); `code_changed_since_saved` is reported. |
+| `existing_test_command` runs target project code | target code runs on the user's machine | Only from user config; argv without a shell, plain paths + allowlist, timeout + kill tree, scrubbed output. Not yet tested with a real runner. |
+| Clicks or actions that change data without a `side_effect` declaration | test data changes without permission | Cannot be detected automatically; mitigation: loopback default, stage 1 prompt instructions, `allow_side_effects: false`. |
+| Smoke only on Windows + Chromium | Linux, Firefox, WebKit behavior not yet proven | Test when there is a CI job or a Linux machine. |
+| `_guarded_imports` in `tests/checks/deps.py` treats an import inside a function in a `try` block as guarded | false negative for non-stdlib deferred imports | Not yet fixed (since Phase 1). |
+| The verify contract parser counts `- none — <explanation>` as a finding | false `fail` verdict on review | Pre-existing, outside this plan. |
+| The e2e run usage row is recorded at finalization with the last stage's `prompt_id`, `command`, and `role`; the stage 1 row is labeled `verify` (found in batch 7) | `calls_by_command` and per-role metrics are mislabeled for e2e runs; total tokens per run remain correct | The e2e metrics token join uses all stage prompt ids so each row is counted once. The per-invocation attribution fix belongs in `core/provider/executor.py` (Phase 1 code), not yet done. |
 
-Diperbaiki selama batch implementasi: nilai resolved yang di-echo halaman bocor ke prompt stage 3 (verify batch 2 Fase 1); normalizer tidak me-route finding reviewer by tag; usage stage gagal tercatat dua kali; nilai typed yang kembali dalam bentuk URL-encoded lolos scrub (ditemukan smoke batch 3, diperbaiki batch 4); page error script pihak ketiga diatribusikan ke origin halaman sehingga menjadi false fail (ditemukan smoke batch 5).
+Fixed during the implementation batches: resolved values echoed by the page leaked into the stage 3 prompt (verify batch 2, Phase 1); the normalizer did not route reviewer findings by tag; failed stage usage was recorded twice; typed values returned in URL-encoded form slipped past the scrub (found in batch 3 smoke, fixed in batch 4); third-party script page errors were attributed to the page origin and so became a false fail (found in batch 5 smoke).
 
-## 26. File terdampak
+## 26. Affected files
 
-Kondisi working tree setelah batch 1–8 (belum di-commit). **baru** = file baru, **berubah** = dimodifikasi, **tidak berubah** = sengaja tidak disentuh.
+Working tree state after batches 1–8 (not yet committed). **new** = new file, **changed** = modified, **unchanged** = intentionally not touched.
 
-| File | Status | Perubahan |
+| File | Status | Change |
 |---|---|---|
-| `core/runtime/config_defaults.py` | berubah | `VERIFY_MODES` + `e2e`; `default_e2e()` termasuk `allow_side_effects`, `artifact_max_mb`, `replay`, `existing_test_*`; validasi nested; `e2e_config()` |
-| `core/provider/executor.py` | berubah | ekstrak `_run_delegated()` + `_build_delegated_prompt()`; branch `e2e` ke `runner.run()` |
-| `config/routing.py` | berubah | route internal `e2e_spec` + `INTERNAL_COMMANDS` |
-| `main.py` | berubah | `main.run()` menolak command internal |
-| `core/prompt/prompt_builder.py` | berubah | prompt `e2e_spec` (source_refs, selector candidates, navigasi, side effect, existing test); `[E2E EVIDENCE]` untuk verify |
-| `core/audit/diagnostics.py` | berubah | `e2e_readiness` di doctor |
-| `core/audit/telemetry.py` | berubah | `e2e_metrics()` di `report()` |
-| `core/evidence/e2e/runner.py` | baru | preflight, sumber spec (`spec_path`, replay, stage 1), validasi + grounding, existing test, player, scrub + budget artifact, review, normalisasi, baris `e2e_run` |
-| `core/evidence/e2e/spec.py` | baru | parser `[E2E SPEC]`; `validate_scenario` (origin, side effect, candidates, source_refs, `covered`); `ground_claims`; `step_selectors`; `navigation_error` |
-| `core/evidence/e2e/browser.py` | baru | player Playwright: `Session` (aksi, candidates, polling, route guard, observer, capture) dan `run_scenario` (launch, trace, close) |
-| `core/evidence/e2e/player.py` | baru | child process; fake modes; non-fake ke `browser.run_scenario` |
-| `core/evidence/e2e/existing_tests.py` | baru | `select`, `build_argv`, `run` (tanpa shell, timeout, scrub) |
-| `core/evidence/e2e/classify.py` | baru | `classify_step`, `build_report` (artifact, probe, existing test, console enforced) |
-| `core/evidence/e2e/normalize.py` | baru | `evidence_block` (probe, existing test, artifact), `to_verification` |
-| `core/evidence/e2e/redact.py` | baru | `scrub_resolved` (varian encoded), `scrub_text_files`, writer artifact |
-| `core/evidence/e2e/supervisor.py` | baru | child process JSONL, timeout, `terminate_tree` |
-| `core/evidence/e2e/preflight.py` | baru | kebijakan `base_url`, dependency, reachability, `readiness()` untuk doctor |
-| `install.py`, `installer/settings.py` | berubah | `--with-e2e`: pip `requirements-e2e.txt`, lalu `playwright install chromium` |
-| `requirements-e2e.txt` | baru | `playwright==1.60.0` |
-| `tests/checks/deps.py` | berubah | izin import `playwright` ber-guard hanya di paket e2e |
-| `tests/checks/installer.py` | berubah | check `installer-e2e` |
-| `tests/checks/e2e_spec.py`, `e2e_normalize.py`, `e2e_supervisor.py`, `e2e_routing.py` | baru | kontrak, klasifikasi, supervisor, orkestrasi (termasuk grounding, replay, existing test, baris metrik) |
-| `tests/checks/e2e_browser.py`, `e2e_redact.py`, `e2e_doctor.py`, `e2e_existing_tests.py`, `e2e_metrics.py`, `e2e_smoke.py` | baru | player dengan page pengganti, scrub, doctor, existing test, metrik, smoke Chromium opt-in |
-| `tests/fixtures/e2e_app/*.html` | baru | aplikasi fixture untuk smoke |
-| `tests/run.py`, `tests/scenario.py` | berubah | registrasi check baru |
-| `tools/sim/sim_flows.py` | berubah | S22, S22b, S22c, S22d (replay) |
-| `docs/runtime-contracts.md` | berubah | section `verify_mode=e2e` |
-| `dist/config/claude/skills/verify.md`, `dist/config/claude/CLAUDE.md` | berubah | dokumentasi mode `e2e` |
-| `dist/manifest.json` | berubah | regen |
-| `core/evidence/contract.py`, `core/evidence/result_shaping.py`, `core/provider/continuation.py`, `core/evidence/runtime_io.py`, `utils/osutil.py` | tidak berubah | dipakai apa adanya |
+| `core/runtime/config_defaults.py` | changed | `VERIFY_MODES` + `e2e`; `default_e2e()` including `allow_side_effects`, `artifact_max_mb`, `replay`, `existing_test_*`; nested validation; `e2e_config()` |
+| `core/provider/executor.py` | changed | extract `_run_delegated()` + `_build_delegated_prompt()`; `e2e` branch to `runner.run()` |
+| `config/routing.py` | changed | internal route `e2e_spec` + `INTERNAL_COMMANDS` |
+| `main.py` | changed | `main.run()` rejects internal commands |
+| `core/prompt/prompt_builder.py` | changed | `e2e_spec` prompt (source_refs, selector candidates, navigation, side effect, existing test); `[E2E EVIDENCE]` for verify |
+| `core/audit/diagnostics.py` | changed | `e2e_readiness` in doctor |
+| `core/audit/telemetry.py` | changed | `e2e_metrics()` in `report()` |
+| `core/evidence/e2e/runner.py` | new | preflight, spec source (`spec_path`, replay, stage 1), validation + grounding, existing test, player, scrub + artifact budget, review, normalization, `e2e_run` row |
+| `core/evidence/e2e/spec.py` | new | `[E2E SPEC]` parser; `validate_scenario` (origin, side effect, candidates, source_refs, `covered`); `ground_claims`; `step_selectors`; `navigation_error` |
+| `core/evidence/e2e/browser.py` | new | Playwright player: `Session` (actions, candidates, polling, route guard, observer, capture) and `run_scenario` (launch, trace, close) |
+| `core/evidence/e2e/player.py` | new | child process; fake modes; non-fake to `browser.run_scenario` |
+| `core/evidence/e2e/existing_tests.py` | new | `select`, `build_argv`, `run` (no shell, timeout, scrub) |
+| `core/evidence/e2e/classify.py` | new | `classify_step`, `build_report` (artifact, probe, existing test, console enforced) |
+| `core/evidence/e2e/normalize.py` | new | `evidence_block` (probe, existing test, artifact), `to_verification` |
+| `core/evidence/e2e/redact.py` | new | `scrub_resolved` (encoded variants), `scrub_text_files`, artifact writer |
+| `core/evidence/e2e/supervisor.py` | new | JSONL child process, timeout, `terminate_tree` |
+| `core/evidence/e2e/preflight.py` | new | `base_url` policy, dependency, reachability, `readiness()` for doctor |
+| `install.py`, `installer/settings.py` | changed | `--with-e2e`: pip `requirements-e2e.txt`, then `playwright install chromium` |
+| `requirements-e2e.txt` | new | `playwright==1.60.0` |
+| `tests/checks/deps.py` | changed | allows guarded `playwright` imports only in the e2e package |
+| `tests/checks/installer.py` | changed | `installer-e2e` check |
+| `tests/checks/e2e_spec.py`, `e2e_normalize.py`, `e2e_supervisor.py`, `e2e_routing.py` | new | contract, classification, supervisor, orchestration (including grounding, replay, existing test, metrics row) |
+| `tests/checks/e2e_browser.py`, `e2e_redact.py`, `e2e_doctor.py`, `e2e_existing_tests.py`, `e2e_metrics.py`, `e2e_smoke.py` | new | player with a substitute page, scrub, doctor, existing test, metrics, opt-in Chromium smoke |
+| `tests/fixtures/e2e_app/*.html` | new | fixture application for smoke |
+| `tests/run.py`, `tests/scenario.py` | changed | new check registration |
+| `tools/sim/sim_flows.py` | changed | S22, S22b, S22c, S22d (replay) |
+| `docs/runtime-contracts.md` | changed | `verify_mode=e2e` section |
+| `dist/config/claude/skills/verify.md`, `dist/config/claude/CLAUDE.md` | changed | `e2e` mode documentation |
+| `dist/manifest.json` | changed | regen |
+| `core/evidence/contract.py`, `core/evidence/result_shaping.py`, `core/provider/continuation.py`, `core/evidence/runtime_io.py`, `utils/osutil.py` | unchanged | used as-is |
 
-## 27. Keputusan final
+## 27. Final decision
 
-Mode E2E layak dibangun sebagai eksperimen terukur karena menutup celah antara “kode terlihat benar” dan “perilaku runtime terbukti”. Implementasi tidak boleh langsung mencakup semua kemampuan browser automation.
+E2E mode is worth building as a measured experiment because it closes the gap between “the code looks correct” and “the runtime behavior is proven”. The implementation must not immediately cover every browser automation capability.
 
-Scope awal yang disetujui untuk MVP:
+Initial scope approved for the MVP:
 
-- satu browser: Chromium;
-- app sudah berjalan;
-- scenario JSON deklaratif;
-- claims dan selector provenance;
-- action/assertion dasar;
+- one browser: Chromium;
+- app already running;
+- declarative scenario JSON;
+- claims and selector provenance;
+- basic actions/assertions;
 - existing-test-first;
 - DOM-first evidence;
 - `app/harness/unknown` classification;
 - `pass/fail/incomplete`;
 - compact hybrid review;
-- screenshot/trace sebagai fallback;
-- tanpa reasoning-based self-healing;
-- D1: three-stage di runtime (delegated `[E2E SPEC]` → player lokal → delegated review → normalizer);
-- D2: hasil dinormalisasi ke `[VERIFICATION]` canonical, validator/continuation/guard existing tidak diubah;
-- D3: Playwright optional extra + lazy import; absen → `incomplete:playwright_missing`;
-- artifact E2E run-local, tidak masuk `evidence.jsonl`.
+- screenshot/trace as fallback;
+- no reasoning-based self-healing;
+- D1: three-stage in the runtime (delegated `[E2E SPEC]` → local player → delegated review → normalizer);
+- D2: results normalized to canonical `[VERIFICATION]`, existing validator/continuation/guard unchanged;
+- D3: Playwright optional extra + lazy import; absent → `incomplete:playwright_missing`;
+- E2E artifacts run-local, not in `evidence.jsonl`.
 
-Setelah MVP diuji pada beberapa perubahan nyata, data hasil pengukuran menjadi dasar apakah fitur dilanjutkan, diperluas, atau tetap opt-in.
+After the MVP is tested on several real changes, the measured data becomes the basis for whether the feature is continued, expanded, or kept opt-in.
 
-## 28. Riwayat revisi
+## 28. Revision history
 
-| Tanggal | Perubahan |
+| Date | Change |
 |---|---|
-| 2026-09-14 | Draft awal |
-| 2026-09-14 | Revisi setelah analisis terhadap codebase verify: tambah §1.1 keputusan D1–D3, catatan fallback `verify_mode` (§4), arsitektur three-stage + kontrak `[E2E SPEC]` (§5), normalisasi canonical + exit code (§14.3), lokasi artifact (§16), mekanisme reviewer + `[E2E EVIDENCE]` (§17), kebijakan dependency (§19.1), reuse vs baru (§20.1), Fase 1/3/4 dikonkretkan (§21), test tambahan (§22), daftar file konkret (§26) |
-| 2026-09-14 | Setelah verifikasi: tambah §5.1 aturan dispatch anti-rekursi (command internal `e2e_spec` untuk stage 1, `_verify_mode_override="delegated"` untuk stage 3, recursion guard + test), D2 menyebut kedua metadata quick, §21 Fase 1 item 2a, §26 tambah `config/routing.py`, `main.py`, path docs konkret |
-| 2026-09-14 | Setelah verifikasi ke-2: output stage 1 wajib format evidence exploration standar (`[EVIDENCE]` … `[DIGEST]`) dengan `[E2E SPEC]` sebagai section tambahan agar lolos generic evidence guard exploration/reasoning tanpa mengubah `_EVIDENCE_MARKERS` (§5.1, contoh kontrak, Fase 1 item 4); guard `main.run()` untuk command internal (§5.1, item 2a) |
-| 2026-09-14 | Fase 1 diimplementasikan. Keputusan Q1: stage memakai `Executor._run_delegated()`/`_build_delegated_prompt()` yang diekstrak dari `execute()` — `_verify_mode_override` dan recursion guard dibatalkan karena tidak ada re-entry (§5.1, §21 item 2a, §26). Modul `core/evidence/e2e/{spec,classify,normalize,redact,supervisor,preflight,player,runner}.py`; test `tests/checks/e2e_{spec,normalize,supervisor,routing}.py`; sim S22/S22b/S22c; `tests/checks/deps.py` mengizinkan hanya import `playwright` ber-guard di paket e2e. Player browser nyata = Fase 2; non-fake run berakhir `incomplete: player_unavailable`. |
-| 2026-09-14 | Verifikasi batch 2 menemukan 3 blocking: (1) nilai `${ENV}` hasil resolve bisa masuk prompt stage 3 lewat event player, (2) normalizer menyalin section reviewer tanpa routing by tag sehingga verdict berbeda dari validator, (3) usage stage gagal tercatat dua kali. Diperbaiki: `redact.scrub_resolved` + redact evidence block sebelum prompt/artifact; `_reviewer_sections` me-route by tag + adopsi verdict validator bila lebih ketat; `_run_delegated(record_failure=False)` untuk stage e2e. Test regresi + uji mutasi ditambahkan. Re-verify: DONE. |
-| 2026-09-14 | Pembaruan status dokumen: header, §1.2 status per fase, §1.3 celah terbuka G1–G14 + housekeeping, §23 status per acceptance criteria, §25 risiko residual, §26 status per file. Isi desain §2–§22 tidak diubah. |
-| 2026-09-14 | Batch implementasi 1–8: policy spec (origin, side effect, selector candidates, source_refs); packaging `requirements-e2e.txt` + `--with-e2e` + doctor; player Playwright nyata; artifact dan privasi (scrub varian encoded, tanpa screenshot/trace bila `${ENV}`, `artifact_max_mb`); smoke Chromium dan perbaikan atribusi page error pihak ketiga; grounding, replay, existing test via config; metrik `e2e_run` di `report`; dokumentasi. D1 dikoreksi (review sebelum normalizer), D3 diperbarui (packaging). Batch 1–7 belum `/.verify`. |
+| 2026-09-14 | Initial draft |
+| 2026-09-14 | Revision after analysis against the verify codebase: added §1.1 decisions D1–D3, `verify_mode` fallback note (§4), three-stage architecture + `[E2E SPEC]` contract (§5), canonical normalization + exit code (§14.3), artifact location (§16), reviewer mechanism + `[E2E EVIDENCE]` (§17), dependency policy (§19.1), reuse vs new (§20.1), Phases 1/3/4 made concrete (§21), additional tests (§22), concrete file list (§26) |
+| 2026-09-14 | After verification: added §5.1 anti-recursion dispatch rules (internal command `e2e_spec` for stage 1, `_verify_mode_override="delegated"` for stage 3, recursion guard + test), D2 names both quick metadata fields, §21 Phase 1 item 2a, §26 adds `config/routing.py`, `main.py`, concrete docs paths |
+| 2026-09-14 | After the 2nd verification: stage 1 output must use the standard exploration evidence format (`[EVIDENCE]` … `[DIGEST]`) with `[E2E SPEC]` as an additional section so it passes the exploration/reasoning generic evidence guard without changing `_EVIDENCE_MARKERS` (§5.1, contract example, Phase 1 item 4); `main.run()` guard for internal commands (§5.1, item 2a) |
+| 2026-09-14 | Phase 1 implemented. Decision Q1: stages use `Executor._run_delegated()`/`_build_delegated_prompt()` extracted from `execute()` — `_verify_mode_override` and the recursion guard were dropped because there is no re-entry (§5.1, §21 item 2a, §26). Modules `core/evidence/e2e/{spec,classify,normalize,redact,supervisor,preflight,player,runner}.py`; tests `tests/checks/e2e_{spec,normalize,supervisor,routing}.py`; sim S22/S22b/S22c; `tests/checks/deps.py` only allows guarded `playwright` imports in the e2e package. Real browser player = Phase 2; non-fake runs end in `incomplete: player_unavailable`. |
+| 2026-09-14 | Batch 2 verification found 3 blocking issues: (1) resolved `${ENV}` values could enter the stage 3 prompt via player events, (2) the normalizer copied reviewer sections without routing by tag so the verdict differed from the validator, (3) failed stage usage was recorded twice. Fixed: `redact.scrub_resolved` + redact the evidence block before prompt/artifact; `_reviewer_sections` routes by tag + adopts the validator verdict when stricter; `_run_delegated(record_failure=False)` for e2e stages. Regression tests + mutation tests added. Re-verify: DONE. |
+| 2026-09-14 | Document status update: header, §1.2 per-phase status, §1.3 open gaps G1–G14 + housekeeping, §23 per-acceptance-criterion status, §25 residual risks, §26 per-file status. Design content §2–§22 unchanged. |
+| 2026-09-14 | Implementation batches 1–8: spec policy (origin, side effect, selector candidates, source_refs); packaging `requirements-e2e.txt` + `--with-e2e` + doctor; real Playwright player; artifacts and privacy (scrub of encoded variants, no screenshot/trace if `${ENV}`, `artifact_max_mb`); Chromium smoke and the fix for third-party page error attribution; grounding, replay, existing tests via config; `e2e_run` metrics in `report`; documentation. D1 corrected (review before normalizer), D3 updated (packaging). Batches 1–7 not yet `/.verify`. |
