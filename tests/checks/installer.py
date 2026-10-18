@@ -308,7 +308,13 @@ def _test_installer_settings_merge() -> None:
     real_windows, real_find = settings_mod.osutil.IS_WINDOWS, settings_mod.osutil.find_bash
     try:
         settings_mod.osutil.IS_WINDOWS = False
+        settings_mod.osutil.find_bash = lambda: "/usr/bin/bash"
         assert_true(hook_bash_command() == "bash", "POSIX names plain bash")
+        settings_mod.osutil.find_bash = lambda: None
+        assert_true(
+            hook_bash_command() is None,
+            "POSIX without bash on PATH has no command, like Windows without Git Bash; install refuses --apply",
+        )
         settings_mod.osutil.IS_WINDOWS = True
         settings_mod.osutil.find_bash = lambda: "C:\\Program Files\\Git\\bin\\bash.exe"
         assert_true(

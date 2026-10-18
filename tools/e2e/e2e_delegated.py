@@ -37,14 +37,22 @@ def delegated_checks(report: Report, session_id: str) -> None:
             )
             return
 
+        # bash on every OS (Git Bash on Windows), as the skills call it. No bare `bash`
+        # fallback: on Windows it can be WSL's, and the run would fail for the wrong reason.
+        bash = find_bash()
+        if not bash:
+            report.record(
+                "delegated commands", FAIL, "no bash found (Git Bash on Windows): the runner cannot start"
+            )
+            return
+
         # sweep is local and returns a git-diff report, not delegated evidence.
         cases = [
             ("explore", "Sebutkan entry point utama. Maksimal 3 baris.", "evidence"),
             ("sweep", "scan git diff, identify impact", "local-report"),
         ]
         for command, task, contract in cases:
-            # bash on every OS (Git Bash on Windows), as the skills call it.
-            runner = [find_bash() or "bash", str(script)]
+            runner = [bash, str(script)]
             result = subprocess.run(
                 [*runner, command, task, session_id],
                 capture_output=True,

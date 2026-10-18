@@ -210,7 +210,12 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
         sys.path.insert(0, str(REPO_ROOT))
         from utils.osutil import find_bash
 
-        command = [find_bash() or "bash", str(hook)]
+        bash = find_bash()
+        if not bash:
+            # No bare `bash` fallback: on Windows it can resolve to WSL's, which cannot
+            # read the Windows paths the hook carries, and the timing would be of nothing.
+            raise SystemExit("no bash found (Git Bash on Windows): the hook cannot be measured")
+        command = [bash, str(hook)]
         payload = json.dumps({"last_assistant_message": "[EXECUTION RESULT] measurement", "cwd": str(root)})
         original = graph.stat() if force_stale and graph.is_file() else None
         if original is not None:

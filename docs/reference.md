@@ -337,7 +337,9 @@ suatu event dicabut dari event itu (misalnya `task-events` di `PreToolUse` dari 
 Command di template sama untuk semua OS, `{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<hook>.sh"`;
 installer mengisi `{{HOOK_BASH}}` dengan `bash` di POSIX dan path absolut Git Bash (dikutip) di
 Windows, karena `bash` polos di sana bisa jatuh ke bash WSL di `System32`. Tanpa Git Bash di
-Windows, `--apply` ditolak (exit 6) sebelum menulis apa pun. Command lama berbentuk
+Windows, atau tanpa `bash` di PATH di POSIX, `--apply` ditolak (exit 6) sebelum menulis apa pun.
+Tool maintainer dan e2e yang menjalankan hook atau runner juga menolak (bukan menebak `bash`
+polos) saat bash tidak ditemukan. Command lama berbentuk
 `powershell ... .ps1` dikenali dari nama hook-nya dan diganti.
 
 ### Uninstall

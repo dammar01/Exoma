@@ -65,6 +65,39 @@ def installer_checks(report: Report) -> None:
         report.check("dry run writes nothing", not (fake_home / ".claude").exists())
         report.check("dry run says so", "DRY RUN" in dry.stdout)
 
+        # Hooks run through bash on every OS, so with no bash (no Git Bash on Windows)
+        # --apply refuses before its first write. PATH is narrowed to python's own dir;
+        # where bash or git sits there too, no bash-less PATH can be built.
+        bare = str(Path(sys.executable).parent)
+        if shutil.which("bash", path=bare) or shutil.which("git", path=bare):
+            report.record("apply without bash refuses", SKIP, "bash or git sits beside python")
+        else:
+            no_bash_home = Path(tempfile.mkdtemp(prefix="e2e-nobash-"))
+            try:
+                refused = subprocess.run(
+                    [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env={
+                        **env,
+                        "PATH": bare,
+                        "USERPROFILE": str(no_bash_home),
+                        "HOME": str(no_bash_home),
+                        "AGENT_HOME": str(no_bash_home),
+                    },
+                    cwd=str(no_bash_home),
+                )
+                report.check(
+                    "apply without bash refuses and writes nothing",
+                    refused.returncode == 6 and not (no_bash_home / ".claude").exists(),
+                    f"rc={refused.returncode}",
+                )
+            finally:
+                shutil.rmtree(no_bash_home, ignore_errors=True)
+
         applied = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
             capture_output=True,

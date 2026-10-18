@@ -95,6 +95,18 @@ def _test_find_bash_and_os_locations() -> None:
     else:
         assert_true(bash == shutil.which("bash"), f"on POSIX find_bash is bash on PATH: {bash}")
 
+    # No bash anywhere is None on both OSes, never a bare `bash` guess: the installer and
+    # every tool that runs a hook or runner refuse on it.
+    real_which, real_windows = osutil.shutil.which, osutil.IS_WINDOWS
+    try:
+        osutil.shutil.which = lambda name, *a, **k: None
+        osutil.IS_WINDOWS = False
+        assert_true(osutil.find_bash() is None, "POSIX without bash on PATH has no bash")
+        osutil.IS_WINDOWS = True
+        assert_true(osutil.find_bash() is None, "Windows without git on PATH has no Git Bash")
+    finally:
+        osutil.shutil.which, osutil.IS_WINDOWS = real_which, real_windows
+
     real_env, real_windows = dict(osutil.os.environ), osutil.IS_WINDOWS
     try:
         osutil.IS_WINDOWS = True

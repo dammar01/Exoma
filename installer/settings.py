@@ -145,14 +145,18 @@ _HOOK_BASH = "{{HOOK_BASH}}"
 def hook_bash_command() -> str | None:
     """How a shipped hook command names bash, or None when this machine has none.
 
-    POSIX: `bash`. Windows: the absolute path of Git Bash, quoted. A bare `bash` there can
-    resolve to WSL's System32\\bash.exe, which cannot read the Windows paths these
-    commands carry, and Claude Code shows a hook that cannot start as nothing at all.
+    POSIX: `bash`, once one is on PATH. Windows: the absolute path of Git Bash, quoted. A
+    bare `bash` there can resolve to WSL's System32\\bash.exe, which cannot read the
+    Windows paths these commands carry, and Claude Code shows a hook that cannot start as
+    nothing at all. Both ask osutil.find_bash, so a POSIX machine without bash is refused
+    like a Windows one without Git Bash.
     """
+    found = osutil.find_bash()
+    if not found:
+        return None
     if not osutil.IS_WINDOWS:
         return "bash"
-    found = osutil.find_bash()
-    return '"' + found.replace("\\", "/") + '"' if found else None
+    return '"' + found.replace("\\", "/") + '"'
 
 
 def _render_command(cmd: str, bash: str) -> str:

@@ -543,6 +543,9 @@ def main() -> int:
         message = (
             "no Git Bash found: the workflow's hooks run through bash on every OS. Install "
             "Git for Windows (its bash is found next to git.exe), then rerun."
+            if osutil.IS_WINDOWS
+            else "no bash on PATH: the workflow's hooks run through bash on every OS. "
+            "Install bash, then rerun."
         )
         if apply:
             print(f"[INSTALL] ABORTED — {message} Nothing was written.")

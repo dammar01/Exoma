@@ -289,8 +289,12 @@ def integrity_checks(report: Report) -> None:
             # task: an empty `--prompt` reaching argparse as a bare flag once killed every
             # local command at the door. Exercised through the script, under the bash the
             # skills use (Git Bash on Windows); calling main.py directly would never catch it.
-            runner = [find_bash() or "bash", str(script)]
-            for command in ("doctor", "inspect"):
+            # No bare `bash` fallback: on Windows it can be WSL's, and the check would fail
+            # for the wrong reason. A machine without bash is named as one.
+            bash = find_bash()
+            report.check("entry script: a bash is found to run it", bash is not None)
+            runner = [bash, str(script)] if bash else []
+            for command in ("doctor", "inspect") if runner else ():
                 res = subprocess.run(
                     [*runner, command],
                     capture_output=True,
