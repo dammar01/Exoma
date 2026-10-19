@@ -7,7 +7,7 @@ Standalone orchestration runtime for a two-agent workflow. No third-party depend
 Two roles, strictly separated:
 
 - **main_agent** — the agent you use (Claude Code, Codex, Cursor, etc.). Orchestrator, user interface, and the **only** one allowed to write files.
-- **second_agent** — the selected provider (OpenCode, Codex, or Agy), a **read-only** evidence gatherer. Not the final answer. Each provider's write boundary differs; see [Security](security.md).
+- **second_agent** — the selected provider (OpenCode, Codex, or Agy), a **read-only** evidence gatherer by role. Not the final answer. Only OpenCode enforces that boundary; each provider's write boundary differs, see [Security](security.md).
 
 This runtime sits between the two: it receives a command, assembles a structured prompt, runs the selected provider's CLI (e.g. `opencode run`), validates the output shape, stores per-session state, then returns a stable JSON contract:
 

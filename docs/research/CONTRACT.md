@@ -149,7 +149,13 @@ disposition:
 ```
 
 - `observed` means there is real-use evidence at some tier in
-  [methodology.md](methodology.md) "Evidence tiers", but no designed evaluation.
+  [methodology.md](methodology.md) "Evidence tiers", but no designed evaluation. In plain
+  words: used for real without a reported problem; a re-countable source may exist, but the
+  record has not been evaluated against the conditions below. It is not a weaker word for
+  `validated`; it says what kind of evidence exists. A DEC used that way can become
+  `validated` without a measured figure, because a clean run (next items) counts as the
+  measurement, but only when all four conditions of the `validated` item below hold and the
+  maintainer sets `validated_by` and `validated_on`.
 - `validated`, `partially_validated`, and `rejected` require an evaluation the record names
   (usually an `EXP-XXX`) and a result measured against the record's stated success criteria.
 - Exception for decisions (`DEC-XXX`) only: a DEC is evaluated on the maintainer's direct

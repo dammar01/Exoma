@@ -167,6 +167,12 @@ validation_status       not_validated | observed | partially_validated | validat
 Only the maintainer marks a record validated or rejected. The fields, their values, and when the corpus counts as final:
 [CONTRACT.md](CONTRACT.md) §14.
 
+Reading `validation_status` in the inventory: `observed` means used for real without a
+reported problem, with no designed evaluation (a re-countable source may still exist).
+`validated` for a DEC means all four conditions of CONTRACT.md §14 hold (two or more uses,
+consistent behavior, the maintainer's decision, and a clean run or a measured figure) and the
+maintainer has set `validated_by` and `validated_on`.
+
 A design being implemented does not mean that its underlying hypothesis has been
 validated. Likewise, a literature source being related to a design does not imply that the
 source directly caused that design.
