@@ -68,7 +68,7 @@ evidence_notes: |
   hook-launchers), run through the real bash launchers on Windows.
 implementation:
   version: 3.9.0
-  commits: [uncommitted]
+  commits: [f63e1b7]
   components:
     - core/runtime/execution.py (plan record, execute begin/end, verification)
     - main.py (plan-record, execute-begin, execute-end; verify writes its verdict)

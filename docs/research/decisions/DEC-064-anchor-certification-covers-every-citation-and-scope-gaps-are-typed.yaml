@@ -47,7 +47,7 @@ evidence_notes: |
   bullets cap as specified.
 implementation:
   version: 3.9.0
-  commits: [uncommitted]
+  commits: [f63e1b7]
   components:
     - core/evidence/evidence_store.py (scan_anchors, certify_claim_refs, anchor_scan on the row)
     - core/evidence/contract.py (anchor_cap scanned_all)

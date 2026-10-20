@@ -40,7 +40,7 @@ evidence_notes: |
   tools/e2e/e2e_promote.py still passes in full.
 implementation:
   version: 3.9.0
-  commits: [uncommitted]
+  commits: [f63e1b7]
   components:
     - core/provider/result_prep.py (knowledge_fingerprint, evidence context schema 3)
     - core/provider/executor.py (passes the injected knowledge)

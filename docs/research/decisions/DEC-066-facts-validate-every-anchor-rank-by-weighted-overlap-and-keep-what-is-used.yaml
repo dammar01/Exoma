@@ -51,7 +51,7 @@ evidence_notes: |
   continuation, and older rows are unrecorded rather than zero.
 implementation:
   version: 3.9.0
-  commits: [uncommitted]
+  commits: [f63e1b7]
   components:
     - core/evidence/fact_store.py (multi-anchor ingest, relevance, per-role limit, usage sidecar, eviction)
     - core/knowledge/retrieve.py (shared relevance)
