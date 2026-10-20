@@ -21,6 +21,12 @@ notes: |
   solved); H-018 and EXP-010 (fixes recounted with feature segments); H-020 and EXP-012
   (structured delegation and corrective intervention).
 
+  Retrospective pre-workflow arm not possible (2026-10-19): an inventory of the maintainer's
+  Claude Code transcripts found one session older than the first workflow banner across 17
+  transcript folders; in every project the oldest transcript is the day the workflow first
+  appears. Claude Code's transcript cleanup was at its default, so earlier sessions are gone.
+  A comparison without the workflow has to be collected prospectively.
+
   Research charter (docs/research/CHARTER.md, adopted 2026-10-05): this question carries the
   charter's CQ6 (whether more decomposition reduces human intervention, moves it to another
   stage, or adds it through coordination and correction) and the human-coordination part of
