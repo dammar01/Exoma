@@ -11,7 +11,7 @@ of the same function with `clean, _ = redact_value(...)` and threw the hits away
 of three providers wrote an audit trail that understated secret exposure as exactly
 nothing. The shapes matched, the behaviour did not, and nothing compared them.
 
-So the accounting lives here once. `adapters/base.py` is a Protocol on purpose — it
+So the accounting lives here once. `adapters/contract/base.py` is a Protocol on purpose — it
 records the shape an adapter answers to without demanding inheritance — and concrete
 helpers do not belong in it. A fourth provider gets this right by importing it, not by
 its author remembering the failure mode above.

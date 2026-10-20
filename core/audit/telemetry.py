@@ -495,6 +495,41 @@ def evidence_reuse(rows) -> dict:
     }
 
 
+def fact_lifecycle(rows) -> dict:
+    """What the fact store offered, served, refused and learned, per command.
+
+    Read only from rows that carry the counts (exploration/reasoning since the fields
+    existed); everything older is counted in `unrecorded_commands` rather than read as
+    zeros. `injection_rate` is injected over candidates — how selective retrieval is —
+    and `stale_rate` the share of candidates that could no longer be placed.
+    """
+    eligible = [row for row in rows if row.role in _REUSE_ROLES and row.command != "verify-browser"]
+    groups = _work_groups(eligible)
+    totals = {
+        "candidates": 0, "injected": 0, "rejected_stale": 0,
+        "rejected_irrelevant": 0, "ingested": 0, "ingest_rejected": 0,
+    }
+    recorded = 0
+    served_commands = 0
+    for group in groups:
+        row = next((r for r in reversed(group) if r.facts_candidates is not None), None)
+        if row is None:
+            continue
+        recorded += 1
+        if row.facts_injected:
+            served_commands += 1
+        for key in totals:
+            totals[key] += getattr(row, f"facts_{key}") or 0
+    return {
+        **totals,
+        "recorded_commands": recorded,
+        "unrecorded_commands": len(groups) - recorded,
+        "commands_with_facts": served_commands,
+        "injection_rate": _rate(totals["injected"], totals["candidates"]),
+        "stale_rate": _rate(totals["rejected_stale"], totals["candidates"]),
+    }
+
+
 def provider_cache(rows) -> dict:
     """Share of measured input the provider served from its own prompt cache (H-008).
 
@@ -709,6 +744,7 @@ def report(project_root) -> dict:
             "provider_calls_avoided": sum(1 for row in rows if row.provider_call_avoided),
         },
         "evidence_reuse": evidence_reuse(rows),
+        "facts": fact_lifecycle(rows),
         "provider_cache": provider_cache(rows),
         "provider_threads": provider_threads(rows),
         "by_effort": by_effort(rows),

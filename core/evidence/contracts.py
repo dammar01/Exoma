@@ -1,6 +1,6 @@
 """The five workflow contracts, as data rather than as convention.
 
-Additive on purpose. `core/contract.py` keeps producing the plain `{ok, content, meta}`
+Additive on purpose. `core/evidence/contract.py` keeps producing the plain `{ok, content, meta}`
 dicts every adapter, call site, and test fixture already speaks — nothing here replaces
 `make_ok`/`make_error`, and no existing shape changes. What was missing was not a
 different wire format but a NAME for the shapes the runtime was already passing around:
@@ -339,6 +339,17 @@ class UsageRecord:
     tests_run: int | None = None
     tests_failed: int | None = None
     tests_seconds: float | None = None
+    # Fact lifecycle for the command, on its final row only (exploration/reasoning). How
+    # many stored facts were candidates, how many were dropped as stale or below the
+    # relevance floor, how many were injected, and how many this run's output added or
+    # had refused. None on rows written before these fields, and on every other role:
+    # "no facts asked for" is not "zero facts found".
+    facts_candidates: int | None = None
+    facts_injected: int | None = None
+    facts_rejected_stale: int | None = None
+    facts_rejected_irrelevant: int | None = None
+    facts_ingested: int | None = None
+    facts_ingest_rejected: int | None = None
     # How many credential-shaped values the redaction boundary scrubbed from this call.
     # A count, never the values: the whole reason they were scrubbed is that they should
     # exist nowhere on disk, and telemetry is not an exception to that.
@@ -503,7 +514,29 @@ def usage_from_result(
             if isinstance(call.get("provider_version_status"), str) else None
         ),
         **_runtime_tests_fields(meta.get("runtime_tests")),
+        **_fact_fields(meta.get("facts")),
     )
+
+
+def _fact_fields(facts) -> dict:
+    if not isinstance(facts, dict):
+        return {}
+
+    def count(key: str) -> int | None:
+        value = facts.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    rejected = [count("ingest_rejected_anchor"), count("ingest_rejected_length")]
+    return {
+        "facts_candidates": count("candidates"),
+        "facts_injected": count("injected"),
+        "facts_rejected_stale": count("rejected_stale"),
+        "facts_rejected_irrelevant": count("rejected_irrelevant"),
+        "facts_ingested": count("ingested"),
+        "facts_ingest_rejected": (
+            sum(v for v in rejected if v is not None) if any(v is not None for v in rejected) else None
+        ),
+    }
 
 
 def _runtime_tests_fields(runtime_tests) -> dict:

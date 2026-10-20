@@ -129,4 +129,4 @@ validation result are added by the runtime after the adapter returns.
 Facts and promoted knowledge are separate systems. A fact enters the fact store after
 recurring in 5 distinct other sessions (`fact_recurrence_threshold`, default in
 `core/runtime/config_defaults.py`), or directly as a `durable_facts` entry once its anchor
-validates. Nothing moves from the fact store into `docs/project-knowledge/` automatically.
+validates — every anchor the claim cites, not only the first. Nothing moves from the fact store into `docs/project-knowledge/` automatically.

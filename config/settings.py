@@ -18,7 +18,7 @@ PROVIDER_SEED_FILE = BASE_DIR / "config" / "second_agent.seed.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
-TOOL_VERSION = "3.8.4"
+TOOL_VERSION = "3.9.0"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
@@ -219,7 +219,7 @@ def default_provider_config(provider: str | None = None) -> dict:
 # from somewhere else, so editing them in the workspace changed nothing while reading as
 # configuration. README said so in prose; the file kept offering the knob anyway.
 #
-#   job_max_runtime_seconds  -> DEFAULT_JOB_MAX_RUNTIME_SECONDS (env AI_PROXY_*), core/job_manager.py
+#   job_max_runtime_seconds  -> DEFAULT_JOB_MAX_RUNTIME_SECONDS (env AI_PROXY_*), core/jobs/job_manager.py
 #   job_poll_timeout_seconds -> the CLI's --poll-timeout, main.py
 #   agent_workflow_path      -> .workflow/config.json `runtime.agent_workflow_path`, or AGENT_PATH
 #

@@ -509,7 +509,8 @@ def _reused_evidence_reports_its_anchor_ratio() -> None:
         executor = Executor()
         result = executor._maybe_reuse(root, "analyze", "ratio query", session_id, context)
         assert_true(
-            result is not None and result["digest"]["anchors"] == {"certified": 2, "total": 2},
+            result is not None
+            and result["digest"]["anchors"] == {"certified": 2, "total": 2, "scanned_all": True},
             f"a reused digest carries the ratio its evidence_ref reports: {result and result.get('digest')}",
         )
         assert_true(
@@ -574,7 +575,115 @@ def _partial_anchor_evidence_is_priced_in() -> None:
     )
 
 
+def _anchor_scan_reads_past_the_stored_prefix() -> None:
+    """A bad citation past the 40th must still count against the run.
+
+    The scan used to stop at 40, so a session's explore citing three nonexistent files
+    after forty good ones reported `40/40 certified` and kept an uncapped confidence.
+    """
+    from core.evidence import evidence_store
+    from core.evidence.contract import anchor_cap
+    from core.provider.executor import _anchor_counts
+
+    root = Path(tempfile.mkdtemp(prefix="anchor-scan-"))
+    try:
+        (root / "src.py").write_text(
+            "\n".join(f"line_{i} = {i}" for i in range(1, 260)) + "\n", encoding="utf-8"
+        )
+        forty_then_bad = "\n".join(f"claim [src.py:{n}]" for n in range(1, 41))
+        forty_then_bad += "\nclaim [core/provider/registry.py:30]"
+        scan = evidence_store.scan_anchors(root, forty_then_bad)
+        assert_true(
+            scan["cited"] == 41 and scan["certified"] == 40 and scan["scanned_all"]
+            and len(scan["anchors"]) == 40 and scan["complete"] is False
+            and scan["uncertified"] == ["core/provider/registry.py:30"],
+            f"the 41st citation is certified, counted and named, not skipped: {scan}",
+        )
+        cap = anchor_cap(scan["certified"], scan["cited"], scan["scanned_all"])
+        assert_true(
+            cap is not None and cap[0] == "medium" and "1 of 41" in cap[1],
+            f"and it lowers the number the reader sees first: {cap}",
+        )
+
+        past_limit = "\n".join(
+            f"claim [src.py:{n}]" for n in range(1, evidence_store.MAX_ANCHORS_SCANNED + 2)
+        )
+        wide = evidence_store.scan_anchors(root, past_limit)
+        assert_true(
+            wide["scanned_all"] is False and wide["cited"] == evidence_store.MAX_ANCHORS_SCANNED,
+            f"a scan that stops early says so: {wide['cited']} {wide['scanned_all']}",
+        )
+        clean_prefix = anchor_cap(wide["certified"], wide["cited"], wide["scanned_all"])
+        assert_true(
+            clean_prefix is not None and clean_prefix[0] == "medium"
+            and "were not checked" in clean_prefix[1],
+            f"a clean prefix is not a clean run: {clean_prefix}",
+        )
+        assert_true(
+            anchor_cap(5, 5, True) is None and anchor_cap(5, 5) is None,
+            "a fully scanned, fully certified run keeps its own number",
+        )
+
+        legacy_cut = {"anchors": [{"certified": True}] * 40, "anchors_complete": False}
+        legacy_short = {"anchors": [{"certified": True}] * 3, "anchors_complete": True}
+        assert_true(
+            _anchor_counts(legacy_cut) == (40, 40, False)
+            and _anchor_counts(legacy_short) == (3, 3, True),
+            f"rows from before the scan record read as what they can prove: "
+            f"{_anchor_counts(legacy_cut)} {_anchor_counts(legacy_short)}",
+        )
+
+        claims = evidence_store.certify_claim_refs(
+            root,
+            [
+                {"text": "real", "refs": ["src.py:3"]},
+                {"text": "moved", "refs": ["src.py:3", "core/provider/registry.py:30"]},
+                {"text": "label", "refs": ["req:login"]},
+            ],
+        )
+        assert_true(
+            [c["ref_status"] for c in claims]
+            == [["certified"], ["certified", "unverified"], ["not_a_file"]],
+            f"each claim says which of its refs this project can open: {claims}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _scope_gaps_cap_only_what_the_answer_needed() -> None:
+    """Live state and external systems are disclosed, not priced in."""
+    from core.provider.result_prep import _scope_incomplete, scope_gaps, scope_warnings
+
+    tagged = (
+        "scope_not_covered:\n"
+        "- [live_state] live provider sessions\n"
+        "- [external] MCP database\n"
+        "- [out_of_scope] unrelated tests\n"
+    )
+    assert_true(
+        not _scope_incomplete(tagged) and len(scope_warnings(tagged)) == 3,
+        f"non-capping gaps leave the number alone and stay visible: {scope_warnings(tagged)}",
+    )
+    reachable = tagged + "- [in_scope_unreachable] promote caller wiring\n"
+    assert_true(_scope_incomplete(reachable), "a hole in the requested ground still caps")
+    untagged = "scope_not_covered:\n- live browser behaviour\n"
+    assert_true(
+        _scope_incomplete(untagged) and scope_gaps(untagged) == [("unknown", "live browser behaviour")],
+        "an untagged bullet keeps the cap it always had",
+    )
+    assert_true(
+        not _scope_incomplete("scope_not_covered:\n- none\n"),
+        "an empty section is still empty",
+    )
+    assert_true(
+        scope_gaps("scope_not_covered:\n- [bogus] x\n") == [("unknown", "[bogus] x")],
+        "an unrecognised tag is not trusted as a non-capping one",
+    )
+
+
 def _test_workflow_contracts() -> None:
+    _anchor_scan_reads_past_the_stored_prefix()
+    _scope_gaps_cap_only_what_the_answer_needed()
     _confidence_caps_keep_their_reasons()
     _reused_evidence_reports_its_anchor_ratio()
     _partial_anchor_evidence_is_priced_in()

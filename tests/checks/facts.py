@@ -167,6 +167,117 @@ def _test_anchor_relocation() -> None:
         _shutil.rmtree(root, ignore_errors=True)
 
 
+def _test_fact_selection() -> None:
+    """Every cited anchor must hold, relevance ignores grammar, and eviction keeps value."""
+    import json as _json
+    import shutil as _shutil
+
+    from core.evidence import fact_store
+    from core.workspace.workspace_paths import workflow_paths
+
+    root = Path(tempfile.mkdtemp(prefix="facts-select-"))
+    try:
+        paths = workflow_paths(root)
+        paths["workflow_dir"].mkdir(parents=True, exist_ok=True)
+        (root / "core").mkdir()
+        (root / "core" / "store.py").write_text(
+            "def fact_store_ingest():\n    pass\nLIMIT = 3\nTHRESHOLD = 5\n", encoding="utf-8"
+        )
+
+        stats: dict = {}
+        added = fact_store.ingest(
+            root,
+            "durable_facts:\n"
+            "- [invariant] `fact_store_ingest` validates anchors [core/store.py:1] [core/provider/registry.py:30]\n"
+            "- [config] `LIMIT` and `THRESHOLD` bound retrieval [core/store.py:3] [core/store.py:4]\n"
+            "- [config] " + "very long claim " * 40 + "[core/store.py:3]\n"
+            "- [config] no anchor at all\n",
+            "sess-select",
+            stats=stats,
+        )
+        stored = fact_store._load_facts(root)
+        assert_true(
+            added == 1 and stats["rejected_anchor"] == 2 and stats["rejected_length"] == 1,
+            f"one bad citation refuses the claim, as does a paragraph: {added} {stats}",
+        )
+        assert_true(
+            stored[0]["line"] == 3
+            and stored[0]["anchors"] == [
+                {"file": "core/store.py", "line": 4,
+                 "anchor_hash": fact_store._anchor_hash(root, "core/store.py", 4)}
+            ],
+            f"the primary anchor stays where old readers look, the rest ride beside it: {stored}",
+        )
+
+        read: dict = {}
+        served = fact_store.load_relevant(root, "kenapa `LIMIT` dipakai", stats=read)
+        assert_true(
+            len(served) == 1 and read == {"candidates": 1, "rejected_stale": 0,
+                                          "rejected_irrelevant": 0, "injected": 1},
+            f"an Indonesian task finds the fact through the identifier it names: {served} {read}",
+        )
+        for noise in ("the and for with that", "yang dan untuk dari", "core tests py"):
+            assert_true(
+                fact_store.load_relevant(root, noise) == [],
+                f"grammar and generic path segments match nothing: {noise!r}",
+            )
+
+        (root / "core" / "store.py").write_text(
+            "def fact_store_ingest():\n    pass\nLIMIT = 3\nTHRESHOLD = 50\n", encoding="utf-8"
+        )
+        stale: dict = {}
+        assert_true(
+            fact_store.load_relevant(root, "`LIMIT` `THRESHOLD`", stats=stale) == []
+            and stale["rejected_stale"] == 1,
+            f"a fact is only as fresh as its weakest citation: {stale}",
+        )
+        assert_true(
+            fact_store.prune(root)["removed"] == 1,
+            "and prune drops it for the same reason",
+        )
+
+        score_id, ids = fact_store.relevance("why `fact_store_ingest` fails", "fact_store_ingest runs", "x.py")
+        score_word, none = fact_store.relevance("why ingest fails", "ingest runs here", "x.py")
+        assert_true(
+            ids == 1 and score_id > score_word and none == 0,
+            f"a shared identifier outweighs a shared word: {score_id} {score_word}",
+        )
+
+        # Per-role limits, and the scalar override still winning when set.
+        assert_true(
+            fact_store._policy_limit(root, "reasoning") == 4
+            and fact_store._policy_limit(root, "exploration") == 3,
+            "reasoning gets its own default",
+        )
+        paths["config"].write_text(
+            _json.dumps({"policies": {"fact_relevant_limit": 2,
+                                      "fact_relevant_limits": {"exploration": 6}}}),
+            encoding="utf-8",
+        )
+        assert_true(
+            fact_store._policy_limit(root, "exploration") == 6
+            and fact_store._policy_limit(root, "reasoning") == 2,
+            "a per-role value wins, else the user's scalar, else the default",
+        )
+
+        # Eviction by value: the used fact outlives two newer, never-served ones.
+        (root / "a.py").write_text("one_value = 1\ntwo_value = 2\nthree_value = 3\n", encoding="utf-8")
+        paths["config"].write_text(_json.dumps({"policies": {"fact_max_facts": 2}}), encoding="utf-8")
+        paths["facts_store"].write_text("", encoding="utf-8")
+        fact_store.ingest(root, "durable_facts:\n- [config] `one_value` is one [a.py:1]\n", "s1")
+        fact_store.load_relevant(root, "`one_value`")
+        fact_store.ingest(root, "durable_facts:\n- [config] `two_value` is two [a.py:2]\n", "s2")
+        fact_store.ingest(root, "durable_facts:\n- [config] `three_value` is three [a.py:3]\n", "s3")
+        kept = [f["claim"] for f in fact_store._load_facts(root)]
+        assert_true(
+            any("one_value" in c for c in kept) and any("three_value" in c for c in kept)
+            and len(kept) == 2,
+            f"a fact that has been served is not evicted for being old: {kept}",
+        )
+    finally:
+        _shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_evidence_anchor_relocation() -> None:
     """Evidence survives a shifted citation. Freshness demands EVERY anchor hold, so one
     insertion above one cited line used to discard a whole artifact and force a re-run."""

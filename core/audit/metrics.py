@@ -100,6 +100,11 @@ REGISTRY: dict[str, dict] = {
         "definition": "Exploration and reasoning commands served from a stored artifact. verify-browser drafts are not eligible.",
         "denominator": "exploration and reasoning commands", "missing": "Rows without a role are named, not placed.",
     },
+    "runtime.fact_lifecycle": {
+        "version": 1, "producer": _RUNTIME, "unit": "command", "statistic": "sum",
+        "definition": "Facts offered (candidates), served (injected), dropped as stale or below the relevance floor, and added or refused at ingest, summed per exploration/reasoning command. Report key `facts`.",
+        "denominator": "commands whose final row carries fact counts", "missing": "Commands recorded before the fact fields are counted as unrecorded_commands, never as zeros.",
+    },
     "runtime.context_avoided": {
         "version": 1, "producer": _RUNTIME, "unit": "tokens", "statistic": "sum",
         "definition": "(answer characters - digest characters) // 4 on the row carrying the digest. Report key `premium_context_avoided`.",

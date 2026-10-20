@@ -497,7 +497,42 @@ def _check_doctor_and_clean_read_the_lock() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_source_extensions_agree() -> None:
+    """The reader calls a graph stale over the same files the hook would refresh it for.
+
+    The reader fingerprinted `*.py` only while the hook scanned eight languages, so in a
+    PHP project one said "current" about a graph the other was about to rebuild.
+    """
+    import ast
+    import re
+
+    block = re.search(r"^SOURCE_EXT = (\([^)]*\))", _hook_source(), re.M | re.S)
+    hook_ext = ast.literal_eval(block.group(1)) if block else None
+    assert_true(
+        hook_ext == graph_index.SOURCE_EXTENSIONS,
+        f"graph-refresh.py SOURCE_EXT {hook_ext} == graph_index.SOURCE_EXTENSIONS",
+    )
+    root = Path(tempfile.mkdtemp(prefix="graph-ext-"))
+    try:
+        (root / "app.php").write_text("<?php\n", encoding="utf-8")
+        (root / "node_modules").mkdir()
+        (root / "node_modules" / "dep.js").write_text("x\n", encoding="utf-8")
+        state = graph_index._source_state(root)
+        assert_true(
+            state is not None,
+            "a project with no Python still has a source fingerprint",
+        )
+        os.utime(root / "node_modules" / "dep.js", None)
+        assert_true(
+            graph_index._source_state(root)[0] == state[0],
+            "skip directories are pruned, so a dependency does not move the fingerprint",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_graph_refresh_hook() -> None:
+    _check_source_extensions_agree()
     _check_lock_rule_agrees()
     _check_doctor_and_clean_read_the_lock()
     _check_hand_off_only_while_the_lock_is_ours()

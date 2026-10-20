@@ -86,6 +86,18 @@ ERROR_TYPES = {
     "secret_shaped_content",
     "ignored_source",
     "ignored_destination",
+    # knowledge_dir or a document id that resolves outside the project root.
+    "knowledge_path_escape",
+    # The plan -> execute chain (core/runtime/execution.py). One type per missing
+    # precondition, because each has its own remedy: fix the plan document, answer its
+    # questions, ask the user for `-y`, or there is simply no execution to close.
+    "plan_input_missing",
+    "plan_input_unreadable",
+    "plan_invalid",
+    "execute_no_plan",
+    "execute_plan_not_proceed",
+    "execute_not_approved",
+    "execution_not_active",
     "unknown",
 }
 
@@ -957,7 +969,9 @@ _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 _RANK_CONFIDENCE = {0: "low", 1: "medium", 2: "high"}
 
 
-def anchor_cap(certified: int, total: int) -> tuple[str, str] | None:
+def anchor_cap(
+    certified: int, total: int, scanned_all: bool = True
+) -> tuple[str, str] | None:
     """What a run's certified-anchor ratio is worth as a confidence ceiling, or None.
 
     An anchor this project cannot open is a citation, not evidence. The grounded-claims
@@ -976,12 +990,20 @@ def anchor_cap(certified: int, total: int) -> tuple[str, str] | None:
     cross-project analysis whose anchors all point outside this root is the ordinary case
     and not a weak analysis. The ratio stays in the digest either way, so a reader can
     disagree with the grade without opening anything.
+
+    `scanned_all=False` means the certifier stopped before the content ended, so `total`
+    counts a prefix. A clean prefix is not a clean run — the citation that names a file
+    which does not exist can sit past the limit — so it is worth `medium` at most, with
+    its own reason. The ratio rungs still apply to the prefix that WAS read, and the
+    lower of the two wins.
     """
     if total <= 0:
         return None
     if certified <= 0:
         return "medium", "no cited anchor could be verified in this project"
     if certified >= total:
+        if not scanned_all:
+            return "medium", f"anchor scan stopped after {total} citations; the rest were not checked"
         return None
     if certified / total < 0.5:
         return "low", f"only {certified} of {total} cited anchors could be verified in this project"

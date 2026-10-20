@@ -297,8 +297,16 @@ def run_doctor(
     from core.runtime.config_defaults import knowledge_relevant_limit, production_branch
     from utils import git as git_util
 
-    knowledge_dir = knowledge_store.knowledge_dir(project_root)
-    if knowledge_dir.exists():
+    try:
+        knowledge_dir = knowledge_store.knowledge_dir(project_root)
+    except knowledge_store.KnowledgePathError as exc:
+        knowledge_dir = None
+        checks["knowledge_folder_writable"] = False
+        issues.append(f"knowledge folder refused: {exc}")
+        recommended_fixes.append("Point policies.knowledge_dir at a directory inside the project")
+    if knowledge_dir is None:
+        pass
+    elif knowledge_dir.exists():
         knowledge_writable, knowledge_error = check_writable(knowledge_dir / ".touch")
         try:
             (knowledge_dir / ".touch").unlink()

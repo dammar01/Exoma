@@ -155,7 +155,7 @@ def _merge_provider_config(project_root: Path, tool_dir: str) -> list[str]:
     return added
 
 
-# Moved to utils/osutil.py: the check is provider-independent, and core/diagnostics.py
+# Moved to utils/osutil.py: the check is provider-independent, and core/audit/diagnostics.py
 # should not import one provider's module to test another provider's binary. Re-exported
 # so existing importers keep working.
 from utils.osutil import provider_callable  # noqa: E402,F401

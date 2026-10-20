@@ -548,7 +548,7 @@ class CodexAdapter:
         # A run that answered but never named its thread cannot be continued: the follow-up
         # would open a fresh session holding none of the work. OpenCode fails the call in
         # the same situation rather than returning an orphan, and the parity matters —
-        # `core/executor.py` reads `provider_session_id` to decide whether its one bounded
+        # `core/provider/executor.py` reads `provider_session_id` to decide whether its one bounded
         # continuation is even possible, and `main.py` refuses job recovery without it.
         #
         # Deliberately LAST, after timeout and returncode: those are different failures with

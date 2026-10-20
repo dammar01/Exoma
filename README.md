@@ -10,7 +10,7 @@ agent, while reasoning and implementation stay with your primary coding agent.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](docs/installation.md#requirements)
-[![Version](https://img.shields.io/badge/version-3.8.4-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.9.0-informational.svg)](CHANGELOG.md)
 
 **[Installation guide](docs/installation.md)** · [Security](docs/security.md) · [Team guide](docs/team-guide/README.md) · [Reference](docs/reference.md)
 

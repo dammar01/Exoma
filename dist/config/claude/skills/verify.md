@@ -73,3 +73,4 @@ not_verified: <tak bisa dicek + alasan> | (tidak ada)
 confidence: low|medium|high — <alasan>
 NEEDS FIX → fix blocking dulu → re-run /.verify. JANGAN output final sebelum done.
 escalations + notes JANGAN dibuang — tampilkan, user yang putuskan garap sekarang/nanti.
+Verdict runtime (`meta.verdict`) ditulis otomatis ke execution sesi (`runtime/execution.json`): pass | fail | incomplete, dan `syntax_only` untuk mode syntax — parse OK tak pernah tercatat sebagai pass.

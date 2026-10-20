@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.8.4, do not edit manually -->
-# Agy Second Agent — v3.8.4
+<!-- WORKFLOW-SECOND-AGENT:START — v3.9.0, do not edit manually -->
+# Agy Second Agent — v3.9.0
 
 ## Scope
 This block applies ONLY when the request's instructions — inline, or in the file attached
@@ -90,7 +90,8 @@ external:
 scope_covered:
 - <file/area yang benar-benar diperiksa>
 scope_not_covered:
-- <diminta tapi tak terjangkau / lintas-sistem tak di-inject> | none
+- [in_scope_unreachable|live_state|external|out_of_scope] <diminta tapi tak terjangkau / lintas-sistem tak di-inject> | none
+  (tag wajib; hanya in_scope_unreachable — atau tanpa tag — yang menurunkan confidence)
 uncertainties:
 - <HANYA yang tak terjawab setelah search. Statement gap fakta, BUKAN pertanyaan user.>
 

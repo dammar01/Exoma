@@ -49,11 +49,23 @@ class _KnowledgeLock(OwnedFileLock):
         super().__init__(workflow_paths(Path(project_root))["promote_lock"], LOCK_TTL_SECONDS)
 
 
+class KnowledgePathError(ValueError):
+    """A knowledge path that would land outside the project root."""
+
+
 def knowledge_dir(project_root: Path) -> Path:
     """Where promoted knowledge lives, from policies.knowledge_dir.
 
     Read from config on every call rather than cached: the same runtime serves several
     projects, and a directory resolved once would follow the first one seen.
+
+    Contained, fail-closed. The value comes from config.json, and the directory it names
+    is the one place this tool writes Git-tracked files — `../elsewhere`, an absolute
+    path, or a symlink out of the repository would turn promotion into a write into a
+    neighbouring project. The documented contract was always "relative to the project
+    root"; nothing enforced it. Raises KnowledgePathError instead of falling back to the
+    default, because silently writing somewhere other than where config points is the
+    other half of the same surprise.
     """
     name = DEFAULT_KNOWLEDGE_DIR
     try:
@@ -65,10 +77,29 @@ def knowledge_dir(project_root: Path) -> Path:
                 name = candidate.strip()
     except (OSError, ValueError):
         pass
-    return Path(project_root) / name
+    relative = Path(name)
+    if relative.is_absolute() or relative.drive or ".." in relative.parts:
+        raise KnowledgePathError(
+            f"policies.knowledge_dir {name!r} must be a path inside the project root"
+        )
+    root = Path(project_root).resolve()
+    target = (root / relative).resolve()
+    if target != root and root not in target.parents:
+        raise KnowledgePathError(
+            f"policies.knowledge_dir {name!r} resolves outside the project root ({target})"
+        )
+    return target
 
 
 def doc_path(project_root: Path, doc_id: str) -> Path:
+    """The file for one document id. The id must be a schema slug.
+
+    Checked here and not only by `schema.validate`: promote-verify loads the EXISTING
+    document by the candidate's id before anything has validated it, so an id of
+    `../../x` reached the filesystem first.
+    """
+    if not isinstance(doc_id, str) or not schema.SLUG.match(doc_id):
+        raise KnowledgePathError(f"knowledge id {doc_id!r} is not a lowercase-hyphen slug")
     return knowledge_dir(project_root) / f"{doc_id}.json"
 
 
@@ -187,7 +218,10 @@ def load(project_root: Path, doc_id: str) -> dict:
     existing document must surface — silently treating it as absent would overwrite a
     colleague's work with a fresh file on the next promotion.
     """
-    path = doc_path(project_root, doc_id)
+    try:
+        path = doc_path(project_root, doc_id)
+    except KnowledgePathError as exc:
+        return {"ok": False, "error": str(exc), "path": None}
     if not path.exists():
         return {"ok": True, "doc": None, "path": str(path)}
     try:
@@ -197,7 +231,10 @@ def load(project_root: Path, doc_id: str) -> dict:
 
 
 def list_docs(project_root: Path) -> list[str]:
-    directory = knowledge_dir(project_root)
+    try:
+        directory = knowledge_dir(project_root)
+    except KnowledgePathError:
+        return []  # doctor names the misconfiguration; readers just see no knowledge
     if not directory.is_dir():
         return []
     return sorted(
@@ -303,8 +340,14 @@ def write(project_root: Path, doc: dict) -> dict:
             ],
         }
 
-    directory = knowledge_dir(project_root)
-    relative = directory.relative_to(project_root).as_posix() if directory.is_relative_to(project_root) else str(directory)
+    try:
+        directory = knowledge_dir(project_root)
+        path = doc_path(project_root, doc["id"])
+    except KnowledgePathError as exc:
+        return {"ok": False, "error_type": "knowledge_path_escape", "errors": [str(exc)]}
+    # knowledge_dir is contained, so this is always relative; resolved on both sides so a
+    # root given through a short name or a symlink compares equal to its target.
+    relative = directory.relative_to(Path(project_root).resolve()).as_posix()
     if git.is_ignored(project_root, relative):
         return {
             "ok": False,
@@ -316,7 +359,6 @@ def write(project_root: Path, doc: dict) -> dict:
         }
 
     text = serialize(doc)
-    path = doc_path(project_root, doc["id"])
     directory.mkdir(parents=True, exist_ok=True)
 
     # The compare-then-write is a read-modify-write like every other store here, so it

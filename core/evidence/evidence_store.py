@@ -8,7 +8,12 @@ import threading
 import time
 from pathlib import Path
 
-from core.evidence.fact_store import _anchor_hash, _FILELINE, current_anchor_line
+from core.evidence.fact_store import (
+    _FILELINE,
+    _line_hash,
+    _read_lines,
+    current_anchor_line,
+)
 from core.workspace.workspace_paths import (
     _safe_component,
     atomic_write_text,
@@ -23,6 +28,15 @@ LOCK_FILENAME = "evidence.jsonl.lock"
 LOCK_TIMEOUT_SECONDS = 30
 MAX_EVIDENCE = 200
 MAX_ANCHORS_PER_ARTIFACT = 40
+# How many distinct citations are CERTIFIED, as opposed to stored. The two used to be one
+# number: the scan stopped at the 40th anchor, so a run citing a nonexistent path at
+# position 41 reported `40/40 certified` — the ratio described the prefix it had read, and
+# the reader is told to trust that ratio before opening anything. Storing stays bounded
+# (every stored anchor is re-hashed on each reuse check); certifying is one hash per line
+# against a per-call file cache, so the scan can afford to read much further.
+MAX_ANCHORS_SCANNED = 200
+# Uncertified citations named back to the reader, so a cap reason can say WHICH refs failed.
+MAX_UNCERTIFIED_LISTED = 10
 
 _EVIDENCE_THREAD_LOCK = threading.Lock()
 
@@ -176,25 +190,106 @@ def _extract_anchors(project_root: Path, content: str) -> tuple[list[dict], bool
     `hash` is None when it was not. The completeness flag still goes False, so nothing
     downstream treats a partly-uncertified artifact as reusable — `_is_fresh` demands
     every anchor hold, and it cannot check one it never hashed.
+
+    Kept as the stored-prefix view of `scan_anchors`, which also counts what lies past it.
+    """
+    scan = scan_anchors(project_root, content)
+    return scan["anchors"], scan["complete"]
+
+
+def scan_anchors(project_root: Path, content: str) -> dict:
+    """Certify every cited anchor up to the scan limit; keep the first few for reuse.
+
+    Returns:
+      anchors        the stored prefix (at most MAX_ANCHORS_PER_ARTIFACT), as before
+      complete       reuse eligibility: every citation was stored AND certified
+      cited          distinct citations certified-or-not (bounded by MAX_ANCHORS_SCANNED)
+      certified      how many of `cited` hash to a line in this project
+      scanned_all    False when the scan limit cut the content short — the ratio then
+                     describes a prefix, and a reader must not take it for the whole
+      uncertified    up to MAX_UNCERTIFIED_LISTED `file:line` strings that did not certify
+
+    `complete` and `scanned_all` answer different questions and are kept apart: evidence
+    with 60 good anchors is fully certified (scanned_all, certified == cited) yet not
+    reusable, because only 40 of them are stored to be re-checked later.
     """
     seen: set[tuple[str, int]] = set()
     anchors: list[dict] = []
+    uncertified: list[str] = []
+    cited = 0
+    certified = 0
     complete = True
+    scanned_all = True
+    line_cache: dict = {}
     for m in _FILELINE.finditer(content or ""):
         file, line = m.group(1), int(m.group(2))
         key = (file, line)
         if key in seen:
             continue
         seen.add(key)
-        if len(anchors) >= MAX_ANCHORS_PER_ARTIFACT:
-            return anchors, False
-        h = _anchor_hash(project_root, file, line)
+        if cited >= MAX_ANCHORS_SCANNED:
+            scanned_all = False
+            break
+        cited += 1
+        h = _cached_anchor_hash(project_root, file, line, line_cache)
         if h is None:
-            anchors.append({"file": file, "line": line, "hash": None, "certified": False})
             complete = False
-            continue
-        anchors.append({"file": file, "line": line, "hash": h, "certified": True})
-    return anchors, complete
+            if len(uncertified) < MAX_UNCERTIFIED_LISTED:
+                uncertified.append(f"{file}:{line}")
+        else:
+            certified += 1
+        if len(anchors) < MAX_ANCHORS_PER_ARTIFACT:
+            anchors.append(
+                {"file": file, "line": line, "hash": h, "certified": h is not None}
+            )
+        else:
+            complete = False  # cited but not stored: a later reuse could not re-check it
+    return {
+        "anchors": anchors,
+        "complete": complete and scanned_all,
+        "cited": cited,
+        "certified": certified,
+        "scanned_all": scanned_all,
+        "uncertified": uncertified,
+    }
+
+
+def certify_claim_refs(project_root: Path, claims: list[dict]) -> list[dict]:
+    """Give every claim's refs a status: `certified`, `unverified`, or `not_a_file`.
+
+    `meta.claims[].refs` was presentation only — lifted out of the prose and never opened —
+    so a grounded claim citing a path that does not exist looked exactly like one citing a
+    real line. The anchor ratio catches that in aggregate; this says WHICH claim.
+
+    `not_a_file` covers refs that are not `file:line` at all (`req:<id>`, `proof:...`
+    labels the shared pattern does not match); they are bookkeeping, not evidence, and are
+    neither counted for nor against the claim. Returns new dicts; the input is unchanged.
+    """
+    cache: dict = {}
+    out: list[dict] = []
+    for claim in claims or []:
+        statuses: list[str] = []
+        for ref in claim.get("refs") or []:
+            m = _FILELINE.search(str(ref))
+            if not m:
+                statuses.append("not_a_file")
+                continue
+            h = _cached_anchor_hash(project_root, m.group(1), int(m.group(2)), cache)
+            statuses.append("certified" if h is not None else "unverified")
+        out.append({**claim, "ref_status": statuses})
+    return out
+
+
+def _cached_anchor_hash(
+    project_root: Path, file: str, line: int, cache: dict
+) -> str | None:
+    """`_anchor_hash` with the file read once per scan, not once per cited line."""
+    if file not in cache:
+        cache[file] = _read_lines(project_root, file)
+    lines = cache[file]
+    if not line or lines is None or line < 1 or line > len(lines):
+        return None
+    return _line_hash(lines[line - 1])
 
 
 def _load(project_root: Path) -> list[dict]:
@@ -289,7 +384,8 @@ def record(
     task_preview, _ = redact((task or "")[:200])
     safe_digest, _ = redact_value(digest)
     safe_command, _ = redact(command)
-    anchors, anchors_complete = _extract_anchors(project_root, content)
+    scan = scan_anchors(project_root, content)
+    anchors, anchors_complete = scan["anchors"], scan["complete"]
     entry = {
         "query_hash": _query_hash(command, task, context),
         "context_hash": _context_hash(context),
@@ -299,6 +395,14 @@ def record(
         **provisional,
         "anchors": anchors,
         "anchors_complete": anchors_complete,
+        # Rows written before this field carry none of it; readers fall back to the
+        # stored-prefix count, which is what those rows always reported.
+        "anchor_scan": {
+            "cited": scan["cited"],
+            "certified": scan["certified"],
+            "scanned_all": scan["scanned_all"],
+            "uncertified": scan["uncertified"],
+        },
         "captured_at": now_iso(),
         "session": safe_session,
     }

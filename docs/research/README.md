@@ -207,6 +207,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-021](real-cases/CASE-021-codex-resume-sandbox-fails-on-config-sandbox-mode.yaml) | Codex resume fails on Windows only when the sandbox rides `-c sandbox_mode`; `exec --sandbox` before `resume` works on 0.154.0 through 0.160.0 | positive | implemented | observed | — |
 | [CASE-022](real-cases/CASE-022-subagent-hand-backs-arm-the-intent-gate.yaml) | Native subagent hand-backs armed the intent gate during /.execute and blocked the main agent and its subagents | negative | implemented | observed | 3a4ba3e |
 | [CASE-023](real-cases/CASE-023-a-failed-verify-left-its-test-request-for-the-next-one.yaml) | A verify whose provider call failed left its test request, and the next verify ran that old choice | negative | implemented | observed | 6097f05 |
+| [CASE-024](real-cases/CASE-024-an-explore-reported-every-anchor-certified-while-citing-missing-files.yaml) | An explore reported every anchor certified while citing files that do not exist | negative | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -267,6 +268,10 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-060](decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml) | /.commit stages targeted paths itself, skips secret-looking names, and commits only on yes | accepted | implemented | observed | 1d43cbe |
 | [DEC-061](decisions/DEC-061-commit-skips-the-canonical-secret-file-list.yaml) | /.commit skips the canonical secret-file list instead of name substrings | accepted | implemented | observed | 251acd7 |
 | [DEC-062](decisions/DEC-062-the-verify-test-request-belongs-to-one-job.yaml) | The verify test request belongs to the job created for it | accepted | implemented | not_validated | f2e967d |
+| [DEC-064](decisions/DEC-064-anchor-certification-covers-every-citation-and-scope-gaps-are-typed.yaml) | Anchor certification covers every citation, and only in-scope gaps cap confidence | accepted | implemented | not_validated | uncommitted |
+| [DEC-065](decisions/DEC-065-promoted-knowledge-is-part-of-reuse-identity-and-stays-in-the-root.yaml) | Promoted knowledge is part of evidence reuse identity and stays inside the project root | accepted | implemented | not_validated | uncommitted |
+| [DEC-066](decisions/DEC-066-facts-validate-every-anchor-rank-by-weighted-overlap-and-keep-what-is-used.yaml) | Facts validate every anchor, rank by weighted overlap, keep what is used, and are measured | accepted | implemented | not_validated | uncommitted |
+| [DEC-067](decisions/DEC-067-the-execute-chain-is-runtime-state-and-hooks-gate-what-is-deterministic.yaml) | The plan-execute-verify chain is runtime state, and hooks gate what is deterministic | accepted | implemented | not_validated | uncommitted |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

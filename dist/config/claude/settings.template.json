@@ -29,6 +29,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{HOOK_BASH}} \"{{HOME}}/.claude/hooks/status-guard.sh\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -59,6 +68,16 @@
             "type": "command",
             "command": "{{HOOK_BASH}} \"{{HOME}}/.claude/hooks/intent-gate-check.sh\"",
             "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{HOOK_BASH}} \"{{HOME}}/.claude/hooks/execution-gate.sh\"",
+            "timeout": 10
           }
         ]
       }

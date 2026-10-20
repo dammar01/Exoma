@@ -8,7 +8,7 @@ four and agreeing with yourself in every one.
 A bundle entry is deliberately shallow: where the provider keeps its own config, which
 files ship there, and which single file (if any) belongs at a project root rather than
 in the user's home. Anything richer than that is provider policy, not packaging, and
-lives with the adapter — `core/opencode_policy.py` is the example: enforcing OpenCode's
+lives with the adapter — `core/policy/opencode_policy.py` is the example: enforcing OpenCode's
 permission rules is not something a table of paths can express, and a second provider
 will need its own equivalent rather than a shared abstraction over both. `install_module`
 is how the installer reaches that equivalent: a name to dispatch through, not an attempt
@@ -16,7 +16,7 @@ to describe what it does.
 
 Adding a provider means: a `dist/config/<name>/` folder, an entry here, an install module
 answering `load_config`/`merge_policy`/`install_project_config`, and an adapter registered
-in `adapters/registry.py`. No build-tool edits, no installer edits.
+in `adapters/contract/registry.py`. No build-tool edits, no installer edits.
 
 `models` and `effort_arg` are the same idea applied to selection rather than packaging:
 what the provider will accept, declared once, so the picker and the adapter cannot

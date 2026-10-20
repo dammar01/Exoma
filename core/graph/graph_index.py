@@ -9,6 +9,7 @@ how a shortlist starts pointing at files that were never really related.
 """
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -23,6 +24,13 @@ MAX_COMMUNITIES = 4
 
 # Skipped when dating the sources: vendored trees can hold thousands of .py files that
 # say nothing about whether THIS project's graph is out of date.
+# The extensions dist/config/claude/hooks/graph-refresh.py scans before it refreshes.
+# Restated rather than imported — the hook runs from ~/.claude without this package —
+# and kept equal by tests/checks/graph_refresh.py, which parses both.
+SOURCE_EXTENSIONS = (
+    ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".php", ".go", ".rs", ".java", ".rb",
+)
 _SKIP_DIRS = {
     "__pycache__", ".git", GRAPH_DIRNAME, "storage", ".workflow",
     "node_modules", "venv", ".venv", "site-packages", "dist", "build", ".tox",
@@ -186,24 +194,32 @@ def _write_stale_cache(
 
 
 def _source_state(project_root) -> tuple[str, int] | None:
-    """Fingerprint Python source stat data and return the newest source mtime."""
+    """Fingerprint source stat data and return the newest source mtime.
+
+    Source means SOURCE_EXTENSIONS, the set the graph-refresh hook also scans. This used
+    to read `*.py` only, so in a PHP or TypeScript project the hook would refresh a graph
+    the reader had never called stale, and a reader in such a project reported a graph
+    current that was a day behind every file it described. Walked with skip directories
+    pruned before descent, the way the hook walks, rather than filtered after it.
+    """
     root = Path(project_root)
     rows: list[str] = []
     newest_ns = 0
     try:
-        for candidate in root.rglob("*.py"):
-            try:
-                relative = candidate.relative_to(root)
-            except ValueError:
-                continue
-            if set(relative.parts) & _SKIP_DIRS:
-                continue
-            try:
-                stat = candidate.stat()
-            except OSError:
-                continue
-            newest_ns = max(newest_ns, stat.st_mtime_ns)
-            rows.append(f"{relative.as_posix()}\0{stat.st_mtime_ns}\0{stat.st_size}")
+        for directory, dirnames, filenames in os.walk(root):
+            # Case-insensitive, as the hook prunes: Vendor/ is vendor/ on Windows and macOS.
+            dirnames[:] = [d for d in dirnames if d.lower() not in _SKIP_DIRS]
+            for name in filenames:
+                if not name.lower().endswith(SOURCE_EXTENSIONS):
+                    continue
+                candidate = Path(directory) / name
+                try:
+                    relative = candidate.relative_to(root)
+                    stat = candidate.stat()
+                except (OSError, ValueError):
+                    continue
+                newest_ns = max(newest_ns, stat.st_mtime_ns)
+                rows.append(f"{relative.as_posix()}\0{stat.st_mtime_ns}\0{stat.st_size}")
     except OSError:
         return None
     if not rows:

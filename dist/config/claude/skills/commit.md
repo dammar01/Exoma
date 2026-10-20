@@ -26,3 +26,5 @@ description: Stage + commit message (Conventional Commits). Local.
    "Jalankan? (yes/no)" → yes: `git commit`. no → `git reset -q -- <path>` hanya untuk
    path yang di-stage langkah 1 (jalan juga di repo tanpa commit), STOP.
    JANGAN commit tanpa yes.
+   Hook `execution-gate` memblok `git commit` di giliran yang user tak minta commit
+   (/.commit atau kalimat yang meminta commit; "yes" atas pesan yang kamu usulkan ikut sah).

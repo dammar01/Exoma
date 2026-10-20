@@ -65,6 +65,7 @@ from core.provider.result_prep import (
     _sanitize_result,
     _scope_incomplete,
     _without_raw_args,
+    scope_warnings,
 )
 from core.workspace.workspace_paths import (
     CONFIG_VERSION,
@@ -103,6 +104,26 @@ _FANOUT_WARNINGS = {
         "is unknown; treat the result as a sequential read"
     ),
 }
+
+
+def _anchor_counts(entry: dict) -> tuple[int, int, bool]:
+    """(certified, cited, scanned_all) for one evidence row.
+
+    Rows indexed before `anchor_scan` existed only know their stored prefix; for them the
+    prefix is the whole answer unless it is exactly as long as the old cap, which is the one
+    length that cannot tell "every citation" from "stopped here".
+    """
+    scan = entry.get("anchor_scan")
+    if isinstance(scan, dict) and isinstance(scan.get("cited"), int):
+        return int(scan.get("certified") or 0), scan["cited"], bool(scan.get("scanned_all"))
+    stored = entry.get("anchors") or []
+    certified = sum(1 for a in stored if a.get("certified") is not False)
+    complete = entry.get("anchors_complete") is True
+    return (
+        certified,
+        len(stored),
+        complete or len(stored) < evidence_store.MAX_ANCHORS_PER_ARTIFACT,
+    )
 
 
 
@@ -272,7 +293,7 @@ class Executor:
     def _adapter_for(self, project_root):
         """The adapter THIS project selects, resolved late enough to know the project.
 
-        Selection order matches `adapters/registry.py`: an injected adapter or a pinned
+        Selection order matches `adapters/contract/registry.py`: an injected adapter or a pinned
         provider, then second_agent.json's `provider`, then the built-in default. A
         `provider` that was merely defaulted into the config does not count as a choice —
         `provider_explicit` is what separates "the file said codex" from "the file said
@@ -711,6 +732,7 @@ class Executor:
                     # The browser's own time and the runtime's tests belong to the command, once.
                     row_meta.pop("e2e", None)
                     row_meta.pop("runtime_tests", None)
+                    row_meta.pop("facts", None)
                     measured_row = {**measured, "digest": None, "meta": row_meta}
                 record = usage_from_result(
                     measured_row,
@@ -835,18 +857,18 @@ class Executor:
             if not content or not content.strip():
                 self._reuse_outcome = "unreadable"
                 return None
+            certified_count, cited_count, scanned_all = _anchor_counts(hit)
             result = {
                 "ok": True,
                 "content": content,
                 "evidence_ref": {
                     "artifact_path": ap,
-                    "anchors": len(hit.get("anchors") or []),
+                    "anchors": cited_count,
                     # Always equal to `anchors` on this path — reuse requires every anchor
                     # to have been certified — but reported anyway so a consumer can read
                     # one field shape whether the evidence is fresh or recalled.
-                    "certified_anchors": sum(
-                        1 for a in (hit.get("anchors") or []) if a.get("certified") is not False
-                    ),
+                    "certified_anchors": certified_count,
+                    "scanned_all": scanned_all,
                     "reused": True,
                 },
                 "meta": {
@@ -862,13 +884,13 @@ class Executor:
                 # the artifact and is read again by the next reuse, and annotating it in
                 # place would leave this run's numbers in the record.
                 result["digest"] = dict(hit["digest"]) if isinstance(hit["digest"], dict) else hit["digest"]
-                reused_anchors = hit.get("anchors") or []
-                if isinstance(result["digest"], dict) and reused_anchors:
+                if isinstance(result["digest"], dict) and cited_count:
                     # The same shape as a fresh result's, so one reader handles both. On
                     # this path the two numbers are always equal — reuse requires it.
                     result["digest"]["anchors"] = {
-                        "certified": sum(1 for a in reused_anchors if a.get("certified") is not False),
-                        "total": len(reused_anchors),
+                        "certified": certified_count,
+                        "total": cited_count,
+                        "scanned_all": scanned_all,
                     }
             return result
         except Exception:
@@ -1651,6 +1673,9 @@ class Executor:
 
         known_facts = None
         known_knowledge = None
+        # Fact lifecycle counts for this command, read and ingest side. One dict so the
+        # usage row can say how many facts were offered, served, refused and learned.
+        fact_stats: dict = {}
         graph_leads = None
         fanout = False
         if graph_leads_enabled(project_root):
@@ -1660,7 +1685,9 @@ class Executor:
         else:
             self._graph_status = "disabled"
         if route["role"] in ("exploration", "reasoning"):
-            facts = fact_store.load_relevant(project_root, task)
+            facts = fact_store.load_relevant(
+                project_root, task, role=route["role"], stats=fact_stats
+            )
             known_facts = [
                 f"{f['claim']} [{f['file']}:{f['line']}]"
                 for f in facts
@@ -1686,7 +1713,7 @@ class Executor:
                 except Exception:
                     known_knowledge = None
         evidence_context = _evidence_context(
-            route, fanout, graph_leads, known_facts
+            route, fanout, graph_leads, known_facts, known_knowledge
         )
 
         # Sidecars keep dynamic evidence off the Windows-limited command line; the
@@ -1855,7 +1882,10 @@ class Executor:
                     # reasoning about a codebase nobody has described yet.
                     caps.append(("medium", "working tree is wider than the declared scope"))
             if _scope_incomplete(result.get("content") or ""):
-                caps.append(("medium", "scope_not_covered is non-empty"))
+                caps.append(("medium", "scope_not_covered lists in-scope ground the run could not reach"))
+            gaps = scope_warnings(result.get("content") or "")
+            if gaps:
+                result.setdefault("meta", {})["scope_warnings"] = gaps
             if caps and digest is not None:
                 result["digest"] = cap_confidence(digest, caps)
 
@@ -1863,7 +1893,29 @@ class Executor:
             # become a second source of truth.
             claims = readable_claims(result.get("content") or "")
             if claims:
+                try:
+                    claims = evidence_store.certify_claim_refs(project_root, claims)
+                except Exception:
+                    pass  # status is an annotation; its absence must not cost the claims
                 result.setdefault("meta", {})["claims"] = claims
+                unverified = [
+                    claim["text"]
+                    for claim in claims
+                    if "unverified" in (claim.get("ref_status") or [])
+                ]
+                if unverified:
+                    # Warning, not a cap: the anchor ratio already prices these refs in.
+                    # This names the claims, so the reader knows which ones to distrust.
+                    result["meta"].setdefault("contract_warnings", []).append(
+                        {
+                            "kind": "claim_ref_unverified",
+                            "detail": (
+                                f"{len(unverified)} grounded claim(s) cite a file:line "
+                                "this project cannot open"
+                            ),
+                            "samples": unverified[:3],
+                        }
+                    )
             questions = parse_questions(result.get("content") or "")
             if questions["open_questions"] or questions["resolvable_uncertainties"]:
                 result.setdefault("meta", {})["questions"] = questions
@@ -1907,16 +1959,24 @@ class Executor:
         if route["role"] in ("exploration", "reasoning"):
             # Fact ingestion is best-effort, but its failure remains visible.
             try:
+                ingest_stats: dict = {}
                 added = fact_store.ingest(
-                    project_root, result.get("content") or "", session_id
+                    project_root, result.get("content") or "", session_id, stats=ingest_stats
                 )
                 result.setdefault("meta", {})["facts_ingested"] = added
+                fact_stats.update(
+                    ingested=added,
+                    ingest_rejected_anchor=ingest_stats.get("rejected_anchor", 0),
+                    ingest_rejected_length=ingest_stats.get("rejected_length", 0),
+                )
             except Exception as exc:
                 result.setdefault("meta", {})["fact_ingest_error"] = {
                     "error_type": "fact_ingest_failed",
                     "error": f"{type(exc).__name__}: {exc}",
                     "next_action": "Report this: the fact store rejected the run's output; facts are not being learned.",
                 }
+            if fact_stats:
+                result.setdefault("meta", {})["facts"] = dict(fact_stats)
 
             # Index the immutable per-run copy; response.last.md is mutable and cannot
             # identify which delegated response an evidence row certifies.
@@ -1938,27 +1998,31 @@ class Executor:
                     result.get("content") or "",
                     evidence_context,
                 )
-                recorded_anchors = entry.get("anchors") or []
-                certified_count = sum(
-                    1 for a in recorded_anchors if a.get("certified") is not False
-                )
+                certified_count, cited_count, scanned_all = _anchor_counts(entry)
                 result["evidence_ref"] = {
                     "artifact_path": str(artifact_path),
-                    "anchors": len(recorded_anchors),
+                    "anchors": cited_count,
                     "certified_anchors": certified_count,
+                    "scanned_all": scanned_all,
                     "reused": False,
                 }
-                # The same two numbers, in the block the reader is told to read first.
-                if result.get("digest") and recorded_anchors:
+                # The same numbers, in the block the reader is told to read first.
+                # `scanned_all` travels with them: without it `40/40` read as "every
+                # citation checked" when it meant "the first forty checked".
+                if result.get("digest") and cited_count:
                     result["digest"]["anchors"] = {
                         "certified": certified_count,
-                        "total": len(recorded_anchors),
+                        "total": cited_count,
+                        "scanned_all": scanned_all,
                     }
                 # The ladder lives in `contract.anchor_cap`, beside the cap it feeds.
-                if result.get("digest") and recorded_anchors:
-                    cap = anchor_cap(certified_count, len(recorded_anchors))
+                if result.get("digest") and cited_count:
+                    cap = anchor_cap(certified_count, cited_count, scanned_all)
                     if cap:
                         result["digest"] = cap_confidence(result["digest"], [cap])
+                uncertified = (entry.get("anchor_scan") or {}).get("uncertified") or []
+                if uncertified:
+                    result.setdefault("meta", {})["uncertified_anchors"] = uncertified
             except Exception as exc:
                 result.setdefault("meta", {})["evidence_store_error"] = (
                     f"{type(exc).__name__}: {exc}"

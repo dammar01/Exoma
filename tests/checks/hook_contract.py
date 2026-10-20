@@ -29,7 +29,7 @@ K5 = REPO / "tests" / "fixtures" / "hooks" / "gate_k5.json"
 # and the statusline carry none, so the shortest one stands in for them.
 _TIMEOUT_S = {
     "graph-refresh": 60, "task-events": 10, "intent-gate-set": 15, "intent-gate-check": 15,
-    "session-bind": 10, "workflow-statusline": 10,
+    "session-bind": 10, "workflow-statusline": 10, "execution-gate": 10, "status-guard": 10,
 }
 
 
@@ -104,6 +104,26 @@ def _case_gate_set(ws: _Workspace, run) -> None:
     assert_true(code == 0, f"intent-gate-set never blocks a prompt, got {code}")
     _silent(ws, out, "intent-gate-set")
 
+    token, commit = ws.runtime / "execute.token", ws.runtime / "commit.marker"
+    for prompt, wants_token in (
+        ("kerjakan", False),
+        ("/.execute", False),
+        ("/.execute -y", True),
+        ("<command-message>.execute</command-message>\n<command-name>/.execute</command-name>\n<command-args>-y</command-args>", True),
+    ):
+        token.unlink(missing_ok=True)
+        run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": prompt})
+        assert_true(token.is_file() == wants_token, f"only the user's `/.execute -y` writes execute.token: {prompt!r}")
+    run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": "tolong commit perubahan ini"})
+    assert_true(commit.is_file(), "a prompt asking to commit writes commit.marker")
+    run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": "yes"})
+    assert_true(commit.is_file(), "the yes to the proposed message keeps the approval")
+    run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": "jangan commit dulu, cek lagi"})
+    assert_true(not commit.is_file(), "a turn that does not ask to commit (or says not to) clears it")
+    token.unlink(missing_ok=True)
+    run({"source": "system", "session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": "/.execute -y"})
+    assert_true(not token.is_file(), "a turn the user did not write approves nothing")
+
 
 def _case_gate_check(ws: _Workspace, run) -> None:
     read = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "PreToolUse", "tool_name": "Grep", "tool_input": {"pattern": "x"}}
@@ -142,7 +162,112 @@ def _case_graph_refresh(ws: _Workspace, run) -> None:
     assert_true(not (ws.project / "graphify-out" / ".refresh.lock").exists(), "graph-refresh takes no lock for a turn that changed no code")
 
 
+def _case_execution_gate(ws: _Workspace, run) -> None:
+    def write(path: str) -> int:
+        code, _, _ = run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "PreToolUse",
+                          "tool_name": "Write", "tool_input": {"file_path": path, "content": "x"}})
+        return code
+
+    # The workspace itself sits in the system temp dir, which the gate allows; point the
+    # hook's temp dir elsewhere so a sibling directory reads as another project.
+    scratch = ws.base / "tmp"
+    scratch.mkdir()
+    ws.env.update(TEMP=str(scratch), TMP=str(scratch), TMPDIR=str(scratch))
+    inside, other = str(ws.project / "core" / "a.py"), str(ws.base / "sibling" / "b.py")
+    assert_true(write(inside) == 0, "with no active execution a write inside the root passes")
+    assert_true(write(other) == 2 and "outside the session's project root" in ws.last_stderr,
+                f"a write into another project is blocked: {ws.last_stderr[:200]!r}")
+    assert_true(write(str(ws.home / ".claude" / "memory" / "m.md")) == 0, "~/.claude stays writable")
+    (ws.base / "sibling").mkdir()
+    link = ws.project / "linked"
+    try:
+        os.symlink(ws.base / "sibling", link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        # No symlink privilege (Windows without developer mode): a junction needs none.
+        made = os.name == "nt" and subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(ws.base / "sibling")],
+            capture_output=True, **osutil.hidden_run_kwargs(),
+        ).returncode == 0
+        link = link if made else None
+    if link is not None:
+        assert_true(write(str(link / "b.py")) == 2 and "outside the session's project root" in ws.last_stderr,
+                    f"a link inside the root does not carry a write out of it: {ws.last_stderr[:200]!r}")
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+
+    execution = ws.runtime / "execution.json"
+    execution.write_text(json.dumps({"status": "active", "plan_id": "p1", "scope": ["core/a.py", "tests/"]}), encoding="utf-8")
+    assert_true(write(inside) == 0 and write(str(ws.project / "tests" / "t.py")) == 0,
+                "an active execution allows its scope: exact files and directory prefixes")
+    assert_true(write(str(ws.project / "docs" / "x.md")) == 2 and "outside the active execution's scope" in ws.last_stderr,
+                f"and blocks everything else in the root: {ws.last_stderr[:200]!r}")
+    assert_true(write(str(ws.project / ".workflow" / "data" / "x.json")) == 0, ".workflow/ is always writable")
+    alias = ws.project / "alias"
+    (ws.project / "tests").mkdir(exist_ok=True)
+    try:
+        os.symlink(ws.project / "tests", alias, target_is_directory=True)
+        aliased = True
+    except (OSError, NotImplementedError):
+        aliased = False
+    if aliased:
+        execution.write_text(json.dumps({"status": "active", "plan_id": "p1", "scope": ["alias/"]}), encoding="utf-8")
+        assert_true(write(str(alias / "t.py")) == 0,
+                    "a scope named through an in-root link matches the path the plan wrote")
+        alias.unlink()
+        execution.write_text(json.dumps({"status": "active", "plan_id": "p1", "scope": ["core/a.py", "tests/"]}), encoding="utf-8")
+    execution.write_text(json.dumps({"status": "implemented", "plan_id": "p1", "scope": ["core/a.py"]}), encoding="utf-8")
+    assert_true(write(str(ws.project / "docs" / "x.md")) == 0, "a closed execution no longer narrows writes")
+
+    commit = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "PreToolUse",
+              "tool_name": "Bash", "tool_input": {"command": "git -C . commit -m 'x'"}}
+    code, _, _ = run(commit)
+    assert_true(code == 2 and "git commit" in ws.last_stderr, f"an unasked commit is blocked, got {code}")
+    for shaped in ('git -C "repo with spaces" commit -m x', "git --git-dir='a b/.git' commit", "git -c user.name=x commit"):
+        code, _, _ = run({**commit, "tool_input": {"command": shaped}})
+        assert_true(code == 2, f"a quoted or optioned commit is still a commit: {shaped!r} -> {code}")
+    import datetime as _dt
+    stale = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=2)).isoformat()
+    (ws.runtime / "commit.marker").write_text(json.dumps({"set_at": stale}), encoding="utf-8")
+    code, _, _ = run(commit)
+    assert_true(code == 2, f"a commit marker from hours ago approves nothing, got {code}")
+    fresh = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    (ws.runtime / "commit.marker").write_text(json.dumps({"set_at": fresh}), encoding="utf-8")
+    code, out, _ = run(commit)
+    assert_true(code == 0, f"a commit the user asked for passes, got {code}")
+    _silent(ws, out, "execution-gate")
+    code, _, _ = run({**commit, "tool_input": {"command": "git status"}})
+    assert_true(code == 0, "other git commands are not the gate's business")
+
+    config = ws.project / ".workflow" / "config.json"
+    config.write_text(json.dumps({"policies": {"enforcement": "warn"}}), encoding="utf-8")
+    code, out, _ = run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "PreToolUse",
+                        "tool_name": "Write", "tool_input": {"file_path": other}})
+    assert_true(code == 0 and "EXECUTION GATE: warn" in out, f"warn mode reports and never blocks: {code} {out[:120]!r}")
+
+
+def _case_status_guard(ws: _Workspace, run) -> None:
+    stop = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "Stop"}
+    code, out, _ = run({**stop, "last_assistant_message": "Semua selesai."})
+    assert_true(code == 0, f"status-guard never blocks, got {code}")
+    _silent(ws, out, "status-guard")  # no execution recorded: nothing to guard
+    (ws.runtime / "execution.json").write_text(
+        json.dumps({"status": "implemented", "plan_id": "p1", "verification": "not_run"}), encoding="utf-8"
+    )
+    code, out, _ = run({**stop, "last_assistant_message": "Blok 3 selesai, semua berjalan."})
+    assert_true(code == 0 and "STATUS GUARD" in out, f"a done-claim before verify is reported: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": "Status: implemented, belum diverifikasi. Belum selesai diverifikasi."})
+    assert_true(code == 0 and not out.strip(), f"the honest status line is not a claim: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": "verification: not_run, tapi semuanya sudah selesai."})
+    assert_true(code == 0 and "STATUS GUARD" in out, f"naming the status does not excuse a claim on the same line: {out[:200]!r}")
+    (ws.runtime / "execution.json").write_text(
+        json.dumps({"status": "implemented", "plan_id": "p1", "verification": "pass"}), encoding="utf-8"
+    )
+    code, out, _ = run({**stop, "last_assistant_message": "Done."})
+    assert_true(code == 0 and not out.strip(), "after a passing verify, done is allowed")
+
+
 _CASES = {
+    "execution-gate": _case_execution_gate,
+    "status-guard": _case_status_guard,
     "session-bind": _case_session_bind,
     "intent-gate-set": _case_gate_set,
     "intent-gate-check": _case_gate_check,

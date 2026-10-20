@@ -18,6 +18,7 @@ them is under construction throws away the knowledge the session most likely nee
 import re
 from pathlib import Path
 
+from core.evidence.fact_store import MIN_RELEVANCE_SCORE, relevance
 from core.knowledge import store
 from utils import git
 
@@ -30,32 +31,27 @@ NEEDS_BRANCH_VERIFICATION = "needs_branch_verification"
 # breadth at the cost of the agent treating it as the answer.
 DEFAULT_LIMIT = 3
 
-_WORD = re.compile(r"[a-z0-9_]+")
 
+def _score(doc: dict, task: str) -> tuple[float, int]:
+    """(weighted score, identifier hits) of one document for one task.
 
-def _words(text: str) -> set[str]:
-    return set(_WORD.findall((text or "").lower()))
-
-
-def _score(doc: dict, task_words: set[str]) -> int:
-    """Overlap between the task's words and the document's own vocabulary.
-
-    Deliberately crude, and matched to core/evidence/fact_store.py's ranking rather than
-    improved past it: two selectors with different ideas of relevance would make the
-    facts and the knowledge in one prompt disagree about what the task is.
+    The fact store's `relevance`, applied to the document's own vocabulary with its
+    anchored paths as the path text — matched rather than improved past it: two
+    selectors with different ideas of relevance would make the facts and the knowledge
+    in one prompt disagree about what the task is.
     """
-    haystack = " ".join(
+    text = " ".join(
         [
-            str(doc.get("id", "")),
+            str(doc.get("id", "")).replace("-", " "),
             str(doc.get("title", "")),
             str(doc.get("summary", "")),
-            " ".join(str(p) for p in (doc.get("anchors", {}) or {}).get("paths", []) or []),
             " ".join(
                 str(c.get("statement", "")) for c in (doc.get("claims") or []) if isinstance(c, dict)
             ),
         ]
     )
-    return len(task_words & _words(haystack))
+    paths = " ".join(str(p) for p in (doc.get("anchors", {}) or {}).get("paths", []) or [])
+    return relevance(task, text, paths)
 
 
 def applicability(
@@ -131,9 +127,7 @@ def load_relevant(
     being used.
     """
     branch = git.current_branch(project_root)
-    task_words = _words(task)
-
-    scored: list[tuple[int, dict]] = []
+    scored: list[tuple[tuple, dict]] = []
     for doc_id in store.list_docs(project_root):
         loaded = store.load(project_root, doc_id)
         doc = loaded.get("doc")
@@ -144,8 +138,8 @@ def load_relevant(
         )
         if verdict["status"] == EXCLUDED:
             continue
-        score = _score(doc, task_words)
-        if score <= 0:
+        score, id_hits = _score(doc, task)
+        if score < MIN_RELEVANCE_SCORE:
             continue
         excluded = set(verdict["excluded_claims"])
         claims = [
@@ -166,7 +160,7 @@ def load_relevant(
             continue
         scored.append(
             (
-                score,
+                (-score, -id_hits, str(doc.get("id"))),
                 {
                     "id": doc.get("id"),
                     "title": doc.get("title"),
@@ -179,7 +173,7 @@ def load_relevant(
             )
         )
 
-    scored.sort(key=lambda pair: (-pair[0], str(pair[1]["id"])))
+    scored.sort(key=lambda pair: pair[0])
     return [entry for _score_value, entry in scored[:limit]]
 
 

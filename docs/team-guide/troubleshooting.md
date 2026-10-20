@@ -22,6 +22,17 @@ usable evidence (an error, empty output, or a refusal instead of findings). This
 deliberate: it will not quietly fall back to reading the code itself. Answer `yes` to
 continue locally without the secondary agent, or `no` to stop and fix the provider first.
 
+## "EXECUTION GATE" / an edit or commit was blocked
+
+Since 3.9.0 the approval rules are checked by hooks, not only asked of the agent. A block
+means one of three things: the agent tried to edit a file its approved plan does not list,
+to write into another project, or to commit in a turn where you did not ask for a commit.
+The message says which. The usual fix is a revised plan and a new `/.execute -y`, or asking
+for the commit yourself. To relax it for one project, see `policies.enforcement` and
+`policies.write_allowed_outside_root` in the
+[configuration reference](../reference.md#workflowconfigjson). A "STATUS GUARD" note is a
+warning, not a block: the agent said "done" before anything was verified.
+
 ## It is slow
 
 It is slow because the secondary agent reads the code. That is the work you are delegating,

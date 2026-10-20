@@ -1,6 +1,9 @@
 # intent-gate-set.py - UserPromptSubmit hook (Pre-flight gate: SET side).
 # Classifies the raw prompt against the DELEGATED NL-map (intent-map.json). Delegated ->
 # write .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker ; else delete stale.
+# Also records the user's own approvals beside it: execute.token for `/.execute -y`
+# (consumed by `main.py --command execute-begin`) and commit.marker for a turn that asks
+# to commit (read by execution-gate.py).
 # MAIN_SESSION_ID resolved from $HOME/.claude/session_registry.json. Never blocks (exit 0).
 import os, sys, json, re, datetime
 
@@ -57,6 +60,37 @@ def not_user_prompt(payload, prompt):
     return text.startswith(_HOST_OPENINGS)
 
 
+# `/.execute -y` typed as text, or as the expanded slash command Claude Code submits.
+_EXECUTE_YES = re.compile(
+    r"(?:^|\s)/\.execute\s+-y\b|<command-name>/?\.execute</command-name>\s*<command-args>\s*-y\b",
+    re.IGNORECASE,
+)
+_COMMIT = re.compile(r"(?:^|\s)/\.commit\b|\bcommit\w*\b", re.IGNORECASE)
+# "jangan commit", "don't commit", "tanpa commit": naming the act is not asking for it.
+_COMMIT_NEGATED = re.compile(
+    r"\b(?:jangan|tanpa|belum|tidak|bukan|don'?t|do\s+not|no|never|without)\b[^.\n]{0,20}\bcommit",
+    re.IGNORECASE,
+)
+
+
+# The skill asks "Jalankan? (yes/no)" after proposing the message, so the commit itself
+# happens a turn after the request. A bare yes keeps the approval that turn already holds;
+# it never creates one.
+_AFFIRM = re.compile(
+    r"^\s*(?:yes|ya|y|iya|ok|oke|okay|gas|lanjut|boleh|setuju|jalankan|commit)\b[\s.!]*$",
+    re.IGNORECASE,
+)
+
+
+def execute_approved(prompt):
+    return bool(_EXECUTE_YES.search(prompt or ""))
+
+
+def commit_requested(prompt):
+    text = prompt or ""
+    return bool(_COMMIT.search(text)) and not _COMMIT_NEGATED.search(text)
+
+
 try:
     raw = os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
@@ -91,6 +125,34 @@ try:
 
     runtime_dir = os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
     marker = os.path.join(runtime_dir, "delegated.marker")
+
+    # The user's own approvals, as files the runtime and execution-gate can check
+    # (core/runtime/execution.py). Written before the NL map is read: approval does not
+    # depend on intent classification, and a missing map must not drop a `-y`.
+    approvals = (
+        ("execute.token", execute_approved(prompt)),
+        ("commit.marker", commit_requested(prompt)),
+    )
+    for name, given in approvals:
+        path = os.path.join(runtime_dir, name)
+        if name == "commit.marker" and not given and os.path.isfile(path) and _AFFIRM.match(prompt):
+            continue  # the yes to a commit this session just proposed
+        if given:
+            os.makedirs(runtime_dir, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "set_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "claude_sid": claude_sid,
+                    "prompt_id": payload.get("prompt_id"),
+                }))
+        elif name == "commit.marker" and os.path.isfile(path):
+            # A commit is approved for the turn the user asked for it, not for the rest of
+            # the session. The execute token is consumed by execute-begin instead, and
+            # expires on its own.
+            try:
+                os.remove(path)
+            except Exception:
+                pass
 
     map_path = os.path.join(os.environ.get("HOOK_DIR", ""), "intent-map.json")
     if not os.path.isfile(map_path):

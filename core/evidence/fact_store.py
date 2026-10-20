@@ -25,6 +25,7 @@ from utils.owned_lock import OwnedFileLock
 
 FACTS_FILENAME = "facts.jsonl"
 LOCK_FILENAME = "facts.jsonl.lock"
+USAGE_FILENAME = "facts-usage.json"
 # How long a writer waits for a live holder, and how old an ownerless lock file must be
 # before it counts as a crashed writer's. ingest is sub-second, so 30s is generous.
 LOCK_TTL_SECONDS = 30
@@ -33,7 +34,7 @@ LOCK_TTL_SECONDS = 30
 # the effective value for every project that never set the key, and a separate literal
 # here (it was 3 while the documented default said 5) silently promoted claims early.
 RECURRENCE_THRESHOLD = default_policies()["fact_recurrence_threshold"]
-MAX_FACTS = 500
+MAX_FACTS = default_policies()["fact_max_facts"]
 
 # Provenance of a stored fact. Only `discovered` (a run read code and grounded the claim)
 # may raise cross-session recurrence; a fact that merely got injected and echoed back must
@@ -41,7 +42,22 @@ MAX_FACTS = 500
 ORIGIN_DISCOVERED = "discovered"
 ORIGIN_MEMORY_INJECTED = "memory_injected"
 ORIGIN_USER_PROVIDED = "user_provided"
-RELEVANT_LIMIT = 3
+RELEVANT_LIMIT = default_policies()["fact_relevant_limit"]
+# Per-role defaults for `fact_relevant_limits`. Reasoning (plan/analyze) gets one more
+# slot than exploration because it weighs several subsystems at once; neither number is
+# measured yet — the fact lifecycle telemetry exists so they can be.
+RELEVANT_LIMITS = default_policies()["fact_relevant_limits"]
+# Weighted overlap a fact must reach to be served. 2.0 = one identifier, or two ordinary
+# words, or four path-only tokens. The old floor was ONE shared token of any kind, so a
+# fact matched every English task through `the` and every task through `core`.
+MIN_RELEVANCE_SCORE = default_policies()["fact_min_relevance"]
+IDENTIFIER_WEIGHT = 2.0
+WORD_WEIGHT = 1.0
+PATH_WEIGHT = 0.5
+# A claim long enough to be a paragraph is a summary, not a fact, and it is injected
+# into every matching prompt. Refused at ingest rather than truncated: a cut claim can
+# state the opposite of the whole one.
+MAX_CLAIM_CHARS = default_policies()["fact_max_claim_chars"]
 # Two claims anchored to the SAME file are treated as one when their word sets
 # overlap this much — proxies rephrase the same fact every run, and the plain
 # normalized-string key never catches that.
@@ -54,10 +70,6 @@ MIN_WORDS_FOR_SIMILARITY = 6
 # (which merely trims what gets injected). A collapse that deletes a stored record
 # always demands an identical anchor_hash — losing a real fact is unrecoverable.
 LINE_PROXIMITY = 3
-# A fact with ZERO task-word overlap is noise: injecting it wastes prompt budget and can
-# mislead the second agent with unrelated context. Read-time retrieval requires at least
-# this much overlap — below it the fact is dropped, never served as "relevant".
-MIN_RELEVANCE_OVERLAP = 1
 
 # The optional single-letter prefix is a Windows drive. Without it the path group, which
 # cannot contain `:`, stops at the drive colon: `E:\work\router.py:16` matched only
@@ -110,6 +122,104 @@ def _policy_int(project_root: Path, key: str, fallback: int) -> int:
     value = _policies(project_root).get(key, fallback)
     try:
         value = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return value if value > 0 else fallback
+
+
+# Function words of the two languages tasks arrive in. Matching on them is matching on
+# grammar: an English task shared `the` with nearly every stored claim, and an Indonesian
+# task shared `yang` with none of them, so the same intent was over-served in one
+# language and starved in the other. Only words of three or more letters are listed —
+# the tokenizer never produces shorter ones.
+STOPWORDS = frozenset(
+    """
+    the and for are was were with that this these those from into onto over under than
+    then them they their there here what when where which while who whom whose why how
+    has have had not but its can could should would will shall may might must does did
+    done any all each every some such only also very just more most less least other
+    about after before again against between both during through until upon via per
+    yang dan atau untuk dari dengan pada dalam ini itu tidak bukan ada akan sudah belum
+    juga saja oleh karena agar supaya jika kalau maka bahwa apa apakah bagaimana gimana
+    mana siapa kenapa mengapa lalu kemudian serta sebagai seperti para nya kan dong
+    lakukan buat bikin coba tolong mohon harus bisa dapat lagi masih sangat lebih
+    """.split()
+)
+# Path segments so common that sharing one says nothing about relevance.
+GENERIC_PATH_TOKENS = frozenset(
+    """
+    core src lib app tests test checks dist config docs utils tools main index init
+    module modules common shared base py md json yaml yml txt js ts
+    """.split()
+)
+_TOKEN = re.compile(r"[a-z0-9_]{3,}")
+# An identifier is anything the author would not have written as plain prose: a
+# snake_case or dotted name, a camelCase word, or something in backticks.
+_IDENTIFIER = re.compile(r"`([^`]+)`|\b([A-Za-z]+[A-Z_][A-Za-z0-9_]*|[a-z0-9]+(?:_[a-z0-9]+)+)\b")
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in _TOKEN.findall((text or "").lower()) if t not in STOPWORDS}
+
+
+def _identifier_tokens(text: str) -> set[str]:
+    out: set[str] = set()
+    for m in _IDENTIFIER.finditer(text or ""):
+        span = m.group(1) or m.group(2) or ""
+        out |= {t for t in _TOKEN.findall(span.lower()) if t not in STOPWORDS}
+        if m.group(2) and "_" in m.group(2):
+            out.add(m.group(2).lower())
+    return out
+
+
+def relevance(task: str, claim: str, path: str | None = None) -> tuple[float, int]:
+    """(weighted score, identifier hits) of one claim for one task.
+
+    Weights: an identifier both sides name is worth 2, an ordinary word 1, a token found
+    only in the fact's path 0.5 — the path says where a fact lives, not what it is about.
+    Generic path segments (`core`, `tests`, `py`) and function words score nothing.
+    Shared with core/knowledge/retrieve.py so facts and knowledge in one prompt agree on
+    what the task is.
+    """
+    task_tokens = _tokens(task) - GENERIC_PATH_TOKENS
+    if not task_tokens:
+        return 0.0, 0
+    task_ids = _identifier_tokens(task)
+    claim_tokens = _tokens(claim) - GENERIC_PATH_TOKENS
+    claim_ids = _identifier_tokens(claim)
+    path_tokens = _tokens((path or "").replace("/", " ").replace("\\", " ").replace(".", " "))
+    path_tokens -= GENERIC_PATH_TOKENS
+    path_tokens -= claim_tokens
+
+    shared = task_tokens & claim_tokens
+    id_hits = len(shared & (task_ids | claim_ids))
+    words = len(shared) - id_hits
+    path_hits = len(task_tokens & path_tokens)
+    score = id_hits * IDENTIFIER_WEIGHT + words * WORD_WEIGHT + path_hits * PATH_WEIGHT
+    return score, id_hits
+
+
+def _policy_limit(project_root: Path, role: str | None) -> int:
+    """The fact limit for one role: `fact_relevant_limits[role]`, else the scalar key."""
+    scalar = _policy_int(project_root, "fact_relevant_limit", RELEVANT_LIMIT)
+    per_role = _policies(project_root).get("fact_relevant_limits")
+    if role and isinstance(per_role, dict) and role in per_role:
+        try:
+            value = int(per_role[role])
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+    # An explicit scalar override is the user's number and wins over the role default.
+    if "fact_relevant_limit" in _policies(project_root):
+        return scalar
+    return RELEVANT_LIMITS.get(role or "", scalar)
+
+
+def _policy_float(project_root: Path, key: str, fallback: float) -> float:
+    value = _policies(project_root).get(key, fallback)
+    try:
+        value = float(value)
     except (TypeError, ValueError):
         return fallback
     return value if value > 0 else fallback
@@ -246,6 +356,16 @@ def _parse_block(content: str, header: str) -> list[str]:
 def _extract_fileline(text: str) -> tuple[str | None, int | None]:
     m = _FILELINE.search(text)
     return (m.group(1), int(m.group(2))) if m else (None, None)
+
+
+def _extract_filelines(text: str) -> list[tuple[str, int]]:
+    """Every distinct `file:line` in a claim, in order. The first is the primary anchor."""
+    out: list[tuple[str, int]] = []
+    for m in _FILELINE.finditer(text or ""):
+        key = (m.group(1), int(m.group(2)))
+        if key not in out:
+            out.append(key)
+    return out
 
 
 def _extract_category(text: str) -> str | None:
@@ -389,9 +509,34 @@ def _dedupe(facts: list[dict], *, allow_line_proximity: bool = False) -> list[di
     return kept
 
 
+def _evict(project_root: Path, facts: list[dict], cap: int) -> list[dict]:
+    """Keep `cap` facts, chosen by value; the store's order is preserved among them.
+
+    The store used to keep its newest tail, which evicted a fact served in every session
+    for a month the moment enough new ones arrived. Value here is use first (`hits`), then
+    how recently it was used or, never used, captured, then position. A store whose facts
+    were never served ranks by capture time and position — the old newest-tail rule.
+    """
+    if len(facts) <= cap:
+        return facts
+    usage = _load_usage(project_root)
+
+    def value(item: tuple[int, dict]) -> tuple:
+        index, fact = item
+        entry = usage.get(_fact_key(fact))
+        entry = entry if isinstance(entry, dict) else {}
+        last = entry.get("last_used") or fact.get("captured_at") or ""
+        return (int(entry.get("hits") or 0), str(last), index)
+
+    keep = sorted(enumerate(facts), key=value, reverse=True)[:cap]
+    return [fact for _, fact in sorted(keep, key=lambda item: item[0])]
+
+
 def _save_facts(project_root: Path, facts: list[dict]) -> None:
     path = _facts_path(project_root)
-    facts = _dedupe(facts)[-MAX_FACTS:]
+    facts = _evict(
+        project_root, _dedupe(facts), _policy_int(project_root, "fact_max_facts", MAX_FACTS)
+    )
     atomic_write_text(
         path,
         "\n".join(json.dumps(f, ensure_ascii=False) for f in facts) + ("\n" if facts else ""),
@@ -497,12 +642,24 @@ def _save_claim_cache(path: Path, cache: dict, live: set[str]) -> None:
         pass
 
 
-def ingest(project_root: Path, content: str, session_id: str) -> int:
+def ingest(
+    project_root: Path, content: str, session_id: str, stats: dict | None = None
+) -> int:
     """Promote qualifying claims from one run's output into the fact store. Returns count added.
 
     The whole read-modify-write runs under _FactLock so a concurrent ingest in another
     session cannot overwrite this one's additions.
+
+    Every `file:line` a claim cites must resolve, not only the first. The store used to
+    hash the first anchor and ignore the rest, so a claim citing one real line and one
+    file that does not exist was stored whole — and served later with the false half
+    attached. `stats`, when given, receives the counts the telemetry reports:
+    `rejected_anchor`, `rejected_length`, `duplicates`.
     """
+    counts = stats if stats is not None else {}
+    for key in ("rejected_anchor", "rejected_length", "duplicates"):
+        counts.setdefault(key, 0)
+    max_chars = _policy_int(project_root, "fact_max_claim_chars", MAX_CLAIM_CHARS)
     with _FactLock(project_root):
         loaded = _load_facts(project_root)
         existing = _dedupe(loaded)
@@ -518,29 +675,45 @@ def ingest(project_root: Path, content: str, session_id: str) -> int:
             raw_claim: str, category: str, origin: str = ORIGIN_DISCOVERED
         ) -> None:
             nonlocal added
-            file, line = _extract_fileline(raw_claim)
-            anchor = _anchor_hash(project_root, file, line)
-            if anchor is None:
-                return  # ingest-time verify: anchor gone/invalid → skip stale-at-birth
+            refs = _extract_filelines(raw_claim)
+            if not refs:
+                counts["rejected_anchor"] += 1
+                return
+            hashes = [_anchor_hash(project_root, f, n) for f, n in refs]
+            if any(h is None for h in hashes):
+                # ingest-time verify: any anchor gone/invalid → skip stale-at-birth
+                counts["rejected_anchor"] += 1
+                return
             claim = _CATEGORY.sub("", raw_claim).strip()
+            if len(claim) > max_chars:
+                counts["rejected_length"] += 1
+                return
+            (file, line), anchor = refs[0], hashes[0]
             sig = _signature(claim, category, anchor, line)
             if not sig["words"]:
                 return
             if _is_duplicate(sig, seen.get(file, [])):
+                counts["duplicates"] += 1
                 return
             seen.setdefault(file, []).append(sig)
-            existing.append(
-                {
-                    "claim": claim,
-                    "category": category,
-                    "file": file,
-                    "line": line,
-                    "anchor_hash": anchor,
-                    "origin": origin,
-                    "captured_at": now_iso(),
-                    "session": session_id,
-                }
-            )
+            fact = {
+                "claim": claim,
+                "category": category,
+                "file": file,
+                "line": line,
+                "anchor_hash": anchor,
+                "origin": origin,
+                "captured_at": now_iso(),
+                "session": session_id,
+            }
+            if len(refs) > 1:
+                # The primary anchor stays in file/line/anchor_hash, where every reader
+                # written before this field already looks; the rest ride beside it.
+                fact["anchors"] = [
+                    {"file": f, "line": n, "anchor_hash": h}
+                    for (f, n), h in zip(refs[1:], hashes[1:])
+                ]
+            existing.append(fact)
             added += 1
 
         # Everything already stored is exactly what load_relevant injects as a KNOWN_FACT
@@ -568,37 +741,130 @@ def ingest(project_root: Path, content: str, session_id: str) -> int:
         return added
 
 
+def _fact_key(fact: dict) -> str:
+    """Stable identity of one stored fact for the usage sidecar."""
+    raw = f"{fact.get('file')}|{fact.get('anchor_hash')}|{_normalize(fact.get('claim', ''))}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _usage_path(project_root: Path) -> Path:
+    return _facts_path(project_root).with_name(USAGE_FILENAME)
+
+
+def _load_usage(project_root: Path) -> dict:
+    try:
+        data = json.loads(_usage_path(project_root).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _record_usage(project_root: Path, served: list[dict]) -> None:
+    """Note that these facts were served: `hits` and `last_used`, in a sidecar.
+
+    Not in facts.jsonl. Rewriting the store on every read would put every delegated call
+    behind `_FactLock`, which ingest and prune hold for a whole read-modify-write. The
+    sidecar is written without the lock and best-effort: two calls racing lose one hit,
+    which eviction can afford and a fact cannot.
+    """
+    if not served:
+        return
+    usage = _load_usage(project_root)
+    stamp = now_iso()
+    for fact in served:
+        key = _fact_key(fact)
+        entry = usage.get(key)
+        entry = entry if isinstance(entry, dict) else {}
+        usage[key] = {"hits": int(entry.get("hits") or 0) + 1, "last_used": stamp}
+    try:
+        atomic_write_text(_usage_path(project_root), json.dumps(usage, sort_keys=True))
+    except OSError:
+        pass
+
+
+def _anchors_placeable(project_root: Path, fact: dict, cache: dict) -> dict | None:
+    """The fact with every anchor placed where its text sits today, or None if any is gone.
+
+    The primary anchor is file/line/anchor_hash; any extra ones ride in `anchors`. A fact
+    is only as fresh as its weakest citation, so one unplaceable extra drops the fact.
+    Returns the SAME dict when nothing moved, a copy when something did.
+    """
+    placed = current_anchor_line(
+        project_root, fact.get("file"), fact.get("line"), fact.get("anchor_hash"), cache
+    )
+    if placed is None:
+        return None
+    out = fact if placed == fact.get("line") else {**fact, "line": placed}
+    extras = fact.get("anchors")
+    if isinstance(extras, list) and extras:
+        moved = []
+        for extra in extras:
+            if not isinstance(extra, dict):
+                return None
+            where = current_anchor_line(
+                project_root, extra.get("file"), extra.get("line"), extra.get("anchor_hash"), cache
+            )
+            if where is None:
+                return None
+            moved.append(extra if where == extra.get("line") else {**extra, "line": where})
+        if moved != extras:
+            out = {**out, "anchors": moved}
+    return out
+
+
+def _newest_first(stamp) -> str:
+    """Sort key that puts the NEWER ISO timestamp first in an ascending sort."""
+    text = str(stamp or "")
+    return "".join(chr(0x10FFFF - ord(ch)) for ch in text) if text else chr(0x10FFFF)
+
+
 def load_relevant(
-    project_root: Path, task: str, limit: int | None = None
+    project_root: Path,
+    task: str,
+    limit: int | None = None,
+    *,
+    role: str | None = None,
+    stats: dict | None = None,
 ) -> list[dict]:
-    """FRESH facts relevant to `task` (stale ones dropped — never served as fresh)."""
+    """FRESH facts relevant to `task` (stale ones dropped — never served as fresh).
+
+    Scored by `relevance` and kept only at or above `fact_min_relevance` (default 2.0).
+    Ties break on identifier hits, then recency, then the claim text, so the same store
+    and task always serve the same facts. `stats`, when given, receives `candidates`,
+    `rejected_stale`, `rejected_irrelevant` and `injected`.
+    """
+    counts = stats if stats is not None else {}
+    for key in ("candidates", "rejected_stale", "rejected_irrelevant", "injected"):
+        counts.setdefault(key, 0)
     if limit is None:
-        limit = _policy_int(project_root, "fact_relevant_limit", RELEVANT_LIMIT)
+        limit = _policy_limit(project_root, role)
+    floor = _policy_float(project_root, "fact_min_relevance", MIN_RELEVANCE_SCORE)
     # read-time trimming: nothing is deleted here, so the weaker proximity signal is safe
     facts = _dedupe(_load_facts(project_root), allow_line_proximity=True)
+    counts["candidates"] += len(facts)
     if not facts:
         return []
-    task_words = set(re.findall(r"[a-z0-9_]{3,}", (task or "").lower()))
-    scored: list[tuple[int, dict]] = []
+    scored: list[tuple[tuple, dict]] = []
     index_cache: dict = {}
     for f in facts:
-        placed = current_anchor_line(
-            project_root, f.get("file"), f.get("line"), f.get("anchor_hash"), index_cache
-        )
+        # A moved line comes back as a copy: the dicts come from _load_facts and writing
+        # through them here would edit the store from a read path. Persisting the move is
+        # `prune`'s job, which holds the lock.
+        placed = _anchors_placeable(project_root, f, index_cache)
         if placed is None:
+            counts["rejected_stale"] += 1
             continue  # stale/invalid/unplaceable → drop, do not inject
-        if placed != f.get("line"):
-            # Serve the line the anchor text sits on today. Copied rather than mutated: the
-            # dicts come from _load_facts and writing through them here would edit the store
-            # from a read path. Persisting the move is `prune`'s job, which holds the lock.
-            f = {**f, "line": placed}
-        blob = f"{f.get('claim', '')} {f.get('file') or ''}".lower()
-        overlap = len(task_words & set(re.findall(r"[a-z0-9_]{3,}", blob)))
-        if overlap < MIN_RELEVANCE_OVERLAP:
-            continue  # zero-overlap == irrelevant; do not pad the top-N with noise
-        scored.append((overlap, f))
-    scored.sort(key=lambda x: -x[0])
-    return [f for _, f in scored[:limit]]
+        score, id_hits = relevance(task, placed.get("claim", ""), placed.get("file"))
+        if score < floor:
+            counts["rejected_irrelevant"] += 1
+            continue  # below the floor == irrelevant; do not pad the top-N with noise
+        rank = (-score, -id_hits, _newest_first(placed.get("captured_at")), placed.get("claim", ""))
+        scored.append((rank, placed))
+    scored.sort(key=lambda pair: pair[0])
+    served = [f for _, f in scored[:limit]]
+    counts["injected"] += len(served)
+    _record_usage(project_root, served)
+    return served
 
 
 def prune(project_root: Path) -> dict:
@@ -608,7 +874,8 @@ def prune(project_root: Path) -> dict:
     relocation back. `load_relevant` recomputes the move on every read and throws it away —
     correct for a read path, but it means a shifted fact pays the file scan forever. Here the
     lock is already held and the file is already being rewritten, so the new line number
-    persists and later reads hit the fast path again.
+    persists and later reads hit the fast path again. Every anchor a fact carries is placed,
+    not only the first.
     """
     with _FactLock(project_root):
         facts = _load_facts(project_root)
@@ -616,19 +883,12 @@ def prune(project_root: Path) -> dict:
         fresh: list[dict] = []
         relocated = 0
         for f in facts:
-            placed = current_anchor_line(
-                project_root,
-                f.get("file"),
-                f.get("line"),
-                f.get("anchor_hash"),
-                index_cache,
-            )
+            placed = _anchors_placeable(project_root, f, index_cache)
             if placed is None:
                 continue
-            if placed != f.get("line"):
-                f = {**f, "line": placed}
+            if placed is not f:
                 relocated += 1
-            fresh.append(f)
+            fresh.append(placed)
         deduped = _dedupe(fresh)
         if len(deduped) != len(facts) or relocated:
             _save_facts(project_root, deduped)

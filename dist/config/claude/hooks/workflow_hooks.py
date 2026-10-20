@@ -9,7 +9,7 @@ still blocks. An empty payload exits 0 without running anything, as the launcher
 
 Standalone on purpose: installed into ~/.claude/hooks, it must run with no repository on
 disk, so it imports nothing beyond the standard library. One file per hook rather than one
-module holding six: the hooks keep module-level names (lock constants, parsers) that
+module holding eight: the hooks keep module-level names (lock constants, parsers) that
 core/ and the tests read by name.
 """
 import os
@@ -17,10 +17,12 @@ import runpy
 import sys
 
 HOOKS = (
+    "execution-gate",
     "graph-refresh",
     "intent-gate-check",
     "intent-gate-set",
     "session-bind",
+    "status-guard",
     "task-events",
     "workflow-statusline",
 )

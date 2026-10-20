@@ -26,7 +26,7 @@ init SCAFFOLD, bukan pembaruan: config.json dan second_agent.json yang SUDAH ADA
 ## Output
 [INIT]
 bootstrap: $AGENT_PATH = <path>
-generated: run/inspect/check.{ps1,sh} + config.json (v3.8.4, main_py_path abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
+generated: run/inspect/check.{ps1,sh} + config.json (v3.9.0, main_py_path abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
 upgrade_needed: <meta.upgrade_needed> (true → sebut versi dari meta.versions + tawarkan /.upgrade)
 status: READY

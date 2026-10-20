@@ -1,7 +1,7 @@
 """Did the second_agent write to the workspace? Asked before and after every agy call.
 
 Every other provider answers this by construction. OpenCode is held to a `permission`
-block that `core/opencode_policy.py` overwrites rather than merges, and codex runs under
+block that `core/policy/opencode_policy.py` overwrites rather than merges, and codex runs under
 `--sandbox read-only`. agy has neither, and not for want of looking: `--sandbox` and
 `--mode plan` were both probed against the shipped binary and changed nothing — same 56
 tools, same `permission_mode: always-proceed`, `write_to_file` and `run_command` among

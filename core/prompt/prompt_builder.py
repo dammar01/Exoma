@@ -500,6 +500,16 @@ def build_prompt(
     )
 
 
+# One tag per gap, because only one kind lowers confidence. `in_scope_unreachable` (asked
+# for, could not be reached) caps the run; live state, external systems and deliberately
+# out-of-scope ground are reported without a cap. An untagged bullet is read as the
+# capping kind — see `core.provider.result_prep.scope_gaps`.
+SCOPE_GAP_LINE = (
+    "- [in_scope_unreachable|live_state|external|out_of_scope] "
+    "<requested-but-unreachable or cross-system surface not inspected> | none"
+)
+
+
 def _exploration_format() -> list[str]:
     return [
         "[EVIDENCE]",
@@ -530,7 +540,7 @@ def _exploration_format() -> list[str]:
         "- <files/areas actually inspected>",
         "",
         "scope_not_covered:",
-        "- <requested-but-unreachable or cross-system surfaces not inspected> | none",
+        SCOPE_GAP_LINE,
         "",
         "uncertainties:",
         "- <list>",
@@ -656,7 +666,7 @@ def _sweep_format() -> list[str]:
         "- <files/symbols actually traced>",
         "",
         "scope_not_covered:",
-        "- <changed surface not traced + why> | none",
+        "- [in_scope_unreachable|live_state|external|out_of_scope] <changed surface not traced + why> | none",
         "",
         "uncertainties:",
         "- <list>",
@@ -707,7 +717,7 @@ def _reasoning_format() -> list[str]:
         "- <files/areas actually inspected>",
         "",
         "scope_not_covered:",
-        "- <requested-but-unreachable or cross-system surfaces not inspected> | none",
+        SCOPE_GAP_LINE,
         "",
         "implications:",
         "- <list>",

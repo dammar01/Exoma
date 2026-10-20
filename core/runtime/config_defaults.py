@@ -41,10 +41,18 @@ def default_policies() -> dict:
         "chat_mode_for_plain_text": True,
         "fallback_requires_confirmation": True,
         "max_active_job_per_session": 1,
-        # --- runtime-consumed (core/fact_store.py) ---
+        # --- runtime-consumed (core/evidence/fact_store.py) ---
         "fact_relevant_limit": 3,
+        # per-role limit; a role absent here falls back to fact_relevant_limit
+        "fact_relevant_limits": {"exploration": 3, "reasoning": 4},
+        # weighted overlap a fact needs to be served: identifier 2, word 1, path-only 0.5
+        "fact_min_relevance": 2.0,
         "fact_recurrence_threshold": 5,
-        # --- runtime-consumed (core/graph_index.py) ---
+        # claims longer than this are refused at ingest, never truncated
+        "fact_max_claim_chars": 400,
+        # store ceiling; past it the least-used, least-recent facts go first
+        "fact_max_facts": 500,
+        # --- runtime-consumed (core/graph/graph_index.py) ---
         # inject a ranked file shortlist from graphify-out/graph.json into evidence prompts
         "graph_leads_enabled": True,
         # --- runtime-consumed (core/knowledge/) ---
@@ -58,7 +66,15 @@ def default_policies() -> dict:
         "knowledge_dir": "docs/project-knowledge",
         # how many promoted knowledge documents may ride along in one delegated prompt.
         "knowledge_relevant_limit": 3,
-        # --- runtime-consumed (core/prompt_builder.py) ---
+        # --- hook-consumed (execution-gate.py, status-guard.py; DEC-067) ---
+        # hybrid: deterministic gates block (write outside root, write outside an active
+        # execution's scope, git commit the user did not ask for) and the done-claim
+        # guard warns; warn: everything only reports; off: no enforcement hooks act.
+        "enforcement": "hybrid",
+        # paths outside the project root a write may land in, beyond the temp dir and
+        # ~/.claude. The user adds a path here once they have approved writing there.
+        "write_allowed_outside_root": [],
+        # --- runtime-consumed (core/prompt/prompt_builder.py) ---
         # ask second_agent to spawn one sub-agent per graph cluster (or per role slice
         # when there is no graph). ON: a delegated call that reads the codebase serially
         # is the slow path, and the fan-out instruction is what makes the second agent

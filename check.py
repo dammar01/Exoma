@@ -31,7 +31,7 @@ _PROBE_RECHECK_SECONDS = float(DEFAULT_PROBE_RECHECK_SECONDS)
 _MAX_PROBES = DEFAULT_MAX_PROBES
 # A record can still read "running" while its worker is gone: get_result keeps the first
 # dead worker recoverable instead of failing it. Polling must treat that as finished
-# anyway, the same way the await loop does in core/job_lifecycle.py.
+# anyway, the same way the await loop does in core/jobs/job_lifecycle.py.
 _TERMINAL_ERROR_TYPES = {"worker_died"}
 
 

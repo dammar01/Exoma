@@ -22,14 +22,17 @@ nothing in Python. The list is kept explicit so that "configured" is never mista
 
 - `commands.verify_mode` (`delegated` | `syntax`; anything else warns and falls back to `delegated`)
 - `commands.verify_test_commands`, `commands.verify_test_timeout_seconds` (`core/evidence/verify_tests.py`)
-- `policies.fact_relevant_limit`
-- `policies.fact_recurrence_threshold`
+- `policies.fact_relevant_limit`, `policies.fact_relevant_limits`, `policies.fact_min_relevance`
+- `policies.fact_recurrence_threshold`, `policies.fact_max_claim_chars`, `policies.fact_max_facts`
+- `policies.enforcement`, `policies.write_allowed_outside_root` (read by the `execution-gate` and `status-guard` hooks, not by Python)
 - `policies.graph_leads_enabled`
 - `policies.subagent_fanout_enabled`
 - `policies.production_branch`, `policies.knowledge_dir`, `policies.knowledge_relevant_limit` (promote and the knowledge sidecar)
 
 `commands.auto_verify_after_execute` sits between the two: the runtime reads it and echoes
-it in `meta.policy`, but nothing in Python acts on it (see the table below).
+it in `meta.policy`, but nothing in Python acts on it (see the table below). The execute path
+itself (plan record, `-y` approval, scope, verification status) is runtime state since 3.9.0 —
+see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state).
 
 `/.verify-browser` reads one section of config.json, `e2e`, as the project's default
 settings; everything else about a run travels in a per-session request (see below).
@@ -47,12 +50,11 @@ the bytes it would have to check.
 
 | Contract | Why it is unreachable from Python |
 | --- | --- |
-| `[OPTIONS]` block in `/.plan` | Appears in main_agent's **output**. This process produces evidence for it and never sees what it writes back to the user. |
-| Per-claim attribution tags | Same: output-side, never routed back through the runtime. |
-| The confidence triple | Same. |
+| `[OPTIONS]` block and the confidence triple in `/.plan` | Appear in main_agent's **output**. Since 3.9.0 their mechanical half is checked when main_agent records the plan (`plan-record`: one to three options, each with a `minus`, exactly one recommended; all three confidence levels; a `proceed` with open questions or `solution_path` below `high` is refused). What the prose says is still unreachable. |
+| Per-claim attribution tags | Output-side, never routed back through the runtime. |
 | Intent detection without the `/.` prefix | Matches on the **user's** message. No Python path receives one. |
-| `/.execute` and its `-y` gate | `/.execute` is implemented entirely by main_agent editing files. There is no Python entry point to hook. |
-| `commands.auto_verify_after_execute` | Same — which is why the config key ships with that caveat inline rather than as a promise. |
+| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose. The `status-guard` Stop hook reads the reply and warns; it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
+| `commands.auto_verify_after_execute` | Whether main_agent chains `/.verify` after an execution is still its own behavior; the runtime records the verdict once a verify runs. |
 | `/.verify-browser` interview | The questions happen in main_agent's thread, and only after a draft reports the target unconfigured or unreachable. The runtime only sees the request file written afterwards. |
 | Proxy-failure hard gate | Stopping, printing `[PROXY GAGAL]`, and waiting for a yes/no before any local fallback is main_agent behavior after it reads `ok:false`. The runtime returns the failure; it cannot stop main_agent from gathering on its own. |
 | Output contracts (RELAY vs SYNTHESIS, mandatory fields) | Output-side, like `[OPTIONS]`. |

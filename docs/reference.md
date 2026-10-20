@@ -1,4 +1,4 @@
-# agent-workflow v3.8.4
+# agent-workflow v3.9.0
 
 Standalone orchestration runtime for a two-agent workflow. No third-party dependencies.
 
@@ -50,11 +50,15 @@ Every result has the shape `{ok, content, meta}`. Other fields are conditional:
 
 | Field | When present | Content |
 |---|---|---|
-| `digest` | second_agent output carries a parseable `[DIGEST]` block | summary to be relayed. `digest.anchors = {certified, total}` is added when the evidence records anchors; a confidence lowered because of anchors/graph keeps its original value in `digest.confidence_reported` and the reason in `digest.confidence_capped_by` |
-| `evidence_ref` | only the explore/plan/analyze evidence path | `{artifact_path, anchors, certified_anchors, reused}`. `reused: true` = an artifact from a past session was reused (see [Evidence reuse and boundary](#evidence-reuse-and-boundary)) |
+| `digest` | second_agent output carries a parseable `[DIGEST]` block | summary to be relayed. `digest.anchors = {certified, total, scanned_all}` is added when the evidence records anchors — up to 200 distinct citations are certified, and `scanned_all: false` means the scan stopped before the content ended (confidence capped at `medium` even when `certified == total`); a confidence lowered because of anchors/graph keeps its original value in `digest.confidence_reported` and the reason in `digest.confidence_capped_by` |
+| `evidence_ref` | only the explore/plan/analyze evidence path | `{artifact_path, anchors, certified_anchors, scanned_all, reused}`; `anchors` counts certified-or-not citations, of which the first 40 are stored for reuse. `reused: true` = an artifact from a past session was reused (see [Evidence reuse and boundary](#evidence-reuse-and-boundary)) |
 | `meta.task_cap`, `meta.task_cap_source` | every delegated call | effective task length limit. `task_cap_source`: `transport` (computed from the remaining argv command-line space), `floor` (scaffolding nearly fills the command line; minimum value), `policy` (opt-in `AI_PROXY_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; stdin/file transport, or argv outside Windows) |
 | `meta.task_truncated` | task cut by the cap | signal to shorten the instruction, not to split the call |
 | `meta.content_mode`, `meta.content_full_chars` | `AI_PROXY_SLIM_CONTENT` is active, content is long, and the artifact exists on disk | `content_mode: "ref_only"`: `content` is only a preview; the full text is at `evidence_ref.artifact_path` |
+| `meta.claims[].ref_status` | exploration/reasoning results with grounded claims | one status per ref: `certified`, `unverified` (a `file:line` this project cannot open; also raises a `claim_ref_unverified` contract warning), `not_a_file` |
+| `meta.uncertified_anchors` | a citation failed to certify | up to 10 `file:line` refs that did not hash to a line in this project |
+| `meta.scope_warnings` | `scope_not_covered` lists non-capping gaps | `[{category, detail}]` for `live_state`, `external`, `out_of_scope` bullets. Only `in_scope_unreachable` and untagged bullets cap confidence at `medium` |
+| `meta.facts` | exploration/reasoning calls | fact lifecycle counts: `candidates`, `injected`, `rejected_stale`, `rejected_irrelevant`, `ingested`, `ingest_rejected_anchor`, `ingest_rejected_length` |
 | `meta.policy` | every delegated call | the effective `auto_verify_after_execute`, `verify_mode`, `subagent_fanout_enabled` |
 | `meta.error_type`, `meta.next_action` | `ok: false` | both required; `error_type` from the closed set below |
 
@@ -99,7 +103,7 @@ git --version
 
 ---
 
-## Install (v3.8.4)
+## Install (v3.9.0)
 
 ### New team member — full sequence from scratch
 
@@ -655,8 +659,8 @@ Second_agent only supplies evidence and reasoning. The runtime does not create o
 The contracts below live in `dist/config/claude/CLAUDE.md` and its skills
 (`dist/config/claude/skills/*.md`), not in Python. The runtime never sees the raw user message
 or main_agent's final answer, so the one enforcing these contracts is main_agent
-itself. The only partial exception is the pre-flight gate, which is also enforced by the host
-agent's hooks. The per-contract reason why Python cannot enforce them: `docs/runtime-contracts.md`,
+itself. The partial exceptions are the pre-flight gate and, since 3.9.0, the execute chain
+([Plan and execution state](#plan-and-execution-state)), both also enforced by the host agent's hooks. The per-contract reason why Python cannot enforce them: `docs/runtime-contracts.md`,
 section "Contracts the runtime cannot enforce".
 
 | Contract | Content | Enforcer | Source |
@@ -666,8 +670,8 @@ section "Contracts the runtime cannot enforce".
 | Output contract | Explore and `sweep`/`doctor` = RELAY the runtime result as is. Plan/analyze = SYNTHESIS by main_agent: three-part confidence (`problem_understanding`, `root_cause`, `solution_path`), per-claim attribution, `open_questions` kept separate from `uncertainty`. Required fields are still shown even when empty, with the reason | main_agent | `CLAUDE.md`, "Output Contract" and "Plan/analysis output" |
 | `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
 | New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` and after `/.refactor` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` (DEC-046) |
-| `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent | `skills/execute.md`, `skills/plan.md` STEP 3 |
-| Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
+| `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent; since 3.9.0 also runtime + hooks: `execute-begin` needs the recorded plan and the `-y` token, `execution-gate` blocks Edit/Write outside the scope | `skills/execute.md`, `skills/plan.md` STEP 3; [Plan and execution state](#plan-and-execution-state) |
+| Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent; the `status-guard` Stop hook warns on a done-claim while `verification: not_run` | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
 | Proxy failure | `ok:false`, an invalid-evidence `error_type`, or content that is not evidence → stop, print `[PROXY GAGAL] …`, ask whether to continue with `/.local` (yes/no), then wait. Automatic local fallback is forbidden | main_agent | `CLAUDE.md`, "Proxy failure" |
 | Destructive actions | Commit, delete, or writing outside the project must not run from a guessed intent; confirmation is required. Writing to another project (Edit/Write or Bash/script) needs explicit approval for that path; the hook does not stop it (see [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" and "Global Forbidden" |
 | `/.commit` staging | An existing staged set is used as is. With nothing staged, main_agent stages changed tracked files and untracked files Git does not ignore, one quoted path per argument (never `-A` or `.`), and skips a path whose lowercased, `/`-separated form matches the canonical secret-file list of `core/policy/secret_patterns.py` (`SECRET_READ_PATTERNS`, minus `SECRET_READ_ALLOWLIST`), the same list the providers' read boundary uses; a test keeps the skill's copy identical. It shows staged, newly tracked, and skipped paths with the message, and commits only on `yes`; `no` unstages only what it staged (`git reset -q --`, which also works before the first commit). The skip list is a prompt rule over file names, not a content scanner | main_agent | `skills/commit.md` (DEC-060, DEC-061) |
@@ -687,7 +691,7 @@ table differ, fix one of them in the same change.
 | `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays), old sessions |
 | `inspect` | local | — | list jobs for the current session |
 | `provider` | local | — | read/change the second_agent provider and reasoning effort; picker with no arguments, direct with `<provider> <model> [effort] [routes]` |
-| `report` | local | — | summary of the workspace quality stream (`quality.jsonl`), including `e2e` (runs), `e2e.drafts` (drafts), and `graph_refresh` (Stop hook graph cost per outcome), and from `usage.jsonl`: `evidence_reuse` (explore/analyze/plan commands served by a stored artifact divided by commands eligible for reuse, continuations counted once; `by_outcome` breaks it down per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, and `unrecorded` for rows before contract v3), `provider_cache` (cached-input share of the provider's measured input: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; rows whose adapter does not report `resumed` are not included in the two thread buckets), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, and `thread_changed` = a resume call answered in a different thread, a sign the session lost state; rows before contract v3 are not counted), `by_effort` (per `<command>/<effort>`: command count, median duration, median input/output tokens — each median only from commands whose value was measured, unmeasured output is not counted as zero; `default` = no effort flag; rows before contract v3 are not counted), and `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); and from `tasks.jsonl`: `tasks` (see [Task telemetry](#task-telemetry)); and `provenance` (metric registry version, version of each `runtime.*` metric, tool commit, stream content hash — definitions in [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
+| `report` | local | — | summary of the workspace quality stream (`quality.jsonl`), including `e2e` (runs), `e2e.drafts` (drafts), and `graph_refresh` (Stop hook graph cost per outcome), and from `usage.jsonl`: `evidence_reuse` (explore/analyze/plan commands served by a stored artifact divided by commands eligible for reuse, continuations counted once; `by_outcome` breaks it down per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, and `unrecorded` for rows before contract v3), `facts` (fact lifecycle summed per exploration/reasoning command: `candidates`, `injected`, `rejected_stale`, `rejected_irrelevant`, `ingested`, `ingest_rejected`, `injection_rate`, `stale_rate`; commands recorded before 3.9.0 count as `unrecorded_commands`), `provider_cache` (cached-input share of the provider's measured input: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; rows whose adapter does not report `resumed` are not included in the two thread buckets), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, and `thread_changed` = a resume call answered in a different thread, a sign the session lost state; rows before contract v3 are not counted), `by_effort` (per `<command>/<effort>`: command count, median duration, median input/output tokens — each median only from commands whose value was measured, unmeasured output is not counted as zero; `default` = no effort flag; rows before contract v3 are not counted), and `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); and from `tasks.jsonl`: `tasks` (see [Task telemetry](#task-telemetry)); and `provenance` (metric registry version, version of each `runtime.*` metric, tool commit, stream content hash — definitions in [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
 | `audit` | local | — | read the session's `audit.jsonl` |
 | `graph-meta` | local | — | graphify snapshot status: fresh, stale, or absent |
 | `explore` | delegated | yes | codebase map, entry points, owners |
@@ -699,6 +703,9 @@ table differ, fix one of them in the same change.
 | `promote-validate` | local | yes² | validate a knowledge document; zero writes |
 | `promote-verify` | local | yes² | freshness of each claim + reconciliation against existing documents |
 | `promote-write` | local | yes² | the only write path into the knowledge directory |
+| `plan-record` | local | yes (path to the plan JSON) | records the session's plan; refuses an unsound `proceed` — see [Plan and execution state](#plan-and-execution-state) |
+| `execute-begin` | local | no | opens an execution: needs a recorded `proceed` plan and the user's `/.execute -y` token |
+| `execute-end` | local | no | closes the execution as `implemented`; verification stays `not_run` until a verify runs |
 | `submit` | job | yes | run asynchronously, return `job_id` |
 | `await` | job | yes | submit and then wait for completion |
 | `status` | job | — | requires `--job-id` |
@@ -711,7 +718,7 @@ table differ, fix one of them in the same change.
 
 ³ `verify-browser` is a **delegated** command: it is registered in the DELEGATED registry and goes through the pre-flight gate like `explore`/`plan`/`analyze`/`verify`. It reads the **per-session request** (`.workflow/data/sessions/<session>/e2e/request.json`) on top of the project defaults from the `e2e` section in `config.json`. The work is split into three stages: second_agent drafts the spec (stage 1) and reviews the browser evidence (stage 3); in between, the **runtime player** — a child process run by the runtime (`python -m core.evidence.e2e.player`) — drives Playwright (stage 2). Neither main_agent nor second_agent runs the browser (read-only sandbox). The interview happens in main_agent only after the draft reports that the target is not configured yet. The `draft` stage carries no verdict; the `run` stage is finalized as `verify`, so its verdict and exit code match other verifications. An `[E2E SPEC]` section that fails validation gets one repair in the same provider thread (`meta.e2e.repair`); the only test attribute is `data-e2e`, via the `e2e` selector key — `testid` is rejected (**breaking**); the `repeat_failure` brake releases by itself when the project (outside `.workflow/`, via Git) or the runtime (`TOOL_VERSION` + the code digest of `core/evidence/e2e/`) has changed since the last failure, the `app` bucket streak only grows for failures with the same signature (page, field, condition), and it is recorded as `repeat_failure` knowledge for the next draft. Credential values typed literally in the task, draft, or `request.json` are found via a `secrets.json` lookup and turned back into `${NAME}` (`request.json` is rewritten; key names are reported in `meta.e2e.secret_literals`, values never are), and a `fill` into a password field without a placeholder → `spec_invalid`; failures caused by the scenario itself — a guessed selector that misses, any selector that matches >1 element, a write/navigation rejected by the run policy — have origin `scenario` and end as `incomplete: scenario_error`, are not retried, and do not count toward the brake; every non-pass run and every brake refusal carries `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), and reusable causes are stored as `failure_hint` knowledge; every draft writes a `kind: e2e_draft` row (validator error category, repair result) that `--command report` summarizes in `e2e.drafts`. Network: every run always records metadata of all page requests (order, URL without query, type, status, timing, size; no body/headers/cookies), the latest 500 rows plus a summary over all requests, in `report.json` → `network` and `meta.e2e.page_requests`, including `since_last_run` (changes compared with the previous run on the same origin). Selector order: candidates follow role+name > label > e2e > text > css, except two kinds that may lead — an `e2e` with `source` provenance and a `path:line` ref, and a `proven` selector recorded in browser knowledge for the origin, the route (the last `goto` path, identifier segments become `:id`: `/users/123` and `/users/456` are one route), and that step's `within` (checked against the store; a `proven` claim without basis or on another route/scope → `spec_invalid`); a `proven` selector that misses drops to the normal order, two consecutive runs that miss retire it (one run weakens an entry at most once); a step that fails after its selector matched is not a miss; a pass is recorded only from a run that passed on the first attempt. Network URLs are cleaned of `;…` path parameters and token-shaped segments (16+ alphanumerics without separators, 16+ mixed upper/lower case, 24+ with digits) to `:id`. Full contract: `docs/runtime-contracts.md`, section `/.verify-browser`.
 
-There is no Python `execute` command. `/.execute -y` remains available as a user-facing command in main_agent; writing code is deliberately not delegated to the runtime or second_agent.
+There is no Python `execute` command that writes code: `/.execute -y` remains a main_agent command, and writing code is deliberately not delegated to the runtime or second_agent. What the runtime holds since 3.9.0 is the execution's **state** — `execute-begin` / `execute-end` and the hooks that read it.
 
 ---
 
@@ -757,22 +764,28 @@ use `await` as in the example above. `sweep` and other local commands finish dir
 
 Created at `init`, and contains **overrides only**: an empty/absent `commands`, `policies`, `e2e` section means every key uses the default built into the running build. Write only the keys you want to change; absent keys are never filled in automatically, so defaults that change in a later release reach this project too.
 
-The following ten keys actually change the Python runtime's behavior:
+The following keys actually change the Python runtime's (or a shipped hook's) behavior:
 
 | Key | Default | Meaning |
 |---|---|---|
 | `commands.verify_mode` | `"delegated"` | `delegated` = full second_agent verification. `syntax` = local parse check only. Unknown values fall back to `delegated` |
 | `commands.verify_test_commands` | `[]` | test command prefixes the runtime may run for `/.verify` (e.g. `["python tests/run.py", "php artisan test"]`). Empty = no tests run; requested tests are reported as not run |
 | `commands.verify_test_timeout_seconds` | `900` | time limit per test command |
-| `policies.fact_relevant_limit` | `3` | maximum facts injected into each prompt |
+| `policies.fact_relevant_limit` | `3` | maximum facts injected into each prompt, for a role `fact_relevant_limits` does not name. Set explicitly, it also overrides the per-role defaults |
+| `policies.fact_relevant_limits` | `{"exploration": 3, "reasoning": 4}` | per-role fact limit |
+| `policies.fact_min_relevance` | `2.0` | weighted overlap a fact needs to be served: shared identifier 2, shared word 1, path-only token 0.5; EN/ID function words and generic path segments score 0 |
 | `policies.fact_recurrence_threshold` | `5` | number of **other** sessions that must report a claim before it is promoted |
+| `policies.fact_max_claim_chars` | `400` | longer claims are refused at ingest, never truncated |
+| `policies.fact_max_facts` | `500` | fact store ceiling; past it the least-used, least-recently-used facts are evicted first |
+| `policies.enforcement` | `"hybrid"` | the `execution-gate` / `status-guard` hooks: `hybrid` blocks the deterministic gates and warns on done-claims, `warn` only reports, `off` disables both |
+| `policies.write_allowed_outside_root` | `[]` | paths outside the project root a Write/Edit may land in, beyond the temp dir and `~/.claude` |
 | `policies.graph_leads_enabled` | `true` | inject a shortlist from `graphify-out/graph.json` |
 | `policies.subagent_fanout_enabled` | `true` | request fan-out for the exploration/reasoning roles |
 | `policies.production_branch` | `"main"` | the only branch where `promote-write` will write. Promoted knowledge describes what is live; a hypothesis from a feature branch must not enter the shared repo carrying that authority |
-| `policies.knowledge_dir` | `"docs/project-knowledge"` | location of knowledge documents, relative to the project root. The only workflow artifact that is **tracked in Git** — its whole value lies in being shareable |
+| `policies.knowledge_dir` | `"docs/project-knowledge"` | location of knowledge documents, relative to the project root; an absolute path, `..`, or a symlink resolving outside the root is refused (`knowledge_path_escape`). The only workflow artifact that is **tracked in Git** — its whole value lies in being shareable |
 | `policies.knowledge_relevant_limit` | `3` | maximum knowledge documents included in one delegated prompt. `0` turns off the knowledge sidecar |
 
-`commands.auto_verify_after_execute` is read and returned in `meta.policy`, but only main_agent can act on it because Python has no `execute` path.
+`commands.auto_verify_after_execute` is read and returned in `meta.policy`; main_agent acts on it. The execute path itself is runtime state since 3.9.0 — see [Plan and execution state](#plan-and-execution-state).
 
 Other main_agent instruction keys: `commands.allow_analyze_to_plan`, `commands.allow_explore_to_plan`, `commands.auto_sweep_after_execute`, `policies.workflow_prefix`, `policies.chat_mode_for_plain_text`, `policies.fallback_requires_confirmation`, and `policies.max_active_job_per_session`.
 
@@ -894,7 +907,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v3.8.4):
+Reliability keys (v3.9.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1113,13 +1126,54 @@ writes on a new and a resumed session, both on Windows (DEC-058).
 1. explicitly tagged `[config]`/`[pattern]`/`[invariant]` by second_agent, or
 2. reported independently by ≥ `fact_recurrence_threshold` **other** sessions.
 
+Every `file:line` the claim cites must resolve; one that does not refuses the whole claim. The
+first anchor is stored in `file`/`line`/`anchor_hash`, any further ones in `anchors[]`, and a fact
+is served only while all of them can still be placed. Claims longer than `fact_max_claim_chars`
+are refused.
+
+Retrieval scores each fact against the task: a shared identifier (snake_case, camelCase, dotted or
+backticked) counts 2, a shared word 1, a token found only in the fact's path 0.5; English and
+Indonesian function words and generic path segments (`core`, `tests`, `py`, ...) count nothing.
+Facts below `fact_min_relevance` are dropped; ties break on identifier hits, then recency. Promoted
+knowledge is ranked with the same function. Each served fact's `hits` and `last_used` go to
+`.workflow/data/facts-usage.json`, and eviction past `fact_max_facts` keeps the most-used, most
+recently used facts.
+
 The current session is excluded from the recurrence count. Without that, a fact injected into the prompt and then merely echoed back could raise its own count up to the promotion threshold — repetition masquerading as evidence.
 
 Each fact is anchored to the content hash of its `file:line` line. When that line changes, the fact is considered stale when read and is never served as fresh.
 
 Two claims are merged only when **all** guards agree: same `file`, same `category`, identical `anchor_hash`, same negation polarity, Jaccard similarity ≥ 0.5, and both claims ≥ 6 words. One guard refuses → both are kept. Duplicates are cheap; a lost fact cannot be recovered.
 
+## Plan and execution state
+
+Since 3.9.0 the plan → `/.execute -y` → `/.verify` chain is runtime state in the session's
+`runtime/` directory (`core/runtime/execution.py`, DEC-067):
+
+| Command | Reads | Writes | Refuses with |
+|---|---|---|---|
+| `plan-record <path>` | the plan JSON at `<path>` | `plan.json` | `plan_invalid`: `decision: proceed` with open questions, `solution_path` below `high`, an empty `files` scope, an option without `minus`, or not exactly one recommended option; `plan_input_missing`, `plan_input_unreadable` |
+| `execute-begin` | `plan.json`, `execute.token` | `execution.json` (`status: active`, `verification: not_run`, `scope` = the plan's `files`); consumes the token | `execute_no_plan`, `execute_plan_not_proceed`, `execute_not_approved` (no `execute.token` younger than 15 minutes) |
+| `execute-end` | `execution.json` | `status: implemented` | `execution_not_active` |
+| `verify` (delegated or syntax) | — | `verification`: `pass`, `fail`, `incomplete`, or `syntax_only` | — |
+
+`execute.token` and `commit.marker` are written by the `intent-gate-set` hook only for a prompt
+the user wrote: `/.execute -y` (typed or as the expanded slash command) and a prompt asking to
+commit (a bare affirmative keeps an existing commit marker; a negated mention clears it).
+
+Hooks, governed by `policies.enforcement`:
+
+- `execution-gate` (PreToolUse, `Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell`): blocks a
+  write outside the project root (the temp dir, `~/.claude` and `policies.write_allowed_outside_root`
+  excepted), a write inside the root outside an active execution's scope (`.workflow/` always
+  passes; with no active execution every in-root write passes), and `git commit` without a
+  `commit.marker` younger than 30 minutes (quoted option values such as `git -C "a b" commit` count; so does the text `git commit` inside another command's quoted argument — a fail-closed false block). Containment is decided on the path after resolving symlinks and junctions; scope accepts either spelling. Shell commands are not parsed for file writes.
+- `status-guard` (Stop): when `execution.json` says `verification: not_run`, a reply claiming
+  completion gets a `systemMessage` warning. It never blocks.
+
 ## Evidence reuse and boundary
+
+The reuse identity includes a fingerprint of the promoted knowledge the call was shown (evidence context schema 3), so promoting or correcting knowledge invalidates an identical earlier answer; rows written under schema 2 miss once.
 
 Cross-session evidence is indexed in `.workflow/data/evidence.jsonl` with a cross-process lock and
 atomic rewrite. An entry may only point to an immutable artifact
@@ -1241,7 +1295,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v3.8.4)
+### Liveness worker (v3.9.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

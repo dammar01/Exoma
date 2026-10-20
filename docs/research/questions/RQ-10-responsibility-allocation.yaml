@@ -6,9 +6,9 @@ status: unanswered
 what_exists: |
   An allocation exists (explore, decompose, decide, execute, verify, remember) but has not
   been evaluated.
-records: [CASE-013, DEC-023, DEC-032, DEC-039, DEC-043, DEC-045, CASE-018, DEC-046, CASE-019, DEC-048, CASE-020, DEC-056, CASE-022, DEC-059, DEC-060, DEC-061]
+records: [CASE-013, DEC-023, DEC-032, DEC-039, DEC-043, DEC-045, CASE-018, DEC-046, CASE-019, DEC-048, CASE-020, DEC-056, CASE-022, DEC-059, DEC-060, DEC-061, DEC-067]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
 
-  Draft records: SYN-002, DEC-002 (drafts).
+  Draft records: SYN-002, DEC-002, H-022, EXP-014 (drafts).

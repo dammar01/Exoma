@@ -434,7 +434,51 @@ def _provider_less_browser_runs_are_not_calls() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _fact_lifecycle_counts_commands_not_invocations() -> None:
+    """Fact counts ride the command's final row; old rows are unrecorded, not zero."""
+    from core.evidence.contracts import TaskSpec, usage_from_result
+
+    spec = TaskSpec(command="analyze", task="t", session_id="s", correlation_id="c")
+    built = usage_from_result(
+        {"ok": True, "meta": {"facts": {
+            "candidates": 12, "injected": 3, "rejected_stale": 2, "rejected_irrelevant": 7,
+            "ingested": 1, "ingest_rejected_anchor": 2, "ingest_rejected_length": 1,
+        }}},
+        spec=spec, call_meta={"role": "reasoning", "prompt_id": "p1"}, recorded_at="now",
+    )
+    assert_true(
+        (built.facts_candidates, built.facts_injected, built.facts_ingest_rejected) == (12, 3, 3),
+        f"meta.facts reaches the usage row: {built}",
+    )
+    bare = usage_from_result({"ok": True, "meta": {}}, spec=spec, call_meta={}, recorded_at="now")
+    assert_true(
+        bare.facts_candidates is None and bare.facts_ingest_rejected is None,
+        "a command that asked for no facts records none, not zeros",
+    )
+
+    rows = [
+        # one continuation: two invocations, counts only on the final row
+        _usage(prompt_id="a", command="analyze", role="reasoning"),
+        _usage(prompt_id="a", command="analyze", role="reasoning", facts_candidates=10,
+               facts_injected=3, facts_rejected_stale=1, facts_rejected_irrelevant=6,
+               facts_ingested=2, facts_ingest_rejected=0),
+        _usage(prompt_id="b", command="explore", role="exploration", facts_candidates=10,
+               facts_injected=0, facts_rejected_stale=0, facts_rejected_irrelevant=10,
+               facts_ingested=0, facts_ingest_rejected=1),
+        _usage(prompt_id="c", command="plan", role="reasoning"),  # written before the fields
+        _usage(prompt_id="d", command="verify", role="verification"),
+    ]
+    facts = telemetry.fact_lifecycle(rows)
+    assert_true(
+        facts["candidates"] == 20 and facts["injected"] == 3
+        and facts["recorded_commands"] == 2 and facts["unrecorded_commands"] == 1
+        and facts["commands_with_facts"] == 1 and facts["injection_rate"] == 0.15,
+        f"counted per command, verify excluded, history named: {facts}",
+    )
+
+
 def _test_telemetry_metrics() -> None:
+    _fact_lifecycle_counts_commands_not_invocations()
     _acceptance_is_per_task()
     _rework_counts_work_that_came_back_after_a_failure()
     _provider_less_browser_runs_are_not_calls()

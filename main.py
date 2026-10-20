@@ -11,7 +11,7 @@ if sys.version_info < (3, 10):
         f"({sys.executable}). Run it with a newer python."
     )
 
-# Looks unused to a linter and is NOT: core/job_lifecycle.py reaches it as
+# Looks unused to a linter and is NOT: core/jobs/job_lifecycle.py reaches it as
 # `_main().subprocess`, and tests/scenario.py patches `main.subprocess.Popen` to
 # intercept worker spawn. Deleting it breaks both, silently and at runtime only.
 import subprocess  # noqa: F401
@@ -29,7 +29,7 @@ from core.runtime.state import ensure_workflow_workspace
 from core.runtime.upgrade import needs_upgrade, resolve_agent_workflow_path, upgrade_workflow_workspace, workspace_versions
 from core.workspace.workspace_paths import detect_project_root, workflow_paths
 from config.settings import (
-    # These two are read as `_main().DEFAULT_*` from core/result_shaping.py, and the
+    # These two are read as `_main().DEFAULT_*` from core/evidence/result_shaping.py, and the
     # harness lowers them on `main` to exercise the ref_only threshold. Imported here
     # so that indirection has something to find — not unused, just used elsewhere.
     DEFAULT_CONTENT_PREVIEW_CHARS,  # noqa: F401
@@ -68,6 +68,7 @@ from core.jobs.job_lifecycle import (  # noqa: E402,F401
     should_run_in_background,
     submit,
 )
+from core.runtime import execution  # noqa: E402
 from core.evidence.result_shaping import (  # noqa: E402,F401
     _as_ref_only,
     _finalize_verify_result,
@@ -237,6 +238,81 @@ def _promote(command: str, project_root: Path, task: str) -> dict:
     }
 
 
+def _execution_command(command: str, project_root: Path, session_id: str, task: str | None) -> dict:
+    """plan-record / execute-begin / execute-end (core/runtime/execution.py).
+
+    plan-record reads its plan from the path in `--prompt`, the way promote reads its
+    document: one argv entry, whatever the plan's size.
+    """
+    if command == "plan-record":
+        if not task or not str(task).strip():
+            return make_error(
+                "plan_input_missing",
+                "plan-record needs the path to the plan JSON in --prompt",
+                next_action="Write the [PLAN] as JSON to a file and pass its path.",
+            )
+        source = Path(str(task).strip())
+        try:
+            doc = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return make_error(
+                "plan_input_unreadable",
+                f"cannot read {source} as JSON: {exc}",
+                next_action="Fix the plan document, then retry.",
+            )
+        recorded = execution.record_plan(project_root, session_id, doc)
+        if not recorded["ok"]:
+            return make_error(
+                "plan_invalid",
+                "; ".join(recorded["errors"]),
+                next_action=(
+                    "Fix the plan. A plan with open questions or a solution_path below "
+                    "high is recorded as clarify, not proceed."
+                ),
+                meta={"errors": recorded["errors"]},
+            )
+        return {
+            "ok": True,
+            "content": f"plan {recorded['plan_id']} recorded ({recorded['decision']})",
+            "meta": recorded,
+        }
+
+    if command == "execute-begin":
+        begun = execution.begin_execution(project_root, session_id)
+        if not begun["ok"]:
+            kind, next_action = {
+                "no_plan": ("execute_no_plan", "Run /.plan and record it with plan-record first."),
+                "plan_not_proceed": (
+                    "execute_plan_not_proceed",
+                    "Resolve the plan's open questions and record it again as proceed.",
+                ),
+                "not_approved": (
+                    "execute_not_approved",
+                    "Ask the user to type `/.execute -y`; nothing else approves an execution.",
+                ),
+            }[begun["reason"]]
+            return make_error(kind, begun["error"], next_action=next_action)
+        scope = begun["execution"]["scope"]
+        return {
+            "ok": True,
+            "content": f"execution open for plan {begun['execution']['plan_id']}; scope {len(scope)} path(s)",
+            "meta": begun["execution"],
+        }
+
+    ended = execution.end_execution(project_root, session_id)
+    if not ended["ok"]:
+        return make_error(
+            "execution_not_active",
+            ended["error"],
+            next_action="Nothing to close; execute-begin opens an execution.",
+        )
+    return {
+        "ok": True,
+        "content": "execution closed: implemented, verification not_run",
+        "meta": ended["execution"],
+    }
+
+
 def run(
     command: str,
     task: str,
@@ -376,6 +452,11 @@ def run(
     if normalized_command in ("promote-verify", "promote-validate", "promote-write"):
         return _promote(normalized_command, project_root, task)
 
+    # The plan -> execute chain. Local like promote: nothing here reaches a provider, and
+    # execute-begin must answer while a delegated job of the same session may hold the lock.
+    if normalized_command in ("plan-record", "execute-begin", "execute-end"):
+        return _execution_command(normalized_command, project_root, session_id, task)
+
     lock_path = workflow_paths(project_root, session_id)["lock"]
     lock_claim = acquire_runtime_lock(lock_path, normalized_command, session_id)
     if not lock_claim.get("ok"):
@@ -424,6 +505,11 @@ def run(
             # (meta.command == "verify"); a draft is not a verification at all.
             finalize_as = str((output.get("meta") or {}).get("command") or normalized_command)
         output = _finalize_verify_result(finalize_as, output)
+        if finalize_as == "verify":
+            try:
+                execution.record_verification(project_root, session_id, output)
+            except (OSError, ValueError) as exc:
+                output.setdefault("meta", {})["execution_state_error"] = f"{type(exc).__name__}: {exc}"
         try:
             provider_sessions.record_run(session, command)
         except (OSError, ValueError) as exc:
@@ -578,6 +664,9 @@ if __name__ == "__main__":
             "promote-verify",
             "promote-validate",
             "promote-write",
+            "plan-record",
+            "execute-begin",
+            "execute-end",
             "report",
             "audit",
             "graph-meta",

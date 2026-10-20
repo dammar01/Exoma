@@ -72,6 +72,14 @@ BOUNDED (langgar = output invalid):
 
 ## STEP 3
 resolvable_uncertainties WAJIB kamu coba tutup DULU sebelum tanya user; sisakan open_questions saja ke user.
+Catat plan ke runtime — tiap kali [PLAN] terbit atau berubah (termasuk sesudah jawaban open_questions):
+  tulis `<work_dir>/.workflow/data/sessions/<MAIN_SESSION_ID>/runtime/plan.input.json`:
+  {"task", "decision", "confidence": {problem_understanding, root_cause, solution_path},
+   "open_questions": [...], "options": [{"name", "plus", "minus", "recommended"}], "files": [<execution scope>]}
+  lalu: bash '<work_dir>/.workflow/run.sh' plan-record '<path itu>' '<MAIN_SESSION_ID>'
+Runtime MENOLAK `proceed` yang masih punya open_questions, solution_path < high, `files`
+kosong, opsi tanpa `minus`, atau rekomendasi ≠ satu (`plan_invalid`). Ditolak → itu bukan
+proceed: perbaiki plan atau tulis decision clarify. /.execute -y hanya membuka plan yang tercatat.
 decision=proceed → "Setuju? Jalankan /.execute -y". clarify → tanya open_questions. JANGAN auto-execute.
 Jawaban open_questions masuk → perbarui [PLAN] (assumptions, confidence, decision) → decision baru
 proceed → "Setuju? Jalankan /.execute -y" → BERHENTI. Jawaban itu BUKAN persetujuan eksekusi;

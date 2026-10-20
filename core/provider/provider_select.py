@@ -481,7 +481,7 @@ def _merge_routes(existing, route_models: dict) -> dict:
 def _sync_config_hint(project_root: Path, provider: str) -> dict:
     """Keep `runtime.second_agent` in config.json agreeing with the real selection.
 
-    That key selects nothing (`adapters/registry.py` reads the provider config), but
+    That key selects nothing (`adapters/contract/registry.py` reads the provider config), but
     doctor prints it and users read it. Left behind, it is a second answer to "which
     provider is this workspace on" that contradicts the first.
 

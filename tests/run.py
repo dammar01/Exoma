@@ -50,6 +50,8 @@ from tests.checks.continuation import (  # noqa: E402
 )
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
+from tests.checks.promote import _test_promote_boundaries  # noqa: E402
+from tests.checks.execution import _test_execution_chain  # noqa: E402
 from tests.checks.e2e_browser import _test_e2e_browser_session  # noqa: E402
 from tests.checks.e2e_doctor import _test_e2e_doctor_readiness  # noqa: E402
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests  # noqa: E402
@@ -84,6 +86,7 @@ from tests.checks.facts import (  # noqa: E402
     _test_evidence_anchor_relocation,
     _test_evidence_lock_file,
     _test_evidence_reuse,
+    _test_fact_selection,
     _test_facts_concurrency,
 )
 from tests.checks.installer import (  # noqa: E402
@@ -192,6 +195,7 @@ SUITES: dict[str, tuple] = {
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
+    "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),
     "evidence-anchor-relocation": (_test_evidence_anchor_relocation, "evidence anchors survive a line moving"),
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),
@@ -226,6 +230,8 @@ SUITES: dict[str, tuple] = {
     "continuation": (_test_contract_continuation, "bounded continuation keeps the first reply's evidence"),
     "continuation-size": (_test_continuation_prompt_is_bounded, "the recovery prompt fits the command line it travels on"),
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
+    "execution-chain": (_test_execution_chain, "plan-record refuses a proceed with open questions; execute-begin needs the user's own -y; verify writes its verdict"),
+    "promote-boundaries": (_test_promote_boundaries, "promoted knowledge stays inside the project and is part of evidence reuse identity"),
     "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
     "hidden-spawn": (_test_every_spawn_hides_its_console, "every runtime subprocess hides its console on Windows"),
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),

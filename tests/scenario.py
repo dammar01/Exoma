@@ -46,6 +46,7 @@ from tests.checks.facts import (
     _test_evidence_anchor_relocation,
     _test_evidence_lock_file,
     _test_evidence_reuse,
+    _test_fact_selection,
     _test_facts_concurrency,
 )
 from tests.checks.runtime_guards import _test_runtime_guard_cleanup
@@ -76,6 +77,8 @@ from tests.checks.continuation import (
 )
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code
 from tests.checks.contracts import _test_workflow_contracts
+from tests.checks.promote import _test_promote_boundaries
+from tests.checks.execution import _test_execution_chain
 from tests.checks.e2e_browser import _test_e2e_browser_session
 from tests.checks.e2e_doctor import _test_e2e_doctor_readiness
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests
@@ -1249,6 +1252,7 @@ confidence: high — all requested checks ran
 
         _test_facts_concurrency()
         _test_anchor_relocation()
+        _test_fact_selection()
         _test_evidence_anchor_relocation()
         _test_evidence_reuse()
         _test_evidence_lock_file()
@@ -1283,6 +1287,8 @@ confidence: high — all requested checks ran
         _test_contract_continuation()
         _test_continuation_prompt_is_bounded()
         _test_workflow_contracts()
+        _test_promote_boundaries()
+        _test_execution_chain()
         _test_installer_text_merging()
         _test_installer_settings_merge()
         _test_installer_settings_are_additive()

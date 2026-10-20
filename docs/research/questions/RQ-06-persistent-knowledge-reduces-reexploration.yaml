@@ -7,7 +7,7 @@ what_exists: |
   Fact store (recurrence and durable facts), anchored evidence reuse, graph leads, promoted
   knowledge; facts and promoted knowledge are injected into exploration and reasoning prompts,
   but there is no outcome to update loop and the effect is not measured.
-records: [CASE-009, DEC-016, DEC-035, DEC-040, DEC-044]
+records: [CASE-009, DEC-016, DEC-035, DEC-040, DEC-044, DEC-065, DEC-066]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -20,3 +20,6 @@ notes: |
 
   Draft records: H-004, CASE-004. DEC-016 (tracked, commit f6edbef) treats proven browser
   selectors as reused knowledge.
+
+  Since 3.9.0 the fact lifecycle is counted per call (DEC-066, `runtime.fact_lifecycle@1`);
+  H-021 and EXP-013 (drafts) calibrate the retrieval defaults against it.

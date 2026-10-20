@@ -15,13 +15,25 @@ memperbarui plan.
 
 ## Pre-Execution
 [EXECUTION SCOPE] allowed: <files> | forbidden: <files> | reason: <batasan>
+Dengan `-y`: SEBELUM edit pertama, buka execution di runtime:
+  bash '<work_dir>/.workflow/run.sh' execute-begin '' '<MAIN_SESSION_ID>'
+Runtime memeriksa plan tercatat (`plan-record`, decision=proceed) DAN token `-y` dari prompt
+user sendiri (ditulis hook `intent-gate-set`, berlaku 15 menit, sekali pakai). Ditolak
+(`execute_no_plan` | `execute_plan_not_proceed` | `execute_not_approved`) → relay
+`next_action`, nol edit, STOP. Jangan tulis token sendiri: itu memalsukan persetujuan user.
 
 ## During
 ONLY sentuh allowed. Butuh forbidden → STOP → report conflict → minta instruksi.
 allowed hanya di project root sesi. Path di project lain → STOP, minta persetujuan eksplisit
 untuk path itu. Edit lewat Bash/skrip patch tunduk ke aturan yang sama dengan Edit/Write.
+Hook `execution-gate` menegakkan dua yang pertama untuk Edit/Write: di luar `files` plan →
+diblok selama execution aktif; di luar root (selain temp dan ~/.claude) → diblok kecuali
+user menaruh path itu di `policies.write_allowed_outside_root`. Bash/skrip TIDAK dicek hook —
+untuk itu aturannya tetap kamu.
 
 ## Post (baca .workflow/config.json → commands.auto_verify_after_execute)
+Tutup execution dulu: bash '<work_dir>/.workflow/run.sh' execute-end '' '<MAIN_SESSION_ID>'
+(status `implemented`, verification `not_run`; /.verify yang selesai menulis verdict-nya ke sini).
 [EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status
 true  → auto-trigger /.verify. status: done|partial|blocked. JANGAN declare done sebelum verify selesai.
 false (default) → JANGAN auto-jalankan /.verify (hindari test berat tak diminta). WAJIB:
@@ -43,8 +55,10 @@ Berhenti sebelum verify selesai = /.execute yang belum selesai, apa pun isi diff
 Yang BOLEH: "implemented, belum diverifikasi". Perbedaannya bukan gaya bahasa — user
 memutuskan langkah berikutnya dari kata itu.
 
-### Kenapa aturan ini prompt-only
-`core/runtime/config_defaults.py:22,217` menyatakannya langsung: /.execute nol jalur Python, jadi runtime
-tak punya proses yang hidup untuk menegakkan apa pun di sini. Nol exit code, nol marker,
-nol gate — pengecekan yang bisa ditulis di Python sudah ditulis, dan yang ini tidak bisa.
-Yang berdiri di antara "belum diverifikasi" dan user yang mengira sudah, cuma kamu.
+### Yang ditegakkan runtime, dan yang tidak
+Runtime (`core/runtime/execution.py`, DEC-067): plan proceed + `-y` user untuk membuka
+execution; scope dan root untuk Edit/Write (hook `execution-gate`, blok); `git commit` hanya
+di giliran user meminta commit. Hook `status-guard` (Stop) MEMPERINGATKAN bila balasanmu
+mengklaim selesai saat verification `not_run` — peringatan, bukan blok, karena membaca
+prosa. Jadi kalimat terlarang di atas tetap tanggung jawabmu; hook hanya memberi tahu user
+saat kamu melanggarnya. `policies.enforcement` = hybrid (default) | warn | off.
