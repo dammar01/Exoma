@@ -228,7 +228,7 @@ def write_row(root, fields):
 try:
     started = time.monotonic()
     hook_ms = lambda: int((time.monotonic() - started) * 1000)
-    raw = os.environ.get("CLAUDE_HOOK_RAW", "")
+    raw = globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
         sys.exit(0)
     payload = json.loads(raw)

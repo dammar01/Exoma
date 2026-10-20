@@ -84,8 +84,19 @@ def _check_prompt_field() -> None:
             assert_true(not marker.exists(), f"[{label}] a task notification matching the NL map does not arm the gate")
             notify("  " + notification)
             assert_true(not marker.exists(), f"[{label}] leading whitespace does not hide a task notification")
-            notify("analisa kenapa <task-notification> muncul di log")
+            notify("/.analyze kenapa <task-notification> muncul di log")
             assert_true(marker.is_file(), f"[{label}] a user prompt that merely mentions the tag still arms the gate")
+
+            # DEC-068: a sentence that only resembles a delegated command arms nothing and
+            # clears the marker the previous command left; it gets a hint instead.
+            sentence = json.dumps({"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit",
+                                   "prompt": "saat saya analisa, ada titik dimana terlogout"})
+            done = subprocess.run(command, input=sentence, text=True, env={**env, "CLAUDE_HOOK_RAW": sentence},
+                                  capture_output=True, timeout=60)
+            assert_true(not marker.exists(), f"[{label}] an NL sentence does not arm the gate and clears the last marker")
+            assert_true("[INTENT HINT]" in done.stdout and "/.analyze" in done.stdout,
+                        f"[{label}] an NL sentence gets an intent hint: {done.stdout[:200]!r}")
+            notify("/.analyze kenapa <task-notification> muncul di log")
 
             # DEC-059: the other turns the host writes, a subagent's hand-back among them,
             # armed the gate in the middle of an /.execute. Each fixture matches the NL map,
@@ -107,7 +118,7 @@ def _check_prompt_field() -> None:
                 marker.unlink()
                 send(case)
                 assert_true(not marker.exists(), f"[{label}] `{case['name']}` does not arm the gate")
-                notify("analisa kenapa gate ini memblokir")
+                notify("/.analyze kenapa gate ini memblokir")
             for case in _HOST_TURNS["user"]:
                 marker.unlink()
                 send(case)

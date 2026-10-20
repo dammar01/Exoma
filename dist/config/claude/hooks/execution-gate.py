@@ -58,10 +58,14 @@ def in_scope(relative, scope):
     return False
 
 
-# An option's value may be quoted and hold spaces: `git -C "repo with spaces" commit`.
+# An option's value may be quoted and hold spaces: `git -C "repo with spaces" commit`. The
+# executable may be named with its Windows suffix or by a quoted path (`git.exe commit`,
+# `"C:/Program Files/Git/cmd/git.exe" commit`); without that, those spellings committed
+# with no approval at all (DEC-068).
 _ARG = r"(?:\"[^\"]*\"|'[^']*'|\S+)"
 _GIT_COMMIT = re.compile(
-    r"\bgit\b(?:\s+(?:-[cC]\s+" + _ARG + r"|--?[\w-]+(?:=" + _ARG + r")?))*\s+commit\b"
+    r"\bgit(?:\.exe)?\b[\"']?(?:\s+(?:-[cC]\s+" + _ARG + r"|--?[\w-]+(?:=" + _ARG + r")?))*\s+commit\b",
+    re.IGNORECASE,
 )
 
 
@@ -102,7 +106,7 @@ def refuse(mode, message):
 
 
 try:
-    raw = os.environ.get("CLAUDE_HOOK_RAW", "")
+    raw = globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
         sys.exit(0)
     payload = json.loads(raw)

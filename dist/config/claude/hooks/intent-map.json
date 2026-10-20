@@ -1,5 +1,5 @@
 {
-  "_comment": "NL-map for the Pre-flight enforcement gate. KEEP IN SYNC with the Command registry NL-map in ~/.claude/CLAUDE.md. Only DELEGATED commands are listed — those are the ones the gate enforces. Patterns are case-insensitive regex fragments matched against the raw user prompt.",
+  "_comment": "NL-map for the Pre-flight enforcement gate. KEEP IN SYNC with the Command registry NL-map in ~/.claude/CLAUDE.md. Only DELEGATED commands are listed. prefix_regex (and the slash-command payload) arms the gate; patterns are case-insensitive regex fragments matched against the user's own text (pasted content and reminders removed) and only produce an [INTENT HINT], never a block (DEC-068).",
   "delegated": ["explore", "plan", "analyze", "verify-browser", "verify"],
   "prefix_regex": "^\\s*/\\.(explore|plan|analyze|verify-browser|verify)(?![\\w-])",
   "patterns": {

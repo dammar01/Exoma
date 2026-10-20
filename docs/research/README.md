@@ -272,6 +272,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-065](decisions/DEC-065-promoted-knowledge-is-part-of-reuse-identity-and-stays-in-the-root.yaml) | Promoted knowledge is part of evidence reuse identity and stays inside the project root | accepted | implemented | not_validated | f63e1b7 |
 | [DEC-066](decisions/DEC-066-facts-validate-every-anchor-rank-by-weighted-overlap-and-keep-what-is-used.yaml) | Facts validate every anchor, rank by weighted overlap, keep what is used, and are measured | accepted | implemented | not_validated | f63e1b7 |
 | [DEC-067](decisions/DEC-067-the-execute-chain-is-runtime-state-and-hooks-gate-what-is-deterministic.yaml) | The plan-execute-verify chain is runtime state, and hooks gate what is deterministic | accepted | implemented | not_validated | f63e1b7 |
+| [DEC-068](decisions/DEC-068-hooks-take-their-payload-on-stdin-and-a-fork-is-its-own-session.yaml) | Hooks take their payload on stdin, a fork is its own session, and only an explicit command arms the gate | accepted | implemented | not_validated | uncommitted |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

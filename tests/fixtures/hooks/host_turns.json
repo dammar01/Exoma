@@ -1,5 +1,5 @@
 {
-  "_comment": "Turns the host sends that the user did not write (DEC-059). Shapes observed in a real session on 2026-10-18, text sanitized; each matches the delegated NL map, so a gate that classified it would arm. `payload` fields are merged into the UserPromptSubmit payload.",
+  "_comment": "Turns the host sends that the user did not write (DEC-059). Shapes observed in a real session on 2026-10-18, text sanitized; each matches the delegated NL map, so a gate that classified it would arm. The user turns name their command explicitly: since DEC-068 only an explicit command arms the gate. `payload` fields are merged into the UserPromptSubmit payload.",
   "host": [
     {
       "name": "subagent hand-back",
@@ -55,11 +55,11 @@
   "user": [
     {
       "name": "user prompt quoting a hand-back",
-      "prompt": "analisa kenapa pesan \"Another Claude session sent a message:\" memicu gate"
+      "prompt": "/.analyze kenapa pesan \"Another Claude session sent a message:\" memicu gate"
     },
     {
       "name": "source user",
-      "prompt": "analisa kenapa gate ini memblokir",
+      "prompt": "/.analyze kenapa gate ini memblokir",
       "payload": {
         "source": "user"
       }
@@ -73,7 +73,7 @@
     },
     {
       "name": "user text after a system reminder",
-      "prompt": "<system-reminder>\nReminder text.\n</system-reminder>\nanalisa kenapa gate ini memblokir"
+      "prompt": "<system-reminder>\nReminder text.\n</system-reminder>\n/.analyze kenapa gate ini memblokir"
     }
   ]
 }

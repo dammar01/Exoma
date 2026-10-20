@@ -143,7 +143,7 @@ def events_for(payload, root):
 
 
 try:
-    payload = json.loads(os.environ.get("CLAUDE_HOOK_RAW", ""))
+    payload = json.loads(globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", ""))
     root = project_root(payload.get("cwd"))
     events = events_for(payload, root) if root else []
     if events:

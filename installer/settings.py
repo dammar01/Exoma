@@ -5,6 +5,7 @@ rollback: everything here appends to the receipt, and a check must not.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -190,6 +191,65 @@ def _render_hook_commands(template: dict, bash: str | None = None) -> dict:
     return template
 
 
+# Claude Code's own setting for where Git Bash is (Windows only). Without it Claude Code
+# finds Git Bash by itself, and where it cannot (a headless `claude -p` started from
+# PowerShell, DEC-068) it runs every hook command through PowerShell instead: the quoted
+# `"<bash>" "<script>"` pair is a parse error there, and PreToolUse hooks then block every
+# tool call.
+GIT_BASH_ENV = "CLAUDE_CODE_GIT_BASH_PATH"
+
+
+def _git_bash_env() -> dict:
+    """`{CLAUDE_CODE_GIT_BASH_PATH: <Git Bash>}` on Windows with Git Bash, else empty."""
+    if not osutil.IS_WINDOWS:
+        return {}
+    found = osutil.find_bash()
+    return {GIT_BASH_ENV: found} if found else {}
+
+
+def _merge_env(current: dict, template: dict, plan: Plan) -> tuple[dict | None, list[str]]:
+    """The shipped `env` keys a settings file lacks, merged into its own `env`.
+
+    A key the user already set is theirs, as every other key is; one that names a missing
+    file is reported, since Claude Code then ignores it and falls back to its own search.
+    Returns the new `env` (None when unchanged) and the keys added.
+    """
+    tmpl_env = template.get("env") if isinstance(template.get("env"), dict) else {}
+    cur_env = current.get("env")
+    if not tmpl_env or not isinstance(cur_env, dict):
+        return None, []
+    missing = [k for k in tmpl_env if k not in cur_env]
+    value = cur_env.get(GIT_BASH_ENV)
+    if GIT_BASH_ENV in tmpl_env and value and not os.path.isfile(str(value)):
+        plan.warn(f"settings.json[env.{GIT_BASH_ENV}] names {value}, which does not exist — kept yours; "
+                  f"Git Bash is at {tmpl_env[GIT_BASH_ENV]}")
+    if not missing:
+        return None, []
+    return {**cur_env, **{k: tmpl_env[k] for k in missing}}, missing
+
+
+def _pin_python(settings_dest: Path, plan: Plan, apply: bool) -> None:
+    """Write hooks/python.path beside the settings.json being installed (~/.claude/hooks on
+    a real install): the interpreter this install runs under.
+
+    The launchers exec it and the generated .workflow scripts name it, so hooks and the
+    runner run one Python, the one the requirements went into, instead of whichever
+    `python3`/`python`/`py -3` PATH offers first (DEC-068). Generated, not shipped: it is
+    not in the manifest, and the stale-file prune never sees it. Placed by the settings
+    file's location, not by HOME, so an install into another directory (the tests) never
+    touches the real home.
+    """
+    dest = settings_dest.parent / "hooks" / osutil.PINNED_PYTHON_FILE
+    value = Path(sys.executable).as_posix()
+    if dest.is_file() and _read_text_lenient(dest).strip() == value:
+        plan.add("unchanged", dest)
+        return
+    plan.add("replace" if dest.exists() else "create", dest, value)
+    if apply:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(value + "\n", encoding="utf-8", newline="\n")
+
+
 def _remove_intent_hook_entries(settings: dict) -> tuple[dict, int]:
     out = json.loads(json.dumps(settings))
     hooks = out.get("hooks")
@@ -340,7 +400,14 @@ def _install_settings(
     retired = retired_hook_stems()
     owned_stems = shipped_hook_stems() | retired
     template = _resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None)
+    # The interpreter pin and Git Bash's location serve the shipped bash launchers; a
+    # template that names none needs neither.
+    runs_launchers = _HOOK_BASH in json.dumps(template)
     template = _render_hook_commands(template)
+    if runs_launchers:
+        _pin_python(dest, plan, apply)
+        if _git_bash_env():
+            template["env"] = {**(template.get("env") or {}), **_git_bash_env()}
     if only_command:
         # The runtime half of auto-intent. Dropping the prompt stanza while leaving this
         # hook registered would keep the gate blocking gather tools on a classification
@@ -363,8 +430,11 @@ def _install_settings(
         plan.warn(f"{dest} root is not a JSON object; left untouched")
         return
 
-    added = [k for k in template if k not in current]
-    differing = [k for k in template if k in current and current[k] != template[k]]
+    # `env` is merged key by key below: the user's own variables are not a conflict.
+    merged_env, env_added = _merge_env(current, template, plan)
+    keyed = [k for k in template if not (k == "env" and isinstance(current.get("env"), dict))]
+    added = [k for k in keyed if k not in current]
+    differing = [k for k in keyed if k in current and current[k] != template[k]]
 
     status_refresh = False
     if "statusLine" in differing:
@@ -439,6 +509,8 @@ def _install_settings(
             )
     if status_refresh:
         hook_changes.append("statusLine (refreshed the shipped command)")
+    if env_added:
+        hook_changes.append(f"env ({', '.join(env_added)} added)")
 
     for key in differing:
         level = "REQUIRED" if key in SETTINGS_REQUIRED else "kept"
@@ -461,6 +533,8 @@ def _install_settings(
             current["statusLine"] = template["statusLine"]
         if merged_hooks is not None:
             current["hooks"] = merged_hooks
+        if merged_env is not None:
+            current["env"] = merged_env
         dest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
         _record("merge", dest, "claude/settings.json", saved, pre_sha256)
 

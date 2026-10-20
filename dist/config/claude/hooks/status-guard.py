@@ -1,10 +1,12 @@
 # status-guard.py - Stop hook (the "never say done before verify" rule, DEC-067).
 # Reads the session's runtime/execution.json (core/runtime/execution.py). When an execution
 # exists whose verification is still `not_run`, and the assistant message that just ended
-# the turn claims completion ("done", "selesai", "berhasil", "fixed", "test lolos", ...),
-# the hook reports it as a systemMessage the user sees. Warning only, by design: a word
-# list reads prose, and prose is where false positives live — "belum selesai" and a quoted
-# rule both contain the word. The deterministic gates are in execution-gate.py.
+# the turn carries an [EXECUTION RESULT] block whose own fields claim more than that — a
+# `status` outside implemented|partial|blocked (skills/execute.md), or a `verification`
+# other than not_run — the hook reports it as a systemMessage the user sees. Warning only.
+# It reads the structured fields the execute skill defines, never prose (DEC-068): a word
+# list fired on "begitu selesai, saya lanjut" and on every quoted digest, in any language,
+# for any model. A reply with no [EXECUTION RESULT] is not judged.
 # The message is `last_assistant_message` when the host sends it, otherwise the last
 # assistant entry of `transcript_path`. Anything missing -> exit 0 silently. Never blocks.
 import json, os, re, sys
@@ -22,15 +24,19 @@ def workflow_data_dir(root):
     return data
 
 
-# Completion claims, in the two languages the skills are written in. A claim negated in
-# the words just before it ("belum selesai", "not done") is not a claim.
-_CLAIM = re.compile(
-    r"\b(done|selesai|berhasil|sudah jalan|fixed|works now|aman sekarang|test lolos|tests? pass(?:ed|es)?)\b|✅",
-    re.IGNORECASE,
-)
-_NEGATION = re.compile(r"\b(belum|tidak|bukan|jangan|dilarang|not|never|no|isn't|aren't|without)\b[\s\w,\"'`-]{0,20}$", re.IGNORECASE)
-# The sentence that names the rule, quoted in a status line, is not a claim either.
-_RULE_QUOTE = re.compile(r"implemented,?\s+belum diverifikasi|verification:\s*not_run", re.IGNORECASE)
+# The values skills/execute.md allows while verification is not_run. Anything else in the
+# status field ("done") claims what only /.verify can establish.
+UNVERIFIED_STATUSES = {"implemented", "partial", "blocked"}
+# The reply's own block: the header opens a line (heading or emphasis marks allowed). One
+# quoted (`> [EXECUTION RESULT]`), mentioned mid-sentence, or inside a code fence is someone
+# else's result being relayed, not this reply's claim.
+_RESULT_HEADER = re.compile(r"^[ \t#*_-]*\[EXECUTION RESULT\]", re.MULTILINE)
+# A fence runs to its closing fence, or to the end of the reply when it is never closed.
+_FENCE = re.compile(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1[^\n]*$|\Z)", re.DOTALL | re.MULTILINE)
+# A block ends at the next [SECTION] header. A field line may carry list or emphasis marks
+# around the key (`- **status:** implemented`); a quoted line is not a field.
+_NEXT_HEADER = re.compile(r"^\s*\[[A-Z][A-Z _-]+\]", re.MULTILINE)
+_FIELD = re.compile(r"^[ \t*_`|-]*(status|verification)[*_`\s]*:[*_`\s]*([A-Za-z_-]+)", re.IGNORECASE | re.MULTILINE)
 
 
 def read_json(path):
@@ -71,21 +77,32 @@ def last_assistant_text(payload):
     return ""
 
 
+def result_fields(text):
+    """{field: value} from the last [EXECUTION RESULT] block in `text`, lower-cased."""
+    text = _FENCE.sub("", text or "")
+    headers = list(_RESULT_HEADER.finditer(text))
+    if not headers:
+        return {}
+    body = text[headers[-1].end():]
+    nxt = _NEXT_HEADER.search(body)
+    body = body[: nxt.start()] if nxt else body
+    return {m.group(1).lower(): m.group(2).lower() for m in _FIELD.finditer(body)}
+
+
 def claims_completion(text):
-    """The first unnegated completion claim in `text`, or None."""
-    for line in (text or "").splitlines():
-        # Drop the quoted rule, keep the rest: a line that names the status and then
-        # claims completion anyway is still a claim.
-        line = _RULE_QUOTE.sub(" ", line)
-        for m in _CLAIM.finditer(line):
-            if _NEGATION.search(line[: m.start()]):
-                continue
-            return m.group(0)
+    """`field: value` where the reply's own [EXECUTION RESULT] claims more than not_run
+    allows, or None."""
+    fields = result_fields(text)
+    status, verification = fields.get("status"), fields.get("verification")
+    if status and status not in UNVERIFIED_STATUSES:
+        return "status: " + status
+    if verification and verification != "not_run":
+        return "verification: " + verification
     return None
 
 
 try:
-    raw = os.environ.get("CLAUDE_HOOK_RAW", "")
+    raw = globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
         sys.exit(0)
     payload = json.loads(raw)
@@ -108,7 +125,7 @@ try:
     if word:
         sys.stdout.write(json.dumps({
             "systemMessage": (
-                "[STATUS GUARD] the reply says %r, but plan %s has verification: not_run. "
+                "[STATUS GUARD] the [EXECUTION RESULT] says %r, but plan %s has verification: not_run. "
                 "Implemented is not verified — run /.verify before treating this as done."
             ) % (word, execution.get("plan_id")),
         }))

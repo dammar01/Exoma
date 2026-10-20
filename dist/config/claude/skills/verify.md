@@ -25,8 +25,8 @@ Second agent cuma baca + telusur; runtime yang menjalankan test. Kamu yang memil
    (`.workflow/config.json`), tanpa shell (`&&`/pipe/redirect ditolak). Di luar allowlist →
    `not_verified`. Allowlist kosong → sebut ke user, sarankan prefix yang perlu ditambahkan;
    project tanpa test suite → tak ada prefix untuk disarankan, tulis `commands: []` (langkah 1).
-Gate: selama marker verify aktif (sebelum `.workflow/run verify`) yang lolos HANYA `git diff --name-only|--name-status|--stat [ref] [-- path]`
-(bersih, nol pipe/`&&`/redirect), Read `.workflow/config.json` + tests.json sesi ini, dan Write tests.json itu. Baca isi file src/test → ke-block; cukup nama file dari diff.
+Gate: selama marker verify aktif (sebelum `.workflow/run verify`) yang lolos HANYA `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
+(boleh diawali `cd <dir di dalam root> && `; selain itu nol pipe/`&&`/redirect), Read `.workflow/config.json` + tests.json sesi ini, dan Write tests.json itu. Baca isi file src/test → ke-block; cukup nama file dari diff.
 Tanpa tests.json → verify jadi `incomplete` (gap `tests:`, exit nonzero). `commands: []` eksplisit ≠ tanpa tests.json. Test gagal → blocking.
 tests.json milik SATU job verify (runtime mengklaimnya saat job dibuat). Rerun sesudah verify gagal = job baru → tulis tests.json lagi; pilihan lama tidak dipakai ulang.
 

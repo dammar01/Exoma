@@ -86,7 +86,7 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 
 | Requirement | Notes |
 |---|---|
-| Python 3.10+ | the `X \| None` syntax is used throughout the code. `main.py`, `install.py` and `check.py` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks pick an interpreter by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.10 is skipped, and with none of them the hook fails open |
+| Python 3.10+ | the `X \| None` syntax is used throughout the code. `main.py`, `install.py` and `check.py` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks run the interpreter `install.py` pinned in `~/.claude/hooks/python.path` (the one it ran under and installed the requirements into, also named by generated `.workflow/*.sh`); without that file they pick one by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.10 is skipped, and with none of them the hook fails open |
 | `opencode` on `PATH` | only for delegated commands |
 | `git` on `PATH` | optional; used by `sweep` and the `syntax` verify mode |
 | Runtime dependencies | **zero**; the whole runtime uses the standard library |
@@ -297,8 +297,11 @@ is mapped to `MAIN_SESSION_ID` via `~/.claude/session_registry.json`, written by
 `session-bind`. No `usage.jsonl` yet, or the session is not mapped yet, the badge only shows
 the project name — it never fails the prompt.
 
-**All numbers are session-scoped.** `/clear` and `/compact` give a new `MAIN_SESSION_ID`
-(`resume` reuses the old one), so all three return to zero together. That is deliberate:
+**All numbers are session-scoped.** `/clear`, `/compact` and a fork (`/branch`, `/fork`,
+`--fork-session`; SessionStart `source: fork`) give a new `MAIN_SESSION_ID` (`resume` reuses
+the old one), so all three return to zero together. A fork shares nothing at runtime with the
+session it came from — no plan, marker, token or execution — so `/.execute -y` in a fork needs
+its plan recorded there (DEC-068). That is deliberate:
 a project-lifetime number next to a session number reads as a ratio that was never measured —
 right after `/clear`, the bar once read `Second Agent 0 | Saved 129.5k`.
 
@@ -329,7 +332,7 @@ measures **prompt** length, not how much was read. Fallback rows turn on `~`.
 
 | Event | Matcher | Script | Function |
 |---|---|---|---|
-| `SessionStart` | `startup\|resume\|clear\|compact` | `session-bind` | binds the Claude session to `MAIN_SESSION_ID` |
+| `SessionStart` | `startup\|resume\|clear\|compact\|fork` | `session-bind` | binds the Claude session to `MAIN_SESSION_ID` |
 | `UserPromptSubmit` | — | `intent-gate-set` | auto-intent mode only: sets the gate marker for delegated prompts |
 | `UserPromptSubmit` | — | `task-events` | local skill from the prompt; HEAD snapshot |
 | `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit` | `intent-gate-check` | blocks gather tools while the gate marker exists; Bash and PowerShell go through one tokenizer and one rule: only a single plain call `[bash] <root>/.workflow/{run,check,inspect}.sh` passes (each word plain or `'...'`; `$`, backtick, `;`, `|`, `&`, redirect, newline only inside single quotes; double quotes, `bash -c`, another interpreter in front, `run.ps1`, paths outside the root, `..`, and look-alike names are rejected); Write/Edit pass except to that runner script; a marker with intent `verify` lets the test-selection path through (see "Intent mode") |
@@ -342,7 +345,26 @@ user hooks are left alone, and workflow script commands that this release no lon
 an event are removed from that event (for example `task-events` on `PreToolUse` from the 3.8.0 draft).
 The command in the template is the same for all OSes, `{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<hook>.sh"`;
 the installer fills `{{HOOK_BASH}}` with `bash` on POSIX and the absolute Git Bash path (quoted) on
-Windows, because a plain `bash` there can fall through to WSL bash in `System32`. Without Git Bash on
+Windows, because a plain `bash` there can fall through to WSL bash in `System32`. On Windows the
+installer also adds `env.CLAUDE_CODE_GIT_BASH_PATH` (Claude Code's own setting for where Git Bash
+is) when `settings.json` does not set it; a value the user set is kept, and one naming a missing
+file is reported. Without it, a Claude Code that cannot find Git Bash by itself (a headless
+`claude -p` started from PowerShell) runs the hook commands through PowerShell, where the quoted
+`"<bash>" "<script>"` pair is a parse error and every PreToolUse hook blocks its tool.
+The installer writes `~/.claude/hooks/python.path` (its own interpreter) beside the launchers.
+A hook receives its payload on stdin, read as UTF-8 bytes whatever the console code page is,
+and `workflow_hooks.py` hands it to the hook module in memory: there is no size limit (the
+environment variable it used before failed past 32767 characters on Windows, so every large
+Edit/Write crashed `task-events` and the PreToolUse gates failed open). A hook that raises, or
+exits with anything but 0 or 2 (a message exit included), exits 0 and appends the traceback to
+`~/.claude/hook-errors.log` (beside the registry, never beside the hook scripts); exit 2 still blocks. `session-bind` replaces
+`session_registry.json` under a sidecar lock file (`session_registry.json.lock`, created
+exclusively and holding its owner's token; a holder removes only its own lock), so sessions
+starting together keep their bindings. Two limits: after 2 s of waiting a bind goes ahead
+unlocked rather than delay the session start, and a lock older than 10 s (its holder died) is
+removed only while it still holds the token judged stale, which leaves the instant between
+that check and the removal unguarded.
+Without Git Bash on
 Windows, or without `bash` on PATH on POSIX, `--apply` is refused (exit 6) before writing anything.
 Maintainer and e2e tools that run hooks or the runner also refuse (rather than guessing a plain
 `bash`) when bash is not found. Old commands of the form
@@ -402,7 +424,13 @@ subagent); or when, after any leading `<system-reminder>` blocks are removed, it
 opens with `<task-notification>`, `[SYSTEM NOTIFICATION`, `<agent-message` or
 `Another Claude session sent a message` (a native subagent's hand-back). `source` `user` and
 `sdk` stay classified, and a user prompt that only mentions one of these shapes mid-sentence
-still arms the gate. Previously a task name, an agent report or a snippet of output could match
+still counts as the user's. Claude Code does not document `source`, so a project may extend both
+lists with `policies.prompt_sources` (`{"user": [...], "host": [...]}`) in `.workflow/config.json`.
+A label in neither list is treated as the user's, with one limit: `execute.token` and
+`commit.marker` are then written only when the command opens the prompt (`/.execute -y ...`,
+`commit ...`) or arrives as the slash-command payload; each such label is counted in
+`~/.claude/prompt-sources.json`. Text inside `<pasted_content>` is never classified and approves
+nothing. Previously a task name, an agent report or a snippet of output could match
 the NL map and set a gate nobody asked for, which also blocked the main agent's own subagents
 during `/.execute`. A real marker still binds subagents: their gather calls go through
 `intent-gate-check` like the main agent's. The marker records `source`, `has_agent_id` and
@@ -411,20 +439,31 @@ during `/.execute`. A real marker still binds subagents: their gather calls go t
 Up to 3.8.0, `intent-gate-set` read the prompt from the `user_prompt` field, which Claude Code never
 sends (the field is `prompt`). As a result the runtime gate was never active and only the
 prompt layer worked. Since that fix, in auto-intent mode `intent-gate-check`
-actually blocks gather tools after a prompt that maps to a delegated command until
+actually blocks gather tools after a prompt that names a delegated command until
 `.workflow/run` is called; the escape is still `WORKFLOW_LOCAL_MODE=1` or `local_mode.flag`.
+
+Only a command the user named arms the gate: the prefix typed at the start of the prompt
+(`/.analyze ...`, `prefix_regex` in `intent-map.json`) or the slash-command payload
+(`<command-name>/.analyze</command-name>`). A prompt that only resembles a delegated command
+under the NL map arms nothing and clears a pending marker; it gets an `[INTENT HINT]` as
+`additionalContext` naming the command and the runner call, and the prompt-level gate decides.
+Until DEC-068 any NL match armed the gate, so questions and descriptions ("saat saya analisa
+...", a question that mentions playwright) blocked the main agent's own reply.
 
 The runner passes only when it is the command itself: the first word is this project's
 `.workflow/{run,check,inspect}.sh` path, or the second word after a plain `bash` (no
-flags). The Bash and PowerShell tools are read by the same tokenizer: each word must be plain (letters, digits,
+flags), and that path, every symlink followed, still lies in the project's `.workflow`: a
+`run.sh` linked to a script elsewhere is not the runner. The Bash and PowerShell tools are read by the same tokenizer: each word must be plain (letters, digits,
 `_ . / : = + % - ^`, and `~` mid-word) or wrapped in single quotes, which are literal in both
-shells. That is why a task may contain `$`, `;`, `|`, `&`, `<`, `>`, and parentheses as long as they are inside
-`'...'`; double quotes are rejected because both shells expand `$` inside them, and an apostrophe
-inside the task cannot be written. A runner path that appears as an argument of another command
+shells. That is why a task may contain `$`, `;`, `|`, `&`, `<`, `>`, parentheses and line breaks as long as they are inside
+`'...'`; a line break outside quotes ends the command and is refused, double quotes are rejected because both shells expand `$` inside them, and an apostrophe
+inside the task cannot be written. A command may open with `cd <dir> && ` when `<dir>` is the
+project root or inside it (the Bash tool resets the working directory between calls); the rest
+is judged on its own. A runner path that appears as an argument of another command
 (`python -c "..." x/.workflow/run.sh`) and `run.ps1` (retired) are still blocked.
 
 The `command` field in the marker selects the pass rule. For `verify`, main_agent must select tests
-before delegating, so three things pass: a plain `git diff` (same word rules as the runner)
+before delegating, so three things pass: a plain `git diff` or `git -C <dir inside the root> diff` (same word rules as the runner)
 with `--name-only`, `--name-status`, or `--stat[=N]`, plus optional `--cached`, `--staged`,
 `--relative`, `--no-renames`, `--no-color`, `--`, refs, and paths (other options such as `-p` or
 `--output` are still blocked); Read of `<root>/.workflow/config.json`; Read/Write of
@@ -440,8 +479,13 @@ For every `command` in the marker, Read of a skill definition also passes: an ab
 inside the real path of `~/.claude/skills`. A symlink may point anywhere inside the skill folder,
 not outside it. The reason: the Skill tool tells the agent to read `~/.claude/skills/<name>.md`
 after the prompt that invoked it has armed the gate, so the dispatch instructions would be locked
-until after dispatch (DEC-039). Grep/Glob over that folder, non-`.md` files, and relative
-paths are still blocked.
+until after dispatch (DEC-039). `~/...` and Git Bash's `/c/...` spellings are read as the shell
+reads them before the check. Grep/Glob over that folder, non-`.md` files, and relative
+paths are still blocked. A Read of a background task's output (`<temp>/claude.../tasks/<id>.output`,
+an existing file under the temp directory) passes too: that is where a delegation started in the
+background returns its result. The layout is Claude Code's and undocumented; if it moves, those
+reads are gated again. `cat <file>` (`type`, `Get-Content`, `gc`) of one such file, bare or
+single-quoted with nothing else on the line, passes like the Read.
 
 For every `command` in the marker, a **precision Read** also passes (DEC-043): a file inside the
 project root (relative paths resolved against the root, symlinks followed), not under
@@ -671,7 +715,7 @@ section "Contracts the runtime cannot enforce".
 | `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
 | New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` and after `/.refactor` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` (DEC-046) |
 | `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent; since 3.9.0 also runtime + hooks: `execute-begin` needs the recorded plan and the `-y` token, `execution-gate` blocks Edit/Write outside the scope | `skills/execute.md`, `skills/plan.md` STEP 3; [Plan and execution state](#plan-and-execution-state) |
-| Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent; the `status-guard` Stop hook warns on a done-claim while `verification: not_run` | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
+| Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent; the `status-guard` Stop hook warns when the `[EXECUTION RESULT]` fields claim more than `verification: not_run` allows | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
 | Proxy failure | `ok:false`, an invalid-evidence `error_type`, or content that is not evidence → stop, print `[PROXY GAGAL] …`, ask whether to continue with `/.local` (yes/no), then wait. Automatic local fallback is forbidden | main_agent | `CLAUDE.md`, "Proxy failure" |
 | Destructive actions | Commit, delete, or writing outside the project must not run from a guessed intent; confirmation is required. Writing to another project (Edit/Write or Bash/script) needs explicit approval for that path; the hook does not stop it (see [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" and "Global Forbidden" |
 | `/.commit` staging | An existing staged set is used as is. With nothing staged, main_agent stages changed tracked files and untracked files Git does not ignore, one quoted path per argument (never `-A` or `.`), and skips a path whose lowercased, `/`-separated form matches the canonical secret-file list of `core/policy/secret_patterns.py` (`SECRET_READ_PATTERNS`, minus `SECRET_READ_ALLOWLIST`), the same list the providers' read boundary uses; a test keeps the skill's copy identical. It shows staged, newly tracked, and skipped paths with the message, and commits only on `yes`; `no` unstages only what it staged (`git reset -q --`, which also works before the first commit). The skip list is a prompt rule over file names, not a content scanner | main_agent | `skills/commit.md` (DEC-060, DEC-061) |
@@ -777,7 +821,7 @@ The following keys actually change the Python runtime's (or a shipped hook's) be
 | `policies.fact_recurrence_threshold` | `5` | number of **other** sessions that must report a claim before it is promoted |
 | `policies.fact_max_claim_chars` | `400` | longer claims are refused at ingest, never truncated |
 | `policies.fact_max_facts` | `500` | fact store ceiling; past it the least-used, least-recently-used facts are evicted first |
-| `policies.enforcement` | `"hybrid"` | the `execution-gate` / `status-guard` hooks: `hybrid` blocks the deterministic gates and warns on done-claims, `warn` only reports, `off` disables both |
+| `policies.enforcement` | `"hybrid"` | the `execution-gate` / `status-guard` hooks: `hybrid` blocks the deterministic gates and warns on an `[EXECUTION RESULT]` that claims more than not_run, `warn` only reports, `off` disables both |
 | `policies.write_allowed_outside_root` | `[]` | paths outside the project root a Write/Edit may land in, beyond the temp dir and `~/.claude` |
 | `policies.graph_leads_enabled` | `true` | inject a shortlist from `graphify-out/graph.json` |
 | `policies.subagent_fanout_enabled` | `true` | request fan-out for the exploration/reasoning roles |
@@ -1159,7 +1203,10 @@ Since 3.9.0 the plan → `/.execute -y` → `/.verify` chain is runtime state in
 
 `execute.token` and `commit.marker` are written by the `intent-gate-set` hook only for a prompt
 the user wrote: `/.execute -y` (typed or as the expanded slash command) and a prompt asking to
-commit (a bare affirmative keeps an existing commit marker; a negated mention clears it).
+commit (a bare affirmative keeps an existing commit marker; any other prompt, a negated mention
+included, clears it). Both live in the session's own runtime directory, and a fork is its own
+session, so a prompt in one window never clears another window's approval. For a prompt whose
+`source` neither list names, see the intent gate above: the command must open the prompt.
 
 Hooks, governed by `policies.enforcement`:
 
@@ -1167,9 +1214,14 @@ Hooks, governed by `policies.enforcement`:
   write outside the project root (the temp dir, `~/.claude` and `policies.write_allowed_outside_root`
   excepted), a write inside the root outside an active execution's scope (`.workflow/` always
   passes; with no active execution every in-root write passes), and `git commit` without a
-  `commit.marker` younger than 30 minutes (quoted option values such as `git -C "a b" commit` count; so does the text `git commit` inside another command's quoted argument — a fail-closed false block). Containment is decided on the path after resolving symlinks and junctions; scope accepts either spelling. Shell commands are not parsed for file writes.
-- `status-guard` (Stop): when `execution.json` says `verification: not_run`, a reply claiming
-  completion gets a `systemMessage` warning. It never blocks.
+  `commit.marker` younger than 30 minutes (`git.exe` and a quoted path to git count, as do quoted option values such as `git -C "a b" commit`; so does the text `git commit` inside another command's quoted argument — a fail-closed false block). Containment is decided on the path after resolving symlinks and junctions; scope accepts either spelling. Shell commands are not parsed for file writes.
+- `status-guard` (Stop): when `execution.json` says `verification: not_run`, a reply whose own
+  `[EXECUTION RESULT]` block claims more — `status` outside `implemented|partial|blocked`, or a
+  `verification` other than `not_run` — gets a `systemMessage` warning. It reads those fields
+  only, never prose: the word list it used before fired on "begitu selesai, saya lanjut" and on
+  every quoted digest (DEC-068). The block must be the reply's own: one quoted with `>`, inside
+  a code fence, or named mid-sentence is a relayed result and is not read. A reply with no
+  `[EXECUTION RESULT]` is not judged. It never blocks.
 
 ## Evidence reuse and boundary
 

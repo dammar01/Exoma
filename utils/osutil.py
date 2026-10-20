@@ -22,9 +22,29 @@ _PYTHON_CANDIDATES: tuple[tuple[str, ...], ...] = (("python3",), ("python",), ("
 _VERSION_PROBE = "import sys; print('%d.%d' % sys.version_info[:2])"
 
 
+# Where install.py records the interpreter it ran under (the one it installed the
+# requirements into), so the hook launchers and the generated .workflow scripts run the
+# same Python instead of each picking its own from PATH (DEC-068).
+PINNED_PYTHON_FILE = "python.path"
+
+
+def pinned_python_path(home: Path | None = None) -> Path:
+    """~/.claude/hooks/python.path, beside the launchers that read it."""
+    return Path(home or os.path.expanduser("~")) / ".claude" / "hooks" / PINNED_PYTHON_FILE
+
+
+def pinned_python(home: Path | None = None) -> str | None:
+    """The interpreter install.py pinned, while that file still exists; else None."""
+    try:
+        value = pinned_python_path(home).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value if value and os.path.isfile(value) else None
+
+
 def python_exe() -> str:
-    """Resolve the python interpreter name for generated scripts."""
-    return sys.executable or ("python" if IS_WINDOWS else "python3")
+    """Resolve the python interpreter for generated scripts: the pinned one, else this one."""
+    return pinned_python() or sys.executable or ("python" if IS_WINDOWS else "python3")
 
 
 def _probe_python(argv: list[str]) -> tuple[int, int] | None:

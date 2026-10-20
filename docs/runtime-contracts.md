@@ -25,6 +25,7 @@ nothing in Python. The list is kept explicit so that "configured" is never mista
 - `policies.fact_relevant_limit`, `policies.fact_relevant_limits`, `policies.fact_min_relevance`
 - `policies.fact_recurrence_threshold`, `policies.fact_max_claim_chars`, `policies.fact_max_facts`
 - `policies.enforcement`, `policies.write_allowed_outside_root` (read by the `execution-gate` and `status-guard` hooks, not by Python)
+- `policies.prompt_sources` (read by the `intent-gate-set` hook, not by Python)
 - `policies.graph_leads_enabled`
 - `policies.subagent_fanout_enabled`
 - `policies.production_branch`, `policies.knowledge_dir`, `policies.knowledge_relevant_limit` (promote and the knowledge sidecar)
@@ -53,7 +54,7 @@ the bytes it would have to check.
 | `[OPTIONS]` block and the confidence triple in `/.plan` | Appear in main_agent's **output**. Since 3.9.0 their mechanical half is checked when main_agent records the plan (`plan-record`: one to three options, each with a `minus`, exactly one recommended; all three confidence levels; a `proceed` with open questions or `solution_path` below `high` is refused). What the prose says is still unreachable. |
 | Per-claim attribution tags | Output-side, never routed back through the runtime. |
 | Intent detection without the `/.` prefix | Matches on the **user's** message. No Python path receives one. |
-| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose. The `status-guard` Stop hook reads the reply and warns; it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
+| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose, which no hook reads. The `status-guard` Stop hook reads only the reply's `[EXECUTION RESULT]` fields (`status`, `verification`) and warns when they claim more than not_run (DEC-068); it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
 | `commands.auto_verify_after_execute` | Whether main_agent chains `/.verify` after an execution is still its own behavior; the runtime records the verdict once a verify runs. |
 | `/.verify-browser` interview | The questions happen in main_agent's thread, and only after a draft reports the target unconfigured or unreachable. The runtime only sees the request file written afterwards. |
 | Proxy-failure hard gate | Stopping, printing `[PROXY GAGAL]`, and waiting for a yes/no before any local fallback is main_agent behavior after it reads `ok:false`. The runtime returns the failure; it cannot stop main_agent from gathering on its own. |
@@ -61,20 +62,27 @@ the bytes it would have to check.
 | Main agent leaves `graphify update` to the Stop hook, and reads the graph as stale while `graphify-out/.refresh.lock` is held | Main agent runs graphify and reads graph.json through its own tools. The runtime honours the lock only for its own reads (`core.graph.graph_index.load_graph`). |
 
 One prompt contract is enforced **partly outside Python**: the pre-flight gate for
-delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode the
+delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode, once the user
+names a delegated command explicitly (`/.analyze ...` or the slash-command payload; a prompt
+that only resembles one under the NL map gets an `[INTENT HINT]` instead, DEC-068), the
 `intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools (including
 the `PowerShell` tool, and writes to the runner scripts) until `.workflow/run` dispatches;
 a Bash or PowerShell call passes only when one shared tokeniser reads it as one plain call to
 `[bash] <root>/.workflow/{run,check,inspect}.sh` whose every word is bare or single-quoted —
 literal in both shells, so `$`, `;`, `|`, `&`, redirects and newlines pass only inside single
-quotes, and double quotes, `bash -c` and the retired `run.ps1` do not — and a Read passes when it
+quotes, and double quotes, `bash -c` and the retired `run.ps1` do not; a leading
+`cd <dir inside the root> && ` is allowed — and a Read (or a one-file `cat`) passes when it
 names an existing `.md` whose real path lies inside `~/.claude/skills` (the skill that says
-how to dispatch, DEC-039) or is a precision read: a project file outside `.workflow/`, at
+how to dispatch, DEC-039; `~` and `/c/...` spellings resolved first), a background task's
+`<temp>/claude.../tasks/<id>.output` (DEC-068), or is a precision read: a project file outside `.workflow/`, at
 most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
 `runtime/delegated.reads` keyed to the marker's `set_at` (DEC-043). That enforcement lives in the agent host, not in this runtime,
 and it fails open. The hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
-on Windows, named by absolute path in `settings.json`) that resolves a Python 3.10+ by running
-it and execs `workflow_hooks.py <hook>`, which runs `<hook>.py`; no `.ps1` ships. The full prompt-layer list, with what each contract requires, is in
+on Windows, named by absolute path in `settings.json`, which also sets
+`env.CLAUDE_CODE_GIT_BASH_PATH`) that runs the Python pinned in `~/.claude/hooks/python.path`
+(else resolves a Python 3.10+ by running it) and execs `workflow_hooks.py <hook>`, which reads
+the payload from stdin as UTF-8 and runs `<hook>.py` with it in memory — never through the
+environment, which Windows caps at 32767 characters per variable; no `.ps1` ships (DEC-068). The full prompt-layer list, with what each contract requires, is in
 [reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
 What *is* checkable is the second agent's output, because it comes back through the

@@ -58,7 +58,8 @@ memutuskan langkah berikutnya dari kata itu.
 ### Yang ditegakkan runtime, dan yang tidak
 Runtime (`core/runtime/execution.py`, DEC-067): plan proceed + `-y` user untuk membuka
 execution; scope dan root untuk Edit/Write (hook `execution-gate`, blok); `git commit` hanya
-di giliran user meminta commit. Hook `status-guard` (Stop) MEMPERINGATKAN bila balasanmu
-mengklaim selesai saat verification `not_run` — peringatan, bukan blok, karena membaca
-prosa. Jadi kalimat terlarang di atas tetap tanggung jawabmu; hook hanya memberi tahu user
-saat kamu melanggarnya. `policies.enforcement` = hybrid (default) | warn | off.
+di giliran user meminta commit. Hook `status-guard` (Stop) MEMPERINGATKAN bila field
+`[EXECUTION RESULT]` balasanmu mengklaim lebih dari not_run — `status` di luar
+implemented|partial|blocked, atau `verification` selain not_run (DEC-068). Hook TIDAK membaca
+prosa, jadi kalimat terlarang di atas sepenuhnya tanggung jawabmu.
+`policies.enforcement` = hybrid (default) | warn | off.

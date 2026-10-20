@@ -269,7 +269,7 @@ SUITES: dict[str, tuple] = {
     "gate-runner-parsed": (_test_intent_gate_runner_parsed, "one tokeniser for the Bash and PowerShell tools: one plain call to [bash] <root>/.workflow/{run,check,inspect}.sh passes; $ ; | & < > pass only inside single quotes; run.ps1 is retired"),
     "gate-runner-tamper": (_test_intent_gate_runner_tamper, "while armed, a write to the runner scripts is refused; other writes pass"),
     "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the hooks read the session registry as UTF-8 and the gate takes a non-ASCII project root in a runner path"),
-    "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout"),
+    "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout; the DEC-068 failures replay clean"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
     "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),

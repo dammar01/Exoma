@@ -19,6 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from tests.checks.hook_repro import check_repro_matrix
 from tests.checks.support import assert_true
 from utils import osutil
 
@@ -86,6 +87,14 @@ def _case_session_bind(ws: _Workspace, run) -> None:
     assert_true("MAIN_SESSION_ID=" in context, f"session-bind injects MAIN_SESSION_ID: {out[:200]!r}")
     registry = json.loads(ws.registry.read_text(encoding="utf-8-sig"))
     assert_true("c2" in registry and registry["c2"].get("main_session_id"), f"session-bind records the session: {registry}")
+    # DEC-068: `/branch` and `/fork` start a SessionStart with source=fork under a new session
+    # id. The fork is its own session: sharing the parent's let a prompt in one window clear
+    # the commit approval the other was about to use.
+    run({"source": "fork", "session_id": "c3", "cwd": str(ws.project), "hook_event_name": "SessionStart"})
+    registry = json.loads(ws.registry.read_text(encoding="utf-8-sig"))
+    forked = (registry.get("c3") or {}).get("main_session_id")
+    assert_true(forked and forked != registry["c2"]["main_session_id"],
+                f"a fork gets its own MAIN_SESSION_ID: {registry.get('c3')}")
 
 
 def _silent(ws: _Workspace, out: str, hook: str) -> None:
@@ -252,12 +261,33 @@ def _case_status_guard(ws: _Workspace, run) -> None:
     (ws.runtime / "execution.json").write_text(
         json.dumps({"status": "implemented", "plan_id": "p1", "verification": "not_run"}), encoding="utf-8"
     )
-    code, out, _ = run({**stop, "last_assistant_message": "Blok 3 selesai, semua berjalan."})
-    assert_true(code == 0 and "STATUS GUARD" in out, f"a done-claim before verify is reported: {out[:200]!r}")
-    code, out, _ = run({**stop, "last_assistant_message": "Status: implemented, belum diverifikasi. Belum selesai diverifikasi."})
-    assert_true(code == 0 and not out.strip(), f"the honest status line is not a claim: {out[:200]!r}")
-    code, out, _ = run({**stop, "last_assistant_message": "verification: not_run, tapi semuanya sudah selesai."})
-    assert_true(code == 0 and "STATUS GUARD" in out, f"naming the status does not excuse a claim on the same line: {out[:200]!r}")
+    # DEC-068: the guard reads the [EXECUTION RESULT] fields skills/execute.md defines, never
+    # prose. The prose below fired the word list on every turn of a real session.
+    for prose in ("Begitu ketiganya selesai, saya akan menilai biaya.", "Hasil menyusul begitu selesai.",
+                  "> job selesai, 12 test lolos", "```\n[exited] done\n```", "Blok 3 selesai, semua berjalan."):
+        code, out, _ = run({**stop, "last_assistant_message": prose})
+        assert_true(code == 0 and not out.strip(), f"prose is not judged: {prose!r} -> {out[:200]!r}")
+    result = "[EXECUTION RESULT]\n- files_changed: 3\n- verification: %s\n- **status:** %s\n\n[NEXT] /.verify"
+    code, out, _ = run({**stop, "last_assistant_message": result % ("not_run", "implemented")})
+    assert_true(code == 0 and not out.strip(), f"the honest status fields are not a claim: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": result % ("not_run", "done")})
+    assert_true(code == 0 and "STATUS GUARD" in out and "status: done" in out,
+                f"status: done before verify is reported: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": result % ("pass", "implemented")})
+    assert_true(code == 0 and "verification: pass" in out, f"a verification the runtime did not record is reported: {out[:200]!r}")
+    # Someone else's result relayed in the reply — quoted, fenced, or named mid-sentence — is
+    # not this reply's claim.
+    relayed = (
+        "> [EXECUTION RESULT]\n> - verification: pass\n> - status: done",
+        "```\n[EXECUTION RESULT]\nstatus: done\n```",
+        "The subagent printed [EXECUTION RESULT] with status: done earlier.",
+        "Its output:\n```\n[EXECUTION RESULT]\nstatus: done\n",  # a fence never closed
+    )
+    for text in relayed:
+        code, out, _ = run({**stop, "last_assistant_message": text})
+        assert_true(code == 0 and not out.strip(), f"a relayed result is not judged: {text!r} -> {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": "- [EXECUTION RESULT]\n  - status: done"})
+    assert_true(code == 0 and "status: done" in out, f"the reply's own block opened as a list item is read: {out[:200]!r}")
     (ws.runtime / "execution.json").write_text(
         json.dumps({"status": "implemented", "plan_id": "p1", "verification": "pass"}), encoding="utf-8"
     )
@@ -312,6 +342,8 @@ def _test_hooks_run_through_their_launchers() -> None:
         print("  hook latency (s, per call): " + json.dumps(
             {f"{h}.{l}": [round(s, 3) for s in v] for (h, l), v in sorted(timings.items())}
         ))
+    # The failures reproduced from real sessions (DEC-068), through the same launchers.
+    check_repro_matrix()
 
 
 def _shim(directory: Path, name: str, body: str) -> None:

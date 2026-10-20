@@ -66,7 +66,7 @@ def fmt_tok(n):
 
 
 def main():
-    raw = os.environ.get("CLAUDE_STATUSLINE_RAW", "")
+    raw = globals().get("HOOK_RAW") or os.environ.get("CLAUDE_STATUSLINE_RAW", "")
     if not raw.strip():
         return
     try:
