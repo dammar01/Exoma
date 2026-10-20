@@ -111,7 +111,7 @@ evidence_notes: |
   gate-prompt-field in intent_gate.py.
 implementation:
   version: 3.9.0
-  commits: [uncommitted]
+  commits: [416cf71]
   components:
     - dist/config/claude/hooks/workflow_hooks.py (stdin payload in memory, error log, exits other than 0/2 failed open; the branch-binding diff dropped)
     - dist/config/claude/hooks/*.sh (pinned interpreter first, quoted argv)
