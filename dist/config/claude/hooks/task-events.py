@@ -10,8 +10,8 @@
 import datetime, json, os, re, subprocess
 
 LOCAL_SKILLS = {
-    "execute", "init", "upgrade", "doctor", "sweep", "refactor", "commit", "review",
-    "compress", "memory", "caveman", "local", "provider", "promote", "help",
+    "execute", "init", "upgrade", "doctor", "sweep", "commit",
+    "memory", "caveman", "local", "provider", "promote", "help",
 }
 SKILL_PROMPT = re.compile(r"^\s*/\.([\w-]+)")
 EVENT_VERSION = 2

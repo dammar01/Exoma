@@ -1,6 +1,6 @@
 # graph-refresh.py - Stop hook.
 # Regenerates graphify-out/ after main_agent actually changed code. Two gates:
-#   1. Did this turn implement? ([EXECUTION RESULT] / [REFACTOR RESULT] in last message)
+#   1. Did this turn implement? ([EXECUTION RESULT] in last message)
 #   2. Is the graph older than the sources? (mtime compare, skip dirs pruned before descent)
 # Both must pass. The refresh is detached (DEC-012): the hook starts a worker that runs
 # `graphify update` only (never init/build/watch) with no time limit (DEC-042), beats the
@@ -237,7 +237,7 @@ try:
     cwd = payload.get("cwd") or os.getcwd()
 
     # Gate 1: did this turn implement anything?
-    if "[EXECUTION RESULT]" not in message and "[REFACTOR RESULT]" not in message:
+    if "[EXECUTION RESULT]" not in message:
         sys.exit(0)
 
     try:

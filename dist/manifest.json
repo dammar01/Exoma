@@ -28,8 +28,8 @@
     },
     {
       "path": "claude/skills/commit.md",
-      "sha256": "a81802d58ac5e0fd59da69fbd21bd4e3be9b7d7d250442480f22eb91c7063a85",
-      "bytes": 1854,
+      "sha256": "5fee5131f673e95be17b1fcf91dbfaa56fdb310c5b33eb9b9235142c3d61ac05",
+      "bytes": 2188,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -252,8 +252,8 @@
     },
     {
       "path": "claude/hooks/execution-gate.py",
-      "sha256": "eb0f1cd820af1f2331f564b15007fdc89d0f75ae867a67aa61dba8b30198fdba",
-      "bytes": 8656,
+      "sha256": "2a0a79d49577a2093511e528059f43baaddf5ea7a51af79d14dab61aba80aecd",
+      "bytes": 8658,
       "merge": "replace",
       "component": "runtime"
     },
@@ -266,8 +266,8 @@
     },
     {
       "path": "claude/hooks/graph-refresh.py",
-      "sha256": "4403004b47a961aea7a96af778463fd74fe32eaeb615d7c609c487a25986870c",
-      "bytes": 13191,
+      "sha256": "2e5109fa43e606176ed478e0f4136286a76d68f9b3af9ddd13926069a0ff7313",
+      "bytes": 13132,
       "merge": "replace",
       "component": "runtime"
     },
@@ -343,8 +343,8 @@
     },
     {
       "path": "claude/hooks/task-events.py",
-      "sha256": "67e95de140157bfdded55e3f3d43fd5f5ffbd30ec718342f0fb4df41f5e20b8a",
-      "bytes": 6049,
+      "sha256": "b6e04ec94112fbf437914961e5d043289619685b9b817fd423470f7ee0b3b3d5",
+      "bytes": 6015,
       "merge": "replace",
       "component": "runtime"
     },

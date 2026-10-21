@@ -110,3 +110,36 @@ def _test_bundle_registry_bijection() -> None:
             f"commands differently.\n{output}\n"
             f"Run: python tools/maintain/{module_name}.py --check",
         )
+    _check_task_events_local_skills()
+
+
+def _check_task_events_local_skills() -> None:
+    """task-events' LOCAL_SKILLS is the registry's LOCAL: line, copied.
+
+    The hook is standalone and cannot import the registry, so the list is a hand copy; it
+    kept refactor, review and compress for a release after the skills were removed. Read
+    with `ast`, not imported: importing a hook runs it.
+    """
+    import ast
+
+    from tools.maintain.sync_skills import CLAUDE_MD, _COMMAND_RE
+
+    hook = REPO_ROOT / "dist" / "config" / "claude" / "hooks" / "task-events.py"
+    shipped: set[str] | None = None
+    for node in ast.parse(hook.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "LOCAL_SKILLS" for t in node.targets
+        ):
+            shipped = set(ast.literal_eval(node.value))
+    registry = {
+        name
+        for line in CLAUDE_MD.read_text(encoding="utf-8").splitlines()
+        if line.startswith("LOCAL:")
+        for name in _COMMAND_RE.findall(line)
+    }
+    assert_true(
+        shipped == registry,
+        f"task-events LOCAL_SKILLS disagrees with the CLAUDE.md LOCAL: registry — "
+        f"only in the hook: {sorted((shipped or set()) - registry)}, "
+        f"only in the registry: {sorted(registry - (shipped or set()))}",
+    )

@@ -7,7 +7,7 @@
 #   2. While an execution is ACTIVE (runtime/execution.json, opened by execute-begin), a
 #      write inside the root must fall in the plan's scope (`files`: exact path, directory
 #      prefix, or glob). .workflow/ is always writable. With no active execution, writes
-#      inside the root pass: /.refactor and small fixes the user points to are legitimate.
+#      inside the root pass: memory notes and small fixes the user points to are legitimate.
 #   3. `git commit` through Bash/PowerShell needs a runtime/commit.marker younger than 30
 #      minutes, which intent-gate-set.py writes only for a user prompt that asks to commit.
 # Paths are compared after realpath, so a symlink or junction cannot carry a write past

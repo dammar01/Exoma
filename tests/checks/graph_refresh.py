@@ -151,6 +151,13 @@ def _check_runner(flavour: str, command: list[str]) -> None:
             not _rows(project) and not (project / "graphify-out" / ".refresh.lock").exists(),
             f"[{flavour}] a turn without [EXECUTION RESULT] must not scan, lock, or record",
         )
+        # The marker of the removed refactor skill no longer counts as an implementation.
+        project = _project(root / "legacy", stale=True)
+        _run_hook(command, project, bin_dir, message="[REFACTOR RESULT] done")
+        assert_true(
+            not _rows(project) and not (project / "graphify-out" / ".refresh.lock").exists(),
+            f"[{flavour}] [REFACTOR RESULT] alone must not trigger a refresh",
+        )
 
         # Fresh: a newer file under node_modules/ does not make the graph stale.
         project = _project(root / "fresh", stale=False)
