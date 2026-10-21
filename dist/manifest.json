@@ -308,8 +308,8 @@
     },
     {
       "path": "claude/hooks/graph-refresh.py",
-      "sha256": "a8b13ce2ed7d039a1f89ea4ccced7ca2b3599602995d3236a6118f97bf002696",
-      "bytes": 13151,
+      "sha256": "4403004b47a961aea7a96af778463fd74fe32eaeb615d7c609c487a25986870c",
+      "bytes": 13191,
       "merge": "replace",
       "component": "runtime"
     },

@@ -17,6 +17,7 @@ SOURCE_EXT = (
 SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
     "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
+    "storage", "site-packages", ".tox",
 }
 # graphify runs without a time limit (DEC-042): a large graph takes as long as it takes, and
 # the worker never kills it. The lock is held while the worker keeps rewriting `beat`, every

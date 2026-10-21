@@ -34,6 +34,7 @@ SOURCE_EXTENSIONS = (
 _SKIP_DIRS = {
     "__pycache__", ".git", GRAPH_DIRNAME, "storage", ".workflow",
     "node_modules", "venv", ".venv", "site-packages", "dist", "build", ".tox",
+    "vendor", ".next", "coverage", "target",
 }
 
 # How much an edge counts toward a node's weight, by graphify's own confidence tag.

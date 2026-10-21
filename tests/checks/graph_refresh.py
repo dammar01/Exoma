@@ -512,21 +512,31 @@ def _check_source_extensions_agree() -> None:
         hook_ext == graph_index.SOURCE_EXTENSIONS,
         f"graph-refresh.py SOURCE_EXT {hook_ext} == graph_index.SOURCE_EXTENSIONS",
     )
+    # The skip sets diverged once (vendor, storage): each side then judged a different
+    # file set, so the reader warned "stale" about a graph the hook called current.
+    block = re.search(r"^SKIP_DIRS = (\{[^}]*\})", _hook_source(), re.M | re.S)
+    hook_skip = ast.literal_eval(block.group(1)) if block else None
+    assert_true(
+        hook_skip == graph_index._SKIP_DIRS,
+        f"graph-refresh.py SKIP_DIRS {hook_skip} == graph_index._SKIP_DIRS",
+    )
     root = Path(tempfile.mkdtemp(prefix="graph-ext-"))
     try:
         (root / "app.php").write_text("<?php\n", encoding="utf-8")
-        (root / "node_modules").mkdir()
-        (root / "node_modules" / "dep.js").write_text("x\n", encoding="utf-8")
+        for skipped in ("node_modules", "vendor", "storage"):
+            (root / skipped).mkdir()
+            (root / skipped / "dep.php").write_text("<?php\n", encoding="utf-8")
         state = graph_index._source_state(root)
         assert_true(
             state is not None,
             "a project with no Python still has a source fingerprint",
         )
-        os.utime(root / "node_modules" / "dep.js", None)
-        assert_true(
-            graph_index._source_state(root)[0] == state[0],
-            "skip directories are pruned, so a dependency does not move the fingerprint",
-        )
+        for skipped in ("node_modules", "vendor", "storage"):
+            os.utime(root / skipped / "dep.php", None)
+            assert_true(
+                graph_index._source_state(root)[0] == state[0],
+                f"{skipped}/ is pruned, so a file under it does not move the fingerprint",
+            )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

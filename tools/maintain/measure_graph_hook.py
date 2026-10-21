@@ -50,6 +50,7 @@ SOURCE_EXTENSIONS = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".php"
 SKIP_DIRS = frozenset({
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
     "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
+    "storage", "site-packages", ".tox",
 })
 
 

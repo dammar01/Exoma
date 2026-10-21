@@ -1009,12 +1009,12 @@ With `policies.graph_leads_enabled: true`, the runtime reads `graphify-out/graph
 
 - `explore`/`plan`/`analyze` receive the full leads and communities for fan-out;
 - `verify` receives a compact shortlist of at most six files without communities;
-- a graph older than the `.py` sources is still used, but the prompt carries a stale warning;
+- a graph older than the sources (`.py`, `.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`, `.php`, `.go`, `.rs`, `.java`, `.rb`) is still used, but the prompt carries a stale warning;
 - graph absent, broken, or being refreshed (`graphify-out/.refresh.lock` held by a worker that is still beating) → the delegated flow still runs without leads and does not wait for the lock. The `usage.jsonl` row records `graph_status` (`used`, `empty`, `absent`, `refreshing`, `disabled`) and `graph_ms`. `verify-browser` does not use leads, so it does no lookup; it only records once per command whether a refresh is running: `refreshing`, `available` (graph exists, not read), or `absent`.
 
 The Python runtime never runs `graphify init`, `build`, `watch`, or `update`. The only trigger of `graphify update` is the `graph-refresh` Stop hook in the Claude bundle (`.sh` launcher + `graph-refresh.py`); `CLAUDE.md` and the `refactor` skill no longer ask the main agent to run it. The hook runs after `[EXECUTION RESULT]` or `[REFACTOR RESULT]`, only when the graph already exists, is older than the sources, and the binary is available:
 
-- the mtime scan skips the skip directories (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, `target`, ...) before entering them, so its cost follows the number of sources, not the number of dependencies; directory names and extensions are matched case-insensitively;
+- the mtime scan skips the skip directories before entering them, so its cost follows the number of sources, not the number of dependencies; directory names and extensions are matched case-insensitively. The runtime fingerprint uses the same extensions and skip directories: `__pycache__`, `.git`, `graphify-out`, `.workflow`, `node_modules`, `venv`, `.venv`, `site-packages`, `.tox`, `vendor`, `storage`, `dist`, `build`, `.next`, `coverage`, `target`;
 - stale graph → the hook creates `graphify-out/.refresh.lock` (`pid`, `token`, `started`, `beat`), starts a separate worker, then returns. The turn does not wait for graphify. The worker runs `graphify update` **with no time limit** and never kills it (DEC-042); while graphify runs, the worker rewrites `beat` (and `graphify_pid`) every 15 seconds, then records one row and deletes its own lock. `GRAPH_REFRESH_LIMIT_S` is no longer read. The hook hands the lock to the worker only while it still carries that hook's token, and if the worker has already finished and deleted it, the lock is not recreated. A stale lock is deleted only if its content is still the same when reread right before deletion; a lock that changed is treated as `skipped_running`, so two sessions do not run two refreshes at once;
 - graphify rewrites `graph.json` in place, so while the lock is held the runtime treats the graph as unavailable, and the main agent is asked to treat it as stale. The lock counts as held while its `beat` is < 120 seconds old, whatever the lock's age; a refresh of any length never reads as stale. A lock without `beat` (written before DEC-042) uses the old rule: pid alive and < 15 minutes old. A lock that exists but cannot be read counts as held while its mtime is < 120 seconds old. Every lock write goes to a temporary file and is then renamed;
 - a hung graphify holds the graph for as long as its worker lives. `--command doctor` reports that lock (`checks.graph_refresh_lock`: `state`, `age`, `beat_age`, `pid`, `graphify_pid`) and gives advice when the refresh has been running ≥ 1 hour or the lock is stale; this is advice, not an issue, because the delegated flow still runs without leads. `--command clean` only deletes a stale lock (no `beat` within 120 seconds) and never kills a process: stop the graphify process yourself, wait for the lock to go stale, then run `clean`. If the worker dies while graphify is still alive, the lock goes stale within 120 seconds even though graphify may still be writing;
@@ -1023,8 +1023,8 @@ The Python runtime never runs `graphify init`, `build`, `watch`, or `update`. Th
 
 The hook fails open, never rejects a response, never creates a new graph or runs `init`/`build`/`watch`. The Stop hook's outer timeout stays 60 seconds.
 
-The graph verdict cache uses a fingerprint of the path, nanosecond mtime, and size of every `.py`
-source. A content change, addition, or deletion of a source invalidates the cache even if
+The graph verdict cache uses a fingerprint of the path, nanosecond mtime, and size of every
+source file (same extensions and skip directories as above). A content change, addition, or deletion of a source invalidates the cache even if
 `graph.json` did not change.
 
 ---
