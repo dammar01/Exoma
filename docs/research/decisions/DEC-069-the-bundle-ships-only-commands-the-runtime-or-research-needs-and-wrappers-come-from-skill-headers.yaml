@@ -65,7 +65,7 @@ evidence_notes: |
   these shapes and that labelled refs to real lines are certified.
 implementation:
   version: 3.9.0
-  commits: [uncommitted]
+  commits: [8a88c2e]
   components:
     - core/evidence/fact_store.py (`_FILELINE` drive letter needs a word start)
     - core/evidence/evidence_store.py (certify_claim_refs docstring)
