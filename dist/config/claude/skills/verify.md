@@ -2,7 +2,7 @@
 description: 3-step verification — logic, falsification, reality. Kedalaman dari commands.verify_mode.
 
 ## Trigger
-/.verify (auto setelah /.execute -y atau /.refactor)
+/.verify (auto setelah /.execute -y bila `commands.auto_verify_after_execute=true`)
 
 ## Mode (runtime baca .workflow/config.json → commands.verify_mode)
 delegated (default) → verifikasi penuh second_agent, Protocol di bawah.

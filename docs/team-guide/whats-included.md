@@ -23,8 +23,6 @@ minutes and spend the secondary agent's quota.
 | --- | --- |
 | `/.execute -y` | a plan is agreed and you want it implemented (the `-y` is your approval) |
 | `/.sweep` | you want to see what the current changes touch before verifying or committing |
-| `/.review` | you want a quick line-by-line review of code, without the secondary agent |
-| `/.refactor` | you want structure cleaned up with no change in behavior |
 | `/.commit` | you want your changes committed: it stages them when nothing is staged (secret-looking files skipped), proposes the message, and asks before committing |
 | `/.local` | the secondary agent is unavailable, or you want Claude Code to gather evidence itself |
 | `/.promote` | verified findings should become shared, Git-tracked project knowledge |
@@ -32,11 +30,13 @@ minutes and spend the secondary agent's quota.
 | `/.provider` | you want a different secondary agent, model, or reasoning effort |
 | `/.doctor` | a project's workflow setup seems broken, or before relying on a new one |
 | `/.init`, `/.upgrade` | setting up a project, or refreshing it after updating agent-workflow |
-| `/.compress`, `/.caveman` | you want shorter answers or a shorter prose file |
+| `/.caveman` | you want shorter answers |
 | `/.help` | you want the command list in the terminal |
 
 In auto-intent mode you can ask in plain language and Claude Code picks the command; in
-command-only mode you type the command. See [installation](installation.md#choose-a-mode-always-on-or-only-when-called).
+command-only mode you type the command. A refactor is planned and executed like any other
+change (`/.plan`, then `/.execute -y`); for a code review or a prose-file compression use
+Claude Code's own commands. See [installation](installation.md#choose-a-mode-always-on-or-only-when-called).
 
 ## Hooks: what runs without being asked
 

@@ -1,5 +1,6 @@
 # Skill: explore
 description: Codebase evidence via second_agent (1-call). Fallback: /.local.
+argument-hint: <hint>
 
 ## Trigger
 /.explore <hint>

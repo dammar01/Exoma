@@ -1,5 +1,6 @@
 # Skill: execute
 description: Controlled implementation dengan approval gate.
+argument-hint: [-y]
 
 ## Trigger
 /.execute -y → PROCEED | /.execute → GATE only
@@ -25,11 +26,11 @@ user sendiri (ditulis hook `intent-gate-set`, berlaku 15 menit, sekali pakai). D
 ## During
 ONLY sentuh allowed. Butuh forbidden → STOP → report conflict → minta instruksi.
 allowed hanya di project root sesi. Path di project lain → STOP, minta persetujuan eksplisit
-untuk path itu. Edit lewat Bash/skrip patch tunduk ke aturan yang sama dengan Edit/Write.
-Hook `execution-gate` menegakkan dua yang pertama untuk Edit/Write: di luar `files` plan →
-diblok selama execution aktif; di luar root (selain temp dan ~/.claude) → diblok kecuali
-user menaruh path itu di `policies.write_allowed_outside_root`. Bash/skrip TIDAK dicek hook —
-untuk itu aturannya tetap kamu.
+untuk path itu. Aturan itu sama untuk semua jalur tulis; penegaknya yang beda:
+- Edit/Write → hook `execution-gate` memblok: di luar `files` plan selama execution aktif;
+  di luar root (selain temp dan ~/.claude) kecuali path itu ada di
+  `policies.write_allowed_outside_root`.
+- Bash/skrip patch → TIDAK dicek hook. Tak ada yang memblok; yang menegakkan cuma kamu.
 
 ## Post (baca .workflow/config.json → commands.auto_verify_after_execute)
 Tutup execution dulu: bash '<work_dir>/.workflow/run.sh' execute-end '' '<MAIN_SESSION_ID>'

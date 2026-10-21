@@ -1,5 +1,6 @@
 # Skill: memory
 description: Propose memory update ke personal knowledge files.
+argument-hint: <note>
 
 ## Trigger
 /.memory <note>

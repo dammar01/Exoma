@@ -646,6 +646,29 @@ def _anchor_scan_reads_past_the_stored_prefix() -> None:
             == [["certified"], ["certified", "unverified"], ["not_a_file"]],
             f"each claim says which of its refs this project can open: {claims}",
         )
+
+        from core.evidence.fact_store import _FILELINE
+
+        drive = "E:" + "\\" + "w" + "\\" + "r.py:16"
+        shapes = {
+            "[proof:src.py:3]": "src.py:3",
+            "[proxy:core/a.py:5]": "core/a.py:5",
+            drive: drive,
+            "(" + drive + ")": drive,
+            "E:/w/r.py:9": "E:/w/r.py:9",
+        }
+        found = {s: (m.group(0) if (m := _FILELINE.search(s)) else None) for s in shapes}
+        assert_true(
+            found == shapes,
+            f"a label before a path does not lend its last letter as a drive: {found}",
+        )
+        labelled = evidence_store.certify_claim_refs(
+            root, [{"text": "tagged", "refs": ["proof:src.py:3", "proxy:src.py:4"]}]
+        )
+        assert_true(
+            labelled[0]["ref_status"] == ["certified", "certified"],
+            f"a labelled ref to a real line is certified: {labelled}",
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

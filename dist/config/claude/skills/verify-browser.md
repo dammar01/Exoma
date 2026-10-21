@@ -1,5 +1,6 @@
 # Skill: verify-browser
 description: Verifikasi lewat browser Playwright sungguhan. DELEGATED: draft spec (second_agent) → run browser (player runtime) → review (second_agent). Wawancara hanya sesudah draft melaporkan project belum dikonfigurasi.
+argument-hint: [fitur/alur]
 
 ## Trigger
 /.verify-browser [<fitur/alur yang mau diuji>]

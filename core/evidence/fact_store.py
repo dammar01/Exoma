@@ -76,8 +76,11 @@ LINE_PROXIMITY = 3
 # `\work\router.py:16`, and that fragment resolves nowhere. An analysis whose evidence
 # lives outside the repo — a transcript under ~/.claude, a sibling project — came back
 # reporting zero anchors while every claim named its file. One letter is deliberate:
-# `https:` and `note:` stay unmatched, so the shape this admits is still a path.
-_FILELINE = re.compile(r"((?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
+# `https:` and `note:` stay unmatched, so the shape this admits is still a path. The drive
+# letter must also START a word: without that lookbehind a label before the path lent its
+# last letter as a drive, so `proof:core/x.py:200` became `f:core/x.py:200` and
+# `proxy:core/a.py:5` became `y:core/a.py:5` — real files reported as uncertified.
+_FILELINE = re.compile(r"((?:(?<![A-Za-z0-9_])[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
 _CATEGORY = re.compile(r"^\[(config|pattern|invariant)\]", re.IGNORECASE)
 _WORD = re.compile(r"[a-z0-9_]+")
 # "X is cached" and "X is not cached" share almost every word — high similarity, opposite

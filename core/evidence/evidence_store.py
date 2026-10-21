@@ -261,9 +261,10 @@ def certify_claim_refs(project_root: Path, claims: list[dict]) -> list[dict]:
     so a grounded claim citing a path that does not exist looked exactly like one citing a
     real line. The anchor ratio catches that in aggregate; this says WHICH claim.
 
-    `not_a_file` covers refs that are not `file:line` at all (`req:<id>`, `proof:...`
-    labels the shared pattern does not match); they are bookkeeping, not evidence, and are
-    neither counted for nor against the claim. Returns new dicts; the input is unchanged.
+    `not_a_file` covers refs that are not `file:line` at all (`req:<id>`, labels with no
+    path in them); they are bookkeeping, not evidence, and are neither counted for nor
+    against the claim. A label that wraps a path (`proof:core/x.py:200`) is judged by that
+    path. Returns new dicts; the input is unchanged.
     """
     cache: dict = {}
     out: list[dict] = []

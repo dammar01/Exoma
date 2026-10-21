@@ -1,5 +1,6 @@
 # Skill: plan
 description: Structured planning — evidence (1-call) + reasoning main_agent. Atribusi klaim + decision gate mekanis.
+argument-hint: <task>
 
 ## Trigger
 /.plan <task>

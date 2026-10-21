@@ -61,9 +61,9 @@ Batas:
 - Prefix "/." TETAP didukung sebagai override eksplisit. Ada prefix → pakai itu, lewati penebakan. Itu jalan keluar saat auto-detect meleset.
 - Cocok ke DELEGATED command (explore/plan/analyze/verify/verify-browser) → itu makan menit + kuota. Yakin sedang → tetap jalankan + sebut di [INTENT]. Ragu → tanya satu kalimat, jangan bakar 10 menit untuk tebakan.
 - Pertanyaan biasa, obrolan, minta ringkasan, minta penjelasan → BUKAN command. Jawab langsung, jangan paksa ke command.
-- Minta spec/teks/penjelasan dari hasil yang sudah ada → jawab dari evidence di context. JANGAN picu /.verify atau delegated lain yang tak diminta; verify hanya saat user minta PEMBUKTIAN, atau sebagai bagian /.execute saat `commands.auto_verify_after_execute=true` (lihat Execution rules), atau sesudah /.refactor (skill refactor).
+- Minta spec/teks/penjelasan dari hasil yang sudah ada → jawab dari evidence di context. JANGAN picu /.verify atau delegated lain yang tak diminta; verify hanya saat user minta PEMBUKTIAN, atau sebagai bagian /.execute saat `commands.auto_verify_after_execute=true` (lihat Execution rules).
 - Task destruktif/ireversibel (commit, hapus, tulis di luar project) → JANGAN auto-fire. Konfirmasi dulu.
-- Project root sesi = satu-satunya tempat menulis. File project lain (Edit/Write ATAU Bash/skrip patch) → minta persetujuan eksplisit untuk path itu dulu; setuju "scope FE+BE" ≠ izin menulis repo sebelah tanpa plan.
+- Project root sesi = satu-satunya tempat menulis. File project lain (Edit/Write ATAU Bash/skrip patch) → minta persetujuan eksplisit untuk path itu dulu; setuju "scope FE+BE" ≠ izin menulis repo sebelah tanpa plan. Hook `execution-gate` memblok Edit/Write di luar root; Bash/skrip TIDAK dicek — di situ aturan ini cuma kamu yang menegakkan.
 - Ragu antara dua command → pilih yang lebih murah (local > delegated), sebut alasannya di [INTENT]. TAPI ini soal pilih COMMAND — BUKAN gather-vs-delegate. "local>delegated" TAK PERNAH override bukti-kurang→second_agent (Pre-flight gate); kalau ragunya "gather sendiri atau delegate", jawabannya SELALU delegate.
 
 Tak ada lagi output [INVALID COMMAND]. Input tanpa prefix bukan error.
@@ -124,7 +124,7 @@ Saat gagal → WAJIB:
 Auto-fallback ke local tanpa tanya user = DILARANG.
 
 ### Command registry
-LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.provider /.promote /.help
+LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.commit /.memory /.caveman /.local /.provider /.promote /.help
 DELEGATED: /.explore /.plan /.analyze /.verify /.verify-browser
 Definisi lengkap tiap skill = file standalone `~/.claude/skills/<name>.md` (dibuka saat "/.name" dipanggil). CLAUDE.md ini SENGAJA cuma orchestrator + registry — body skill TIDAK di-embed di sini (hemat token/turn; single source di skills/).
 <!-- AUTO-INTENT:START -->
@@ -164,8 +164,6 @@ NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik 
              INTI: apa yang tersentuh oleh perubahan yang SUDAH ada di working tree.
 
   doctor   ← cek siap | readiness | kenapa error setup | kenapa gagal jalan | .workflow rusak
-  refactor ← benerin struktur | rapikan | bersihin | rombak struktur (TANPA ubah behavior)
-  review   ← review kode ini | lihat PR | cek kode ini
   commit   ← commit message | mau commit          (destruktif → konfirmasi dulu)
   memory   ← catat | ingat ini | simpan insight
   local    ← tanpa proxy | offline | jangan pakai second agent
@@ -213,7 +211,7 @@ Relay-tag: teruskan tag grounded/assumption dari proxy apa adanya; JANGAN re-sum
 [OPTIONS]: /.plan WAJIB tutup dengan blok [OPTIONS] (max 3 opsi, tiap opsi plus+minus+effort+risiko, satu rekomendasi). BOUNDED: opsi SAH cuma kalau beda ARSITEKTUR / DEPENDENCY / ARAH IMPLEMENTASI keseluruhan — BUKAN varian sejenis/subset/parametrik dari rencana yang sama (mis. rencana penuh vs setengahnya). Tak ada fork arah nyata → satu opsi saja, jangan karang tandingan. Wajib dalam scope task, dilarang usul rewrite/ganti stack kalau task-nya bukan itu. `minus` wajib jujur termasuk untuk yang kamu rekomendasikan. Opsi yang dibantah evidence → tandai ❌ + sebut evidence-nya, jangan sajikan setara. Detail: skill plan STEP 2b.
 
 ### Execution rules
-Persetujuan eksekusi = HANYA `/.execute -y` dari user SETELAH plan aktif berstatus decision=proceed. Kalimat execute tanpa `-y` ("kerjakan", "lanjut") → tampilkan [EXECUTION SCOPE] + minta `-y`, nol edit. Jawaban AskUserQuestion atas open_questions BUKAN persetujuan: perbarui [PLAN] (confidence, decision) dari jawaban itu, tutup "Setuju? Jalankan /.execute -y", lalu BERHENTI. Execute/fitur baru tanpa plan aktif → nol edit; sarankan /.plan satu baris dan berhenti. (Skill lokal yang memang mengedit tanpa plan — /.refactor, perbaikan kecil yang user tunjuk persis — tetap jalan sesuai skill-nya.)
+Persetujuan eksekusi = HANYA `/.execute -y` dari user SETELAH plan aktif berstatus decision=proceed. Kalimat execute tanpa `-y` ("kerjakan", "lanjut") → tampilkan [EXECUTION SCOPE] + minta `-y`, nol edit. Jawaban AskUserQuestion atas open_questions BUKAN persetujuan: perbarui [PLAN] (confidence, decision) dari jawaban itu, tutup "Setuju? Jalankan /.execute -y", lalu BERHENTI. Execute/fitur baru tanpa plan aktif → nol edit; sarankan /.plan satu baris dan berhenti. (Perbaikan kecil yang user tunjuk persis tetap boleh tanpa plan. Refactor bukan pengecualian: ia lewat /.plan → /.execute -y → /.verify seperti perubahan lain.)
 /.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → verify SESUAI `commands.auto_verify_after_execute`: `true` → auto /.verify, jangan declare done sebelum verify selesai; `false` (default) → status `implemented`, `verification: not_run`, DILARANG bilang "done", tawarkan "/.verify sekarang?". Jangan commit kecuali user minta.
 Key itu dibaca ulang dari `.workflow/config.json` tiap /.execute — bukan dari ingatan, bukan dari sesi lain. `true` → chain ke /.verify BAGIAN DARI /.execute, bukan langkah opsional sesudahnya; berhenti sebelum verify selesai = /.execute belum selesai. Saat `verification: not_run`, kata "done"/"selesai"/"berhasil"/"sudah jalan"/"test lolos" DILARANG — yang boleh cuma "implemented, belum diverifikasi".
 Ditegakkan runtime (DEC-067, `policies.enforcement` hybrid|warn|off): /.plan mencatat plan via `plan-record` (proceed + open_questions / solution_path<high / tanpa `files` → ditolak); /.execute -y membuka execution via `execute-begin` (butuh plan proceed + token `-y` dari prompt user sendiri) dan menutup via `execute-end`; hook `execution-gate` memblok Edit/Write di luar scope plan selama execution aktif, Edit/Write di luar root (kecuali temp, ~/.claude, `policies.write_allowed_outside_root`), dan `git commit` di giliran yang user tak minta commit; /.verify menulis verdict ke execution. Hook `status-guard` hanya MEMPERINGATKAN klaim selesai saat `not_run` — kalimatnya tetap tanggung jawabmu. Bash/skrip tak dicek hook untuk tulis file.

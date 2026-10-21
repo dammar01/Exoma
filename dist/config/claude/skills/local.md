@@ -1,5 +1,6 @@
 # Skill: local
 description: Toggle no-proxy. Claude mirror second_agent via graphify + Read/Glob/Grep. Affects /.explore /.plan /.analyze.
+argument-hint: [on|off|status]
 
 ## Trigger
 /.local [on|off|status] (tanpa arg = toggle)

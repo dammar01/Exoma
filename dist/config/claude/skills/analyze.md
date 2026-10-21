@@ -1,5 +1,6 @@
 # Skill: analyze
 description: Deep analysis via second_agent (1-call). --local: Claude only.
+argument-hint: [--local] <topic>
 
 ## Trigger
 /.analyze <topic>          → 1-call

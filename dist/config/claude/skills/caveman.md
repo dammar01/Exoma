@@ -1,5 +1,6 @@
 # Skill: caveman
 description: Token compression — default ultra untuk respons non-code.
+argument-hint: [lite|full|ultra]
 
 ## Status
 ALWAYS ON sejak pesan pertama. Off: "normal mode" | "stop caveman".

@@ -1,5 +1,6 @@
 # Skill: promote
 description: Turn verified evidence into Git-tracked project knowledge. Plan first, write only after approval.
+argument-hint: [subjek]
 
 ## Trigger
 /.promote <subjek>   → plan lalu tulis

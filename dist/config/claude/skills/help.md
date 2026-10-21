@@ -13,10 +13,7 @@ LOCAL (main_agent langsung):
   /.upgrade         refresh workspace in-place, preserve sessions
   /.doctor          .workflow + bundle readiness
   /.sweep           local git diff impact report
-  /.refactor <s>    structural, zero behavior change
   /.commit          commit message (Conventional Commits)
-  /.review <f>      one-line per issue review
-  /.compress <f>    compress prose ke caveman
   /.memory <note>   simpan insight
   /.promote <subj>  evidence terverifikasi → project knowledge ter-Git (plan dulu, approve)
   /.caveman [lite|full|ultra]  toggle compression

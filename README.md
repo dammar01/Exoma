@@ -149,8 +149,9 @@ concurrent sessions would share an identifier and overwrite each other's state.
 | `verify-browser` | delegated | Verify a running app in a real browser: the secondary agent drafts the scenario and reviews the evidence; a runtime player drives Playwright |
 | `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
 
-Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a runtime
-command. Asynchronous job commands and the remaining local commands are in the
+Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a delegated
+command; since 3.9.0 it opens and closes a runtime execution (`plan-record`, `execute-begin`,
+`execute-end`) whose scope a hook enforces for Edit/Write. Asynchronous job commands and the remaining local commands are in the
 [full reference](docs/reference.md#command).
 
 Setup problems and their fixes: [installation guide](docs/installation.md#when-something-is-wrong).

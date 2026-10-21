@@ -1,5 +1,6 @@
 # Skill: provider
-description: Pilih second_agent (provider → model → effort → model per route) lewat pertanyaan interaktif, lalu terapkan.
+description: Pilih second_agent (provider → model → effort → model per route) lewat pertanyaan interaktif, lalu terapkan. Tanpa argumen = picker; dengan argumen = langsung, mis. /.provider codex gpt-6-luna low.
+argument-hint: [provider model [effort] [routes]]
 
 ## Trigger
 /.provider                                  → picker interaktif (STEP 1-3)
