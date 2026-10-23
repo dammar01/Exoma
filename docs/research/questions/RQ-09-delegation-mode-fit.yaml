@@ -12,3 +12,9 @@ notes: |
   recorded before 3.7.3.
 
   Draft records: SYN-001 (archived draft). See also docs/team-guide/when-to-use.md.
+
+  Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged): plans
+  help but slow small work; for a small fix the maintainer prefers report-then-do, and asks for a
+  summary before larger changes. Full autonomy is accepted today for small tasks and wanted later
+  for large ones; every size is still checked somehow (git glance, local try, review in a new
+  session). DEC-074 (draft) proposes the small-fix path.

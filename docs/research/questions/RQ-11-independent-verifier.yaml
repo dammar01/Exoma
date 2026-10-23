@@ -15,3 +15,8 @@ notes: |
   recorded before 3.7.3.
 
   Draft records: SYN-002 (draft); DEC-003, H-007, EXP-003 (archived drafts).
+
+  Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged): the
+  maintainer combines an automatic check with their own final call, trusts a passing report except
+  for important or UI work, accepts self-review for small changes with a real lint or build, and
+  often reviews large changes in a fresh session, an independent pass in practice.

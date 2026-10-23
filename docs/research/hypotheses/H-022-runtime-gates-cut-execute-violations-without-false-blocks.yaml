@@ -1,0 +1,42 @@
+schema_version: 3
+id: H-022
+title: Runtime execute gates cut violations without false blocks that interrupt legitimate work
+date: 2026-10-20
+status: closed
+outcome: inconclusive
+provenance:
+  type: observed
+  confidence: low
+
+statement: |
+  With DEC-067's hybrid gates installed, edits without the user's -y, writes outside scope or
+  root, and unrequested commits fall to near zero, while blocks the user has to work around
+  stay rare.
+motivation: |
+  DEC-046 deferred enforcement for fear of false blocks; DEC-067 builds only deterministic
+  gates. Whether they block legitimate work is the open part.
+sources: [CASE-018]
+external_sources: []
+counter_evidence: []
+expected_effect: |
+  Fewer edit events outside an execution's scope in task telemetry, and few enforcement
+  overrides (policies.enforcement set to warn or off) after installation.
+
+success_criteria:
+  primary_metric: false blocks per session (EXP-014)
+  supported_when: over at least 20 blocks labelled by a blind judge, false_block_rate is at most 0.10
+  rejected_when: over at least 20 blocks labelled by a blind judge, false_block_rate exceeds 0.25
+  data_recorded: true
+  data_source: EXP-014 (transcript blocks judged by the maintainer); the hook log of DEC-070 from 2026-10-23
+
+experiments: [EXP-014]
+limitations:
+  - "EXP-014 (2026-10-23): 6 judged unique events for the gate as it ships (4 false blocks, 2 legitimate, 1 unclear), below the 20 the rule needs; inconclusive. Before 416cf71: 7 of 21 false. The unit changed to unique events after part of the labels were known."
+  - "Pre-registration: Thresholds proposed by the agent and frozen on 2026-10-23, before any block was recorded (proposed-by-agent). Between 0.10 and 0.25, or below 20 labelled blocks, the outcome is inconclusive. The \"violations fall\" half of the statement has no pre-gate baseline and is not_measured by EXP-014; these criteria test only the false-block half."
+  - The hooks do not record their own blocks; counting them needs either telemetry or transcripts
+related_decisions: [DEC-067]
+
+disposition:
+  implementation_status: not_applicable
+  validation_status: not_validated
+questions: [RQ-10]

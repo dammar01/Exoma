@@ -27,3 +27,9 @@ notes: |
   CASE-011 and CASE-012 bear on this question but are not listed under `records`: a listed
   record must name this question back (CONTRACT.md section 16), and both are frozen records
   that name the questions they were written for. They are cited above as what exists.
+
+  Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged):
+  delegation helps most on medium tasks (3-10 files, one area); on large ones the result is less
+  trusted and re-checked in a new session. The main value is not having to write detailed
+  instructions; quality is only part of it. Orchestration effort fell a lot (0-1 corrections on a
+  recent medium feature).

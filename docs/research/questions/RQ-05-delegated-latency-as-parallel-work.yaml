@@ -12,3 +12,7 @@ notes: |
   recorded before 3.7.3.
 
   Draft records: EXP-002, CASE-002, CASE-004 (drafts). Latency by project size is RQ-13.
+
+  Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged): while a
+  delegated call runs (3-10 min for a plan, over 10 for verification) the maintainer works on
+  something else and does not count the wait as lost time.

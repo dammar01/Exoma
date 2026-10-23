@@ -11,3 +11,8 @@ notes: |
   recorded before 3.7.3.
 
   Draft records: H-003 (archived draft).
+
+  Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged): agent
+  changes follow the conventions they can see: a clean codebase stays clean, an inconsistent one
+  is copied; patterns outside the agent's view need extra exploration, which is rare. Long-term
+  upkeep depends on how tidy the code was to begin with.
