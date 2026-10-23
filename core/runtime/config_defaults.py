@@ -18,8 +18,9 @@ def default_commands() -> dict:
         "allow_explore_to_plan": True,
         "auto_sweep_after_execute": True,
         # whether /.execute chains into /.verify on its own. false => /.execute reports
-        # `verification: not_run` and must never call itself done. Prompt-only: /.execute
-        # has no Python path at all, so this runtime cannot enforce it.
+        # `verification: not_run` and must never call itself done. The chain itself is
+        # prompt-only: core/runtime/execution.py (DEC-067) records not_run at execute-end,
+        # but nothing in the runtime starts /.verify.
         "auto_verify_after_execute": False,
         # --- runtime-consumed ---
         # how deep /.verify goes when it does run:
@@ -280,8 +281,9 @@ def verify_mode(project_root: Path) -> str:
 def auto_verify_after_execute(project_root: Path) -> bool:
     """commands.auto_verify_after_execute.
 
-    Still prompt-only in effect — /.execute has no Python path, so nothing here can
-    make it chain into /.verify. What this does buy: the value now rides out on every
+    Still prompt-only in effect — /.execute has a runtime path since DEC-067
+    (core/runtime/execution.py), but it only records `verification: not_run`; nothing
+    here can make it chain into /.verify. What this does buy: the value now rides out on every
     delegated result, so main_agent reads the project's actual setting instead of
     recalling what the config said.
     """

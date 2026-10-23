@@ -117,7 +117,8 @@ def _check_task_events_local_skills() -> None:
     """task-events' LOCAL_SKILLS is the registry's LOCAL: line, copied.
 
     The hook is standalone and cannot import the registry, so the list is a hand copy; it
-    kept refactor, review and compress for a release after the skills were removed. Read
+    went on naming refactor, review and compress after DEC-069 removed those skills, until
+    073eb82. Read
     with `ast`, not imported: importing a hook runs it.
     """
     import ast
