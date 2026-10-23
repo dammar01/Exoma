@@ -59,10 +59,13 @@ implementation:
     - core/evidence/fact_store.py (served_fact_refs)
     - core/provider/executor.py (served_facts in call meta)
     - dist/config/claude/hooks/execution-gate.py (gate-blocks.jsonl)
+    - dist/manifest.json (regenerated for the hook)
     - core/audit/metrics.py (replay.call, replay.injection_rate, replay.served_fact_use_rate)
     - tools/maintain/replay_facts.py, tools/maintain/export_blind_sample.py
     - tools/maintain/measure_task_outcomes.py (collect_tasks)
     - docs/reference.md, docs/runtime-contracts.md, docs/evaluation/metrics.md
+    - tests/checks/facts.py, telemetry.py, hook_contract.py, metrics.py (assertions for the above)
+    - tests/checks/replay.py, tests/checks/blind_sample.py (new), tests/run.py and tests/scenario.py (registered and run by default)
 disposition:
   implementation_status: implemented
   validation_status: not_validated

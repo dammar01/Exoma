@@ -16,7 +16,12 @@ setup: |
 method: |
   tests/checks/hook_contract.py runs each hook's contract case through `bash <hook>.sh` and
   `powershell -File <hook>.ps1` and records each call's wall time (process start to exit).
-  Two passes so far, one to three calls per hook and flavour per pass.
+  Passes one and two took one to three calls per hook and flavour; pass three repeated them
+  after DEC-054's interpreter probe. Passes four and five ran a script around
+  tests/checks/hook_contract._Workspace against the `.ps1` files of 2e41ffc^ restored outside
+  the repository: one warm-up then 10 timed calls (fourth), and the pre-registered 3 warm-up
+  then 30 timed calls per hook and flavour, interleaved call by call (fifth, which decides
+  H-019).
 arms:
   - name: sh
     description: bash launcher (Git Bash) piping stdin to the embedded python3
