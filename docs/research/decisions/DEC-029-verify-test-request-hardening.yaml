@@ -69,6 +69,11 @@ validation:
   summary: |
     The suites above pass. No delegated verify has run through the verify lane in real use yet,
     and verify duration after DEC-025 has not been measured (draft experiment).
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only verify-runtime-tests --only e2e-supervisor --only gate-prompt-field` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - The verdict cannot be rewritten by request text; a hung test ends at its timeout.

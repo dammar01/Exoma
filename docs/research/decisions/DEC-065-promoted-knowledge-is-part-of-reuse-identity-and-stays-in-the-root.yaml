@@ -54,7 +54,11 @@ validation:
   summary: |
     Covered by the promote-boundaries suite and the e2e promote checks on Windows. The
     symlink case runs only where the OS grants symlink creation.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only promote-boundaries --only evidence-reuse` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A knowledge correction is never shadowed by an answer reasoned without it

@@ -81,8 +81,12 @@ disposition:
 validation:
   summary: |
     sync_skills, sync_intent_map, gen_manifest and stamp_version checks pass on the working
-    tree. The test suite has not been run on this change.
-  runs: []
+    tree. On 2026-10-21 the suites covering it passed (see runs); no direct use yet.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only bundle-sync --only installer-stale --only contracts --only graph-refresh` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - The command list explains each command and its arguments.
@@ -92,7 +96,7 @@ trade_offs:
     - Users who typed /.refactor, /.review or /.compress lose them; an edited installed copy stays as an orphan skill.
     - Anchor ratios from before and after this change are not directly comparable.
 limitations:
-  - dist/config/claude/hooks still names refactor, review and compress (task-events LOCAL_SKILLS, the graph-refresh `[REFACTOR RESULT]` trigger, an execution-gate comment); harmless, not yet removed.
+  - At commit 8a88c2e dist/config/claude/hooks still named refactor, review and compress (task-events LOCAL_SKILLS, the graph-refresh `[REFACTOR RESULT]` trigger, an execution-gate comment). Removed in 073eb82; tests/checks/bundle_sync.py now fails if task-events LOCAL_SKILLS drifts from the registry.
   - A word-start drive letter still matches a one-letter word followed by a colon and a path-like token.
 revisit_when:
   - A measured need for a behavior-preserving change path that /.plan cannot express.

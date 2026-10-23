@@ -86,7 +86,11 @@ validation:
     Covered by the execution-chain and hook-launchers suites on Windows. No real-use session
     has run with the hooks installed; the Stop hook's reliance on `last_assistant_message` or
     the transcript's last assistant entry has only been exercised with fixture payloads.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only execution-chain --only gate-prompt-field --only hook-launchers` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - An execution cannot start without a sound proceed plan and the user's own -y

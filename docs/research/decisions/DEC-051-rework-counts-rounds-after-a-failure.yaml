@@ -48,7 +48,11 @@ disposition:
 validation:
   summary: |
     Covered by unit checks only. Not yet recounted on real usage streams.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only telemetry --only contracts` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense. No suite is dedicated to rework counting; these cover it only indirectly."
+      clean: false
 trade_offs:
   better:
     - Plans verified phase by phase no longer inflate rework.

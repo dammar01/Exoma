@@ -68,7 +68,11 @@ validation:
   summary: |
     Unit checks on Windows only. Linux `/proc` and macOS `ps` identity paths are untested in
     this change; CI's Ubuntu leg runs the same checks.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only process-identity --only worker-kill --only byte-lock` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A recycled PID is no longer killed when the recorded process cannot be compared.

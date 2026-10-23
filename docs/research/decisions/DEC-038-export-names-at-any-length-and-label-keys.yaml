@@ -51,6 +51,11 @@ disposition:
 validation:
   summary: |
     The metrics suite passes. No export has been produced from real projects since the change.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only metrics-contract` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A short project name or a folder name used as a map key cannot reach a shared export.

@@ -58,6 +58,11 @@ validation:
   summary: |
     The gate suites pass on Windows and, with pwsh 7.4, on Linux. The case that prompted it
     (a 210-line read) is still refused at 200 lines; no real session has used the lane yet.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only gate-k5-fixtures --only gate-runner-parsed` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - The prompt's small-slice exception now has numbers the hook enforces, so the two no longer disagree.

@@ -56,6 +56,11 @@ validation:
   summary: |
     Unit tests pass and the bisect named the codex release. No user has yet been warned about
     an untested release in real use.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only provider-update --only provider-seam --only provider-boundary` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A failure report names the provider release, and there is a known release to go back to.

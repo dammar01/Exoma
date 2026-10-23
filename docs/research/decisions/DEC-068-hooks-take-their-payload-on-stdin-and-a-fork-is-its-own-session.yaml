@@ -134,7 +134,11 @@ validation:
     Not yet run in a live Claude Code session: SessionStart `source: fork` firing for
     /branch, `CLAUDE_CODE_GIT_BASH_PATH` reaching a headless `claude -p` from PowerShell, and
     the [INTENT HINT] being read by the main agent are taken from the documentation.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only hook-launchers --only hook-python-resolver --only gate-prompt-field --only gate-k5-fixtures` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - No payload size or console code page crashes a hook, and the gates decide on large payloads

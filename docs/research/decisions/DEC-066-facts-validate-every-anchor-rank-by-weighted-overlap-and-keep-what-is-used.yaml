@@ -66,7 +66,11 @@ validation:
     Covered by the fact-selection and telemetry suites on Windows. The defaults (weights,
     floor, limits, length) are unmeasured; recall against the old ranking has not been
     compared on recorded tasks.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only fact-selection --only anchor-relocation --only evidence-anchor-relocation --only facts-concurrency` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A stored fact never carries a citation that did not resolve

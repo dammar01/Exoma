@@ -64,6 +64,10 @@ validation:
     not recorded, because a skipped turn writes no marker.
   runs:
     - {date: 2026-10-18, job_id: gate-handback-repro, description: subagent hand-back matching the NL map left no marker after install on Windows, clean: true}
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only gate-prompt-field --only hook-launchers` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A subagent's report or a task notification can no longer arm or clear the gate

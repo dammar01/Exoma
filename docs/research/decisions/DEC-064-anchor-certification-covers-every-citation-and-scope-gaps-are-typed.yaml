@@ -62,7 +62,11 @@ validation:
   summary: |
     Covered by the contracts suite on Windows. No delegated run since the change has been
     checked for how often `scanned_all` is false or how often providers tag scope bullets.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only contracts --only evidence-anchor-relocation` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A certified ratio covers the whole answer up to 200 citations, and says when it does not

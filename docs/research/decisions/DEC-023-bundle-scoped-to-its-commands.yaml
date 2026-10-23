@@ -60,6 +60,11 @@ validation:
   summary: |
     Installer suites pass. A command-only session in which plain chat follows the user's
     CLAUDE.md has not been run yet; the scope is a prompt instruction, so only use can show it holds.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only bundle-sync --only installer-text --only installer-uninstall` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A command-only user keeps their own behavior outside workflow commands.

@@ -62,6 +62,11 @@ validation:
   summary: |
     The graph-refresh suite passes on Windows and, with pwsh 7.4, on Linux. No real refresh
     longer than the old 600 s bound and no hung graphify have been observed since the change.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only graph-refresh` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A large graph refresh always runs to its end instead of being killed.

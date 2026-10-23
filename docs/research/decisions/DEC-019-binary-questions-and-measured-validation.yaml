@@ -65,6 +65,11 @@ validation:
   summary: |
     `check_research.py --git` passes on 38 records and the research suite rejects every new rule
     on a broken fixture. Not yet used beyond this change.
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only research` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - A question's status says one thing, and an answered one points to a proven record and a decision.

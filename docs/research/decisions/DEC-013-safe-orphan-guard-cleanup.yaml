@@ -68,7 +68,11 @@ validation:
     process taking the guard during clean keeps it (Windows and POSIX); clean twice removes
     nothing the second time. Real use: after clean in this workspace, guards remain only for
     live sessions (baseline 83, CASE-007).
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only runtime-guards --only process-identity --only byte-lock` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 
 trade_offs:
   better:

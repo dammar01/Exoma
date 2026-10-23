@@ -77,7 +77,11 @@ validation:
     Unit assertions with fixed readers, and one smoke read against the three real CLIs on
     the maintainer machine. The full suite (`tests/run.py`) passed on this tree. No
     end-to-end `/.provider` session in another project yet.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only provider-selection --only provider-seam` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 trade_offs:
   better:
     - The picker offers models the installed CLI has now, with the newest recommended.

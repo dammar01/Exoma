@@ -93,7 +93,11 @@ validation:
     retires after two; a fingerprint change withholds knowledge. Real use: a clean run on a
     maintainer project that matches a source or proven candidate ranked first — which also
     completes DEC-004's pending validation.
-  runs: []
+  runs:
+    - date: 2026-10-21
+      job_id: "local suite check 2026-10-21"
+      description: "`python tests/run.py --keep-going --record . --only e2e-knowledge --only e2e-tagging --only e2e-browser` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
 
 trade_offs:
   better:
