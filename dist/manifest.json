@@ -280,8 +280,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.py",
-      "sha256": "79628106c58c0fe27827d9307f81564ac33709b5fb486d6cb618f06f6bb64a34",
-      "bytes": 22958,
+      "sha256": "ee62fce3d8fce58582e3bdac655ebce95068ced1a39e5353caadb0a1a60dd225",
+      "bytes": 23269,
       "merge": "replace",
       "component": "runtime"
     },

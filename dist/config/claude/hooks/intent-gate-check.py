@@ -68,6 +68,8 @@ def hook_warning(kind, message):
 
 def same_path(candidate, expected, base):
     # True when candidate names expected. A relative path resolves against the project root.
+    # realpath as well as abspath: the root comes from session-bind's realpath(cwd), so an
+    # 8.3 short name in the command (`C:\Users\RUNNER~1\...`) only matches once expanded.
     if not candidate.strip():
         return False
     try:
@@ -75,7 +77,9 @@ def same_path(candidate, expected, base):
             candidate = os.path.join(base, candidate)
         a = os.path.normcase(os.path.abspath(candidate))
         b = os.path.normcase(os.path.abspath(expected))
-        return a == b
+        if a == b:
+            return True
+        return os.path.normcase(os.path.realpath(candidate)) == os.path.normcase(os.path.realpath(expected))
     except Exception:
         return False
 
