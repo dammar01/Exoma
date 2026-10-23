@@ -1,0 +1,42 @@
+schema_version: 3
+id: H-021
+title: Weighted, stopword-aware fact retrieval serves the facts a task needs and drops the rest
+date: 2026-10-20
+status: closed
+outcome: rejected
+provenance:
+  type: observed
+  confidence: low
+
+statement: |
+  With the DEC-066 scoring (identifier 2, word 1, path-only 0.5, floor 2.0, EN/ID stopwords),
+  the facts injected into exploration and reasoning calls are mostly cited or used by the
+  answer, and the injection rate falls without the answers needing facts that were dropped.
+motivation: |
+  DEC-066 chose its weights, floor, limits and length cap without data. The fact lifecycle
+  counts now recorded per call make them measurable.
+sources: [CASE-024]
+external_sources: []
+counter_evidence: []
+expected_effect: |
+  A lower injection rate than the one-token rule would have given on the same store, with
+  served facts referenced in the answers more often than not.
+
+success_criteria:
+  primary_metric: served-fact use rate (EXP-013)
+  supported_when: over at least 30 replayed calls, the weighted arm's injection rate is at most the one-token arm's AND its served-fact use rate is at least 10 percentage points higher
+  rejected_when: over at least 30 replayed calls, the weighted arm's served-fact use rate is not higher than the one-token arm's, OR its injection rate is higher
+  data_recorded: true
+  data_source: .workflow/data/usage.jsonl facts_* fields; telemetry report `facts`
+
+experiments: [EXP-013]
+limitations:
+  - "EXP-013 (2026-10-23, 1576 replayed calls): weighted injection_rate 0.027 vs one-token 0.022, served_fact_use_rate 0.202 vs 0.214; both rejection clauses hold. The replay is counterfactual on today's store; see EXP-013 threats."
+  - "Pre-registration: Thresholds proposed by the agent and frozen on 2026-10-23, before the replay runner existed or any replay ran (proposed-by-agent, maintainer-approved as a rule, values not reviewed). Between the two criteria, or below 30 calls, the outcome is inconclusive."
+  - Whether a fact was used is judged from the answer text, which depends on how the second agent cites
+related_decisions: [DEC-066]
+
+disposition:
+  implementation_status: not_applicable
+  validation_status: not_validated
+questions: [RQ-06]

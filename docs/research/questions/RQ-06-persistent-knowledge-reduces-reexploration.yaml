@@ -7,7 +7,7 @@ what_exists: |
   Fact store (recurrence and durable facts), anchored evidence reuse, graph leads, promoted
   knowledge; facts and promoted knowledge are injected into exploration and reasoning prompts,
   but there is no outcome to update loop and the effect is not measured.
-records: [CASE-009, DEC-016, DEC-035, DEC-040, DEC-044, DEC-065, DEC-066]
+records: [CASE-009, DEC-016, DEC-035, DEC-040, DEC-044, DEC-065, DEC-066, DEC-070, H-021, EXP-013, H-023, EXP-016]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -22,4 +22,7 @@ notes: |
   selectors as reused knowledge.
 
   Since 3.9.0 the fact lifecycle is counted per call (DEC-066, `runtime.fact_lifecycle@1`);
-  H-021 and EXP-013 (drafts) calibrate the retrieval defaults against it.
+  H-021 and EXP-013 replayed the retrieval defaults against it (rejected: the weighted rule
+  served more facts and fewer were cited); H-023 and EXP-016 traced the excess to the
+  per-role limit. DEC-070 records served facts per call so later replays need not be
+  counterfactual. DEC-072 (draft) proposes the limit change.

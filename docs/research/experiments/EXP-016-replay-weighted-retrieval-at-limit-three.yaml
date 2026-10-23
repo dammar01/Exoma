@@ -1,0 +1,57 @@
+schema_version: 3
+id: EXP-016
+title: Replay EXP-013 with the weighted arm capped at three facts for every role
+date: 2026-10-23
+status: completed
+hypothesis: H-023
+version_under_test: 3.9.0
+
+objective: |
+  Whether DEC-066's per-role limit explains why the weighted arm served more facts than the
+  one-token arm in EXP-013.
+setup: |
+  The same projects, archived calls and fact stores as EXP-013, replayed by
+  tools/maintain/replay_facts.py with --weighted-limit 3; the one-token arm unchanged (limit 3).
+method: |
+  One run of replay_facts.py --weighted-limit 3 with the committed tool. Compare
+  replay.injection_rate@1 of the two arms; report replay.served_fact_use_rate@1 beside it.
+arms:
+  - name: one-token
+    description: 3.8.4 rule, limit 3 (as in EXP-013)
+  - name: weighted-3
+    description: DEC-066 scoring and floor, limit 3 for every role
+metrics:
+  - name: injection_rate
+    definition: replay.injection_rate@1
+    unit: ratio over candidate offers
+  - name: served_fact_use_rate
+    definition: replay.served_fact_use_rate@1 (secondary)
+    unit: ratio over served facts
+results:
+  summary: |
+    One run, 2026-10-23, committed tool (tool_commit a87fbba (+dirty: the working tree held unrelated uncommitted edits, the replay tool itself was committed), inputs 4745 files sha256 7ba73d8e07d363e4), the same 1576 calls and
+    108503 candidate offers as EXP-013's run of record. one-token: 2440 served, 521 cited.
+    weighted-3: 2399 served, 509 cited.
+  data_source: tools/maintain/replay_facts.py --weighted-limit 3 over the maintainer's projects, 2026-10-23; inputs are private, the output stays on the maintainer's machine
+  figures:
+    - {metric: replay.injection_rate@1, arm: one-token, value: "0.0225 (2440 / 108503)"}
+    - {metric: replay.injection_rate@1, arm: weighted-3, value: "0.0221 (2399 / 108503)"}
+    - {metric: replay.served_fact_use_rate@1, arm: one-token, value: "0.214 (521 / 2440)"}
+    - {metric: replay.served_fact_use_rate@1, arm: weighted-3, value: "0.212 (509 / 2399)"}
+interpretation: |
+  Capped at three, the weighted arm serves slightly fewer facts than the one-token arm, so
+  H-023 is supported: the per-role limit, not the scoring, is what made DEC-066 serve more.
+  At equal limits the share of served facts the answer cites is level (0.212 against
+  0.214): the weighted scoring does not pick facts the answer uses more often. The gap is
+  small (41 facts over 1576 calls); the result says the limit explains the excess, not
+  that weighted retrieval is better.
+threats_to_validity:
+  - Counterfactual store and answers written after seeing whichever set their version served (EXP-013)
+  - One limit value; a limit of 2 or a floor change is not tested
+outcome: supported
+related: [EXP-013, DEC-066]
+
+disposition:
+  implementation_status: not_applicable
+  validation_status: not_validated
+questions: [RQ-06]

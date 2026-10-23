@@ -1,0 +1,86 @@
+schema_version: 3
+id: EXP-011
+title: Hook call wall time, bash launcher vs PowerShell 5.1, on Windows
+date: 2026-10-17
+status: completed
+hypothesis: H-019
+version_under_test: 3.8.2
+
+objective: |
+  Whether the bash launchers can replace the `.ps1` hooks on Windows without lengthening a
+  hook call.
+setup: |
+  Windows 11, Git Bash 5.2 (MSYS), Windows PowerShell 5.1, Python 3.14 reached as `python3`
+  (a WindowsApps-installed interpreter). The shipped hooks from dist/config/claude/hooks,
+  unchanged. A throwaway home and project per hook and flavour; the same payload for both.
+method: |
+  tests/checks/hook_contract.py runs each hook's contract case through `bash <hook>.sh` and
+  `powershell -File <hook>.ps1` and records each call's wall time (process start to exit).
+  Two passes so far, one to three calls per hook and flavour per pass.
+arms:
+  - name: sh
+    description: bash launcher (Git Bash) piping stdin to the embedded python3
+  - name: ps1
+    description: Windows PowerShell 5.1 running the .ps1 flavour
+metrics:
+  - name: hook_call_wall_seconds
+    definition: wall time of one hook process, from spawn to exit, for one payload
+    unit: seconds per call
+results:
+  summary: |
+    Interim, two passes. Every `.sh` call was faster than or equal to its `.ps1` call: 0.50–0.66 s
+    against 0.76–1.25 s, except session-bind's first pass (1.02 s vs 1.05 s). No call came
+    near half its hook's timeout.
+    A third pass, after each `.sh` hook gained a bash interpreter resolver (one version probe
+    per call, DEC-054): `.sh` 0.65–0.76 s, `.ps1` 0.62–0.84 s in the same run — the probe
+    costs about 0.1 s and the two arms now overlap.
+    Fourth pass, 2026-10-21, after the `.ps1` hooks were retired (2e41ffc): the 3.9.0 `.sh`
+    launchers (bash + the shared `.py` dispatcher) against the `.ps1` files of 2e41ffc^,
+    restored outside the repository and not installed. Six hooks both flavours had, one
+    warm-up then 10 timed calls each, same payload, throwaway home and project per hook and
+    arm, machine otherwise idle; every call exited 0 and the warm-up outputs matched
+    (session-bind printed a binding in both, statusline the same line, the rest nothing).
+    Median `.sh` against `.ps1`: session-bind 0.495/0.443, intent-gate-set 0.463/0.401,
+    intent-gate-check 0.483/0.405, task-events 0.499/0.457, workflow-statusline 0.442/0.442,
+    graph-refresh 0.476/0.365. `.sh` is slower on five of six hooks by 0.04–0.11 s and level
+    on one. A pass taken while the test suite ran in parallel gave the same direction with
+    wider spread and is not used.
+    Fifth pass, 2026-10-23, the pre-registered one (H-019: margin 1.25 ×, set before it ran):
+    same six hooks, 3.9.0 dist `.sh` against the 2e41ffc^ `.ps1` restored outside the
+    repository, 3 warm-up then 30 timed calls per hook and flavour, interleaved call by call
+    (sh/ps1, then ps1/sh), throwaway home and project per hook and arm, machine idle. Every
+    call exited 0; warm-up outputs matched. Median `.sh`/`.ps1` (ratio): session-bind
+    0.475/0.433 (1.10), intent-gate-set 0.437/0.396 (1.11), intent-gate-check 0.452/0.384
+    (1.18), task-events 0.442/0.384 (1.15), workflow-statusline 0.434/0.437 (0.99),
+    graph-refresh 0.453/0.361 (1.26). Five hooks within the margin, graph-refresh 0.006 over it.
+  data_source: HOOK_CONTRACT_TIMINGS output of `python tests/run.py --only hook-launchers`, 2026-10-17; fourth and fifth passes a throwaway script around tests/checks/hook_contract._Workspace, 2026-10-21 and 2026-10-23; raw timings kept on the maintainer's machine, not in the repository
+  figures:
+    - {metric: hook_call_wall_seconds, arm: sh, value: "0.50–0.66 (session-bind 0.55–1.02)"}
+    - {metric: hook_call_wall_seconds, arm: ps1, value: "0.72–1.25"}
+    - {metric: hook_call_wall_seconds, arm: sh, value: "0.65–0.76 with the per-call interpreter probe"}
+    - {metric: hook_call_wall_seconds, arm: ps1, value: "0.62–0.84 (same run as the probe figure)"}
+    - {metric: hook_call_wall_seconds, arm: sh, value: "median 0.442–0.499 over six hooks, n=10 each (3.9.0 dispatcher)"}
+    - {metric: hook_call_wall_seconds, arm: ps1, value: "median 0.365–0.457 over six hooks, n=10 each (2e41ffc^)"}
+    - {metric: hook_call_wall_seconds, arm: sh, value: "median 0.434–0.475 over six hooks, n=30 each, interleaved (fifth pass)"}
+    - {metric: hook_call_wall_seconds, arm: ps1, value: "median 0.361–0.437 over six hooks, n=30 each, interleaved (fifth pass)"}
+interpretation: |
+  The fifth pass decides H-019 under its pre-registered rule: graph-refresh's median `.sh`
+  call is 1.256 × its `.ps1` call, over the 1.25 margin, so H-019 is rejected. The miss is
+  narrow (0.006 of the ratio, 0.09 s per call) and on one hook; five of six are within it,
+  and every call stays far below its hook timeout (10/15/60 s). The direction matches the
+  fourth pass: the bash launcher with the shared dispatcher costs a little more than
+  PowerShell 5.1 did. The `.ps1` flavour is already retired (2e41ffc), so the result
+  prices that retirement rather than reversing it.
+threats_to_validity:
+  - The margin was chosen with the fourth pass visible (H-019 limitations); the fifth pass alone decides.
+  - One machine, one run of 30 per hook; a rerun could land graph-refresh on either side of 1.25.
+  - Two passes, one machine; first-call disk cache effects not separated.
+  - Wall time includes the test's own subprocess spawn, the same for both arms.
+  - Fourth pass compares 3.9.0 hook logic with the logic the `.ps1` files had at 2e41ffc^; the payloads take the fail-open/no-op path of each hook, so it measures launcher and startup cost, not the heavier branches.
+outcome: rejected
+related: [DEC-021, DEC-030]
+
+disposition:
+  implementation_status: not_applicable
+  validation_status: not_validated
+questions: [RQ-07a, RQ-13]

@@ -1,0 +1,83 @@
+schema_version: 3
+id: DEC-070
+title: Each delegated call archives the facts it was served, and the execution gate logs its refusals
+date: 2026-10-23
+status: accepted
+provenance:
+  type: observed
+  confidence: medium
+  basis: EXP-013 and EXP-014 were not runnable; their data was never recorded
+
+problem: |
+  Two implemented decisions name experiments that could not run because the runtime never
+  recorded what they measure.
+  - DEC-066 (weighted fact retrieval) names H-021 and EXP-013. EXP-013 needs, per call, the
+    facts served and whether the answer used them. Usage rows keep only counts; the facts
+    sidecar is a session-level file rewritten on every call; facts-usage.json aggregates hits
+    per fact. Which facts a given call saw was not recoverable.
+  - DEC-067 (execute gates) names H-022 and EXP-014. The execution-gate hook wrote a block to
+    stderr and nothing else, so blocks per session could only be reconstructed from
+    transcripts, and warned refusals (enforcement: warn) not at all.
+decision: |
+  - Executor keeps `fact_store.served_fact_refs(facts)` (usage-sidecar key, file, line) for
+    exploration and reasoning calls and writes it to call.meta.json as `served_facts`; `[]`
+    when nothing passed the floor, absent for other roles.
+  - execution-gate appends one JSON line per refusal to the session's
+    runtime/gate-blocks.jsonl: time, rule (commit_unapproved, outside_root, outside_scope),
+    tool, mode, exit code and plan id. No path, no command. Fail-open.
+  - Two offline tools read what exists: tools/maintain/replay_facts.py replays the 3.8.4
+    one-token rule and the current weighted rule over archived calls (metrics replay.*@1),
+    and tools/maintain/export_blind_sample.py exports unlabelled samples for a blind judge
+    (gate blocks found in transcripts, category labels for EXP-010, EXP-008's task sample).
+    measure_task_outcomes.py gains collect_tasks() for the latter; its output is unchanged.
+rationale: |
+  Charter §12, in short. Research question: does DEC-066's ranking serve facts the answer
+  uses (RQ-06), and do DEC-067's gates block legitimate work (RQ-10)? Hypotheses H-021 and
+  H-022, thresholds frozen 2026-10-23 before any data. Variable changed: none at run time;
+  this records what the runtime already decides. Experiments enabled: EXP-013 exactly on calls
+  archived from now on, counterfactually on older ones; EXP-014 from the log and transcripts.
+  Expected measurement: served_fact_use_rate per arm; blocks per session and false_block_rate.
+  Existing mechanisms were insufficient because the counts cannot be joined to a fact or a
+  block. Complexity: one list in call meta, one append in a hook, two maintainer tools.
+alternatives:
+  - option: Reconstruct blocks from transcripts only
+    rejected_because: Warned refusals leave no tool error in the transcript, and a transcript can be lost or pruned; the export still reads transcripts for the blocks before this change.
+  - option: Store served fact claims in the usage stream
+    rejected_because: Claims are prompt-derived text; the call meta is already per call, redacted and archived beside the prompt it explains.
+evidence: [DEC-066, DEC-067, H-021]
+evidence_notes: |
+  H-022 (draft) is the hypothesis the gate log serves; it is tested by EXP-014 (draft).
+  tests/checks/telemetry.py (_call_meta_names_the_facts_it_served), tests/checks/facts.py
+  (served_fact_refs key equals the usage key), tests/checks/hook_contract.py (one row per
+  refusal, rule, exit, plan, warn row, no path or command in the log), tests/checks/replay.py,
+  tests/checks/blind_sample.py. measure_task_outcomes.py output compared byte-for-byte (minus
+  stamp time and commit) against HEAD on the 48 labelled 3.6.0/3.7.3 tasks: identical.
+implementation:
+  version: 3.9.0
+  commits: [a87fbba]
+  components:
+    - core/evidence/fact_store.py (served_fact_refs)
+    - core/provider/executor.py (served_facts in call meta)
+    - dist/config/claude/hooks/execution-gate.py (gate-blocks.jsonl)
+    - core/audit/metrics.py (replay.call, replay.injection_rate, replay.served_fact_use_rate)
+    - tools/maintain/replay_facts.py, tools/maintain/export_blind_sample.py
+    - tools/maintain/measure_task_outcomes.py (collect_tasks)
+    - docs/reference.md, docs/runtime-contracts.md, docs/evaluation/metrics.md
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+validation:
+  summary: |
+    Tests pass locally. No real call has yet archived served_facts outside the test suite,
+    and no installed hook has logged a refusal: the bundle is not installed by this change.
+  runs: []
+trade_offs:
+  better: [EXP-013 can score the exact served set, EXP-014 can count blocks and warnings]
+  worse: [call.meta.json grows by up to the role limit of small entries, one file write per refusal]
+limitations:
+  - The log says a refusal happened, not whether it was right; legitimacy still needs a judge.
+  - Calls archived before this change are replayed against today's store, not the store they saw.
+revisit_when:
+  - EXP-013 or EXP-014 produce a result
+  - gate-blocks.jsonl grows past what a session-scoped file serves
+questions: [RQ-06, RQ-10]

@@ -1,0 +1,44 @@
+schema_version: 3
+id: H-019
+title: On Windows, the bash launcher of a hook (Git Bash + Python) costs no more wall time than its PowerShell 5.1 flavour
+date: 2026-10-17
+status: closed
+outcome: rejected
+provenance:
+  type: observed
+  confidence: low
+
+statement: |
+  Running each shipped hook as `bash <hook>.sh` under Git Bash on Windows takes no more wall
+  time per call than running `<hook>.ps1` under Windows PowerShell 5.1, for the same payload.
+motivation: |
+  The OS-agnostic migration drops the `.ps1` hooks and runs bash launchers on every OS.
+  DEC-021 measured a PowerShell spawn at 422–486 ms and moved task events to turn boundaries
+  because of it; a launcher that is slower would multiply that cost on every gated tool call.
+sources: [DEC-021, DEC-030]
+external_sources: []
+counter_evidence: []
+expected_effect: |
+  If it holds, retiring the `.ps1` flavour does not lengthen any hook against its timeout
+  (10/15/60 s in settings.template.json).
+
+success_criteria:
+  primary_metric: hook_call_wall_seconds
+  supported_when: in EXP-011's fifth pass (3 warm-up, then 30 timed calls per hook and flavour), every hook's median `.sh` call is at most 1.25 × its median `.ps1` call
+  rejected_when: in EXP-011's fifth pass, any hook's median `.sh` call exceeds 1.25 × its median `.ps1` call
+  data_recorded: true
+  data_source: tests/checks/hook_contract.py with HOOK_CONTRACT_TIMINGS=1
+
+experiments: [EXP-011]
+limitations:
+  - "EXP-011 fifth pass (2026-10-23, n=30 interleaved): graph-refresh median .sh/.ps1 = 1.256, over the 1.25 margin; the other five hooks 0.99-1.18. Rejected by the frozen rule, narrowly and on one hook."
+  - "Pre-registration: Margin 1.25 × (non-inferiority) set by the maintainer on 2026-10-23, before the fifth pass. It replaces \"no slower\" in supported_when, so the two criteria are complementary and the outcome is binary. The margin was chosen with the fourth pass visible (graph-refresh 0.476/0.365 = 1.30 ×); only the fifth pass decides the outcome, earlier passes do not."
+  - Measured on one Windows machine; Python startup and antivirus scanning vary by machine.
+  - Until 2e41ffc the `.sh` flavour embedded its Python; it now runs the shared `.py` dispatcher, which imports more modules. EXP-011's fourth pass measures the dispatcher form.
+  - "EXP-011's fourth pass (2026-10-21, 3.9.0 dispatcher, n=10 per hook) does not meet supported_when: median `.sh` is 0.04–0.11 s slower on five of six hooks, level on one. rejected_when cannot be applied until its margin replaces [PLACEHOLDER]."
+related_decisions: [DEC-021, DEC-030]
+
+disposition:
+  implementation_status: not_applicable
+  validation_status: not_validated
+questions: [RQ-07a, RQ-13]

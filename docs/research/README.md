@@ -208,6 +208,9 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-022](real-cases/CASE-022-subagent-hand-backs-arm-the-intent-gate.yaml) | Native subagent hand-backs armed the intent gate during /.execute and blocked the main agent and its subagents | negative | implemented | observed | 3a4ba3e |
 | [CASE-023](real-cases/CASE-023-a-failed-verify-left-its-test-request-for-the-next-one.yaml) | A verify whose provider call failed left its test request, and the next verify ran that old choice | negative | implemented | observed | 6097f05 |
 | [CASE-024](real-cases/CASE-024-an-explore-reported-every-anchor-certified-while-citing-missing-files.yaml) | An explore reported every anchor certified while citing files that do not exist | negative | implemented | observed | — |
+| [CASE-025](real-cases/CASE-025-codex-model-at-capacity-surfaces-as-silent-exit-1.yaml) | Codex "Selected model is at capacity" reaches the runtime as a silent `codex exited 1` with `error_type: unknown` | negative | implemented | observed | — |
+| [CASE-026](real-cases/CASE-026-inline-credential-redaction-breaks-e2e-scenario-json.yaml) | The "inline credential" redaction rewrites `"password": "${E2E_PASS}"` inside the draft scenario JSON, so every draft with a password fill ends `spec_invalid` | negative | implemented | observed | — |
+| [CASE-027](real-cases/CASE-027-provider-catalog-flashes-console-windows-on-windows.yaml) | `/.provider` catalog read (`run.sh provider ''`) flashes CMD console windows on Windows | negative | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -274,6 +277,13 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-067](decisions/DEC-067-the-execute-chain-is-runtime-state-and-hooks-gate-what-is-deterministic.yaml) | The plan-execute-verify chain is runtime state, and hooks gate what is deterministic | accepted | implemented | not_validated | f63e1b7 |
 | [DEC-068](decisions/DEC-068-hooks-take-their-payload-on-stdin-and-a-fork-is-its-own-session.yaml) | Hooks take their payload on stdin, a fork is its own session, and only an explicit command arms the gate | accepted | implemented | not_validated | 416cf71 |
 | [DEC-069](decisions/DEC-069-the-bundle-ships-only-commands-the-runtime-or-research-needs-and-wrappers-come-from-skill-headers.yaml) | The bundle drops /.refactor, /.review and /.compress, and command wrappers are rendered from skill headers | accepted | implemented | not_validated | 8a88c2e |
+| [DEC-070](decisions/DEC-070-calls-name-the-facts-they-were-served-and-the-gate-logs-its-refusals.yaml) | Each delegated call archives the facts it was served, and the execution gate logs its refusals | accepted | implemented | not_validated | a87fbba |
+| [EXP-011](experiments/EXP-011-hook-launcher-latency-bash-vs-powershell.yaml) | Hook call wall time, bash launcher vs PowerShell 5.1, on Windows | completed | not_applicable | not_validated | — |
+| [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Calibrate fact retrieval on recorded tasks | completed | not_applicable | not_validated | — |
+| [EXP-016](experiments/EXP-016-replay-weighted-retrieval-at-limit-three.yaml) | Replay EXP-013 with the weighted arm capped at three facts for every role | completed | not_applicable | not_validated | — |
+| [H-019](hypotheses/H-019-bash-launcher-no-slower-than-powershell-hooks.yaml) | On Windows, the bash launcher of a hook (Git Bash + Python) costs no more wall time than its PowerShell 5.1 flavour | closed | not_applicable | not_validated | — |
+| [H-021](hypotheses/H-021-weighted-fact-retrieval-serves-what-the-task-needs.yaml) | Weighted, stopword-aware fact retrieval serves the facts a task needs and drops the rest | closed | not_applicable | not_validated | — |
+| [H-023](hypotheses/H-023-per-role-limit-explains-weighted-over-injection.yaml) | DEC-066's per-role limit, not its scoring, is why the weighted rule serves more facts than the one-token rule | closed | not_applicable | not_validated | — |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
