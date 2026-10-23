@@ -51,7 +51,7 @@ implementation:
     - docs/reference.md (runtime tests), dist/config/claude/skills/verify.md, dist/manifest.json
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     Covered by the verify-runtime-tests suite on Windows; no live verify run after a real
@@ -60,6 +60,10 @@ validation:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only verify-runtime-tests --only e2e-routing` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
+    - date: 2026-10-23
+      job_id: "main_agent-workflow_20261023_082642459_3c69 verify jobs"
+      description: "Live use: two delegated verify jobs each ran the tests the main agent chose for that job (verify/tests.used.json; usage verdicts fail, then incomplete). The fail named a real gap. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:

@@ -127,7 +127,7 @@ implementation:
     - docs/reference.md, docs/runtime-contracts.md
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The replay matrix and the hook suites pass through the real bash launchers on Windows.
@@ -138,6 +138,10 @@ validation:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only hook-launchers --only hook-python-resolver --only gate-prompt-field --only gate-k5-fixtures` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
+    - date: 2026-10-23
+      job_id: "main_agent-workflow_20261023_082642459_3c69 session"
+      description: "Live use: the session ran on the stdin hook launchers; startup and resume kept one MAIN_SESSION_ID, an explicit /.verify armed the verify lane, natural-language prompts got an intent hint without arming the gate. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:

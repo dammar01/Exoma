@@ -68,12 +68,16 @@ implementation:
     - tests/checks/replay.py, tests/checks/blind_sample.py (new), tests/run.py and tests/scenario.py (registered and run by default)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
-    Tests pass locally. No real call has yet archived served_facts outside the test suite,
-    and no installed hook has logged a refusal: the bundle is not installed by this change.
-  runs: []
+    Tests pass locally. Since 2026-10-23 real delegated calls archive served_facts (see runs);
+    the bundle was installed that day and no installed hook has logged a refusal yet.
+  runs:
+    - date: 2026-10-23
+      job_id: "main_agent-workflow_20261023_082642459_3c69 plan calls 20261023_054648 and 20261023_110649"
+      description: "Live use: two delegated plan calls archived call.meta.json with served_facts (4 facts each). No execution-gate refusal has been logged to gate-blocks.jsonl since install. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
+      clean: false
 trade_offs:
   better: [EXP-013 can score the exact served set, EXP-014 can count blocks and warnings]
   worse: [call.meta.json grows by up to the role limit of small entries, one file write per refusal]

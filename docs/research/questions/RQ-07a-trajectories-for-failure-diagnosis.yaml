@@ -6,7 +6,7 @@ status: unanswered
 what_exists: |
   Audit, usage, quality, per-call metadata, progress, job logs, and continuation metadata
   exist, but are scattered and have no diagnosis tooling.
-records: [CASE-009, DEC-015, DEC-020, CASE-014, CASE-015, DEC-021, DEC-022, DEC-024, DEC-028, CASE-016, CASE-017, DEC-030, DEC-034, DEC-037, DEC-041, DEC-049, DEC-050, DEC-051, DEC-052, CASE-021, DEC-053, DEC-054, DEC-055, DEC-057, DEC-058, CASE-025, CASE-026, CASE-027, H-019, EXP-011]
+records: [CASE-009, DEC-015, DEC-020, CASE-014, CASE-015, DEC-021, DEC-022, DEC-024, DEC-028, CASE-016, CASE-017, DEC-030, DEC-034, DEC-037, DEC-041, DEC-049, DEC-050, DEC-051, DEC-052, CASE-021, DEC-053, DEC-054, DEC-055, DEC-057, DEC-058, CASE-025, CASE-026, CASE-027, H-019, EXP-011, DEC-071]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.

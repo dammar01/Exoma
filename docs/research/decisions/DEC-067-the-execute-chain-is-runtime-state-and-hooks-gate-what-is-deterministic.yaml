@@ -80,16 +80,20 @@ implementation:
     - docs/reference.md, docs/runtime-contracts.md, docs/team-guide/troubleshooting.md
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
-    Covered by the execution-chain and hook-launchers suites on Windows. No real-use session
-    has run with the hooks installed; the Stop hook's reliance on `last_assistant_message` or
+    Covered by the execution-chain and hook-launchers suites on Windows. Real use with the
+    hooks installed is recorded under runs (2026-10-23); the Stop hook's reliance on `last_assistant_message` or
     the transcript's last assistant entry has only been exercised with fixture payloads.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only execution-chain --only gate-prompt-field --only hook-launchers` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
+    - date: 2026-10-23
+      job_id: "main_agent-workflow_20261023_082642459_3c69 execution chains"
+      description: "Live use: two plan-record, execute-begin (user -y token), execute-end chains. execution-gate blocked a Bash call whose heredoc text held the words git commit (the documented fail-closed false block), worked around through a script file; the second chain ran with enforcement warn by the maintainer's choice. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:

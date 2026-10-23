@@ -60,16 +60,21 @@ implementation:
     - docs/reference.md, docs/evaluation/metrics.md
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
-    Covered by the fact-selection and telemetry suites on Windows. The defaults (weights,
-    floor, limits, length) are unmeasured; recall against the old ranking has not been
-    compared on recorded tasks.
+    Covered by the fact-selection and telemetry suites on Windows. The ranking was compared
+    with the old one-token rule on recorded tasks by EXP-013 and EXP-016 (counterfactual
+    replays: more facts served, no more cited; the reasoning limit explains the excess).
+    Weights, floor and length remain unmeasured on their own.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only fact-selection --only anchor-relocation --only evidence-anchor-relocation --only facts-concurrency` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
+    - date: 2026-10-23
+      job_id: "main_agent-workflow_20261023_082642459_3c69 delegated calls"
+      description: "Live use: delegated explore and plan calls were served facts by the weighted rule (usage facts_* rows, served_facts in call meta). Its effect was measured only counterfactually (EXP-013, EXP-016). Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:
