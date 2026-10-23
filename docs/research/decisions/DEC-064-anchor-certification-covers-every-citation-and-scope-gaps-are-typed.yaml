@@ -68,8 +68,8 @@ validation:
       description: "`python tests/run.py --keep-going --record . --only contracts --only evidence-anchor-relocation` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
       clean: false
     - date: 2026-10-23
-      job_id: "main_agent-workflow_20261023_082642459_3c69 explore digest"
-      description: "Live use: a delegated explore digest was capped from high to low with its reasons named (10 of 86 anchors unverifiable, claims without file:line, scope gaps). Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
+      job_id: "main_agent-workflow_20261023_082642459_3c69 explore 20261023_012807_264535_explore_91eeb90a"
+      description: ".workflow/data/evidence.jsonl, row for that prompt: the stored digest reads confidence low with three named confidence_capped_by reasons, anchor_scan 76 certified and 10 uncertified; the provider's raw output.raw.md for the same prompt reads confidence high. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:

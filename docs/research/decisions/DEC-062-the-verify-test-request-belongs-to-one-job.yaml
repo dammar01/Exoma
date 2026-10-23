@@ -63,7 +63,7 @@ validation:
       clean: false
     - date: 2026-10-23
       job_id: "main_agent-workflow_20261023_082642459_3c69 verify jobs"
-      description: "Live use: two delegated verify jobs each ran the tests the main agent chose for that job (verify/tests.used.json; usage verdicts fail, then incomplete). The fail named a real gap. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
+      description: "Two delegated verify jobs ran the tests the main agent chose for each (usage.jsonl verdict rows fail, then incomplete; the fail named a real gap). Only the last job's verify/tests.used.json survives, so the earlier job's command list is not re-countable from the workspace. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:

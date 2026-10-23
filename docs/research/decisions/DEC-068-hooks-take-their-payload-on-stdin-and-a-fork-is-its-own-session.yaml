@@ -140,8 +140,8 @@ validation:
       description: "`python tests/run.py --keep-going --record . --only hook-launchers --only hook-python-resolver --only gate-prompt-field --only gate-k5-fixtures` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
       clean: false
     - date: 2026-10-23
-      job_id: "main_agent-workflow_20261023_082642459_3c69 session"
-      description: "Live use: the session ran on the stdin hook launchers; startup and resume kept one MAIN_SESSION_ID, an explicit /.verify armed the verify lane, natural-language prompts got an intent hint without arming the gate. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
+      job_id: "main_agent-workflow_20261023_082642459_3c69; Claude Code transcript a2358c1a-e5dc-4596-a4ae-84af3fe44b84.jsonl"
+      description: "The maintainer's transcript (private; recount on the machine holding it) shows the session on the stdin hook launchers: the SessionStart binding on startup and on resume names the same MAIN_SESSION_ID, an explicit /.verify armed the verify lane, and natural-language prompts got an intent hint without arming the gate. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
       clean: false
 trade_offs:
   better:
