@@ -132,6 +132,8 @@ from tests.checks.os_resolvers import (  # noqa: E402
 )
 from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
+from tests.checks.replay import _test_fact_replay  # noqa: E402
+from tests.checks.blind_sample import _test_blind_sample  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_key_pattern_needs_a_left_boundary, _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
@@ -196,6 +198,8 @@ SUITES: dict[str, tuple] = {
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
+    "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),
+    "blind-sample": (_test_blind_sample, "blind-judge export: gate blocks read from transcripts, EXP-008 strata, the key kept apart, category labels merged"),
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),
     "evidence-anchor-relocation": (_test_evidence_anchor_relocation, "evidence anchors survive a line moving"),
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),

@@ -88,6 +88,11 @@ environment, which Windows caps at 32767 characters per variable; no `.ps1` ship
 What *is* checkable is the second agent's output, because it comes back through the
 runtime: see `core.evidence.contract.contract_warnings`. Those are reported, never fatal.
 
+The `execution-gate` hook records its own refusals: one line per block or warning in the
+bound session's `runtime/gate-blocks.jsonl` (rule, tool, mode, exit code, plan id; never the
+path or command), fail-open. The runtime does not read it; it is EXP-014's count of how often
+the gate fires, and whether a block was legitimate is still judged from the transcript.
+
 ## /.verify-browser
 
 `--command verify-browser` is a **delegated** command: listed in the DELEGATED registry of
@@ -959,7 +964,10 @@ fail differently:
   meta, a redaction failure, a write error — is caught and recorded as
   `"<ExceptionType>: <message>"`: on the result as `meta.call_meta_error` when the provider
   returned one, and in the executor's last call meta either way, so the previous call's meta
-  is never left standing in for this one.
+  is never left standing in for this one. For exploration and reasoning calls it also holds
+  `served_facts`, the facts `fact_store.load_relevant` served (`key`, `file`, `line`; `[]`
+  when none), recorded before the prompt is built so the archived call names exactly what the
+  second agent was shown (EXP-013, DEC-070).
 - **Usage and audit rows** (`_record_usage`: `write_usage_record`, then `write_audit_record`)
   are written separately, on the return path. A failure there is swallowed silently — no
   `call_meta_error`, no field on the result. A missing usage or audit row is therefore not

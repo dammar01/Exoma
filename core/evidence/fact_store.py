@@ -750,6 +750,18 @@ def _fact_key(fact: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def served_fact_refs(facts: list[dict]) -> list[dict]:
+    """Identity of each served fact, for the call's archived meta (EXP-013).
+
+    `key` is the usage-sidecar key, so a replay can join a call to the store; file and line
+    are the anchor as served, which is what an answer would cite.
+    """
+    return [
+        {"key": _fact_key(f), "file": f.get("file"), "line": f.get("line")}
+        for f in facts
+    ]
+
+
 def _usage_path(project_root: Path) -> Path:
     return _facts_path(project_root).with_name(USAGE_FILENAME)
 

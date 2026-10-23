@@ -1181,7 +1181,10 @@ Indonesian function words and generic path segments (`core`, `tests`, `py`, ...)
 Facts below `fact_min_relevance` are dropped; ties break on identifier hits, then recency. Promoted
 knowledge is ranked with the same function. Each served fact's `hits` and `last_used` go to
 `.workflow/data/facts-usage.json`, and eviction past `fact_max_facts` keeps the most-used, most
-recently used facts.
+recently used facts. The call's `call.meta.json` lists what it was served under `served_facts`
+(`key` = the usage-sidecar key, `file`, `line` as served; `[]` when nothing passed the floor;
+absent for roles that get no facts), so a later replay knows the exact set
+(`tools/maintain/replay_facts.py`, [metrics](evaluation/metrics.md)).
 
 The current session is excluded from the recurrence count. Without that, a fact injected into the prompt and then merely echoed back could raise its own count up to the promotion threshold — repetition masquerading as evidence.
 
@@ -1215,6 +1218,11 @@ Hooks, governed by `policies.enforcement`:
   excepted), a write inside the root outside an active execution's scope (`.workflow/` always
   passes; with no active execution every in-root write passes), and `git commit` without a
   `commit.marker` younger than 30 minutes (`git.exe` and a quoted path to git count, as do quoted option values such as `git -C "a b" commit`; so does the text `git commit` inside another command's quoted argument — a fail-closed false block). Containment is decided on the path after resolving symlinks and junctions; scope accepts either spelling. Shell commands are not parsed for file writes.
+  Every refusal, blocked (`hybrid`) or warned (`warn`), appends one JSON line to
+  `runtime/gate-blocks.jsonl` of the bound session: `at`, `hook`, `rule` (`commit_unapproved`,
+  `outside_root`, `outside_scope`), `tool`, `mode`, `exit` (2 or 0) and the active `plan_id`.
+  The path and the command are not recorded. Writing the line is fail-open: a failure never
+  changes the decision.
 - `status-guard` (Stop): when `execution.json` says `verification: not_run`, a reply whose own
   `[EXECUTION RESULT]` block claims more — `status` outside `implemented|partial|blocked`, or a
   `verification` other than `not_run` — gets a `systemMessage` warning. It reads those fields
@@ -1292,6 +1300,7 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
       │  ├─ prompt.txt
       │  ├─ prompt.meta.json
       │  ├─ response.last.md
+      │  ├─ gate-blocks.jsonl   # execution-gate refusals, appended by the hook
       │  └─ lock
       ├─ logs/<prompt_id>/
       │  ├─ prompt.md

@@ -167,6 +167,8 @@ from tests.checks.os_resolvers import (
 )
 from tests.checks.verify_tests import _test_verify_runtime_tests
 from tests.checks.metrics import _test_metrics_contract
+from tests.checks.replay import _test_fact_replay
+from tests.checks.blind_sample import _test_blind_sample
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
 from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider
 from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates
@@ -215,6 +217,8 @@ def run_tests() -> None:
     _test_find_bash_and_os_locations()
     _test_verify_runtime_tests()
     _test_metrics_contract()
+    _test_fact_replay()
+    _test_blind_sample()
     _test_opencode_prompt_never_reaches_cmd()
     _test_statusline_failed_calls_are_not_estimates()
     _test_provider_seam()

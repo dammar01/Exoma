@@ -288,6 +288,9 @@ class Executor:
     # without `__init__` would otherwise lose its usage row to an AttributeError silently.
     _reuse_outcome: str | None = None
     _graph_status: str | None = None
+    # Facts served to the call in flight, as `fact_store.served_fact_refs`; None for roles
+    # that get no facts. Archived in call.meta.json so EXP-013 knows exactly what was served.
+    _served_facts: list[dict] | None = None
     _graph_ms: int | None = None
 
     def _adapter_for(self, project_root):
@@ -1206,6 +1209,8 @@ class Executor:
                 call_meta["provider"] = route.get("provider")
                 call_meta["provider_command"] = route.get("provider_command")
                 call_meta["provider_boundary"] = provider_boundary(route.get("provider"))
+                if self._served_facts is not None:
+                    call_meta["served_facts"] = self._served_facts
                 self._last_call_meta = call_meta
                 # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
                 # once, in `_record_usage`; expanding into the same attribute would feed the
@@ -1514,6 +1519,7 @@ class Executor:
         normalized_command = command.strip().lower()
         self._last_call_meta = None
         self._call_metas = []
+        self._served_facts = None
         # Per-call instrumentation for the usage row (v3.8.0 phase 1): why reuse missed,
         # and whether graph leads were there to use. None means the call never got as far
         # as asking — the runtime-only paths return before either question comes up.
@@ -1688,6 +1694,7 @@ class Executor:
             facts = fact_store.load_relevant(
                 project_root, task, role=route["role"], stats=fact_stats
             )
+            self._served_facts = fact_store.served_fact_refs(facts)
             known_facts = [
                 f"{f['claim']} [{f['file']}:{f['line']}]"
                 for f in facts

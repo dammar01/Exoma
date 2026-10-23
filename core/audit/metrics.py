@@ -55,6 +55,7 @@ _RUNTIME = "core/audit/telemetry.py report()"
 _TASKS = "core/audit/task_telemetry.py report()"
 _REAL_USE = "tools/maintain/measure_real_use.py"
 _OUTCOMES = "tools/maintain/measure_task_outcomes.py"
+_REPLAY = "tools/maintain/replay_facts.py"
 
 REGISTRY: dict[str, dict] = {
     # --- runtime: usage.jsonl ------------------------------------------------------------
@@ -182,6 +183,22 @@ REGISTRY: dict[str, dict] = {
         "version": 2, "producer": _OUTCOMES, "unit": "tokens per task", "statistic": "median_stdlib",
         "definition": "Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.)",
         "denominator": "coding tasks", "missing": "Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks.",
+    },
+    # --- fact replay: archived calls + facts.jsonl (EXP-013) --------------------------------
+    "replay.call": {
+        "version": 1, "producer": _REPLAY, "unit": "archived exploration/reasoning call", "statistic": "count",
+        "definition": "A logs/<prompt_id>/ folder whose call.meta.json role is exploration or reasoning, with a [TASK] block in prompt.md and a non-empty output.raw.md.",
+        "denominator": "-", "missing": "Folders lacking any of the three are counted in `skipped` by reason, never replayed.",
+    },
+    "replay.injection_rate": {
+        "version": 1, "producer": _REPLAY, "unit": "fact offered to a call", "statistic": "rate",
+        "definition": "Facts an arm serves over the candidates both arms see: stored facts captured before the call's recorded_at whose every anchor still places today. Arms: one-token (3.8.4: any shared [a-z0-9_]{3,} token of task and claim+file, limit 3) and weighted (current fact_store.relevance, floor and per-role limit).",
+        "denominator": "candidates summed over replayed calls", "missing": "Facts evicted or pruned since the call are absent from both arms (counterfactual store).",
+    },
+    "replay.served_fact_use_rate": {
+        "version": 1, "producer": _REPLAY, "unit": "served fact", "statistic": "rate",
+        "definition": "Served facts whose file:line the call's output.raw.md cites: same normalized path and the line equal to a cited line or inside a cited range. Reported per arm, and as `recorded` for calls whose call.meta.json lists served_facts (exact, not replayed).",
+        "denominator": "facts served by the arm", "missing": "Citations without a line are not matched.",
     },
 }
 

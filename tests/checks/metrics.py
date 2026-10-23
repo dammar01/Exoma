@@ -24,7 +24,7 @@ _REQUIRED = {"version", "producer", "unit", "statistic", "definition", "denomina
 def _test_metrics_contract() -> None:
     # --- every metric is complete, named apart, and documented at its version ------------
     for mid, metric in metrics.REGISTRY.items():
-        assert_true(re.fullmatch(r"(runtime|real_use|outcome)\.[a-z_]+", mid), f"metric id shape: {mid}")
+        assert_true(re.fullmatch(r"(runtime|real_use|outcome|replay)\.[a-z_]+", mid), f"metric id shape: {mid}")
         assert_true(_REQUIRED <= set(metric), f"{mid} misses {_REQUIRED - set(metric)}")
         assert_true(metric["statistic"] in metrics.STATISTICS, f"{mid}: unknown statistic {metric['statistic']}")
     doc = DOC.read_text(encoding="utf-8")

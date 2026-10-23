@@ -16,6 +16,8 @@
 # Shell commands are not parsed for file writes — a write through a script is outside what
 # a PreToolUse hook can see reliably, and claiming otherwise would overstate the gate.
 # Session or workspace absent -> allow (fail-open). exit 2 = block; every other path exits 0.
+# Every refusal, blocked or warned, appends one line to runtime/gate-blocks.jsonl: when, which
+# rule, tool, mode, exit code and plan id; never the path or command (EXP-014, DEC-070).
 import datetime, fnmatch, json, os, re, sys, tempfile
 
 
@@ -97,7 +99,33 @@ def marker_fresh(path):
     return 0 <= age <= COMMIT_MARKER_TTL_S
 
 
-def refuse(mode, message):
+# Set once the session is known; refuse() reads it to log the refusal it is about to issue.
+CONTEXT = {}
+
+
+def log_refusal(rule, mode):
+    runtime_dir = CONTEXT.get("runtime_dir")
+    if not runtime_dir:
+        return
+    row = {
+        "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "hook": "execution-gate",
+        "rule": rule,
+        "tool": CONTEXT.get("tool"),
+        "mode": mode,
+        "exit": 0 if mode == "warn" else 2,
+        "plan_id": CONTEXT.get("plan_id"),
+    }
+    try:
+        os.makedirs(runtime_dir, exist_ok=True)
+        with open(os.path.join(runtime_dir, "gate-blocks.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass  # measuring the gate must never change what it decides
+
+
+def refuse(mode, rule, message):
+    log_refusal(rule, mode)
     if mode == "warn":
         sys.stdout.write(json.dumps({"systemMessage": "[EXECUTION GATE: warn] " + message}))
         sys.exit(0)
@@ -128,6 +156,8 @@ try:
     if mode == "off":
         sys.exit(0)
     runtime_dir = os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
+    CONTEXT.update(runtime_dir=runtime_dir, tool=tool_name,
+                   plan_id=(read_json(os.path.join(runtime_dir, "execution.json")) or {}).get("plan_id"))
     ti = payload.get("tool_input") or {}
     if not isinstance(ti, dict):
         ti = {}
@@ -135,7 +165,7 @@ try:
     if tool_name in ("Bash", "PowerShell"):
         command = str(ti.get("command") or "")
         if _GIT_COMMIT.search(command) and not marker_fresh(os.path.join(runtime_dir, "commit.marker")):
-            refuse(mode, (
+            refuse(mode, "commit_unapproved", (
                 "`git commit` without the user asking for a commit this turn.\n"
                 "A commit is approved by the user's own prompt (e.g. /.commit, or asking to commit); "
                 "show the proposed message and wait for that prompt.\n"
@@ -158,7 +188,7 @@ try:
             allowed += [os.path.expanduser(str(p)) for p in extra if str(p).strip()]
         if any(base and under(target, base) for base in allowed):
             sys.exit(0)
-        refuse(mode, (
+        refuse(mode, "outside_root", (
             "'%s' writes outside the session's project root (%s): %s\n"
             "Writing into another project needs the user's explicit approval for that path.\n"
             "Once given, the user adds it to policies.write_allowed_outside_root in .workflow/config.json."
@@ -180,7 +210,7 @@ try:
     ).replace("\\", "/")
     if in_scope(relative, scope_keys) or in_scope(lexical, scope_keys):
         sys.exit(0)
-    refuse(mode, (
+    refuse(mode, "outside_scope", (
         "'%s' targets %s, which is outside the active execution's scope (plan %s).\n"
         "Scope: %s\n"
         "Needing it means the plan was incomplete: stop, report the conflict, and ask the user; "

@@ -216,6 +216,15 @@ def _test_fact_selection() -> None:
                                           "rejected_irrelevant": 0, "injected": 1},
             f"an Indonesian task finds the fact through the identifier it names: {served} {read}",
         )
+        refs = fact_store.served_fact_refs(served)
+        usage = _json.loads(
+            paths["facts_store"].with_name(fact_store.USAGE_FILENAME).read_text(encoding="utf-8")
+        )
+        assert_true(
+            refs == [{"key": fact_store._fact_key(served[0]), "file": "core/store.py", "line": 3}]
+            and refs[0]["key"] in usage,
+            f"a served fact is named by its usage key and the anchor it was served at: {refs}",
+        )
         for noise in ("the and for with that", "yang dan untuk dari", "core tests py"):
             assert_true(
                 fact_store.load_relevant(root, noise) == [],

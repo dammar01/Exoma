@@ -252,6 +252,31 @@ def _case_execution_gate(ws: _Workspace, run) -> None:
                         "tool_name": "Write", "tool_input": {"file_path": other}})
     assert_true(code == 0 and "EXECUTION GATE: warn" in out, f"warn mode reports and never blocks: {code} {out[:120]!r}")
 
+    # Every refusal is logged for EXP-014: rule, tool, mode, exit and plan, never the target.
+    log = ws.runtime / "gate-blocks.jsonl"
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    rules = [r["rule"] for r in rows]
+    assert_true(
+        rules.count("commit_unapproved") == 5 and rules.count("outside_scope") == 1
+        and rules.count("outside_root") >= 2,
+        f"each refusal is one row, under the rule that refused: {rules}",
+    )
+    scope_row = next(r for r in rows if r["rule"] == "outside_scope")
+    assert_true(
+        scope_row["tool"] == "Write" and scope_row["exit"] == 2 and scope_row["plan_id"] == "p1"
+        and scope_row["mode"] == "hybrid",
+        f"a block names its tool, exit and the plan it enforced: {scope_row}",
+    )
+    assert_true(
+        rows[-1]["mode"] == "warn" and rows[-1]["exit"] == 0,
+        f"a warning is logged as one, with the exit it really had: {rows[-1]}",
+    )
+    text = log.read_text(encoding="utf-8")
+    assert_true(
+        "sibling" not in text and "docs/x.md" not in text and "commit -m" not in text,
+        "the log holds no path and no command",
+    )
+
 
 def _case_status_guard(ws: _Workspace, run) -> None:
     stop = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "Stop"}

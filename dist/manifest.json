@@ -252,8 +252,8 @@
     },
     {
       "path": "claude/hooks/execution-gate.py",
-      "sha256": "2a0a79d49577a2093511e528059f43baaddf5ea7a51af79d14dab61aba80aecd",
-      "bytes": 8658,
+      "sha256": "3070ea6396b0e385ace26c7ad7074d8018d7345f968af3d2be3afbd691aa8c37",
+      "bytes": 9897,
       "merge": "replace",
       "component": "runtime"
     },

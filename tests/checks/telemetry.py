@@ -477,7 +477,49 @@ def _fact_lifecycle_counts_commands_not_invocations() -> None:
     )
 
 
+def _call_meta_names_the_facts_it_served() -> None:
+    """call.meta.json lists the facts a call was served, so a replay need not guess (EXP-013)."""
+    import os
+
+    import core.provider.executor as executor_module
+    from core.evidence import fact_store
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
+    from tests.checks.continuation import _EVIDENCE, _ScriptedAdapter, _session
+
+    root = Path(tempfile.mkdtemp(prefix="aw-served-facts-"))
+    saved = executor_module.write_call_meta
+    written: list[dict] = []
+    executor_module.write_call_meta = lambda _root, _pid, _sid, meta: written.append(meta)
+    try:
+        ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
+        (root / "store.py").write_text("RETRY_LIMIT = 3\n", encoding="utf-8")
+        fact_store.ingest(root, "durable_facts:\n- [config] `RETRY_LIMIT` is three [store.py:1]\n", "s0")
+        Executor(adapter=_ScriptedAdapter([_EVIDENCE])).execute(
+            "analyze", "why is `RETRY_LIMIT` three", _session(), str(root)
+        )
+        served = (written[-1] if written else {}).get("served_facts")
+        assert_true(
+            isinstance(served, list) and len(served) == 1
+            and served[0]["file"] == "store.py" and served[0]["line"] == 1
+            and len(served[0]["key"]) == 16,
+            f"the analyze call archives the fact it was served: {served}",
+        )
+        written.clear()
+        Executor(adapter=_ScriptedAdapter([_EVIDENCE])).execute(
+            "analyze", "unrelated wording only", _session(), str(root)
+        )
+        assert_true(
+            (written[-1] if written else {}).get("served_facts") == [],
+            f"a call served nothing records an empty list, not a missing field: {written}",
+        )
+    finally:
+        executor_module.write_call_meta = saved
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_telemetry_metrics() -> None:
+    _call_meta_names_the_facts_it_served()
     _fact_lifecycle_counts_commands_not_invocations()
     _acceptance_is_per_task()
     _rework_counts_work_that_came_back_after_a_failure()

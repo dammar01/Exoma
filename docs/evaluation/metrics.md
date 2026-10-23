@@ -31,7 +31,7 @@ Registry version: **1**.
 
 ## Running the tools
 
-Both read only; both print one JSON object. Run them from the clone.
+All three read only; each prints one JSON object. Run them from the clone.
 
 ```bash
 # Real use of one version over every project under a folder (real_use.*)
@@ -42,6 +42,12 @@ python tools/maintain/measure_task_outcomes.py --projects-root <folder> --labels
 
 # The same, also written to a file that may be shared (refused if it would carry a path or a project name)
 python tools/maintain/measure_real_use.py --projects-root <folder> --version 3.8.0 --export real-use.json
+
+# Fact retrieval replayed over archived calls, one-token against weighted (replay.*, EXP-013)
+python tools/maintain/replay_facts.py --projects-root <folder>
+
+# The same with the weighted arm capped at N facts for every role (EXP-016)
+python tools/maintain/replay_facts.py --projects-root <folder> --weighted-limit 3
 ```
 
 `--transcripts` points at another transcript folder (default `~/.claude/projects`);
@@ -101,3 +107,11 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | `outcome.continuation_cost@1` | coding task | `median_stdlib` | Delegated calls (distinct prompt_id with a provider) and their input tokens (actual, else estimated) recorded before the session's first edit in tasks.jsonl. Reported for continuations and for tasks that continue nothing. Report keys `ramp_up_*`. | tasks with a recorded edit | Tasks without task events (before 3.8.0) are left out. |
 | `outcome.context_final@1` | tokens | `median_stdlib` | input + cache_read + cache_creation of the task's last main-agent message. p90 uses p90_floor. | tasks with usage | Tasks without usage are left out of the statistic. |
 | `outcome.context_saved@2` | tokens per task | `median_stdlib` | Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.) | coding tasks | Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks. |
+
+### Fact replay (`tools/maintain/replay_facts.py`)
+
+| ID | Unit | Statistic | Definition | Denominator | Missing data |
+| --- | --- | --- | --- | --- | --- |
+| `replay.call@1` | archived exploration/reasoning call | `count` | A logs/<prompt_id>/ folder whose call.meta.json role is exploration or reasoning, with a [TASK] block in prompt.md and a non-empty output.raw.md. | - | Folders lacking any of the three are counted in `skipped` by reason, never replayed. |
+| `replay.injection_rate@1` | fact offered to a call | `rate` | Facts an arm serves over the candidates both arms see: stored facts captured before the call's recorded_at whose every anchor still places today. Arms: one-token (3.8.4: any shared [a-z0-9_]{3,} token of task and claim+file, limit 3) and weighted (current fact_store.relevance, floor and per-role limit). | candidates summed over replayed calls | Facts evicted or pruned since the call are absent from both arms (counterfactual store). |
+| `replay.served_fact_use_rate@1` | served fact | `rate` | Served facts whose file:line the call's output.raw.md cites: same normalized path and the line equal to a cited line or inside a cited range. Reported per arm, and as `recorded` for calls whose call.meta.json lists served_facts (exact, not replayed). | facts served by the arm | Citations without a line are not matched. |

@@ -586,34 +586,17 @@ def _apply_rule(args) -> None:
     AUTHOR_AFTER = timedelta(minutes=args.author_after_minutes)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--projects-root", required=True)
-    ap.add_argument("--labels", required=True, help="JSON: {transcript file name: category}")
-    ap.add_argument("--version", action="append", required=True)
-    ap.add_argument("--transcripts", default=os.path.expanduser("~/.claude/projects"))
-    ap.add_argument("--exclude", action="append", default=["agent-workflow"])
-    ap.add_argument("--show-names", action="store_true")
-    ap.add_argument("--solved-share", type=float, default=SOLVED_SHARE)
-    ap.add_argument("--partial-share", type=float, default=PARTIAL_SHARE)
-    ap.add_argument("--fix-hours", type=float, default=FIX_WINDOW.total_seconds() / 3600)
-    ap.add_argument("--search-days", type=float, default=SEARCH_WINDOW.days)
-    ap.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
-    ap.add_argument("--author-before-minutes", type=float, default=AUTHOR_BEFORE.total_seconds() / 60)
-    ap.add_argument("--author-after-minutes", type=float, default=AUTHOR_AFTER.total_seconds() / 60)
-    ap.add_argument("--link-hours", type=float, default=LINK_WINDOW.total_seconds() / 3600,
-                    help="a session starting this long after an earlier one ended can continue it")
-    ap.add_argument("--export", metavar="FILE",
-                    help="also write the figures to FILE for sharing; refused if it would carry a path or project name")
-    args = ap.parse_args()
-    if args.export and args.show_names:
-        ap.error("--export cannot be combined with --show-names")
-    _apply_rule(args)
+def collect_tasks(args) -> tuple[list[dict], int, list, list]:
+    """The coding tasks of the labelled transcripts, linked; with the inputs and main heads read.
+
+    Each task keeps its transcript path (`transcript`) for tools that sample tasks; summary()
+    never reads it, so no report carries it.
+    """
     labels = json.loads(Path(args.labels).read_text(encoding="utf-8"))
     inputs = [Path(args.labels), INTENT_MAP]
     heads = []
 
-    tasks, names, unlabelled = [], {}, 0
+    tasks, unlabelled = [], 0
     for path in sorted(p for p in glob.glob(os.path.join(args.projects_root, "*")) if os.path.isdir(p)):
         name = os.path.basename(path)
         if name in args.exclude:
@@ -659,6 +642,7 @@ def main() -> int:
                 "landed_at": _ts(out.get("landed_at")), "lost_files": out.get("lost_files", set()),
                 "segments": len(own), "segment_links": Counter(g["link"] for g in own),
                 "ramp_up": ramp_up(rows, min(edits) if edits else None),
+                "transcript": f,
                 "project": name, "version": s["version"], "category": category,
                 "grade": grade(out["main_share"], bool(per_file), out["fixed_24h"]),
                 "prompts": len(s["prompts"]), "active_minutes": s["active_minutes"],
@@ -679,6 +663,34 @@ def main() -> int:
             })
     link_continuations(tasks)
     fixed_outside_feature(tasks)
+    return tasks, unlabelled, inputs, heads
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--projects-root", required=True)
+    ap.add_argument("--labels", required=True, help="JSON: {transcript file name: category}")
+    ap.add_argument("--version", action="append", required=True)
+    ap.add_argument("--transcripts", default=os.path.expanduser("~/.claude/projects"))
+    ap.add_argument("--exclude", action="append", default=["agent-workflow"])
+    ap.add_argument("--show-names", action="store_true")
+    ap.add_argument("--solved-share", type=float, default=SOLVED_SHARE)
+    ap.add_argument("--partial-share", type=float, default=PARTIAL_SHARE)
+    ap.add_argument("--fix-hours", type=float, default=FIX_WINDOW.total_seconds() / 3600)
+    ap.add_argument("--search-days", type=float, default=SEARCH_WINDOW.days)
+    ap.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
+    ap.add_argument("--author-before-minutes", type=float, default=AUTHOR_BEFORE.total_seconds() / 60)
+    ap.add_argument("--author-after-minutes", type=float, default=AUTHOR_AFTER.total_seconds() / 60)
+    ap.add_argument("--link-hours", type=float, default=LINK_WINDOW.total_seconds() / 3600,
+                    help="a session starting this long after an earlier one ended can continue it")
+    ap.add_argument("--export", metavar="FILE",
+                    help="also write the figures to FILE for sharing; refused if it would carry a path or project name")
+    args = ap.parse_args()
+    if args.export and args.show_names:
+        ap.error("--export cannot be combined with --show-names")
+    _apply_rule(args)
+    tasks, unlabelled, inputs, heads = collect_tasks(args)
+    names = {}
     for t in tasks:
         names.setdefault(t["project"], None)
     order = sorted(names, key=lambda n: -sum(1 for t in tasks if t["project"] == n))
