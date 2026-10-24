@@ -290,7 +290,8 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
-No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
+`H-XXX` and `EXP-XXX` records are tracked once carried out with a recorded result (listed
+above); no `SYN-XXX` record is tracked yet.
 
 ### Drafts
 
@@ -298,14 +299,13 @@ Proposed hypotheses, planned experiments, syntheses, and decisions without a res
 kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
 only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held (2026-10-19): H-004, H-008..H-020 and EXP-004..EXP-012 (YAML, each
-naming its research question; H-016 is the charter's CH1), DEC-063 and SYN-003 (YAML),
-CASE-004 (moved back on 2026-09-28: the records it relates to are all drafts), and H-005,
-EXP-002, CASE-002, SYN-002, DEC-002 (Markdown, still referenced).
-H-001..H-003, H-006, H-007, EXP-001, EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
+Drafts currently held (2026-10-24), all YAML: H-004, H-005, H-008..H-018 and H-020 (each
+naming its research question; H-016 is the charter's CH1), EXP-004..EXP-010, EXP-012 and
+EXP-015, DEC-002, DEC-063 and DEC-072..DEC-076, CASE-002 and CASE-004 (CASE-004 moved back
+on 2026-09-28: the records it relates to are all drafts), SYN-002 and SYN-003.
+H-001..H-003, H-006, H-007, EXP-001..EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
 kept in `docs/research-drafts/_archive/`, which the check does not read. Drafts use the
-same YAML format; the Markdown ones are listed by `check_research.py --drafts` until
-converted. A draft returns here only as a YAML record that passes the check.
+same YAML format. A draft returns here only as a YAML record that passes the check.
 
 LIT-001 (2026-10-05) is the first literature record: a reference for a broader agent
 abstraction that this project does not follow, recorded from its verified arXiv metadata and
