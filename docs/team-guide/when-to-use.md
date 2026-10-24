@@ -46,3 +46,13 @@ cannot, start with the workflow.
 
 These are heuristics, not measured thresholds. Known limitations of the runtime:
 [limitations.md](../limitations.md).
+
+## How much of this is tested
+
+Each behavior choice is a decision record (`DEC-XXX`); each measurement is an experiment
+(`EXP-XXX`) testing a hypothesis (`H-XXX`). The
+[record inventory](../research/README.md#record-inventory) lists every one with its
+implementation and validation status, and
+[how to read it](../research/README.md#epistemic-status) explains the difference between
+`validated` (deliberately evaluated) and `observed` (used for real without a reported
+problem). Release notes name the records behind each change.

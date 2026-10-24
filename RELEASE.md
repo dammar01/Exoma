@@ -60,6 +60,8 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
    theme. The index stays an index: detail goes in the release file, and behavior is linked
    to `docs/reference.md` / `docs/runtime-contracts.md` rather than restated. Do not create
    `prompt/v<version>/`: `prompt/` is a historical archive that ends at v3.7.2.
+   Every behavior change in the release file names the tracked `DEC`, and any `EXP` whose
+   result it relies on, so a reader can follow it to its validation status.
 
    **Research records.** Replace every `uncommitted` in a decision's
    `implementation.commits` with the hash of the commit that carries it, then:

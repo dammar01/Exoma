@@ -11,15 +11,18 @@ what_exists: |
   main and needed a fix within 24 hours, and the kinds of follow-up prompts it took
   (CASE-012: 97 tasks, 9 projects). There is no arm without the workflow, so the question's
   comparison is not measured yet.
-records: [CASE-011, CASE-012, DEC-026, DEC-027, DEC-036, DEC-038]
+records: [CASE-011, CASE-012, DEC-026, DEC-027, DEC-036, DEC-038, H-014, EXP-008]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
 
   Draft records: H-002 (archived draft); H-013 and EXP-007 (a later version against the
-  CASE-011 baseline); H-014 and EXP-008 (a quality review of the tasks CASE-012 counts as
-  solved); H-018 and EXP-010 (fixes recounted with feature segments); H-020 and EXP-012
+  CASE-011 baseline); H-018 and EXP-010 (fixes recounted with feature segments); H-020 and EXP-012
   (structured delegation and corrective intervention).
+
+  H-014 and EXP-008 (tracked 2026-10-24): a review of 20 solved tasks judged all correct
+  (17 acceptable), supporting acceptance on main as a stand-in for success, with the
+  reviewer being the maintainer who accepted the work.
 
   Retrospective pre-workflow arm not possible (2026-10-19): an inventory of the maintainer's
   Claude Code transcripts found one session older than the first workflow banner across 17

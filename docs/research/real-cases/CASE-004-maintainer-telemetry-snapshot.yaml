@@ -1,0 +1,88 @@
+schema_version: 3
+id: CASE-004
+title: Maintainer telemetry snapshot
+recorded_on: 2026-09-27
+visibility: public
+environment: maintainer_development
+repository_identity: agent-workflow (this repository)
+evidence_tier: creator_observation
+confidentiality_note: |
+  Aggregates only. Every figure below is counted from metadata fields of a fixed prefix of
+  the usage stream. No prompt text, task text, source code, or evidence content was read.
+
+context: |
+  The maintainer's own use of agent-workflow while developing agent-workflow itself: one
+  person, one machine, one repository, uncontrolled. The runtime records telemetry in the
+  project's `.workflow/` workspace as a side effect of normal use.
+
+task: |
+  Everyday maintenance and feature work on this repository, through the delegated commands
+  (`explore`, `analyze`, `plan`, `verify`).
+
+workflow: |
+  Delegated calls run through `.workflow/run` as background jobs. Each call appends one row
+  per provider invocation to `.workflow/data/usage.jsonl`.
+
+observation: |
+  Source: the first 255 lines of `.workflow/data/usage.jsonl`, recorded 2026-08-15 ..
+  2026-09-27 (UTC). The stream is append-only; later rows do not change these lines.
+
+  255 provider rows form 238 work units. A work unit groups rows that share a `prompt_id`;
+  a continuation adds a row to the same unit — the same grouping as
+  `core/audit/telemetry.py` `_work_groups`.
+
+  Latency per work unit (seconds, sum of the unit's measured rows; p90 by nearest rank):
+
+  | Command | n | min | median | p90 | max |
+  | --- | --- | --- | --- | --- | --- |
+  | explore | 61 | 4 | 218 | 394 | 612 |
+  | plan | 40 | 2 | 225 | 473 | 663 |
+  | analyze | 39 | 12 | 299 | 493 | 1414 |
+  | verify | 98 | 10 | 185 | 405 | 1544 |
+
+  Verification outcome. Of 98 verify work units: 59 `fail`, 38 `incomplete`, 1 without a
+  verdict, 0 `pass`. `accepted` was true in none of them.
+
+  Evidence reuse. `reused_evidence` and `provider_call_avoided` were false on every row
+  (0 of 255).
+
+evidence:
+  source: |
+    The first 255 lines of `.workflow/data/usage.jsonl`, fields `command`, `prompt_id`,
+    `verdict`, `accepted`, `duration_seconds`, `reused_evidence`, and `provider_call_avoided`.
+  counted_by: maintainer
+  counted_on: 2026-09-27
+  notes: |
+    The figures were first drafted by the secondary agent; the re-count matched them. Drafted
+    figures from other sources (evidence, facts, call metadata, jobs, quality rows, recurrence
+    cache) were not re-counted and are removed.
+
+outcome: inconclusive
+
+unexpected_behavior:
+  - No verify unit passed. The data cannot say why; a per-unit look was not done.
+  - Evidence reuse never fired in this prefix.
+
+limitations:
+  - One operator who is also the tool's author, on the tool's own repository. This supports only that something can happen.
+  - Development use — many calls exercised features under construction, which distorts verdicts and durations compared with ordinary use.
+  - Durations include the secondary agent's own reading; they are not comparable to direct use without a matched task.
+  - "`.workflow/` is git-ignored: the figures are reproducible only where the stream exists."
+
+related: [CASE-002]
+related_notes: |
+  CASE-002 (team latency complaints) cites this case as maintainer-only data. Draft records
+  H-004 and H-005, and archived drafts H-001, H-007 and EXP-002, also cite this case; they
+  are kept locally in `docs/research-drafts/` and are not tracked.
+
+implementation:
+  version: 3.7.3
+  commits_note: telemetry spans several commits
+  feature: usage telemetry in .workflow/data/usage.jsonl
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+  validated_by: maintainer
+  validated_on: 2026-09-27
+questions: [RQ-05, RQ-06, RQ-07a]

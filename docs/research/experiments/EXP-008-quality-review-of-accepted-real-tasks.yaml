@@ -1,0 +1,93 @@
+schema_version: 3
+id: EXP-008
+title: Correctness and quality review of a sample of real tasks accepted on main (CASE-012)
+date: 2026-10-04
+status: completed
+hypothesis: H-014
+version_under_test: "3.6.0 and 3.7.3 (the CASE-012 tasks)"
+
+objective: |
+  Turn CASE-012's acceptance rate into a success rate: how many accepted tasks were correct
+  and of acceptable quality, and whether tasks fixed within 24 hours differ from clean ones.
+setup: |
+  The 97 coding tasks of CASE-012 and their diffs on main (the lines each session left
+  behind). The maintainer reviews; the main agent prepares each diff and the task's first
+  prompt, never the reviewer's verdict. Rubric fixed before the first review, after Senior
+  SWE-bench's taste dimensions and the engineering-quality list of the evaluation notes.
+method: |
+  1. Draw 20 solved tasks stratified by clean (12) and fixed within 24 hours (8), and by
+     project so A and B together hold at most half.
+  2. Per task the reviewer records: root cause correct (yes/no), scope discipline
+     (tight/over-change), unnecessary files (yes/no), consistency with the codebase
+     (yes/no), regression risk (low/medium/high), tests adequate (yes/no/not applicable),
+     and an overall verdict (correct and acceptable / correct but poor / incorrect).
+  3. Also review the 13 partial tasks' diffs for why they were only partly kept
+     (rewritten for taste, wrong approach, superseded by a later session, other).
+  4. Report shares with Wilson intervals; compare clean with fixed solved.
+  5. Judge against H-014's thresholds, fixed before step 1.
+arms:
+  - name: solved_clean
+    description: solved, no same-author change within 24 hours
+  - name: solved_fixed
+    description: solved, changed by the same author within 24 hours
+  - name: partial
+    description: 30-80% of the lines reached main (diagnostic only)
+metrics:
+  - name: reviewed_correct_share
+    definition: sampled solved tasks whose verdict is correct and acceptable or correct but poor
+    unit: share of reviewed tasks, Wilson 95% interval
+  - name: acceptable_share
+    definition: sampled solved tasks whose verdict is correct and acceptable
+    unit: share of reviewed tasks
+  - name: over_change_share
+    definition: sampled tasks with scope over-change or unnecessary files
+    unit: share of reviewed tasks
+  - name: partial_cause
+    definition: the reviewer's cause for each partial task
+    unit: count per cause
+results:
+  summary: |
+    Sample drawn 2026-10-23 (seed 20261023). The current tool and labels file yield 48 coding
+    tasks for 3.6.0 and 3.7.3, not CASE-012's 97, and 3 partial tasks, not 13: the sample is
+    12 solved clean, 8 solved fixed (arm hidden from the reviewer) and 3 partial.
+    Review 2026-10-24. H-014's threshold (0.80) was fixed by the maintainer before the first
+    label. The maintainer labelled Q001-Q017 and part of Q018 in an interview: the agent showed
+    each item's first prompt and the lines left on main, asked plain scenario questions without
+    naming the hypothesis, and mapped the answers to the rubric. The maintainer then stopped
+    the interview as too long and asked the agent to label the rest; the agent labelled the
+    remaining fields of Q018 and all of Q019-Q023 from the items and the maintainer's earlier
+    answers. `key/` was opened only after all 23 labels were written.
+  data_source: the maintainer's blind sample of 2026-10-23 (items, labels and key files); items carry private prompts and code, so the files stay on the maintainer's machine and only aggregates are recorded here
+  figures:
+    - {metric: reviewed_correct_share, arm: solved (all labels), value: "1.00 (20 / 20), Wilson 95% [0.84, 1.00]"}
+    - {metric: reviewed_correct_share, arm: solved (maintainer labels only), value: "1.00 (15 / 15), Wilson 95% [0.80, 1.00]"}
+    - {metric: acceptable_share, arm: solved (all labels), value: "0.85 (17 / 20)"}
+    - {metric: "quality score (acceptable 2, poor 1, incorrect 0)", arm: solved_clean, value: "1.92 mean (n 12; 11 acceptable)"}
+    - {metric: "quality score (acceptable 2, poor 1, incorrect 0)", arm: solved_fixed, value: "1.75 mean (n 8; 6 acceptable)"}
+    - {metric: over_change_share, arm: all, value: "0.00 (0 / 23)"}
+    - {metric: partial_cause, arm: partial, value: "other 3 (rewritten_for_taste 0, wrong_approach 0, superseded 0)"}
+interpretation: |
+  Every reviewed solved task was judged correct, so reviewed_correct_share clears 0.80, and
+  clean tasks score above tasks fixed within 24 hours (1.92 against 1.75): H-014 is
+  supported under its own rule. Two cautions keep this from meaning more. The share sits at
+  the ceiling: no task was judged incorrect, which is what a reviewer who already accepted the
+  work would also produce. And one solved-clean task (Q017) was judged to have missed the
+  cause the user reported, yet still counted as correct but poor under the rubric's verdict;
+  root cause and verdict disagree there. The clean-fixed gap rests on 8 fixed tasks and is
+  one or two verdicts wide.
+threats_to_validity:
+  - The reviewer accepted the same work; the review is not independent.
+  - 6 of 23 items (Q018 in part, Q019-Q023) were labelled by the agent after the maintainer stopped the interview; the agent knew H-014's direction.
+  - The interviewer summarised each item in plain words; the summary, not the raw diff, is what the maintainer judged.
+  - Several analysis or exploration prompts ended in implementations; the maintainer said they asked to continue (Q003, Q014), and the agent assumed the same for Q019 and Q022.
+  - Files outside git (session files under .workflow/, node_modules/.cache) were judged not unnecessary because they never reached the repository.
+  - 20 tasks is a practical size for one reviewer, not derived from a power calculation.
+  - Diffs are reconstructed from session edits; context outside the diff may be missed.
+  - Category labels came from the main agent and are corrected only if the reviewer flags them.
+outcome: supported
+related: [CASE-012, CASE-009]
+
+disposition:
+  implementation_status: not_applicable
+  validation_status: not_validated
+questions: [RQ-02]

@@ -6,7 +6,7 @@ status: unanswered
 what_exists: |
   Audit, usage, quality, per-call metadata, progress, job logs, and continuation metadata
   exist, but are scattered and have no diagnosis tooling.
-records: [CASE-009, DEC-015, DEC-020, CASE-014, CASE-015, DEC-021, DEC-022, DEC-024, DEC-028, CASE-016, CASE-017, DEC-030, DEC-034, DEC-037, DEC-041, DEC-049, DEC-050, DEC-051, DEC-052, CASE-021, DEC-053, DEC-054, DEC-055, DEC-057, DEC-058, CASE-025, CASE-026, CASE-027, H-019, EXP-011, DEC-071]
+records: [CASE-004, CASE-009, DEC-015, DEC-020, CASE-014, CASE-015, DEC-021, DEC-022, DEC-024, DEC-028, CASE-016, CASE-017, DEC-030, DEC-034, DEC-037, DEC-041, DEC-049, DEC-050, DEC-051, DEC-052, CASE-021, DEC-053, DEC-054, DEC-055, DEC-057, DEC-058, CASE-025, CASE-026, CASE-027, H-019, EXP-011, DEC-071]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -15,7 +15,7 @@ notes: |
   verification, intervention, outcome) accumulates only through real use, which makes it
   valuable for research. Only part of it is recorded today: the runtime keeps routing,
   evidence, verification verdicts, and continuation and recovery events, but not the plan, the
-  execution, human interventions, or the task outcome (CASE-004, draft). Corrected
+  execution, human interventions, or the task outcome (CASE-004). Corrected
   2026-10-05: task telemetry (DEC-015, `core/audit/task_telemetry.py`) records skill, edit
   and commit events and a derived task completion, and CASE-012 measured task outcomes after
   the fact; the plan's content and human interventions are still not recorded at run time. What is recorded is

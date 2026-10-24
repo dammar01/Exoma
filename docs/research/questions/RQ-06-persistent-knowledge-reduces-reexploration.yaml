@@ -7,7 +7,7 @@ what_exists: |
   Fact store (recurrence and durable facts), anchored evidence reuse, graph leads, promoted
   knowledge; facts and promoted knowledge are injected into exploration and reasoning prompts,
   but there is no outcome to update loop and the effect is not measured.
-records: [CASE-009, DEC-016, DEC-035, DEC-040, DEC-044, DEC-065, DEC-066, DEC-070, H-021, EXP-013, H-023, EXP-016]
+records: [CASE-004, CASE-009, DEC-016, DEC-035, DEC-040, DEC-044, DEC-065, DEC-066, DEC-070, H-021, EXP-013, H-023, EXP-016]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -16,9 +16,9 @@ notes: |
   knowledge is stored but whether it is operationalized. A first measurable signal already
   exists: usage rows record evidence reuse and avoided provider calls, so their rate can be
   read before any new mechanism is proposed. In the maintainer's telemetry from 2026-08-15 to
-  2026-09-27 it read zero (CASE-004, draft).
+  2026-09-27 it read zero (CASE-004).
 
-  Draft records: H-004, CASE-004. DEC-016 (tracked, commit f6edbef) treats proven browser
+  Draft records: H-004. DEC-016 (tracked, commit f6edbef) treats proven browser
   selectors as reused knowledge.
 
   Since 3.9.0 the fact lifecycle is counted per call (DEC-066, `runtime.fact_lifecycle@1`);
