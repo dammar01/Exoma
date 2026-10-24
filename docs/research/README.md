@@ -213,6 +213,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-025](real-cases/CASE-025-codex-model-at-capacity-surfaces-as-silent-exit-1.yaml) | Codex "Selected model is at capacity" reaches the runtime as a silent `codex exited 1` with `error_type: unknown` | negative | implemented | observed | — |
 | [CASE-026](real-cases/CASE-026-inline-credential-redaction-breaks-e2e-scenario-json.yaml) | The "inline credential" redaction rewrites `"password": "${E2E_PASS}"` inside the draft scenario JSON, so every draft with a password fill ends `spec_invalid` | negative | implemented | observed | — |
 | [CASE-027](real-cases/CASE-027-provider-catalog-flashes-console-windows-on-windows.yaml) | `/.provider` catalog read (`run.sh provider ''`) flashes CMD console windows on Windows | negative | implemented | observed | — |
+| [CASE-028](real-cases/CASE-028-real-use-of-3-8-x-context-split.yaml) | Real use of 3.8.2 — context kept out of the main agent, read back, and task outcomes | inconclusive | implemented | observed | bb89223 |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -292,6 +293,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [H-022](hypotheses/H-022-runtime-gates-cut-execute-violations-without-false-blocks.yaml) | Runtime execute gates cut violations without false blocks that interrupt legitimate work | closed | not_applicable | not_validated | — |
 | [H-023](hypotheses/H-023-per-role-limit-explains-weighted-over-injection.yaml) | DEC-066's per-role limit, not its scoring, is why the weighted rule serves more facts than the one-token rule | closed | not_applicable | not_validated | — |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
+| [LIT-002](literature/LIT-002-the-extended-mind.yaml) | The Extended Mind | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
 `H-XXX` and `EXP-XXX` records are tracked once carried out with a recorded result (listed

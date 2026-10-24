@@ -11,7 +11,7 @@ what_exists: |
   main and needed a fix within 24 hours, and the kinds of follow-up prompts it took
   (CASE-012: 97 tasks, 9 projects). There is no arm without the workflow, so the question's
   comparison is not measured yet.
-records: [CASE-011, CASE-012, DEC-026, DEC-027, DEC-036, DEC-038, H-014, EXP-008]
+records: [CASE-011, CASE-012, DEC-026, DEC-027, DEC-036, DEC-038, H-014, EXP-008, CASE-028]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.

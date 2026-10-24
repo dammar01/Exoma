@@ -32,6 +32,7 @@ relationship_notes: |
   it is the origin of none of them.
 limitations:
   - Verified against the arXiv API metadata and the v1 abstract on 2026-10-05; the full text, its theorems and its experimental setup have not been read.
+  - "Correction (2026-10-25): the maintainer gave the full text to an LLM and studied it through that discussion; the maintainer did not read it directly. The claims above still rest only on the abstract and were not checked against the full text."
   - Its gains are reported against state-of-the-art agent systems on its own tasks, not against a single agent at matched cost, so they establish nothing yet about the marginal-return threshold RQ-16 asks about.
 notes: |
   My interpretation, not a claim the paper makes: its shared-budget sufficient conditions are

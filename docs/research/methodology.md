@@ -25,6 +25,13 @@ Claims produced during AI discussion must not automatically become project knowl
 A claim should be promoted only after it has an identifiable basis such as literature,
 observation, implementation evidence, experiment results, or explicit human reasoning.
 
+A source read through an AI system is recorded as such. A literature record states in its
+`limitations` who or what read the full text, and which parts were checked against the source
+itself; its `relevant_claims` hold only claims checked against the text, with page or section
+where the source has them. An AI summary of a paper is not the paper: a summary of a paper
+behind a paywall may come from secondary material or the model's training rather than from
+the text.
+
 ## Literature relationship
 
 Literature may relate to the project in different ways:

@@ -6,7 +6,7 @@ status: unanswered
 what_exists: |
   Usage telemetry; the 3-arm harness was removed in 3.7.3 without results (DEC-011); no
   net-value measure.
-records: [CASE-024, DEC-064]
+records: [CASE-024, DEC-064, CASE-028]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
