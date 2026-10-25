@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="t d">
+  <title id="t">Exoma — Evidence-driven problem solving for AI agents</title>
+  <desc id="d">Exoma banner. Three principles: context over prescription, evidence over expectation, effective coordination over unnecessary complexity. An agent at the centre is surrounded by context, tools, memory, delegation, and evidence. Give agents the context to solve, not the answer to repeat.</desc>
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="430" fill="#F5F1EA"/>
+  <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
+    <path d="M28 52 V28 H52"/><path d="M1148 28 H1172 V52"/>
+    <path d="M28 378 V402 H52"/><path d="M1148 402 H1172 V378"/>
+  </g>
+
+  <text x="64" y="76" class="mono" font-size="13" font-weight="700" letter-spacing="2" fill="#3F6F73">LIBRARY / EVIDENCE-DRIVEN PROBLEM SOLVING</text>
+  <text x="62" y="150" class="sans" font-size="76" font-weight="800" fill="#1F3A44">Exoma</text>
+  <text x="64" y="194" class="sans" font-size="24" fill="#5B6B70">Evidence-driven problem solving for AI agents</text>
+
+  <!-- an agent inside its extended resources -->
+  <g transform="translate(1030 132)">
+    <circle r="78" fill="none" stroke="#B08A5E" stroke-width="1.5" stroke-dasharray="5 6"/>
+    <circle r="30" fill="#3F6F73"/>
+    <text y="4" class="mono" font-size="12" font-weight="700" fill="#FBF9F4" text-anchor="middle">agent</text>
+    <g fill="#FBF9F4" stroke="#3F6F73" stroke-width="2">
+      <circle cx="0" cy="-78" r="7"/>
+      <circle cx="74.2" cy="-24.1" r="7"/>
+      <circle cx="45.8" cy="63.1" r="7"/>
+      <circle cx="-45.8" cy="63.1" r="7"/>
+      <circle cx="-74.2" cy="-24.1" r="7"/>
+    </g>
+    <g class="mono" font-size="12" fill="#3F5A60">
+      <text x="0" y="-94" text-anchor="middle">context</text>
+      <text x="88" y="-20">tools</text>
+      <text x="58" y="86">evidence</text>
+      <text x="-58" y="86" text-anchor="end">memory</text>
+      <text x="-88" y="-20" text-anchor="end">delegation</text>
+    </g>
+  </g>
+
+  <line x1="64" y1="236" x2="1136" y2="236" stroke="#C9CFCB" stroke-width="1.5"/>
+
+  <g class="sans">
+    <g transform="translate(64 258)">
+      <rect width="344" height="110" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="344" height="5" rx="2" fill="#3F6F73"/>
+      <text x="22" y="34" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F6F73">01</text>
+      <text x="22" y="66" font-size="24" font-weight="700" fill="#1F3A44">Context</text>
+      <text x="22" y="92" font-size="16" fill="#5B6B70">over prescription</text>
+    </g>
+    <g transform="translate(428 258)">
+      <rect width="344" height="110" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="344" height="5" rx="2" fill="#4A7A6E"/>
+      <text x="22" y="34" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#4A7A6E">02</text>
+      <text x="22" y="66" font-size="24" font-weight="700" fill="#1F3A44">Evidence</text>
+      <text x="22" y="92" font-size="16" fill="#5B6B70">over expectation</text>
+    </g>
+    <g transform="translate(792 258)">
+      <rect width="344" height="110" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="344" height="5" rx="2" fill="#B08A5E"/>
+      <text x="22" y="34" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#8C6A43">03</text>
+      <text x="22" y="66" font-size="24" font-weight="700" fill="#1F3A44">Effective coordination</text>
+      <text x="22" y="92" font-size="16" fill="#5B6B70">over unnecessary complexity</text>
+    </g>
+  </g>
+
+  <text x="64" y="402" class="mono" font-size="13" font-weight="700" letter-spacing="1" fill="#3F6F73">GIVE AGENTS THE CONTEXT TO SOLVE, NOT THE ANSWER TO REPEAT.</text>
+</svg>

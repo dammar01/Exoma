@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="712" viewBox="0 0 1200 712" role="img" aria-labelledby="t d">
+  <title id="t">Exoma architecture</title>
+  <desc id="d">The developer briefs the primary agent (Claude Code) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, and shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth; the primary agent retains the final decision.</desc>
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .flow { stroke: #4F6970; stroke-width: 2.4; fill: none; }
+      .lbl { font-size: 11px; font-weight: 700; fill: #3F5A60; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#4F6970" stroke-width="1.8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="712" fill="#F5F1EA"/>
+  <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
+    <path d="M28 54 V32 H52"/><path d="M1148 32 H1172 V54"/>
+    <path d="M28 684 V706 H52"/><path d="M1148 706 H1172 V684"/>
+  </g>
+
+  <!-- header -->
+  <text x="56" y="56" class="mono" font-size="13" font-weight="700" letter-spacing="1.5" fill="#3F6F73">ENGINEERING MAP / EXOMA RUNTIME</text>
+  <text x="54" y="108" class="sans" font-size="46" font-weight="800" fill="#1F3A44">Exoma</text>
+  <text x="56" y="136" class="sans" font-size="17" fill="#5B6B70">Evidence-driven problem solving for AI agents</text>
+  <rect x="902" y="66" width="242" height="30" rx="15" fill="#E6ECEA"/>
+  <text x="1023" y="86" class="mono" font-size="11" font-weight="700" fill="#2F4F55" text-anchor="middle">DELEGATE → EVIDENCE → DECIDE</text>
+  <line x1="56" y1="156" x2="1144" y2="156" stroke="#C9CFCB" stroke-width="1.5"/>
+
+  <!-- developer -->
+  <rect x="56" y="180" width="287" height="112" rx="8" fill="#FCFAF5" stroke="#C3CAC6" stroke-width="1.5"/>
+  <text x="75" y="206" class="mono" font-size="12" font-weight="700" fill="#4F6970">DEVELOPER</text>
+  <text x="75" y="234" class="sans" font-size="18" font-weight="700" fill="#1F3A44">Objective + constraints</text>
+  <text x="75" y="264" class="sans" font-size="12.5" fill="#5B6B70">Receives plan · verdict · questions</text>
+
+  <!-- primary agent -->
+  <rect x="431" y="180" width="381" height="112" rx="8" fill="#E7EFEE" stroke="#4F6F73" stroke-width="2"/>
+  <text x="452" y="206" class="mono" font-size="12" font-weight="700" fill="#3F6F73">PRIMARY AGENT</text>
+  <text x="452" y="240" class="sans" font-size="27" font-weight="800" fill="#1F3A44">Claude Code</text>
+  <text x="452" y="266" class="sans" font-size="13.5" fill="#4F6266">Reasons · writes code · makes final decision</text>
+
+  <path class="flow" d="M343 221 H427" marker-end="url(#a)"/>
+  <text x="387" y="212" class="mono lbl" text-anchor="middle">brief</text>
+  <path class="flow" d="M431 262 H347" marker-end="url(#a)"/>
+  <text x="387" y="281" class="mono lbl" text-anchor="middle">feedback</text>
+
+  <!-- runtime -->
+  <rect x="188" y="348" width="724" height="206" rx="8" fill="#FCFAF5" stroke="#4F6F73" stroke-width="2"/>
+  <rect x="188" y="345" width="724" height="6" rx="3" fill="#4A7A6E"/>
+  <text x="209" y="380" class="mono" font-size="16" font-weight="700" fill="#3F6F6A">EXOMA RUNTIME / CONTROL PLANE</text>
+  <text x="209" y="402" class="sans" font-size="14" fill="#5B6B70">Deterministic orchestration · Python standard library</text>
+
+  <rect x="209" y="422" width="316" height="108" rx="7" fill="#F1F5F3" stroke="#C3CEC9" stroke-width="1.3"/>
+  <text x="228" y="446" class="mono" font-size="11.5" font-weight="700" fill="#4A7A6E">TASK &amp; POLICY</text>
+  <text x="228" y="471" class="sans" font-size="17" font-weight="700" fill="#1F3A44">Job · session · lock</text>
+  <text x="228" y="494" class="sans" font-size="14" fill="#4F6266">Route · context · prompt</text>
+  <text x="228" y="516" class="sans" font-size="11.5" fill="#6B787C">Delegates bounded investigation</text>
+
+  <rect x="543" y="422" width="347" height="108" rx="7" fill="#EFF4F5" stroke="#BFCDD2" stroke-width="1.3"/>
+  <text x="562" y="446" class="mono" font-size="11.5" font-weight="700" fill="#4A6F85">EVIDENCE GATE &amp; RETURN</text>
+  <text x="562" y="471" class="sans" font-size="16.5" font-weight="700" fill="#1F3A44">Redact · check contract · shape</text>
+  <text x="562" y="494" class="sans" font-size="14" fill="#4F6266">Digest · file:line anchors</text>
+  <text x="562" y="516" class="sans" font-size="11.5" fill="#6B787C">Persist provenance · return result</text>
+
+  <path class="flow" d="M541 292 V341" marker-end="url(#a)"/>
+  <text x="530" y="324" class="mono lbl" text-anchor="end">delegate</text>
+  <path class="flow" d="M694 345 V296" marker-end="url(#a)"/>
+  <text x="706" y="324" class="mono lbl">digest + file:line</text>
+
+  <!-- secondary agent -->
+  <text x="1047" y="314" class="mono" font-size="11.5" font-weight="700" fill="#8C6A43" text-anchor="middle">EVIDENCE BOUNDARY</text>
+  <rect x="942" y="324" width="211" height="240" rx="12" fill="none" stroke="#B08A5E" stroke-width="1.6" stroke-dasharray="7 6"/>
+  <rect x="958" y="348" width="181" height="204" rx="8" fill="#FCFAF5" stroke="#C4A57F" stroke-width="1.6"/>
+  <rect x="958" y="345" width="181" height="6" rx="3" fill="#B08A5E"/>
+  <text x="973" y="378" class="mono" font-size="11.5" font-weight="700" fill="#8C6A43">SECONDARY AGENT</text>
+  <text x="973" y="407" class="sans" font-size="21" font-weight="700" fill="#2F3436">Investigate</text>
+  <text x="973" y="434" class="sans" font-size="13" fill="#4F5658">Read · search · trace</text>
+  <text x="973" y="468" class="sans" font-size="12" font-weight="700" fill="#2F3436">Intended role: read-only</text>
+  <text x="973" y="500" class="sans" font-size="12" fill="#4F5658">Returns candidate evidence</text>
+  <text x="973" y="526" class="sans" font-size="10" fill="#7A7F80">Enforcement varies by provider.</text>
+
+  <path class="flow" d="M912 432 H954" marker-end="url(#a)"/>
+  <text x="933" y="425" class="mono" font-size="9.5" font-weight="700" fill="#5B5040" text-anchor="middle">task</text>
+  <path class="flow" d="M958 492 H894" marker-end="url(#a)"/>
+  <text x="926" y="509" class="mono" font-size="9.5" font-weight="700" fill="#5B5040" text-anchor="middle">raw evidence</text>
+
+  <!-- storage -->
+  <path class="flow" d="M506 554 V589" marker-end="url(#a)"/>
+  <path class="flow" d="M650 593 V558" marker-end="url(#a)"/>
+  <text x="578" y="578" class="mono lbl" text-anchor="middle">read / write</text>
+  <rect x="56" y="593" width="1088" height="68" rx="8" fill="#E8EEEA" stroke="#A9BDB4" stroke-width="1.6"/>
+  <text x="78" y="620" class="mono" font-size="15" font-weight="700" fill="#3F6F6A">PERSISTENT SUBSTRATE  .workflow/data/</text>
+  <text x="78" y="645" class="sans" font-size="14" fill="#2F3F44">Sessions · facts · evidence · usage · audit · response artifacts</text>
+  <text x="1124" y="645" class="sans" font-size="13" font-weight="700" fill="#4F6F6A" text-anchor="end">Source anchors + hashes</text>
+
+  <!-- footer -->
+  <line x1="56" y1="676" x2="1144" y2="676" stroke="#C9CFCB" stroke-width="1.2"/>
+  <text x="56" y="696" class="mono" font-size="11.5" font-weight="700" fill="#4F6970">EVIDENCE CANDIDATES ≠ GROUND TRUTH</text>
+  <text x="1144" y="696" class="sans" font-size="12" fill="#6B787C" text-anchor="end">Primary agent retains the final decision.</text>
+</svg>

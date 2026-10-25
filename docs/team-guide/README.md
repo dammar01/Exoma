@@ -21,3 +21,8 @@ Read in this order:
 The one idea to take away: Exoma changes **who does the decomposition and
 repository discovery**. If you still break every task into small instructions yourself, it
 will mostly feel like the agent you already had, only slower.
+
+That is the project's philosophy in practice: define the problem, not the answer to be
+found. Give the goal, the context you have, and the constraints that matter, then judge the
+result by its evidence rather than by whether it matches what you expected. The principles
+behind it are in the [README](../../README.md#core-philosophy).

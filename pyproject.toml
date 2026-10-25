@@ -3,11 +3,12 @@ name = "exoma"
 # Stamped from TOOL_VERSION in src/exoma/config/settings.py by tools/maintain/stamp_version.py.
 # uv_build reads only a static version, so this line is a copy, never the source.
 version = "0.1.0"
-description = "External control plane for coding agents: a secondary agent gathers repository evidence while the primary agent reasons and implements."
+description = "Evidence-driven problem solving for AI agents: context management, delegated exploration, and evidence gathering around the agent that reasons and decides."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
+keywords = ["ai-agents", "coding-agents", "claude-code", "delegation", "evidence", "context-management", "llm"]
 # The runtime is stdlib-only (tests/checks/deps.py); anything third-party is an extra.
 dependencies = []
 classifiers = [

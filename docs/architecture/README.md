@@ -1,7 +1,7 @@
 # Architecture
 
 How a request moves through Exoma, verified against the source tree. The
-README image (`docs/assets/architecture.png`) is the illustrated overview; the diagram
+README image ([`docs/assets/architecture.svg`](../assets/architecture.svg)) is the illustrated overview; the diagram
 below is its text version, and the rest of this page is the authoritative detail (its
 steps 1–7 compress the 19 of the delegated path).
 
@@ -22,7 +22,7 @@ gathers repository evidence.
              │ .workflow/run <cmd> <task> <session> │ digest
              ▼                                      │ + file:line anchors
 ┌───────────────────────────────────────────────────┴──────────┐
-│ AGENT-WORKFLOW RUNTIME            deterministic · stdlib     │
+│ EXOMA RUNTIME                     deterministic · stdlib     │
 │                                                              │
 │  1 job · session · lock     ┌─► 5 redact · contract check    │
 │  2 route · policy           │   6 digest · anchors · shape   │
