@@ -12,6 +12,10 @@ Getting it on a machine: [installation.md](installation.md) (requirements, insta
 per-project setup, updating, uninstalling; it carries the exact commands so a new user finds
 them in one place) and [security.md](security.md) (what each provider can read and change).
 
+Working on Exoma itself: [development.md](development.md) (the checkout, tests, keeping a
+development build away from your daily `~/.claude`, and staging a release in
+agent-workflow).
+
 Supporting documents: [limitations.md](limitations.md), the
 [metrics registry](evaluation/metrics.md) behind every figure `report` prints, and the
 release history: the index in [CHANGELOG.md](../CHANGELOG.md), per-version notes in

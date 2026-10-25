@@ -87,6 +87,12 @@ accident.
    never ran against that layer — record the decision in the release notes rather than
    leaving it implied.
 
+6b. **Stage in agent-workflow.** Push the candidate to `main`, wait for CI, then point
+   agent-workflow's Exoma dependency at that commit and run its staging suite there,
+   delegated end-to-end run included. A failure is fixed here and the candidate re-staged;
+   nothing is patched inside agent-workflow. See
+   [docs/development.md](docs/development.md#staging-a-release-in-agent-workflow).
+
 7. **Commit, then tag.** The tag points at the commit whose `stamp_version --check` and
    `gen_manifest --check` both passed:
 
@@ -133,7 +139,7 @@ use) on every push and pull request, on Linux and Windows. Its `dist` job covers
 wheel install of step 6.
 
 CI bumps nothing and tags nothing. A pushed tag triggers `publish.yml` (step 8); everything
-else — deciding the number and running steps 1, 4, 5, 7 and 9 — is still a human's. The delegated end-to-end run
+else — deciding the number and running steps 1, 4, 5, 6b, 7 and 9 — is still a human's. The delegated end-to-end run
 (`.github/workflows/e2e-full.yml`) is manual and covers no release step: it exists to spend
 quota deliberately, not on a schedule.
 

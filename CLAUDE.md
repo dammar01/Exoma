@@ -6,8 +6,10 @@ here belongs in it.
 
 ## Scope
 
-Exoma is the user-facing library and CLI for the agent-workflow runtime. Research on
-delegation (hypotheses, experiments, decision records) stays in agent-workflow; this
+Exoma is the core: the runtime, library and CLI. Every runtime change lands here.
+agent-workflow is the research and staging repository that depends on Exoma: research on
+delegation (hypotheses, experiments, decision records) stays there, and it exercises a
+release candidate before it is tagged. Nothing is merged back from agent-workflow; this
 repository does not carry `docs/research/` or research records. Local drafts may live in
 the git-ignored `docs/research-drafts/`; tracked files never link there.
 
@@ -45,5 +47,7 @@ exploration and reasoning prompts, and only `promote-write` may write there.
   its prose, or in `docs/reference.md`, fails `tools/maintain/stamp_version.py --check`.
 - Release notes: `docs/releases/v<version>.md` plus one index row in `CHANGELOG.md` (the
   index stays one line per version).
-- Do not run `exoma install --apply` from a development checkout onto a machine that also
-  uses agent-workflow: both install hooks and skills under the same names in `~/.claude`.
+- Do not run `exoma install --apply` from a development checkout onto the real `~/.claude`:
+  daily sessions run the released Exoma from PyPI, and a checkout install would replace its
+  hooks and skills under the same names. Point `AGENT_HOME` and `EXOMA_HOME` at a temporary
+  directory instead (`docs/development.md`).
