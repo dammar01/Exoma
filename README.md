@@ -1,6 +1,6 @@
 <div align="center">
 
-# agent-workflow
+# Exoma
 
 **An external control plane for coding agents.**
 
@@ -10,13 +10,14 @@ agent, while reasoning and implementation stay with your primary coding agent.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](docs/installation.md#requirements)
-[![Version](https://img.shields.io/badge/version-3.9.0-informational.svg)](CHANGELOG.md)
+[![PyPI](https://img.shields.io/badge/pip-exoma-blue.svg)](docs/installation.md)
+[![Version](https://img.shields.io/badge/version-0.1.0-informational.svg)](CHANGELOG.md)
 
 **[Installation guide](docs/installation.md)** · [Security](docs/security.md) · [Team guide](docs/team-guide/README.md) · [Reference](docs/reference.md)
 
 <br>
 
-<img src="docs/assets/architecture.png" alt="agent-workflow architecture. The developer briefs the primary agent (Claude Code) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the runtime control plane, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
+<img src="docs/assets/architecture.png" alt="Exoma architecture. The developer briefs the primary agent (Claude Code) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the runtime control plane, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
 
 </div>
 
@@ -27,19 +28,22 @@ flow, side paths, and storage: [docs/architecture](docs/architecture/README.md).
 
 ---
 
-## What is agent-workflow?
+## What is Exoma?
 
-`agent-workflow` is an external runtime for AI-assisted software development. It separates
-work that needs **broad repository inspection** from work that needs the **primary agent's
-reasoning and implementation context**.
+Exoma is an external runtime for AI-assisted software development, installed as a Python
+package (`pip install exoma`) with a CLI (`exoma`). It separates work that needs **broad
+repository inspection** from work that needs the **primary agent's reasoning and
+implementation context**.
 
 A coding agent on a mature repository spends much of its effort locating modules, tracing
-call sites, and reading conventions before it changes anything. `agent-workflow` moves that
-inspection into a separate execution context and returns structured evidence: a digest,
-`file:line` anchors, and a reference to the full evidence on disk.
+call sites, and reading conventions before it changes anything. Exoma moves that inspection
+into a separate execution context and returns structured evidence: a digest, `file:line`
+anchors, and a reference to the full evidence on disk.
 
 It is **not a replacement** for Claude Code or any other coding agent. It is an additional
-control layer around them.
+control layer around them. This first release repackages agent-workflow 3.9.0
+([repository](https://github.com/dammar01/agent-workflow)) as a library: the same commands,
+contracts and workspace, installed and upgraded like any other Python tool.
 
 Delegated results are treated as **evidence candidates**, not truth. Every delegated call
 returns the same envelope; `digest` appears when the secondary agent's summary parses, and
@@ -59,7 +63,7 @@ agent can be incomplete or wrong even when its output looks plausible.
 | Role | Who | Responsibility |
 | --- | --- | --- |
 | **Primary agent** | Claude Code (the integration target) | Reasoning, decisions, code changes, and final review |
-| **Workflow runtime** | This repository, Python standard library only | Routing, sessions and locks, policy, prompt building, redaction, evidence contracts, digests, persistence, recovery |
+| **Workflow runtime** | The `exoma` package, Python standard library only | Routing, sessions and locks, policy, prompt building, redaction, evidence contracts, digests, persistence, recovery |
 | **Secondary agent** | `opencode`, `codex`, or `agy` | Repository exploration, analysis, planning, and verification evidence |
 
 The design keeps code-writing with the primary agent. The secondary agent's role is
@@ -73,26 +77,11 @@ enforce state, contracts, policy, provenance, and execution control.
 
 ## When it is useful
 
-Measured on the maintainer's real use: 97 coding tasks from 167 Claude Code sessions on nine
-private projects (Laravel, Next.js and Python codebases), over the two most used stable
-releases. A task is solved when the code its session left behind entered `main`, and clean when the
-developer did not change that code again within 24 hours.
+The idea behind the design: on a large codebase, keeping exploration out of the primary
+agent's context should leave it more room to reason. That is a design premise, not a measured
+result; Exoma does not claim a benchmark.
 
-| Delegated calls per task | Tasks | Solved | Clean | Prompts (median) | Active time (median) | Main-agent final context | Context kept out of the main agent |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 15 | 8 (53%) | 8 | 5 | 19 min | 108k | 0 |
-| 1–2 | 20 | 14 (70%) | 12 | 6 | 33 min | 152k | 170k |
-| 3–5 | 28 | 23 (82%) | 15 | 9 | 53 min | 201k | 671k |
-| 6+ | 34 | 23 (68%) | 12 | 16.5 | 101 min | 354k | 1.4M |
-| **All** | **97** | **68 (70%)** | **47 (48%)** | **9** | **53 min** | **210k** | **574k** |
-
-Features were solved in 46 of 68 tasks and bugs in 19 of 26. Larger tasks drew more calls,
-so the table shows where delegation was used, not what it caused; it is one developer, with
-no run without the workflow to compare against, and acceptance on `main` is not a correctness
-check. Per release, per project, prompt kinds and method:
-[real-use benchmark](docs/evaluation/real-use-benchmark.md).
-
-What those tasks looked like, from the same sessions (translated, names removed):
+Typical requests (translated, names removed):
 
 | Situation | What was asked | Command |
 | --- | --- | --- |
@@ -116,8 +105,15 @@ requests.
 
 ## Quick start
 
-Install first: [installation guide](docs/installation.md). Then, in a project, run `/.init`
-(or `/.upgrade` when it already has a `.workflow/`) and `/.doctor`.
+```bash
+uv tool install exoma            # or: pip install exoma
+exoma install                    # dry run: read what it will change in ~/.claude
+exoma install --apply
+```
+
+Then, in a project, run `/.init` in Claude Code (or `exoma init --work-dir .`), and `/.doctor`.
+A project that already has a `.workflow/` from agent-workflow is taken over by `/.upgrade`.
+Details, modes and undo: [installation guide](docs/installation.md).
 
 Ask in natural language; the primary agent routes it:
 
@@ -150,7 +146,7 @@ concurrent sessions would share an identifier and overwrite each other's state.
 | `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
 
 Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a delegated
-command; since 3.9.0 it opens and closes a runtime execution (`plan-record`, `execute-begin`,
+command; it opens and closes a runtime execution (`plan-record`, `execute-begin`,
 `execute-end`) whose scope a hook enforces for Edit/Write. Asynchronous job commands and the remaining local commands are in the
 [full reference](docs/reference.md#command).
 
@@ -164,29 +160,10 @@ What each secondary-agent provider can read and change: [docs/security.md](docs/
 
 ---
 
-## Research & evaluation
-
-> `agent-workflow` explores whether externalizing repository exploration, evidence
-> handling, and execution control from a primary coding agent can improve
-> software-engineering workflows on complex real-world repositories.
-
-It is developed as an open engineering and research artifact. Design
-decisions, hypotheses, experiments, and sanitized real-world observations are recorded in
-[docs/research/](docs/research/), with explicit provenance: a related paper is not presented
-as the origin of an implementation unless that is known, and an implementation working in
-one project is not presented as a general result.
-
-The project does not assume that more orchestration makes a coding agent better. The
-controlled benchmark and the maintainer's usage telemetry are kept apart in
-[docs/evaluation/](docs/evaluation/), and telemetry is read as evidence for specific
-conditions, not as a performance claim.
-
----
-
 ## Documentation
 
-Documentation is layered: the team guide says **how and when**, research says **why**, and
-the reference says **exactly what the runtime does** — see [docs/](docs/README.md).
+Documentation is layered: the team guide says **how and when**, and the reference says
+**exactly what the runtime does** — see [docs/](docs/README.md).
 
 | Document | Contents |
 | --- | --- |
@@ -197,8 +174,7 @@ the reference says **exactly what the runtime does** — see [docs/](docs/README
 | [docs/reference.md](docs/reference.md) | Complete technical reference: configuration, jobs, fact store, evidence reuse, verify modes, sessions, tests, CI |
 | [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the runtime obeys, and which it cannot enforce |
 | [docs/limitations.md](docs/limitations.md) | Known limitations |
-| [docs/research](docs/research/README.md) | Research method, contract, and records |
-| [docs/evaluation](docs/evaluation/README.md) | Benchmark and observed usage |
+| [docs/evaluation/metrics.md](docs/evaluation/metrics.md) | How every figure `exoma report` prints is computed |
 | [CHANGELOG.md](CHANGELOG.md) / [RELEASE.md](RELEASE.md) | Release history and procedure |
 
 [ci.yml](.github/workflows/ci.yml) runs the version stamp, manifest, stdlib-only gate, and
@@ -210,10 +186,9 @@ agent.
 
 ## Limitations
 
-`agent-workflow` adds an execution layer, and with it additional latency, additional
-provider calls and compute, new failure modes, provider-specific security limits, and
-maintenance complexity. It is not preferable for every task; the project is exploring
-**when** external orchestration pays off. Full list: [docs/limitations.md](docs/limitations.md).
+Exoma adds an execution layer, and with it additional latency, additional provider calls
+and compute, new failure modes, provider-specific security limits, and maintenance
+complexity. It is not preferable for every task. Full list: [docs/limitations.md](docs/limitations.md).
 
 ## License
 

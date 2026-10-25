@@ -9,13 +9,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from core.audit import task_telemetry
-from core.audit.task_telemetry import derive_tasks
+from exoma.core.audit import task_telemetry
+from exoma.core.audit.task_telemetry import derive_tasks
 
 from tests.checks.support import assert_true
-from utils.osutil import find_bash
+from exoma.utils.osutil import find_bash
 
-HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 
 
 def _skill(sid, skill, verdict=None, derived=None):

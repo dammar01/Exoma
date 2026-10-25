@@ -16,9 +16,9 @@ from pathlib import Path
 import contextlib
 import io
 
-from installer import rollback as rollback_mod
-from installer import uninstall as uninstall_mod
-from installer.base import (
+from exoma.installer import rollback as rollback_mod
+from exoma.installer import uninstall as uninstall_mod
+from exoma.installer.base import (
     ManagedBlockError,
     Plan,
     _begin_receipt,
@@ -28,8 +28,8 @@ from installer.base import (
     _merge_managed,
     _reset_receipt,
 )
-from installer.settings import _drop_relocated_hooks
-from installer.uninstall import _remove_receipted, _strip_settings, _uninstall_text, _without_block
+from exoma.installer.settings import _drop_relocated_hooks
+from exoma.installer.uninstall import _remove_receipted, _strip_settings, _uninstall_text, _without_block
 from tests.checks.support import assert_true
 
 _START = "WORKFLOW-MAIN-AGENT:START"

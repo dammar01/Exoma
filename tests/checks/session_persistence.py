@@ -20,12 +20,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.prompt.router import Router
-from core.provider.executor import Executor
-from core.runtime.state import ensure_workflow_workspace
-from core.workspace import workspace_paths
-from core.workspace.session_manager import SessionManager
-from core.workspace.workspace_paths import data_dir, read_json_file
+from exoma.core.prompt.router import Router
+from exoma.core.provider.executor import Executor
+from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.core.workspace import workspace_paths
+from exoma.core.workspace.session_manager import SessionManager
+from exoma.core.workspace.workspace_paths import data_dir, read_json_file
 from tests.checks.continuation import _EVIDENCE
 from tests.checks.support import assert_true
 

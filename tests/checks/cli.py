@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import main
+from exoma import cli as main
 from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

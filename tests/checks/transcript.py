@@ -12,7 +12,7 @@ answer "how many times did a person have to ask".
 
 from pathlib import Path
 
-from core.audit import transcript
+from exoma.core.audit import transcript
 from tests.checks.support import assert_true
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "claude" / "session-basic.jsonl"

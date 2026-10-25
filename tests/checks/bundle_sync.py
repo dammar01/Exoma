@@ -27,6 +27,7 @@ from tests.checks.support import assert_true
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 
 def _run_check(module_name: str) -> tuple[int, str]:
@@ -63,7 +64,7 @@ def _test_every_shipped_hook_is_a_launcher_and_its_module() -> None:
     """
     import ast
 
-    hooks = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
+    hooks = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
     launchers = {p.stem for p in hooks.glob("*.sh")}
     modules = {p.stem for p in hooks.glob("*.py")} - {"workflow_hooks"}
     assert_true(bool(launchers), f"no hook launchers found under {hooks}")
@@ -89,7 +90,7 @@ def _test_every_shipped_hook_is_a_launcher_and_its_module() -> None:
     invokes = re.compile(r"&\s*\"[^\"\n]*\.ps1\"")
     calling = sorted(
         str(p.relative_to(REPO_ROOT))
-        for p in (REPO_ROOT / "dist" / "config").rglob("*.md")
+        for p in (REPO_ROOT / "src" / "exoma" / "_bundle" / "config").rglob("*.md")
         if invokes.search(p.read_text(encoding="utf-8"))
     )
     assert_true(not calling, f"no shipped instruction invokes a retired .ps1 runner: {calling}")
@@ -125,7 +126,7 @@ def _check_task_events_local_skills() -> None:
 
     from tools.maintain.sync_skills import CLAUDE_MD, _COMMAND_RE
 
-    hook = REPO_ROOT / "dist" / "config" / "claude" / "hooks" / "task-events.py"
+    hook = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "task-events.py"
     shipped: set[str] | None = None
     for node in ast.parse(hook.read_text(encoding="utf-8")).body:
         if isinstance(node, ast.Assign) and any(

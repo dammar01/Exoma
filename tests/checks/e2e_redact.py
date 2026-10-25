@@ -14,7 +14,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
-from core.evidence.e2e.redact import MIN_SCRUB_CHARS, scrub_resolved, scrub_text_files
+from exoma.core.evidence.e2e.redact import MIN_SCRUB_CHARS, scrub_resolved, scrub_text_files
 from tests.checks.support import assert_true
 
 
@@ -88,7 +88,7 @@ def _test_e2e_redaction_variants() -> None:
             )
 
         # Fail-closed: a file the pass cannot scrub does not survive it unscrubbed.
-        from core.evidence.e2e import redact as redact_module
+        from exoma.core.evidence.e2e import redact as redact_module
 
         stuck = root / "stuck.html"
         stuck.write_text(f"<p>{email}</p>", encoding="utf-8")
@@ -158,7 +158,7 @@ def _test_e2e_redaction_variants() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
     # Agent-written input: a typed-out value is found by the lookup, never by its shape.
-    from core.evidence.e2e.redact import scrub_literals
+    from exoma.core.evidence.e2e.redact import scrub_literals
 
     scenario = {
         "claims": [{"id": "login-valid-user"}],

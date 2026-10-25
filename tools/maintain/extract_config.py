@@ -3,7 +3,7 @@
 BOOTSTRAP-ONLY. dist/ is the canonical, Git-reviewed bundle; this tool only *seeds* it
 from a maintainer's live ~/.claude the first time (or when deliberately re-importing home
 edits). Routine changes are made in dist/ directly. Skill bodies live only in
-`dist/config/claude/skills/*.md`; CLAUDE.md contains the command registry and
+`src/exoma/_bundle/config/claude/skills/*.md`; CLAUDE.md contains the command registry and
 orchestrator contract.
 `tools/maintain/sync_skills.py --check` verifies those files still match CLAUDE.md's command
 registry, and `tools/maintain/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
@@ -11,7 +11,7 @@ refresh the manifest after editing dist/ — it would overwrite dist/ with home-
 and abort on the clobber guard.
 
 Runs on the DEV machine. Reads the live agent directories, copies an explicit allowlist
-into `dist/config/`, redacts machine-specific paths, and writes a manifest the installer
+into `src/exoma/_bundle/config/`, redacts machine-specific paths, and writes a manifest the installer
 consumes.
 
 Security posture, in order of importance:
@@ -38,16 +38,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from config.providers import PROVIDER_BUNDLES  # noqa: E402
+from exoma.config.providers import PROVIDER_BUNDLES  # noqa: E402
 
-DIST_DIR = REPO_ROOT / "dist" / "config"
-MANIFEST = REPO_ROOT / "dist" / "manifest.json"
+DIST_DIR = REPO_ROOT / "src" / "exoma" / "_bundle" / "config"
+MANIFEST = REPO_ROOT / "src" / "exoma" / "_bundle" / "manifest.json"
 
 # Only these leave the machine. Adding an entry is a deliberate act; forgetting one
 # costs a missing feature, whereas a stray glob costs a leaked credential.
 ALLOWLIST = [
-    # (source relative to home, dest relative to dist/config, kind)
+    # (source relative to home, dest relative to src/exoma/_bundle/config, kind)
     (".claude/CLAUDE.md", "claude/CLAUDE.md", "file"),
     (".claude/skills", "claude/skills", "dir:*.md"),
     (".claude/commands", "claude/commands", "dir:*.md"),
@@ -111,7 +112,7 @@ DENY_DIR_PARTS = {
 # Credential-shaped content. Lives in utils/redact.py so the runtime evidence path uses
 # the SAME table — a second copy here would drift, and the copy that fell behind would be
 # the one guarding live agent output.
-from utils.redact import SECRET_PATTERNS  # noqa: E402
+from exoma.utils.redact import SECRET_PATTERNS  # noqa: E402
 
 HOME = Path.home()
 
@@ -279,7 +280,7 @@ def main() -> int:
         print(
             "\nThat pattern means the change was authored in dist/ directly, and copying\n"
             "over it would erase it silently. Pick one:\n"
-            "  - keep the dist/ version: install it first (python install.py --apply),\n"
+            "  - keep the dist/ version: install it first (exoma install --apply),\n"
             "    then rerun this to extract it back as a normal build\n"
             "  - discard the dist/ version: rerun with --force\n"
             "Nothing was written."
@@ -346,4 +347,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(REPO_ROOT / "src"))
     raise SystemExit(main())

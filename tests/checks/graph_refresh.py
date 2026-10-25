@@ -22,12 +22,12 @@ import tempfile
 import time
 from pathlib import Path
 
-from core.graph import graph_index
-from utils.osutil import find_bash, hidden_run_kwargs
+from exoma.core.graph import graph_index
+from exoma.utils.osutil import find_bash, hidden_run_kwargs
 from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOOKS = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
+HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 _FAKE_SLEEP_S = 3
 
 # FAKE_GRAPHIFY_MODE: "ok" sleeps then writes a graph; "corrupt" sleeps then writes half a
@@ -317,7 +317,7 @@ def _check_call_during_refresh() -> None:
     Never waits: a verify that ran while the worker held the lock must record
     `refreshing`, not block on it and not pass as a project with no graph.
     """
-    from core.provider.executor import graph_leads_for_call, graph_state_for_call
+    from exoma.core.provider.executor import graph_leads_for_call, graph_state_for_call
 
     root = Path(tempfile.mkdtemp(prefix="graph-leads-call-"))
     try:
@@ -452,9 +452,9 @@ def _check_doctor_and_clean_read_the_lock() -> None:
     """With no time limit a hung graphify holds the lock for as long as its worker lives, so
     doctor names the lock and clean removes it only once nothing beats it (DEC-042). clean
     never kills a process and never removes a lock a worker is beating."""
-    from core.audit.diagnostics import run_doctor
-    from core.runtime.state import ensure_workflow_workspace
-    from core.workspace.workspace_paths import read_json_file
+    from exoma.core.audit.diagnostics import run_doctor
+    from exoma.core.runtime.state import ensure_workflow_workspace
+    from exoma.core.workspace.workspace_paths import read_json_file
 
     root = Path(tempfile.mkdtemp(prefix="graph-refresh-clean-"))
     try:

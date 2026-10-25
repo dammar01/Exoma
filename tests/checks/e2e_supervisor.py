@@ -7,9 +7,9 @@ import sys
 import time
 from pathlib import Path
 
-from core.evidence.e2e.classify import build_report
-from core.evidence.e2e.supervisor import run_player
-from utils.osutil import process_alive
+from exoma.core.evidence.e2e.classify import build_report
+from exoma.core.evidence.e2e.supervisor import run_player
+from exoma.utils.osutil import process_alive
 from tests.checks.support import assert_true
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -30,10 +30,10 @@ def _run(fake: str, *, idle: float = 5.0, total: float = 10.0, beats: list | Non
     import os
 
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USERPROFILE")}
-    env["PYTHONPATH"] = str(_ROOT)
+    env["PYTHONPATH"] = str(_ROOT / "src")
     env["PYTHONIOENCODING"] = "utf-8"
     return run_player(
-        [sys.executable, "-m", "core.evidence.e2e.player"],
+        [sys.executable, "-m", "exoma.core.evidence.e2e.player"],
         stdin_payload=payload,
         env=env,
         cwd=str(_ROOT),

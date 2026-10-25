@@ -1,6 +1,10 @@
-# agent-workflow v3.9.0
+# Exoma v0.1.0
 
-Standalone orchestration runtime for a two-agent workflow. No third-party dependencies.
+Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
+package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
+
+Module paths in this reference (`core/...`, `adapters/...`, `config/...`) are relative to
+the package, `src/exoma/` in the repository.
 
 ## Summary
 
@@ -17,7 +21,7 @@ This runtime sits between the two: it receives a command, assembles a structured
 
 `digest` is added only when the second_agent output carries a parseable `[DIGEST]` block; it is not a required field.
 
-Evidence, config, per-session state, and provider session bindings (`.workflow/data/provider-sessions/`) live project-local in `.workflow/` in the target project. The job queue and the tool's cross-project cache stay in this repo's `storage/` (see [Workspace layout](#workspace-layout)).
+Evidence, config, per-session state, and provider session bindings (`.workflow/data/provider-sessions/`) live project-local in `.workflow/` in the target project. The job queue, the main-session cache and the provider seed live in the per-user data directory (see [Workspace layout](#workspace-layout)).
 
 ---
 
@@ -27,7 +31,7 @@ Evidence, config, per-session state, and provider session bindings (`.workflow/d
 Prompt user
 → main_agent: auto-detect intent or use the /. override
 → .workflow/run.sh (bash on every OS)
-→ main.py await → JobManager → detached worker
+→ python -m exoma --command await → JobManager → detached worker
 → Executor → Router
 → Graphify leads + fact store → PromptBuilder
 → selected provider adapter (OpenCode/Codex/Agy) → second_agent
@@ -86,7 +90,7 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 
 | Requirement | Notes |
 |---|---|
-| Python 3.10+ | the `X \| None` syntax is used throughout the code. `main.py`, `install.py` and `check.py` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks run the interpreter `install.py` pinned in `~/.claude/hooks/python.path` (the one it ran under and installed the requirements into, also named by generated `.workflow/*.sh`); without that file they pick one by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.10 is skipped, and with none of them the hook fails open |
+| Python 3.10+ | the `X \| None` syntax is used throughout the code. `exoma`, `exoma install` and `exoma check` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks run the interpreter `exoma install` pinned in `~/.claude/hooks/python.path` (the one it ran under and installed the extras into, also named by generated `.workflow/*.sh`); without that file they pick one by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.10 is skipped, and with none of them the hook fails open |
 | `opencode` on `PATH` | only for delegated commands |
 | `git` on `PATH` | optional; used by `sweep` and the `syntax` verify mode |
 | Runtime dependencies | **zero**; the whole runtime uses the standard library |
@@ -103,24 +107,25 @@ git --version
 
 ---
 
-## Install (v3.9.0)
+## Install (v0.1.0)
 
 ### New team member — full sequence from scratch
 
-Four steps, run once per machine (except step 4, once per project):
+Three steps, run once per machine (except step 3, once per project):
 
 ```bash
-git clone <repo> && cd agent-workflow      # 1. get the tool
-python install.py --apply                  # 2. install the global agent config
-export AGENT_PATH="$PWD/main.py"           # 3. tell the runtime where main.py is
-                                           #    (make it permanent — see "Set AGENT_PATH")
-python main.py --command init --work-dir /path/to/your-project   # 4. per project
+uv tool install exoma                       # 1. get the tool (or: pip install exoma)
+exoma install --apply                       # 2. install the global agent config
+exoma init --work-dir /path/to/your-project # 3. per project
 ```
+
+`exoma` is also `python -m exoma`, with the same arguments. Every command accepts both the
+subcommand form (`exoma init`) and the flag form agent-workflow used (`exoma --command init`).
 
 Verify before using it:
 
 ```bash
-python install.py --check                  # bundle + global install
+exoma install --check                       # bundle + global install
 cd /path/to/your-project && bash .workflow/run.sh doctor    # every OS (Git Bash on Windows)
 ```
 
@@ -129,28 +134,30 @@ before continuing — a `NOT_READY` status means an entry point is genuinely bro
 not merely a style note.
 
 The entry scripts in `.workflow/` bake in absolute paths of the machine where `init` was run, so
-step 4 belongs to each person. Committing `.workflow/` to a shared repo will not
+step 3 belongs to each person. Committing `.workflow/` to a shared repo will not
 help anyone; `init` already adds it to `.gitignore`.
+
+Do not install Exoma and agent-workflow into the same `~/.claude`: both ship hooks and skills
+under the same names, and the last install wins.
 
 <a id="detail-installer"></a>
 ### Installer details
 
-Clone → run one script → configured.
+Install the package → run one command → configured.
 
 ```bash
-git clone <repo> && cd agent-workflow
-python install.py            # DRY RUN — show every change, write nothing
-python install.py --apply    # now writes
-python install.py --apply --only-command      # workflow active only through /.<command>
-python install.py --apply --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
-python install.py --check                     # check bundle + install (including the project when cwd has .workflow/)
-python install.py --rollback                  # dry run of the latest rollback
-python install.py --rollback --apply          # rollback after a hash preflight
-python install.py --uninstall                 # dry run: what would be removed
-python install.py --uninstall --apply         # remove, with a receipt (can be rolled back)
+exoma install            # DRY RUN — show every change, write nothing
+exoma install --apply    # now writes
+exoma install --apply --only-command      # workflow active only through /.<command>
+exoma install --apply --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
+exoma install --check                     # check bundle + install (including the project when cwd has .workflow/)
+exoma install --rollback                  # dry run of the latest rollback
+exoma install --rollback --apply          # rollback after a hash preflight
+exoma install --uninstall                 # dry run: what would be removed
+exoma install --uninstall --apply         # remove, with a receipt (can be rolled back)
 ```
 
-All `install.py` flags:
+All `exoma install` flags:
 
 | Flag | Effect | Writes? |
 |---|---|---|
@@ -160,7 +167,6 @@ All `install.py` flags:
 | `--auto-intent` | restore auto-intent mode | with `--apply` |
 | `--provider NAME` / `--model ID` | second agent choice for the seed (`--model` requires `--provider`) | with `--apply` |
 | `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser` | with `--apply` |
-| `--set-env` | persist `AGENT_PATH` (Windows: `HKCU\Environment`; POSIX: `~/.bashrc`/`~/.zshrc`) | with `--apply` |
 | `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | with `--apply` |
 | `--check` | drift report for the bundle, the global install, and the project when cwd has `.workflow/` | no |
 | `--rollback [ID]` | undo one install/uninstall from its receipt (default: latest) | with `--apply` |
@@ -169,9 +175,9 @@ All `install.py` flags:
 `AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
 install into a temporary HOME.
 
-Bundle drift (`--check`, and the `--apply` refusal) is computed in both directions: `dist/` files whose hash
-does not match or that are not recorded in `dist/manifest.json`, **and** manifest entries whose source file
-in `dist/config/` no longer exists. `doctor` (`checks.bundle_integrity`) first validates the shape of each
+Bundle drift (`--check`, and the `--apply` refusal) is computed in both directions: bundle files
+(`exoma/_bundle/config/`) whose hash does not match or that are not recorded in
+`exoma/_bundle/manifest.json`, **and** manifest entries whose source file no longer exists. `doctor` (`checks.bundle_integrity`) first validates the shape of each
 manifest entry: an entry that is not an object, lacks `path`, or lacks a 64-hex `sha256` makes the check
 stop with `error` + `malformed` (the entry indices), which `doctor` turns into an issue — not local
 install drift.
@@ -210,9 +216,10 @@ The receipt covers the global install targets and the bundle. Stateful init/upgr
 and adding `.workflow/` to `.gitignore` are not part of the installer rollback because they can
 hold session and project state that is unsafe to delete automatically.
 
-#### Seed `config/second_agent.seed.json`
+#### Seed `second_agent.seed.json`
 
-`config/second_agent.seed.json` is in `.gitignore`. The installer **rebuilds it on every
+`<data dir>/config/second_agent.seed.json` lives in the per-user data directory, outside any
+repository. The installer **rebuilds it on every
 `--apply`** from `second_agent.example.json` — this is the file `init` copies into each new
 `.workflow/second_agent.json` (`adapters/install/opencode_install._copy_provider_config`,
 with the example as the last fallback). The runtime itself never reads it: a project
@@ -230,12 +237,12 @@ Order in which the choice is determined:
 | `--apply` from a terminal, no seed yet | the installer **asks** for the provider, then the model |
 | non-interactive, no seed yet | `second_agent.example.json` is copied as is |
 
-The old `config/second_agent.json` (written once, never refreshed — the source of
+An old `second_agent.json` beside the seed (written once, never refreshed — the source of
 `opencode/mimo-v2.5-free` being copied into new projects) is renamed to
 `second_agent.json.retired`; its choice is **not** carried over and is mentioned in a warning.
 
 The non-interactive path is not an oversight: `tools/e2e/e2e_installer.py` and CI call
-`install.py` without stdin, and a prompt there would **hang** the run, not fail it.
+`exoma install` without stdin, and a prompt there would **hang** the run, not fail it.
 
 The prompt shows each provider along with whether its CLI is on `PATH` and whether it requires
 opt-in (`AI_PROXY_<PROVIDER>_OPT_IN`), then a shortlist of the selected provider's models with
@@ -248,16 +255,16 @@ The model is pinned to `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verif
 `sweep` is left alone. `routes` is edited per key via `_merge_routes` so that per-route `timeout_seconds`
 and `agent` are not discarded.
 
-The seed is **not** part of the install receipt, for the same reason as `--set-env`: a receipt entry without a
+The seed is **not** part of the install receipt, because a receipt entry without a
 backup would be DELETED on `--rollback`, while this file holds user edits after it is
 created.
 
 `--check` reports it as a separate `second agent default:` line — `NOT SET`,
 `UNREADABLE`, or `<provider>, model=<id>` — and it is deliberately **outside** the drift count:
-this file has no counterpart in `dist/`, so it has no source to drift from, and its absence
+this file has no counterpart in the bundle, so it has no source to drift from, and its absence
 is not breakage (init still works via the example).
 
-When the installer is run from inside a project that already has `.workflow/`, it performs an **in-place upgrade**: the old workspace layout is migrated to `.workflow/data/` (with a backup), scripts are regenerated, the config version stamp is updated, `<project_root>/opencode.json` is refreshed, and `sessions/` is preserved. A new workspace is not scaffolded by the installer — use `python main.py --command init --work-dir DIR` (skill `/.init`). The workspace upgrade is refused while there is still an active job; the global install still completes and the warning must be checked.
+When the installer is run from inside a project that already has `.workflow/`, it performs an **in-place upgrade**: the old workspace layout is migrated to `.workflow/data/` (with a backup), scripts are regenerated, the config version stamp is updated, `<project_root>/opencode.json` is refreshed, and `sessions/` is preserved. A new workspace is not scaffolded by the installer — use `exoma init --work-dir DIR` (skill `/.init`). The workspace upgrade is refused while there is still an active job; the global install still completes and the warning must be checked.
 
 ### Statusline (second agent badge)
 
@@ -269,7 +276,7 @@ carries only `hooks` and `statusLine` — `model`, `enabledPlugins`,
 `extraKnownMarketplaces`, `effortLevel`, and `permissions.defaultMode` are no longer planted
 (those are preferences, not workflow requirements; ones already planted by old releases are left alone). Already have
 your own `statusLine` → yours wins, the badge does not appear, and the collision is reported in the
-install output. Delete that key and rerun `install.py --apply` if you want to use
+install output. Delete that key and rerun `exoma install --apply` if you want to use
 the shipped one.
 
 The script file itself follows the `~/.claude/hooks/*` rule in the table above: **replace**,
@@ -278,7 +285,7 @@ with a backup first. Have your own `workflow-statusline.sh` there → it is over
 `statusLine` key in `settings.json`, not the file in `hooks/`.
 
 ```
-agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k tok
+my-app | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k tok
 ```
 
 | part | meaning |
@@ -301,7 +308,7 @@ the project name — it never fails the prompt.
 `--fork-session`; SessionStart `source: fork`) give a new `MAIN_SESSION_ID` (`resume` reuses
 the old one), so all three return to zero together. A fork shares nothing at runtime with the
 session it came from — no plan, marker, token or execution — so `/.execute -y` in a fork needs
-its plan recorded there (DEC-068). That is deliberate:
+its plan recorded there. That is deliberate:
 a project-lifetime number next to a session number reads as a ratio that was never measured —
 right after `/clear`, the bar once read `Second Agent 0 | Saved 129.5k`.
 
@@ -372,7 +379,7 @@ Maintainer and e2e tools that run hooks or the runner also refuse (rather than g
 
 ### Uninstall
 
-`python install.py --uninstall` (dry run), then `--uninstall --apply`:
+`exoma install --uninstall` (dry run), then `--uninstall --apply`:
 
 - the `WORKFLOW-MAIN-AGENT` / `WORKFLOW-SECOND-AGENT` block is cut from CLAUDE.md and each
   AGENTS.md; user text above and below it stays. A file whose content is only that block is deleted;
@@ -397,9 +404,9 @@ markers are unpaired (START without END, END without START, END before START, or
 one block) are refused at install (action `refused` + a warning with the path and both markers) and
 left alone at uninstall.
 
-Not touched: `config/second_agent.seed.json`, `AGENT_PATH` from `--set-env`, and
+Not touched: the seed `second_agent.seed.json` and
 `.workflow/` in each project. All changes go through the same backup + receipt as install,
-so `python install.py --rollback --apply` undoes an uninstall.
+so `exoma install --rollback --apply` undoes an uninstall.
 
 ### Intent mode
 
@@ -417,7 +424,7 @@ follows the user's instructions outside the block (the user's CLAUDE.md, memory,
 to restore the default mode. Without either flag, an upgrade keeps the previous mode.
 
 A turn the user did not write is ignored by `intent-gate-set`: it neither sets a marker nor
-removes a marker set by a user prompt in the same turn (DEC-045, DEC-059). Claude Code sends such
+removes a marker set by a user prompt in the same turn. Claude Code sends such
 turns via `UserPromptSubmit` too. A turn counts as not the user's when its `source` is `system`,
 `loop_wakeup`, `schedule_wakeup` or `poll_event`; when it carries `agent_id` (it runs inside a
 subagent); or when, after any leading `<system-reminder>` blocks are removed, it is empty or
@@ -447,7 +454,7 @@ Only a command the user named arms the gate: the prefix typed at the start of th
 (`<command-name>/.analyze</command-name>`). A prompt that only resembles a delegated command
 under the NL map arms nothing and clears a pending marker; it gets an `[INTENT HINT]` as
 `additionalContext` naming the command and the runner call, and the prompt-level gate decides.
-Until DEC-068 any NL match armed the gate, so questions and descriptions ("saat saya analisa
+Before agent-workflow 3.9.0 any NL match armed the gate, so questions and descriptions ("saat saya analisa
 ...", a question that mentions playwright) blocked the main agent's own reply.
 
 The runner passes only when it is the command itself: the first word is this project's
@@ -479,7 +486,7 @@ For every `command` in the marker, Read of a skill definition also passes: an ab
 inside the real path of `~/.claude/skills`. A symlink may point anywhere inside the skill folder,
 not outside it. The reason: the Skill tool tells the agent to read `~/.claude/skills/<name>.md`
 after the prompt that invoked it has armed the gate, so the dispatch instructions would be locked
-until after dispatch (DEC-039). `~/...` and Git Bash's `/c/...` spellings are read as the shell
+until after dispatch. `~/...` and Git Bash's `/c/...` spellings are read as the shell
 reads them before the check. Grep/Glob over that folder, non-`.md` files, and relative
 paths are still blocked. A Read of a background task's output (`<temp>/claude.../tasks/<id>.output`,
 an existing file under the temp directory) passes too: that is where a delegation started in the
@@ -487,7 +494,7 @@ background returns its result. The layout is Claude Code's and undocumented; if 
 reads are gated again. `cat <file>` (`type`, `Get-Content`, `gc`) of one such file, bare or
 single-quoted with nothing else on the line, passes like the Read.
 
-For every `command` in the marker, a **precision Read** also passes (DEC-043): a file inside the
+For every `command` in the marker, a **precision Read** also passes: a file inside the
 project root (relative paths resolved against the root, symlinks followed), not under
 `.workflow/`, spanning at most 200 lines — `limit` a number 1–200, or no
 `limit` on a file that is itself ≤ 200 lines (files > 1 MB are not counted, so they do not pass). At
@@ -498,7 +505,7 @@ agent itself, not evidence gathering. A 3rd Read, a span > 200 lines, a large fi
 `limit`, a file outside the root, Grep, Glob, MCP, and shell are still blocked, and the block message
 cites this rule. A marker without `set_at` (not written by `intent-gate-set`) does not open this lane.
 
-`dist/config/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
+`src/exoma/_bundle/config/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
 `AUTO-INTENT`, each wrapped in `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->` markers.
 That file is the source before trimming, not the installed result. On `--apply`, the installer
 (`_apply_intent_mode`) drops the unselected mode stanza along with both modes' markers,
@@ -515,7 +522,7 @@ falls back to the default (opencode), so its boundary is still checked.
 
 ### Extractor (maintainer side)
 
-`dist/` is generated from the maintainer's live config:
+The bundle (`src/exoma/_bundle/`) is bootstrapped from the maintainer's live config:
 
 ```bash
 python tools/maintain/extract_config.py --dry-run
@@ -526,7 +533,7 @@ Its security posture, in order of importance:
 
 1. **Allowlist, not blocklist.** The agent home contains `.credentials.json`, a `history.jsonl` of hundreds of KB, session transcripts, and project paths. A blocklist ships anything it forgot to name; an allowlist ships only what is named.
 2. **Fail closed on secrets.** Every byte is scanned for credential patterns. A single hit **aborts the whole run and writes nothing** — a warning would be read, ignored, then committed. A secret in git history is practically impossible to revoke.
-3. **Read-only.** The extractor never writes outside `dist/`.
+3. **Read-only.** The extractor never writes outside the bundle.
 
 Absolute paths are redacted to `{{HOME}}` / `{{PROJECT_ROOT}}`; the installer restores them.
 
@@ -539,7 +546,7 @@ python tools/e2e/e2e.py --full   # plus delegated commands: minutes + real quota
 
 `--full` is opt-in. Delegated commands use the same rate-limit budget the workflow itself needs; a suite that silently burns it is worse than no suite.
 
-The installer is tested against a **temporary HOME**, not the machine that produced `dist/` — installing onto the origin machine only proves idempotence, it never exercises the *create* path a new user faces.
+The installer is tested against a **temporary HOME**, not the machine that produced the bundle — installing onto the origin machine only proves idempotence, it never exercises the *create* path a new user faces.
 
 `SKIPPED` is not `PASS`, and is reported separately.
 
@@ -547,45 +554,19 @@ The installer is tested against a **temporary HOME**, not the machine that produ
 
 ## Bootstrap
 
-`main.py` lives in this repo, **not** in the target project. For the first init, the runtime needs to know where it is. After init, `.workflow/config.json` stores its absolute path, so `AGENT_PATH` is no longer required.
+The runtime is the installed `exoma` package, **not** something in the target project. Any
+shell that can run `exoma --version` (or `python -m exoma --version`) can bootstrap a project;
+no environment variable is needed. `init` records the interpreter and the directory holding the
+package in `.workflow/config.json`, so the runner scripts reach the same build afterwards.
 
-**Windows (persistent, run once):**
-
-```powershell
-[Environment]::SetEnvironmentVariable("AGENT_PATH", "C:/path/to/agent-workflow/main.py", "User")
-```
-
-Close and reopen the terminal so the variable takes effect.
-
-**Windows (current session only):**
-
-```powershell
-$env:AGENT_PATH = "C:/path/to/agent-workflow/main.py"
-```
-
-**macOS / Linux (persistent):**
-
-```bash
-echo 'export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"' >> ~/.bashrc   # or ~/.zshrc
-source ~/.bashrc
-```
-
-**macOS / Linux (current session only):**
-
-```bash
-export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"
-```
+`AGENT_PATH`, which agent-workflow used to locate a checkout's `main.py`, is not read. A source
+checkout of Exoma still runs as `exoma ...` from its root (a shim over `exoma.cli`).
 
 Verification:
 
 ```bash
-test -f "$AGENT_PATH" && echo OK
-python3 "$AGENT_PATH" --help
-```
-
-```powershell
-Test-Path $env:AGENT_PATH
-python $env:AGENT_PATH --help
+exoma --version
+python -m exoma --help
 ```
 
 ---
@@ -593,18 +574,14 @@ python $env:AGENT_PATH --help
 ## Init in the target project
 
 ```bash
-python3 "$AGENT_PATH" --command init --work-dir /path/to/target-app --pretty
-```
-
-```powershell
-python $env:AGENT_PATH --command init --work-dir "C:/path/to/target-app" --pretty
+exoma init --work-dir /path/to/target-app --pretty
 ```
 
 `init` is idempotent: it creates the scaffolding that does not exist yet and regenerates the three runner scripts. A workspace created by an old build (different version or old layout) is upgraded directly by init; if a live job exists, the upgrade is skipped and the command to run is named.
 
-- `.workflow/config.json` — the absolute paths of `main.py`/`check.py`, so the runner can find the tool without relying on `AGENT_PATH`
+- `.workflow/config.json` — `runtime.python` (the interpreter) and `runtime.package_root` (the directory holding the `exoma` package), so the runner reaches this build without any environment variable
 - `.workflow/second_agent.json` — a project-local copy, which you may edit
-- runner scripts `run.sh` `inspect.sh` `check.sh` — bash on all OSes (Git Bash on Windows); there is no `.ps1` any more
+- runner scripts `run.sh` `inspect.sh` `check.sh` — bash on all OSes (Git Bash on Windows) that put `package_root` first on `PYTHONPATH` and exec `<python> -m exoma`; there is no `.ps1` any more
 - an empty `.workflow/data/sessions/` — per-session state is created lazily on the first delegated call. All internal files (streams, store, cache, sessions, reports) are in `.workflow/data/`; the `.workflow/` root holds only the files you edit, the scripts, and `current/`
 - a `.workflow/` entry is added to the project root `.gitignore`
 
@@ -614,7 +591,7 @@ The `.sh` scripts are given the executable bit when created. If the repo is move
 chmod +x .workflow/*.sh
 ```
 
-**Portability limitation.** The scripts bake in **absolute paths from the machine where `init` was run** — the path to `main.py`, `--work-dir`, and the detected Python interpreter. None of them is portable across machines.
+**Portability limitation.** The scripts bake in **absolute paths from the machine where `init` was run** — the package root, `--work-dir`, and the detected Python interpreter. None of them is portable across machines.
 
 Paths are written with forward slashes (`C:/...` on Windows), which both Git Bash and Windows Python read. `init`/`upgrade` **delete** `run.ps1`/`inspect.ps1`/`check.ps1` left over from old builds: no generator maintains them any more and the gate does not let calls to them through, so keeping them only makes them look usable. A `run.sh` from another machine still contains that machine's absolute paths. Every team member runs `init` (or `upgrade`) themselves in their own environment; that also applies when moving between WSL and native Windows.
 
@@ -622,27 +599,24 @@ Paths are written with forward slashes (`C:/...` on Windows), which both Git Bas
 
 ## Workspace upgrade
 
-The recommended path after pulling a new agent-workflow version:
+The recommended path after updating Exoma (`uv tool upgrade exoma` or `pip install -U exoma`):
 
 ```bash
-cd /path/to/target-app && python /path/to/agent-workflow/install.py --apply
+cd /path/to/target-app && exoma install --apply
 ```
 
 That command updates the global config and upgrades the workspace in the cwd. A project that does not
 have `.workflow/` yet is scaffolded via `init`, not the installer. For the workspace only:
 
 ```bash
-python3 "$AGENT_PATH" --command upgrade --work-dir /path/to/target-app --pretty
-```
-
-```powershell
-python $env:AGENT_PATH --command upgrade --work-dir "C:/path/to/target-app" --pretty
+exoma upgrade --work-dir /path/to/target-app --pretty
 ```
 
 `upgrade`:
 
 - refuses to run while a delegated job is active;
-- regenerates the runner scripts and repoints the tool paths;
+- regenerates the runner scripts and repoints `runtime.python`/`runtime.package_root` at the running build;
+- takes over a workspace agent-workflow wrote: `runtime.agent_workflow_path`, `main_py_path`, `check_py_path` and `tool_dir` are removed, and the scripts call `-m exoma` instead of a checkout's `main.py`;
 - migrates the v3.4.2 keys (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) once, moving their values;
 - **layout migration** (once): the internal contents of `.workflow/` are moved to `.workflow/data/` after a backup to `data/backups/<stamp>/` (the last 3 are kept), archived evidence paths are rewritten, old leftovers (`state.json`, `runtime/`, `logs/`, locks) are deleted, an object-format `secrets.json` is converted to a list. Contents are first moved to the staging `.workflow/data.migrating/` and then renamed to `data/` in a single step. Staging left over from an interrupted attempt is restored first; if it contains a name that also exists in the `.workflow` root, the upgrade stops with `MigrationConflict` and **moves nothing** — keep one copy of each entry (compare them first), delete the other, then rerun `upgrade`. After that check, a failure has three distinct outcomes:
   - **failure before the rename, clean rollback** → everything is returned to `.workflow/`, the backup is kept as `.workflow/migration-backup-*`, message `workspace migration failed and was rolled back`;
@@ -700,25 +674,25 @@ Second_agent only supplies evidence and reasoning. The runtime does not create o
 <a id="kontrak-lapisan-prompt"></a>
 ### Prompt-layer contracts
 
-The contracts below live in `dist/config/claude/CLAUDE.md` and its skills
-(`dist/config/claude/skills/*.md`), not in Python. The runtime never sees the raw user message
+The contracts below live in `src/exoma/_bundle/config/claude/CLAUDE.md` and its skills
+(`src/exoma/_bundle/config/claude/skills/*.md`), not in Python. The runtime never sees the raw user message
 or main_agent's final answer, so the one enforcing these contracts is main_agent
-itself. The partial exceptions are the pre-flight gate and, since 3.9.0, the execute chain
+itself. The partial exceptions are the pre-flight gate and, since agent-workflow 3.9.0, the execute chain
 ([Plan and execution state](#plan-and-execution-state)), both also enforced by the host agent's hooks. The per-contract reason why Python cannot enforce them: `docs/runtime-contracts.md`,
 section "Contracts the runtime cannot enforce".
 
 | Contract | Content | Enforcer | Source |
 |---|---|---|---|
 | Intent mode | One of two, chosen by the installer. `AUTO-INTENT`: natural language is mapped to a command and announced with one `[INTENT]` line without waiting for an answer. `COMMAND-ONLY`: commands run only via the `/.` prefix; no prefix = ordinary conversation, may suggest one line and then stop | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; see [Intent mode](#intent-mode) |
-| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `dist/config/claude/hooks/intent-map.json` |
+| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `src/exoma/_bundle/config/claude/hooks/intent-map.json` |
 | Output contract | Explore and `sweep`/`doctor` = RELAY the runtime result as is. Plan/analyze = SYNTHESIS by main_agent: three-part confidence (`problem_understanding`, `root_cause`, `solution_path`), per-claim attribution, `open_questions` kept separate from `uncertainty`. Required fields are still shown even when empty, with the reason | main_agent | `CLAUDE.md`, "Output Contract" and "Plan/analysis output" |
 | `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
-| New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` (DEC-046) |
-| `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent; since 3.9.0 also runtime + hooks: `execute-begin` needs the recorded plan and the `-y` token, `execution-gate` blocks Edit/Write outside the scope | `skills/execute.md`, `skills/plan.md` STEP 3; [Plan and execution state](#plan-and-execution-state) |
+| New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` |
+| `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent; since agent-workflow 3.9.0 also runtime + hooks: `execute-begin` needs the recorded plan and the `-y` token, `execution-gate` blocks Edit/Write outside the scope | `skills/execute.md`, `skills/plan.md` STEP 3; [Plan and execution state](#plan-and-execution-state) |
 | Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent; the `status-guard` Stop hook warns when the `[EXECUTION RESULT]` fields claim more than `verification: not_run` allows | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
 | Proxy failure | `ok:false`, an invalid-evidence `error_type`, or content that is not evidence → stop, print `[PROXY GAGAL] …`, ask whether to continue with `/.local` (yes/no), then wait. Automatic local fallback is forbidden | main_agent | `CLAUDE.md`, "Proxy failure" |
-| Destructive actions | Commit, delete, or writing outside the project must not run from a guessed intent; confirmation is required. Writing to another project (Edit/Write or Bash/script) needs explicit approval for that path. Since 3.9.0 the `execution-gate` hook blocks Edit/Write outside the root unless the path is in `policies.write_allowed_outside_root`; Bash/script writes are not checked (see [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" and "Global Forbidden" |
-| `/.commit` staging | An existing staged set is used as is. With nothing staged, main_agent stages changed tracked files and untracked files Git does not ignore, one quoted path per argument (never `-A` or `.`), and skips a path whose lowercased, `/`-separated form matches the canonical secret-file list of `core/policy/secret_patterns.py` (`SECRET_READ_PATTERNS`, minus `SECRET_READ_ALLOWLIST`), the same list the providers' read boundary uses; a test keeps the skill's copy identical. It shows staged, newly tracked, and skipped paths with the message, and commits only on `yes`; `no` unstages only what it staged (`git reset -q --`, which also works before the first commit). The skip list is a prompt rule over file names, not a content scanner | main_agent | `skills/commit.md` (DEC-060, DEC-061) |
+| Destructive actions | Commit, delete, or writing outside the project must not run from a guessed intent; confirmation is required. Writing to another project (Edit/Write or Bash/script) needs explicit approval for that path. Since agent-workflow 3.9.0 the `execution-gate` hook blocks Edit/Write outside the root unless the path is in `policies.write_allowed_outside_root`; Bash/script writes are not checked (see [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" and "Global Forbidden" |
+| `/.commit` staging | An existing staged set is used as is. With nothing staged, main_agent stages changed tracked files and untracked files Git does not ignore, one quoted path per argument (never `-A` or `.`), and skips a path whose lowercased, `/`-separated form matches the canonical secret-file list of `core/policy/secret_patterns.py` (`SECRET_READ_PATTERNS`, minus `SECRET_READ_ALLOWLIST`), the same list the providers' read boundary uses; a test keeps the skill's copy identical. It shows staged, newly tracked, and skipped paths with the message, and commits only on `yes`; `no` unstages only what it staged (`git reset -q --`, which also works before the first commit). The skip list is a prompt rule over file names, not a content scanner | main_agent | `skills/commit.md` |
 
 The exact content stays in the source files; this table is a map, not a copy. When a source file and this
 table differ, fix one of them in the same change.
@@ -735,7 +709,7 @@ table differ, fix one of them in the same change.
 | `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays), old sessions |
 | `inspect` | local | — | list jobs for the current session |
 | `provider` | local | — | read/change the second_agent provider and reasoning effort; picker with no arguments, direct with `<provider> <model> [effort] [routes]` |
-| `report` | local | — | summary of the workspace quality stream (`quality.jsonl`), including `e2e` (runs), `e2e.drafts` (drafts), and `graph_refresh` (Stop hook graph cost per outcome), and from `usage.jsonl`: `evidence_reuse` (explore/analyze/plan commands served by a stored artifact divided by commands eligible for reuse, continuations counted once; `by_outcome` breaks it down per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, and `unrecorded` for rows before contract v3), `facts` (fact lifecycle summed per exploration/reasoning command: `candidates`, `injected`, `rejected_stale`, `rejected_irrelevant`, `ingested`, `ingest_rejected`, `injection_rate`, `stale_rate`; commands recorded before 3.9.0 count as `unrecorded_commands`), `provider_cache` (cached-input share of the provider's measured input: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; rows whose adapter does not report `resumed` are not included in the two thread buckets), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, and `thread_changed` = a resume call answered in a different thread, a sign the session lost state; rows before contract v3 are not counted), `by_effort` (per `<command>/<effort>`: command count, median duration, median input/output tokens — each median only from commands whose value was measured, unmeasured output is not counted as zero; `default` = no effort flag; rows before contract v3 are not counted), and `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); and from `tasks.jsonl`: `tasks` (see [Task telemetry](#task-telemetry)); and `provenance` (metric registry version, version of each `runtime.*` metric, tool commit, stream content hash — definitions in [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
+| `report` | local | — | summary of the workspace quality stream (`quality.jsonl`), including `e2e` (runs), `e2e.drafts` (drafts), and `graph_refresh` (Stop hook graph cost per outcome), and from `usage.jsonl`: `evidence_reuse` (explore/analyze/plan commands served by a stored artifact divided by commands eligible for reuse, continuations counted once; `by_outcome` breaks it down per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, and `unrecorded` for rows before contract v3), `facts` (fact lifecycle summed per exploration/reasoning command: `candidates`, `injected`, `rejected_stale`, `rejected_irrelevant`, `ingested`, `ingest_rejected`, `injection_rate`, `stale_rate`; commands recorded before agent-workflow 3.9.0 count as `unrecorded_commands`), `provider_cache` (cached-input share of the provider's measured input: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; rows whose adapter does not report `resumed` are not included in the two thread buckets), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, and `thread_changed` = a resume call answered in a different thread, a sign the session lost state; rows before contract v3 are not counted), `by_effort` (per `<command>/<effort>`: command count, median duration, median input/output tokens — each median only from commands whose value was measured, unmeasured output is not counted as zero; `default` = no effort flag; rows before contract v3 are not counted), and `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); and from `tasks.jsonl`: `tasks` (see [Task telemetry](#task-telemetry)); and `provenance` (metric registry version, version of each `runtime.*` metric, tool commit, stream content hash — definitions in [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
 | `audit` | local | — | read the session's `audit.jsonl` |
 | `graph-meta` | local | — | graphify snapshot status: fresh, stale, or absent |
 | `explore` | delegated | yes | codebase map, entry points, owners |
@@ -762,7 +736,7 @@ table differ, fix one of them in the same change.
 
 ³ `verify-browser` is a **delegated** command: it is registered in the DELEGATED registry and goes through the pre-flight gate like `explore`/`plan`/`analyze`/`verify`. It reads the **per-session request** (`.workflow/data/sessions/<session>/e2e/request.json`) on top of the project defaults from the `e2e` section in `config.json`. The work is split into three stages: second_agent drafts the spec (stage 1) and reviews the browser evidence (stage 3); in between, the **runtime player** — a child process run by the runtime (`python -m core.evidence.e2e.player`) — drives Playwright (stage 2). Neither main_agent nor second_agent runs the browser (read-only sandbox). The interview happens in main_agent only after the draft reports that the target is not configured yet. The `draft` stage carries no verdict; the `run` stage is finalized as `verify`, so its verdict and exit code match other verifications. An `[E2E SPEC]` section that fails validation gets one repair in the same provider thread (`meta.e2e.repair`); the only test attribute is `data-e2e`, via the `e2e` selector key — `testid` is rejected (**breaking**); the `repeat_failure` brake releases by itself when the project (outside `.workflow/`, via Git) or the runtime (`TOOL_VERSION` + the code digest of `core/evidence/e2e/`) has changed since the last failure, the `app` bucket streak only grows for failures with the same signature (page, field, condition), and it is recorded as `repeat_failure` knowledge for the next draft. Credential values typed literally in the task, draft, or `request.json` are found via a `secrets.json` lookup and turned back into `${NAME}` (`request.json` is rewritten; key names are reported in `meta.e2e.secret_literals`, values never are), and a `fill` into a password field without a placeholder → `spec_invalid`; failures caused by the scenario itself — a guessed selector that misses, any selector that matches >1 element, a write/navigation rejected by the run policy — have origin `scenario` and end as `incomplete: scenario_error`, are not retried, and do not count toward the brake; every non-pass run and every brake refusal carries `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), and reusable causes are stored as `failure_hint` knowledge; every draft writes a `kind: e2e_draft` row (validator error category, repair result) that `--command report` summarizes in `e2e.drafts`. Network: every run always records metadata of all page requests (order, URL without query, type, status, timing, size; no body/headers/cookies), the latest 500 rows plus a summary over all requests, in `report.json` → `network` and `meta.e2e.page_requests`, including `since_last_run` (changes compared with the previous run on the same origin). Selector order: candidates follow role+name > label > e2e > text > css, except two kinds that may lead — an `e2e` with `source` provenance and a `path:line` ref, and a `proven` selector recorded in browser knowledge for the origin, the route (the last `goto` path, identifier segments become `:id`: `/users/123` and `/users/456` are one route), and that step's `within` (checked against the store; a `proven` claim without basis or on another route/scope → `spec_invalid`); a `proven` selector that misses drops to the normal order, two consecutive runs that miss retire it (one run weakens an entry at most once); a step that fails after its selector matched is not a miss; a pass is recorded only from a run that passed on the first attempt. Network URLs are cleaned of `;…` path parameters and token-shaped segments (16+ alphanumerics without separators, 16+ mixed upper/lower case, 24+ with digits) to `:id`. Full contract: `docs/runtime-contracts.md`, section `/.verify-browser`.
 
-There is no Python `execute` command that writes code: `/.execute -y` remains a main_agent command, and writing code is deliberately not delegated to the runtime or second_agent. What the runtime holds since 3.9.0 is the execution's **state** — `execute-begin` / `execute-end` and the hooks that read it.
+There is no Python `execute` command that writes code: `/.execute -y` remains a main_agent command, and writing code is deliberately not delegated to the runtime or second_agent. What the runtime holds since agent-workflow 3.9.0 is the execution's **state** — `execute-begin` / `execute-end` and the hooks that read it.
 
 ---
 
@@ -772,11 +746,11 @@ There is no Python `execute` command that writes code: `/.execute -y` remains a 
 Useful for debugging; the normal flow only needs the runner script. For the same blocking behavior as the runner, use `await`:
 
 ```bash
-python3 main.py -c await --job-command explore -p "find the auth entry point" -s "main_app_20260723_090000" -w /path/to/target-app --pretty
+exoma -c await --job-command explore -p "find the auth entry point" -s "main_app_20260723_090000" -w /path/to/target-app --pretty
 ```
 
 ```powershell
-python main.py -c await --job-command explore -p "find the auth entry point" -s "main_app_20260723_090000" -w "C:/path/to/target-app" --pretty
+exoma -c await --job-command explore -p "find the auth entry point" -s "main_app_20260723_090000" -w "C:/path/to/target-app" --pretty
 ```
 
 Calling `-c explore`, `plan`, `analyze`, `verify`, or `verify-browser` directly only performs
@@ -829,7 +803,7 @@ The following keys actually change the Python runtime's (or a shipped hook's) be
 | `policies.knowledge_dir` | `"docs/project-knowledge"` | location of knowledge documents, relative to the project root; an absolute path, `..`, or a symlink resolving outside the root is refused (`knowledge_path_escape`). The only workflow artifact that is **tracked in Git** — its whole value lies in being shareable |
 | `policies.knowledge_relevant_limit` | `3` | maximum knowledge documents included in one delegated prompt. `0` turns off the knowledge sidecar |
 
-`commands.auto_verify_after_execute` is read and returned in `meta.policy`; main_agent acts on it. The execute path itself is runtime state since 3.9.0 — see [Plan and execution state](#plan-and-execution-state).
+`commands.auto_verify_after_execute` is read and returned in `meta.policy`; main_agent acts on it. The execute path itself is runtime state since agent-workflow 3.9.0 — see [Plan and execution state](#plan-and-execution-state).
 
 Other main_agent instruction keys: `commands.allow_analyze_to_plan`, `commands.allow_explore_to_plan`, `commands.auto_sweep_after_execute`, `policies.workflow_prefix`, `policies.chat_mode_for_plain_text`, `policies.fallback_requires_confirmation`, and `policies.max_active_job_per_session`.
 
@@ -844,7 +818,7 @@ The retired key `commands.autoverify` is migrated on upgrade. A typo in any othe
 
 This project-local adapter file may be changed per project. Its name follows the ROLE, not the vendor — since v3.4.3 the second_agent provider is chosen through config, so this file no longer assumes OpenCode. A v3.4.2 workspace that still uses `.workflow/opencode.json` is migrated once on `upgrade` (values moved, old keys deleted). Do not confuse it with `<project_root>/opencode.json` and `~/.config/opencode/opencode.json`, which genuinely belong to OpenCode itself and keep those names.
 
-At `init`, its source is `config/second_agent.seed.json` if present, or `config/second_agent.example.json` on a clean clone. This file MUST exist per project: without it (or if it does not parse) delegated commands are rejected, with no fallback to machine-level config. The loader fills in keys not yet stored with the source defaults in memory; `upgrade` writes them to the file additively. Its effective shape:
+At `init`, its source is the user's `second_agent.seed.json` if present, or the shipped `exoma/config/second_agent.example.json`. This file MUST exist per project: without it (or if it does not parse) delegated commands are rejected, with no fallback to machine-level config. The loader fills in keys not yet stored with the source defaults in memory; `upgrade` writes them to the file additively. Its effective shape:
 
 ```json
 {
@@ -891,7 +865,7 @@ The write side is reported separately. `doctor` writes `checks.second_agent_writ
 **Codex on Windows — its own OS sandbox.** Codex's Windows sandbox (`elevated` backend) can
 refuse to start a session: ``windows sandbox failed: elevated Windows sandbox requires effective
 `:root` read access``. In 3.8.0 this was observed on **resumed** threads while new threads
-worked (CASE-015; upstream regression openai/codex#46312, and #46114 when every thread
+worked (upstream regression openai/codex#46312, and #46114 when every thread
 fails). The runtime classifies it from stderr only (similar text in the agent's output, e.g. a file it read, does not trigger it) as `error_type: sandbox_unavailable` — not `unknown` —
 with an ordered `next_action`: start a new main session (`/clear` gives a new `MAIN_SESSION_ID` and a new
 codex thread) and rerun; if a new thread also fails, update codex and run
@@ -902,7 +876,7 @@ agent via `/.provider`. When what failed is a resume, the same error carries
 resume keeps failing. Resume sends the sandbox as `exec --sandbox read-only resume <id> …`
 (the `exec` flag before the subcommand), not `-c sandbox_mode=…`: that `-c` form, together with the
 deny-read profile, is what made resume get rejected on the codex releases listed in
-[Provider releases](#provider-releases) (CASE-021); the flag form resumes on the releases tested
+[Provider releases](#provider-releases); the flag form resumes on the releases tested
 there, and the write probe proves read-only still holds. The runtime does **not** downgrade the sandbox: the deny-read profile it sends
 needs the `elevated` backend, and choosing a weaker one (`[windows] sandbox = "unelevated"` in
 `~/.codex/config.toml`) is the user's decision. The codex version (`codex --version`, read once per
@@ -911,7 +885,7 @@ process) is recorded in `meta.provider_version`, in the usage row (`provider_ver
 
 Codex sends the same deny list as a `-c permissions.workflow.filesystem` flag on every call, but that flag stops nothing. Tested against codex-cli 0.147.0 in `exec` mode: denying `**` and `**/*` for `:workspace_roots` and then asking for a file in that root still returned its contents, exit 0. Codex reads by running a shell, and `--sandbox read-only` (together with `approval_policy="never"`, see above) restricts **writes**, not reads.
 
-This means a codex second_agent can read every file in the project you point it at, `.env` included. `init` reports this as `status: not_enforceable` with `permissions_enforced: 0`, and `dist/config/codex/AGENTS.md` tells its agent that avoiding secret files is its own obligation — an instruction, not enforcement.
+This means a codex second_agent can read every file in the project you point it at, `.env` included. `init` reports this as `status: not_enforceable` with `permissions_enforced: 0`, and `src/exoma/_bundle/config/codex/AGENTS.md` tells its agent that avoiding secret files is its own obligation — an instruction, not enforcement.
 
 Use `codex` when the project holds no secrets, or when you accept the risk. For a project whose secrets must stay unreadable to second_agent, use `opencode`.
 
@@ -942,7 +916,7 @@ still use the shortlist: both run on every delegated call, where spawning the CL
 expensive; a model outside the shortlist is treated there as "unknown" (effort kept).
 
 CLI missing, timeout (30 s), or unrecognized format → `models_source: static`, the shortlist
-is used. Live results are cached for 10 minutes in `<cache user>/agent-workflow/model-catalog.json`
+is used. Live results are cached for 10 minutes in `<cache user>/exoma/model-catalog.json`
 so that the catalog and apply within one picker session see the same list.
 `AI_PROXY_MODEL_CATALOG=static` turns off live reading.
 
@@ -951,7 +925,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v3.9.0):
+Reliability keys (v0.1.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -965,12 +939,12 @@ Reliability keys (v3.9.0):
 
 Per route is also possible: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 
-**Roles are not read from this file.** The command → role mapping is defined in code (`config/routing.py`), so it cannot be overridden via config.
+**Roles are not read from this file.** The command → role mapping is defined in code (`exoma/config/routing.py`), so it cannot be overridden via config.
 
 **Three retired keys.** `job_max_runtime_seconds`, `job_poll_timeout_seconds`, and
 `agent_workflow_path` used to be written to this file and were never read by anyone. All three
 are no longer written; their values come from `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`, the CLI
-`--poll-timeout`, and `.workflow/config.json → runtime.agent_workflow_path` (or `AGENT_PATH`).
+`--poll-timeout`, and `.workflow/config.json → runtime.python`/`runtime.package_root`.
 The upgrade to the `data/` layout (v3.6.0) drops retired keys from `config.json`; before that, `doctor` flags them
 `retired — never read` and they are safe to delete manually.
 
@@ -1015,11 +989,11 @@ With `policies.graph_leads_enabled: true`, the runtime reads `graphify-out/graph
 The Python runtime never runs `graphify init`, `build`, `watch`, or `update`. The only trigger of `graphify update` is the `graph-refresh` Stop hook in the Claude bundle (`.sh` launcher + `graph-refresh.py`); `CLAUDE.md` no longer asks the main agent to run it. The hook runs after `[EXECUTION RESULT]`, only when the graph already exists, is older than the sources, and the binary is available:
 
 - the mtime scan skips the skip directories before entering them, so its cost follows the number of sources, not the number of dependencies; directory names and extensions are matched case-insensitively. The runtime fingerprint uses the same extensions and skip directories: `__pycache__`, `.git`, `graphify-out`, `.workflow`, `node_modules`, `venv`, `.venv`, `site-packages`, `.tox`, `vendor`, `storage`, `dist`, `build`, `.next`, `coverage`, `target`;
-- stale graph → the hook creates `graphify-out/.refresh.lock` (`pid`, `token`, `started`, `beat`), starts a separate worker, then returns. The turn does not wait for graphify. The worker runs `graphify update` **with no time limit** and never kills it (DEC-042); while graphify runs, the worker rewrites `beat` (and `graphify_pid`) every 15 seconds, then records one row and deletes its own lock. `GRAPH_REFRESH_LIMIT_S` is no longer read. The hook hands the lock to the worker only while it still carries that hook's token, and if the worker has already finished and deleted it, the lock is not recreated. A stale lock is deleted only if its content is still the same when reread right before deletion; a lock that changed is treated as `skipped_running`, so two sessions do not run two refreshes at once;
-- graphify rewrites `graph.json` in place, so while the lock is held the runtime treats the graph as unavailable, and the main agent is asked to treat it as stale. The lock counts as held while its `beat` is < 120 seconds old, whatever the lock's age; a refresh of any length never reads as stale. A lock without `beat` (written before DEC-042) uses the old rule: pid alive and < 15 minutes old. A lock that exists but cannot be read counts as held while its mtime is < 120 seconds old. Every lock write goes to a temporary file and is then renamed;
+- stale graph → the hook creates `graphify-out/.refresh.lock` (`pid`, `token`, `started`, `beat`), starts a separate worker, then returns. The turn does not wait for graphify. The worker runs `graphify update` **with no time limit** and never kills it; while graphify runs, the worker rewrites `beat` (and `graphify_pid`) every 15 seconds, then records one row and deletes its own lock. `GRAPH_REFRESH_LIMIT_S` is no longer read. The hook hands the lock to the worker only while it still carries that hook's token, and if the worker has already finished and deleted it, the lock is not recreated. A stale lock is deleted only if its content is still the same when reread right before deletion; a lock that changed is treated as `skipped_running`, so two sessions do not run two refreshes at once;
+- graphify rewrites `graph.json` in place, so while the lock is held the runtime treats the graph as unavailable, and the main agent is asked to treat it as stale. The lock counts as held while its `beat` is < 120 seconds old, whatever the lock's age; a refresh of any length never reads as stale. A lock without `beat` (written before agent-workflow 3.9.0) uses the old rule: pid alive and < 15 minutes old. A lock that exists but cannot be read counts as held while its mtime is < 120 seconds old. Every lock write goes to a temporary file and is then renamed;
 - a hung graphify holds the graph for as long as its worker lives. `--command doctor` reports that lock (`checks.graph_refresh_lock`: `state`, `age`, `beat_age`, `pid`, `graphify_pid`) and gives advice when the refresh has been running ≥ 1 hour or the lock is stale; this is advice, not an issue, because the delegated flow still runs without leads. `--command clean` only deletes a stale lock (no `beat` within 120 seconds) and never kills a process: stop the graphify process yourself, wait for the lock to go stale, then run `clean`. If the worker dies while graphify is still alive, the lock goes stale within 120 seconds even though graphify may still be writing;
 - a refresh counts as `refreshed` when `graph.json` was rewritten and parses as JSON, whatever the exit code (graphify exits 1 on large graphs because of the HTML visualization); a rewrite that does not parse is recorded as `corrupt`;
-- every run that passes the first gate on a project that already has `graph.json` writes a `kind: graph_refresh` row to `.workflow/data/quality.jsonl` (when that directory exists) with `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `corrupt`, `error`; `timeout` only appears in rows from before DEC-042 and is still counted), `hook_ms` (what the turn paid), `scan_ms`, `files_visited`, `dirs_skipped`, and for a refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` summarizes it in `graph_refresh`.
+- every run that passes the first gate on a project that already has `graph.json` writes a `kind: graph_refresh` row to `.workflow/data/quality.jsonl` (when that directory exists) with `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `corrupt`, `error`; `timeout` only appears in older rows and is still counted), `hook_ms` (what the turn paid), `scan_ms`, `files_visited`, `dirs_skipped`, and for a refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` summarizes it in `graph_refresh`.
 
 The hook fails open, never rejects a response, never creates a new graph or runs `init`/`build`/`watch`. The Stop hook's outer timeout stays 60 seconds.
 
@@ -1031,14 +1005,14 @@ source file (same extensions and skip directories as above). A content change, a
 
 ## Task telemetry
 
-`--command report` → `tasks` reads `.workflow/data/tasks.jsonl` (DEC-015, revised by DEC-020). One task = a series of events within one MAIN_SESSION_ID, from its first event until a verify whose runtime-**derived** verdict is `pass` after that task edited files. A commit is the recommended next step, not the closer. Events are written by two parties, with no additional instructions in the prompt:
+`--command report` → `tasks` reads `.workflow/data/tasks.jsonl`. One task = a series of events within one MAIN_SESSION_ID, from its first event until a verify whose runtime-**derived** verdict is `pass` after that task edited files. A commit is the recommended next step, not the closer. Events are written by two parties, with no additional instructions in the prompt:
 
 - runtime: one event per delegated command (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). A verify event carries `verdict` (the one **declared** by the reply; `DONE` with a blocking finding counts as `NEEDS FIX`) and `derived` (the runtime-derived verdict: `pass`, `incomplete`, or `fail`). Only `derived: pass` closes a task; a `DONE` that the runtime considers `incomplete`, including because of `not_verified`, leaves the task `open`;
 - the `task-events` hook (`.sh` launcher + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): local skills invoked from the prompt (`/.<name>`) or via the `Skill` tool, files inside the project that were edited (not `.workflow/`/`.git/`), and commits as HEAD **moving between turns**. The session's first event stores a HEAD snapshot in `.workflow/data/task-hook/<claude_session_id>.head`; each `Stop` (or the next prompt, for commits made in a terminal between turns) records the commits since the snapshot — first-parent, oldest first, each with `paths` — then advances the snapshot. Events are v2 (`v: 2`). Before 3.8.0 this hook ran on every `Read` and `Bash` (twice for `Bash`); one PowerShell spawn is ~450 ms on Windows, while skills and commits only need to be read once per turn. Consequence: a skill loaded via `Read` without a prefix (natural-language auto-intent) is not recorded, and a commit is recorded at the end of the turn that made it, after the verify in that turn.
 
-States: `completed` (verify `derived: pass` with no edit afterwards, committed or not), `open` (has edits, not yet `pass` — committed or not), `read_only` (no edits), `unknown` (events without a session identity). An edit after `pass` opens a new task. A commit containing files of a task that just became `completed` goes into that task's `sequence`; a commit in an `open` task goes into its `sequence` without changing its state. Events from before DEC-020 do not carry `derived`, so their task stays `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (distinct commits none of whose copies is claimed by a task; a commit is marked as used only when claimed, so a copy recorded earlier by another session does not hide it from the session that made it), and `recent` (the last 10 tasks with `sequence`). This stream is separate from `usage.jsonl`: local skills and edits are not delegated calls and must not enter budget governance.
+States: `completed` (verify `derived: pass` with no edit afterwards, committed or not), `open` (has edits, not yet `pass` — committed or not), `read_only` (no edits), `unknown` (events without a session identity). An edit after `pass` opens a new task. A commit containing files of a task that just became `completed` goes into that task's `sequence`; a commit in an `open` task goes into its `sequence` without changing its state. Older events do not carry `derived`, so their task stays `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (distinct commits none of whose copies is claimed by a task; a commit is marked as used only when claimed, so a copy recorded earlier by another session does not hide it from the session that made it), and `recent` (the last 10 tasks with `sequence`). This stream is separate from `usage.jsonl`: local skills and edits are not delegated calls and must not enter budget governance.
 
-`--command report` → `rework` is computed from `usage.jsonl`, not from this stream: per `correlation_id`, the assessed verify rounds are ordered by `recorded_at`, and a group counts as rework only when a round that is not `pass` (`fail` or `incomplete`) is followed by another round; `extra_verification_rounds` = the rounds after the first failure. A plan verified per phase with all rounds `pass` is not rework (DEC-051, `runtime.rework@1` in [metrics](evaluation/metrics.md)).
+`--command report` → `rework` is computed from `usage.jsonl`, not from this stream: per `correlation_id`, the assessed verify rounds are ordered by `recorded_at`, and a group counts as rework only when a round that is not `pass` (`fail` or `incomplete`) is followed by another round; `extra_verification_rounds` = the rounds after the first failure. A plan verified per phase with all rounds `pass` is not rework (`runtime.rework@1` in [metrics](evaluation/metrics.md)).
 
 ---
 
@@ -1096,8 +1070,8 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   (`checks.verify_test_commands: empty`) because verify runs no tests and cannot `pass`.
   Under a verify intent, the gate hook lets main_agent read `git diff --name-only`/`--stat`,
   `.workflow/config.json`, and write `verify/tests.json` before `.workflow/run`. The reason: when the second agent also ran tests, codex
-  ran the whole suite (verify median up to 366 s, CASE-010) while opencode could not
-  run a single one and its verify became `incomplete` (CASE-009).
+  ran the whole suite (verify median up to 366 s) while opencode could not
+  run a single one and its verify became `incomplete`.
 - **`syntax`** — answered locally, without calling OpenCode at all. Checks staged, unstaged, and untracked files, including a repository with no commits: `.py` via in-process `compile()`, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. Python files also require the `pyflakes` name check; if the tool is not available, the result is `incomplete`. A Git discovery failure also yields `incomplete`, not `skipped`.
 
 Everything that cannot be checked is reported as it is, never counted as passing:
@@ -1121,7 +1095,7 @@ Each provider in `config/providers.py` names the CLI release this workflow versi
 (`stable_version`): opencode `1.19.3`, codex `0.163.0`, agy `1.1.13`. The runtime reads
 `<cli> --version` (`core/provider/versions.py`; the first line containing a semver, from stdout
 then stderr) at most once per process and stores it per user (`%LOCALAPPDATA%` or
-`$XDG_CACHE_HOME`/`~/.cache`, file `agent-workflow/provider-versions.json`), keyed by the executable's path,
+`$XDG_CACHE_HOME`/`~/.cache`, file `exoma/provider-versions.json`), keyed by the executable's path,
 mtime, and size, expiring after 24 hours; a CLI without a version is cached as `null`, a timeout is not
 cached. Every usage row that reaches the provider (single calls as well as each continuation row,
 all providers) carries `provider_version` and `provider_version_status`: `stable` (same), `untested` (another
@@ -1130,7 +1104,7 @@ release, including pre-releases), `unreadable` (the CLI did not answer). `doctor
 `untested`. It is advisory: the call still runs; nothing blocks the provider, and the installer
 only changes providers when asked to with `--update-providers`.
 
-`install.py --update-providers` (opt-in, DEC-057) brings each CLI to `stable_version`, never
+`exoma install --update-providers` (opt-in) brings each CLI to `stable_version`, never
 to a newer release. The dry run prints the plan per provider; `--apply` executes it
 after all files are installed. A provider is changed only when its bundle names an update method
 (`update` in `config/providers.py`: codex `@openai/codex`, opencode `opencode-ai`, both npm),
@@ -1154,12 +1128,12 @@ Going back to the stable release if calls fail after a provider is updated:
 | agy | the agy installer with that version |
 
 Codex releases 0.155.0 through 0.160.0 failed to resume threads on Windows with
-`sandbox_unavailable` (CASE-016) while the resume sandbox was sent via `-c sandbox_mode`;
+`sandbox_unavailable` while the resume sandbox was sent via `-c sandbox_mode`;
 the adapter now sends `exec --sandbox`, and resume works on the releases tested within that range
-(codex-cli 0.155.1 and 0.160.0, CASE-021).
+(codex-cli 0.155.1 and 0.160.0).
 `stable_version` moves only to a release that passed the live probe: codex 0.163.0 passed
 `codex-write-probe` (writes refused on a new and a resumed thread) and opencode 1.19.3 refused
-writes on a new and a resumed session, both on Windows (DEC-058).
+writes on a new and a resumed session, both on Windows.
 
 ---
 
@@ -1194,8 +1168,8 @@ Two claims are merged only when **all** guards agree: same `file`, same `categor
 
 ## Plan and execution state
 
-Since 3.9.0 the plan → `/.execute -y` → `/.verify` chain is runtime state in the session's
-`runtime/` directory (`core/runtime/execution.py`, DEC-067):
+Since agent-workflow 3.9.0 the plan → `/.execute -y` → `/.verify` chain is runtime state in the session's
+`runtime/` directory (`core/runtime/execution.py`):
 
 | Command | Reads | Writes | Refuses with |
 |---|---|---|---|
@@ -1227,7 +1201,7 @@ Hooks, governed by `policies.enforcement`:
   `[EXECUTION RESULT]` block claims more — `status` outside `implemented|partial|blocked`, or a
   `verification` other than `not_run` — gets a `systemMessage` warning. It reads those fields
   only, never prose: the word list it used before fired on "begitu selesai, saya lanjut" and on
-  every quoted digest (DEC-068). The block must be the reply's own: one quoted with `>`, inside
+  every quoted digest. The block must be the reply's own: one quoted with `>`, inside
   a code fence, or named mid-sentence is a relayed result and is not read. A reply with no
   `[EXECUTION RESULT]` is not judged. It never blocks.
 
@@ -1266,7 +1240,7 @@ telemetry only carries the count, length, and hash of argv.
 Clean up stale entries and duplicates:
 
 ```bash
-python3 main.py --command clean --work-dir /path/to/target-app --pretty
+exoma --command clean --work-dir /path/to/target-app --pretty
 ```
 
 ---
@@ -1310,12 +1284,18 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
       └─ reports/sweep.last.md
 ```
 
+`<data dir>` is the per-user data directory: `$EXOMA_HOME` when set, else
+`%LOCALAPPDATA%\exoma` (Windows), `~/Library/Application Support/exoma` (macOS), or
+`$XDG_DATA_HOME/exoma` / `~/.local/share/exoma` (Linux). It holds `storage/` (jobs, main-session
+cache) and `config/second_agent.seed.json`; never anything per project. Jobs an agent-workflow
+checkout recorded in its own `storage/` stay there: they belong to that runtime.
+
 Mutable state (`state`/`scope`/`cache`/`runtime`/`logs`) lives under `data/sessions/<id>/`, so two main_agents on the same project never overwrite each other. The `.workflow/` root holds only human-edited files plus scripts.
 
 The v3.5.x workspace layout (layout 1) stored the contents of `data/` directly in the `.workflow/` root; the runtime still reads it until `upgrade` moves it. Post-move steps (rewrite evidence paths, delete old leftovers, strip config, convert `secrets.json`, prune backups) are recorded in `data/.migration-pending.json`; if any of them fails, the next `upgrade` resumes from that step and `doctor` reports it as `migration incomplete`. A leftover `data.migrating/` whose names collide with the root is refused without moving anything.
 
-Async jobs are still stored in the tool repo under `storage/jobs/`. The default session ID cache is
-in `storage/main-sessions/` and is separated by a hash of the project root; the mapping to OpenCode
+Async jobs are stored per user under `<data dir>/storage/jobs/`. The default session ID cache is
+in `<data dir>/storage/main-sessions/` and is separated by a hash of the project root; the mapping to OpenCode
 session IDs is project-local in `.workflow/data/provider-sessions/`, so the same ID on
 two projects cannot resume each other's provider sessions.
 
@@ -1356,7 +1336,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v3.9.0)
+### Liveness worker (v0.1.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 
@@ -1368,7 +1348,7 @@ A live PID does **not** mean it is working. The worker therefore reports a heart
 
 When `alive-stalled`, the runtime sends a PING to a **new OpenCode session**, not the session suspected of hanging. The first probe runs as soon as the stalled status is seen, then repeats per `probe_recheck_seconds` while the job is still stalled. The current source default is `120` seconds, not one minute.
 
-The normal `await` path reads `stall_threshold_seconds`, `idle_stall_seconds`, and `probe_recheck_seconds` from the project config. The `check.py --wait` attach path currently uses the tool defaults for all three and a fixed probe cadence of 120 seconds; project tuning is not yet passed to the attach process.
+The normal `await` path reads `stall_threshold_seconds`, `idle_stall_seconds`, and `probe_recheck_seconds` from the project config. The `exoma check --wait` attach path currently uses the tool defaults for all three and a fixed probe cadence of 120 seconds; project tuning is not yet passed to the attach process.
 
 - probe answers → store `stalled_no_progress`, keep waiting;
 - provider refuses because of quota/rate limit → terminate the process tree, reap as `rate_limited`;
@@ -1421,8 +1401,8 @@ Use `python tools/e2e/e2e.py --full` if you want to add a real OpenCode smoke te
 Additional checks:
 
 ```bash
-python3 main.py --help
-python3 main.py --command doctor --work-dir . --pretty
+exoma --help
+exoma --command doctor --work-dir . --pretty
 ```
 
 ---
@@ -1486,23 +1466,12 @@ links to `#batasan-yang-diketahui` keep working.
 
 ---
 
-## Benchmark
-
-Moved to [`docs/evaluation/benchmark.md`](evaluation/benchmark.md). Real-use results
-(tasks that landed in `main`, fixes, prompts, context) are in
-[`docs/evaluation/real-use-benchmark.md`](evaluation/real-use-benchmark.md); status line
-telemetry in [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md).
-
----
-
 ## References
 
 - Release notes: [`CHANGELOG.md`](../CHANGELOG.md)
-- Canonical main_agent contract: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
-- Canonical second_agent contract: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
-- Runtime entry point: [`main.py`](../main.py)
-- Benchmark: [`docs/evaluation/benchmark.md`](evaluation/benchmark.md) (method as `H` + `EXP` in `docs/research/`)
+- Canonical main_agent contract: [`src/exoma/_bundle/config/claude/CLAUDE.md`](../src/exoma/_bundle/config/claude/CLAUDE.md)
+- Canonical second_agent contract: [`src/exoma/_bundle/config/opencode/AGENTS.md`](../src/exoma/_bundle/config/opencode/AGENTS.md)
+- Runtime entry point: [`src/exoma/cli.py`](../src/exoma/cli.py)
 - Architecture (verified diagrams): [`docs/architecture/`](architecture/README.md)
 - Limitations: [`docs/limitations.md`](limitations.md)
-- Evaluation (benchmark and telemetry): [`docs/evaluation/`](evaluation/README.md)
-- Research notes and design decisions: [`docs/research/`](research/README.md); research questions (`RQ`): [`docs/research/questions.md`](research/questions.md)
+- Metrics registry: [`docs/evaluation/metrics.md`](evaluation/metrics.md)

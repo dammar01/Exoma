@@ -14,7 +14,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.workspace.workspace_paths import _LEGACY_MARKERS, data_dir, is_legacy_layout, workflow_paths
+from exoma.core.workspace.workspace_paths import _LEGACY_MARKERS, data_dir, is_legacy_layout, workflow_paths
 from tests.checks.support import assert_true
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -25,9 +25,9 @@ _SCRIPT = re.compile(r"^(run|check|inspect)\.(ps1|sh)$")
 def _check_new_workspace_keeps_its_root_editable() -> None:
     import os
 
-    from core.evidence.contracts import UsageRecord
-    from core.evidence.runtime_io import write_audit_record, write_usage_record
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.evidence.contracts import UsageRecord
+    from exoma.core.evidence.runtime_io import write_audit_record, write_usage_record
+    from exoma.core.runtime.state import ensure_workflow_workspace
 
     root = Path(tempfile.mkdtemp(prefix="aw-layout-new-"))
     try:
@@ -53,8 +53,8 @@ def _check_new_workspace_keeps_its_root_editable() -> None:
 
 
 def _check_unmigrated_workspace_stays_where_its_data_is() -> None:
-    from core.evidence.contracts import UsageRecord
-    from core.evidence.runtime_io import write_usage_record
+    from exoma.core.evidence.contracts import UsageRecord
+    from exoma.core.evidence.runtime_io import write_usage_record
 
     root = Path(tempfile.mkdtemp(prefix="aw-layout-legacy-"))
     try:
@@ -73,7 +73,7 @@ def _check_unmigrated_workspace_stays_where_its_data_is() -> None:
 
 
 def _check_hooks_share_the_rule() -> None:
-    hooks = _REPO / "dist" / "config" / "claude" / "hooks"
+    hooks = _REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
     for name in ("intent-gate-set", "intent-gate-check", "workflow-statusline"):
         for suffix in ("py",):
             text = (hooks / f"{name}.{suffix}").read_text(encoding="utf-8")
@@ -91,7 +91,7 @@ def _check_hooks_share_the_rule() -> None:
 
 def _check_consumers_do_not_spell_the_root_layout() -> None:
     """Messages and tools that name a data path must name the one a migrated workspace has."""
-    for relative in ("adapters/providers/opencode_adapter.py", "adapters/providers/codex_adapter.py"):
+    for relative in ("src/exoma/adapters/providers/opencode_adapter.py", "src/exoma/adapters/providers/codex_adapter.py"):
         text = (_REPO / relative).read_text(encoding="utf-8")
         assert_true(
             ".workflow/sessions/" not in text and '".workflow" / "usage.jsonl"' not in text,

@@ -48,8 +48,8 @@ def promote_checks(report: Report) -> None:
     """Cover core/knowledge/: schema, deterministic store, freshness ladder, reconciler."""
     print("\n[PROMOTE] knowledge schema, determinism, freshness, reconciliation")
 
-    from core.knowledge import reconcile, retrieve, schema, store, verify
-    from core.runtime.config_defaults import knowledge_relevant_limit, production_branch
+    from exoma.core.knowledge import reconcile, retrieve, schema, store, verify
+    from exoma.core.runtime.config_defaults import knowledge_relevant_limit, production_branch
 
     root = Path(tempfile.mkdtemp(prefix="e2e-promote-"))
     (root / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
@@ -294,13 +294,13 @@ def promote_checks(report: Report) -> None:
     )
 
     # --- doctor readiness ---
-    from core.audit.diagnostics import run_doctor
+    from exoma.core.audit.diagnostics import run_doctor
 
     checks = run_doctor(root, "does-not-exist", "e2e-promote")["meta"].get("checks", {})
     if not checks:
         # run_doctor puts its checks in the report file, not the returned meta, on some
         # paths. Read them back from the written report rather than skipping the checks.
-        from core.workspace.workspace_paths import read_json_file, workflow_paths
+        from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
 
         report_path = workflow_paths(root, "e2e-promote")["doctor_report"]
         checks = read_json_file(report_path).get("checks", {}) if report_path.exists() else {}
@@ -370,7 +370,7 @@ def promote_checks(report: Report) -> None:
 
     # Every error_type the promote path can name has to be one make_error will accept.
     # Registering them one at a time is how the last six went missing; assert the set.
-    from core.evidence.contract import ERROR_TYPES
+    from exoma.core.evidence.contract import ERROR_TYPES
 
     promote_types = {
         "promote_input_missing",

@@ -1,6 +1,6 @@
 # Team guide
 
-Practical guidance for developers using `agent-workflow` with Claude Code. It explains how
+Practical guidance for developers using Exoma with Claude Code. It explains how
 and when to use it, not how it works inside; for exact behavior, follow the links into the
 [reference](../reference.md).
 
@@ -18,6 +18,6 @@ Read in this order:
 8. [measure-your-use.md](measure-your-use.md) — summarize weeks of your own sessions, and
    share the figures without sharing your projects.
 
-The one idea to take away: agent-workflow changes **who does the decomposition and
+The one idea to take away: Exoma changes **who does the decomposition and
 repository discovery**. If you still break every task into small instructions yourself, it
 will mostly feel like the agent you already had, only slower.

@@ -10,7 +10,7 @@ provider you select.
 | Shell commands restricted | **Yes**, read-only git allowlist | No | No |
 | Workspace mutation handling | Prevented | Prevented for writes | Detected after the fact |
 
-1. **The write boundary lives in the global configuration** installed by `install.py`
+1. **The write boundary lives in the global configuration** installed by `exoma install`
    ([installation](installation.md)). The project-local `opencode.json` covers secret-file
    *reads* only.
 2. **`codex` passes filesystem permission flags on every call, but their runtime effect is

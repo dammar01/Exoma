@@ -12,9 +12,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import main
-from core.runtime import execution
-from core.workspace.workspace_paths import workflow_paths
+from exoma import cli as main
+from exoma.core.runtime import execution
+from exoma.core.workspace.workspace_paths import workflow_paths
 from tests.checks.support import assert_true
 
 

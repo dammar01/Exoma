@@ -28,12 +28,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from core.provider.executor import Executor  # noqa: E402
-from core.jobs.job_manager import JobManager  # noqa: E402
-from core.workspace.session_manager import SessionManager  # noqa: E402
-from core.runtime.upgrade import upgrade_workflow_workspace  # noqa: E402
-from core.workspace.workspace_paths import workflow_paths  # noqa: E402
-from adapters.providers.opencode_adapter import OpenCodeAdapter  # noqa: E402
+from exoma.core.provider.executor import Executor  # noqa: E402
+from exoma.core.jobs.job_manager import JobManager  # noqa: E402
+from exoma.core.workspace.session_manager import SessionManager  # noqa: E402
+from exoma.core.runtime.upgrade import upgrade_workflow_workspace  # noqa: E402
+from exoma.core.workspace.workspace_paths import workflow_paths  # noqa: E402
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter  # noqa: E402
 
 clean_output = OpenCodeAdapter.clean_output
 extract_session_id = OpenCodeAdapter.extract_session_id
@@ -754,7 +754,7 @@ def simulate():
         )
 
         # --- S20 routing guard ----------------------------------------------------
-        from core.prompt.router import Router
+        from exoma.core.prompt.router import Router
 
         rejected = None
         try:
@@ -831,7 +831,7 @@ def simulate():
         # on `verify` with a clean review; the player is the shipped fake. Same entry
         # point as every other flow (`main.run`), so the lock, the finaliser, and the exit
         # code are the real ones. Settings travel in the session's request file only.
-        from core.evidence.e2e.request import request_path
+        from exoma.core.evidence.e2e.request import request_path
 
         # The file E2E_SPEC cites: grounding refuses a spec whose references do not exist.
         login_source = project / "src" / "pages" / "Login.tsx"

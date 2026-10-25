@@ -22,9 +22,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from config.providers import PROVIDER_BUNDLES  # noqa: E402
-from config.settings import TOOL_VERSION  # noqa: E402
+from exoma.config.providers import PROVIDER_BUNDLES  # noqa: E402
+from exoma.config.settings import TOOL_VERSION  # noqa: E402
 
 # path -> substrings that mark a line as carrying the CURRENT version. A line is rewritten
 # only when it contains one of them, so adding a new mention means adding it here too —
@@ -33,26 +34,26 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # The README carries the version only in its shields.io badge; the prose deliberately
     # does not, so a release bump touches one line here instead of five.
     "README.md": ("img.shields.io/badge/version-",),
+    # uv_build reads only a static version, so the package metadata is one more copy.
+    "pyproject.toml": ('version = "',),
     "docs/reference.md": (
-        "# agent-workflow v",
+        "# Exoma v",
         "## Install (v",
         "Reliability keys (v",
         "### Liveness worker (v",
     ),
-    "dist/config/claude/CLAUDE.md": (
+    "src/exoma/_bundle/config/claude/CLAUDE.md": (
         "# Claude Code — Personal Global Config (v",
         "WORKFLOW-MAIN-AGENT:START",
         "## Workflow Main Agent —",
     ),
-    "dist/config/claude/skills/doctor.md": (".workflow/config.json : v",),
-    "dist/config/claude/skills/help.md": (
+    "src/exoma/_bundle/config/claude/skills/doctor.md": (".workflow/config.json : v",),
+    "src/exoma/_bundle/config/claude/skills/help.md": (
         "description: Command reference v",
         "[COMMAND GUIDE — v",
     ),
-    "dist/config/claude/skills/init.md": ("generated: run/inspect/check",),
-    # A benchmark's system under test is pinned in its EXP record (`version_under_test`),
-    # never stamped: a SUT that follows TOOL_VERSION mid-measurement makes the numbers
-    # attributable to no version at all. docs/research/ is outside SCAN_PATHS for that reason.
+    "src/exoma/_bundle/config/claude/skills/init.md": ("generated: run/inspect/check",),
+    "src/exoma/_bundle/config/claude/commands/.help.md": ('description: "Command reference v',),
 }
 
 # Each provider's instruction file carries the same banner. Derived rather than listed so
@@ -60,7 +61,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
 # The title anchor stays loose ("Second Agent —" matches "# OpenCode Second Agent — v…")
 # because the provider's own name is in it.
 for _name, _bundle in PROVIDER_BUNDLES.items():
-    TARGETS[f"dist/config/{_name}/{_bundle['instructions'][0]}"] = (
+    TARGETS[f"src/exoma/_bundle/config/{_name}/{_bundle['instructions'][0]}"] = (
         "WORKFLOW-SECOND-AGENT:START",
         "Second Agent —",
     )
@@ -73,14 +74,18 @@ for _name, _bundle in PROVIDER_BUNDLES.items():
 # exemption was forgotten, edit a sentence about the past into a sentence about the present
 # — and the files most exposed to that are precisely the migration notes and changelog
 # entries someone reads to find out what changed. A noisy check is the cheaper failure.
-SCAN_PATHS: tuple[str, ...] = ("README.md", "docs/reference.md", "dist/config")
+SCAN_PATHS: tuple[str, ...] = ("README.md", "docs/reference.md", "src/exoma/_bundle/config")
 
 # Lines inside SCAN_PATHS allowed to carry a semver that is NOT TOOL_VERSION, keyed the
 # same way TARGETS is: path -> substrings. Two legitimate kinds live here.
 #   - history: a sentence about a past release must keep saying what it said.
 #   - somebody else's version: a third-party tool's release is not ours to stamp.
 EXEMPT: dict[str, tuple[str, ...]] = {
+    # Exoma is forked from agent-workflow; a sentence about an agent-workflow release names
+    # that project's version, not ours.
+    "README.md": ("agent-workflow 3.",),
     "docs/reference.md": (
+        "agent-workflow 3.",
         # The v3.4.2 -> v3.4.3 provider-key migration, described in the past tense.
         "migrates the v3.4.2 keys",
         "since v3.4.3 the second_agent provider",
@@ -105,7 +110,7 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "In 3.8.0 this was observed",
         "Before 3.8.0 this hook ran",
     ),
-    "dist/config/claude/settings.template.json": (
+    "src/exoma/_bundle/config/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.
         '"ref": "v',
     ),
@@ -137,7 +142,7 @@ def _scanned_files() -> list[Path]:
 
     Not restricted to `*.md`: a version can be written into a hook or a settings template
     as easily as into prose, and "only markdown was checked" is the kind of boundary that
-    reads as coverage without being it. `dist/manifest.json` sits outside SCAN_PATHS
+    reads as coverage without being it. `src/exoma/_bundle/manifest.json` sits outside SCAN_PATHS
     because `tools/maintain/gen_manifest.py --check` already owns it — two gates over one file
     disagree eventually, and that one hashes the whole bundle rather than guessing.
     """
@@ -194,7 +199,7 @@ def main() -> int:
             continue
         stale.append(f"{relative} ({changed} line(s))")
         if not check_only:
-            path.write_text(stamped, encoding="utf-8")
+            path.write_text(stamped, encoding="utf-8", newline="\n")
 
     if missing:
         print("[stamp_version] target file(s) missing:")

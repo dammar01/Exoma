@@ -39,7 +39,7 @@ def local_checks(report: Report) -> None:
         config_path = project / ".workflow" / "config.json"
         if config_path.exists():
             config = json.loads(config_path.read_text(encoding="utf-8"))
-            from config.settings import TOOL_VERSION
+            from exoma.config.settings import TOOL_VERSION
 
             report.check(
                 "config carries current version",
@@ -104,10 +104,10 @@ def local_checks(report: Report) -> None:
         shutil.rmtree(project, ignore_errors=True)
 
     # The shipped example is what a fresh clone actually installs.
-    from config.settings import load_provider_config
-    from core.prompt.router import Router
+    from exoma.config.settings import load_provider_config
+    from exoma.core.prompt.router import Router
 
-    example = REPO_ROOT / "config" / "second_agent.example.json"
+    example = REPO_ROOT / "src" / "exoma" / "config" / "second_agent.example.json"
     if example.exists():
         routes = Router(load_provider_config(example))
         models = [routes.route(c)["model"] for c in ("explore", "plan", "analyze")]
@@ -121,11 +121,11 @@ def local_checks(report: Report) -> None:
             "shipped example has no placeholder models", SKIP, "example missing"
         )
 
-    from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
-    from core.workspace.workspace_paths import CONFIG_VERSION
+    from exoma.config.settings import COMPONENT_VERSIONS, TOOL_VERSION
+    from exoma.core.workspace.workspace_paths import CONFIG_VERSION
 
     manifest = json.loads(
-        (REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8")
+        (REPO_ROOT / "src" / "exoma" / "_bundle" / "manifest.json").read_text(encoding="utf-8")
     )
     report.check(
         "release versions are synchronized",

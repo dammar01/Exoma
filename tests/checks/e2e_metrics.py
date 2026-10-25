@@ -8,10 +8,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.audit.telemetry import e2e_metrics, report, test_pass_rate
-from core.evidence.contracts import UsageRecord
-from core.evidence.runtime_io import write_quality_record, write_usage_record
-from core.runtime.state import ensure_workflow_workspace
+from exoma.core.audit.telemetry import e2e_metrics, report, test_pass_rate
+from exoma.core.evidence.contracts import UsageRecord
+from exoma.core.evidence.runtime_io import write_quality_record, write_usage_record
+from exoma.core.runtime.state import ensure_workflow_workspace
 from tests.checks.support import assert_true
 
 

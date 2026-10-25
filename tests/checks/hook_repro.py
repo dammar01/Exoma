@@ -22,9 +22,9 @@ import time
 from pathlib import Path
 
 from tests.checks.support import assert_true
-from utils import osutil
+from exoma.utils import osutil
 
-HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 BIG = 40_000  # past the 32767-character limit Windows puts on one environment variable
 
 
@@ -210,8 +210,8 @@ def _explicit_arming(r: _Repro) -> None:
 
 def _git_bash_env() -> None:
     """I: Windows installs name Git Bash to Claude Code; the user's own value wins."""
-    from installer import settings as installer_settings
-    from installer.base import Plan
+    from exoma.installer import settings as installer_settings
+    from exoma.installer.base import Plan
 
     env = installer_settings._git_bash_env()
     if osutil.IS_WINDOWS and osutil.find_bash():
@@ -228,8 +228,8 @@ def _git_bash_env() -> None:
 
 def _pin_beside_settings(r: _Repro) -> None:
     """K: the pin lands beside the settings.json being written, never in the real home."""
-    from installer import settings as installer_settings
-    from installer.base import Plan
+    from exoma.installer import settings as installer_settings
+    from exoma.installer.base import Plan
 
     real_pin = osutil.pinned_python_path()
     existed = real_pin.exists()
@@ -364,6 +364,6 @@ def check_repro_matrix() -> None:
         _runner_symlink(r)
         _pin_beside_settings(r)
         left = {p.name for p in HOOKS.iterdir() if p.name != "__pycache__"} - shipped
-        assert_true(not left, f"running the hooks wrote into dist/config/claude/hooks: {sorted(left)}")
+        assert_true(not left, f"running the hooks wrote into src/exoma/_bundle/config/claude/hooks: {sorted(left)}")
     finally:
         r.close()

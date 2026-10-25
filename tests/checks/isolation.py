@@ -10,8 +10,8 @@ from tests.checks.support import EXAMPLE_SEED, assert_true
 
 def _test_suite_ignores_the_machine_seed() -> None:
     """A workspace a test builds is seeded from the shipped example, never the local seed."""
-    from adapters.install.opencode_install import _copy_provider_config
-    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, WORKFLOW_DIRNAME
+    from exoma.adapters.install.opencode_install import _copy_provider_config
+    from exoma.core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, WORKFLOW_DIRNAME
 
     tool = Path(tempfile.mkdtemp(prefix="seed-tool-"))
     project = Path(tempfile.mkdtemp(prefix="seed-project-"))
@@ -24,7 +24,7 @@ def _test_suite_ignores_the_machine_seed() -> None:
             json.dumps({"provider": "opencode"}), encoding="utf-8"
         )
         (project / WORKFLOW_DIRNAME).mkdir()
-        _copy_provider_config(project, str(tool))
+        _copy_provider_config(project, tool / "config", tool / "config")
         copied = json.loads(
             (project / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME).read_text(encoding="utf-8")
         )

@@ -8,13 +8,13 @@ import threading
 import time
 from pathlib import Path
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -28,14 +28,14 @@ from tests.checks.support import (
 def _test_key_pattern_needs_a_left_boundary() -> None:
     """Kebab-case words that contain "sk-" are not keys; keys in any usual context still are.
 
-    `task-events-at-turn-boundaries` matched the openai-style pattern, so a research file name
-    in second-agent evidence came back as `ta[REDACTED:...]` and its anchor was lost.
+    `task-events-at-turn-boundaries` matched the openai-style pattern, so a file name in
+    second-agent evidence came back as `ta[REDACTED:...]` and its anchor was lost.
     """
-    from utils.redact import redact_value
+    from exoma.utils.redact import redact_value
 
     kept = (
-        "docs/research/decisions/DEC-021-task-events-at-turn-boundaries.yaml:17",
-        "DEC-045-task-notifications-do-not-arm-the-gate",
+        "docs/notes/task-events-at-turn-boundaries.md:17",
+        "task-notifications-do-not-arm-the-gate",
         "risk-assessment-for-the-release-gate",
         "a disk-usage-report-for-the-week",
     )

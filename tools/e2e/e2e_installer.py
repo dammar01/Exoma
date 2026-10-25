@@ -1,6 +1,6 @@
 """Installer behaviour against a throwaway HOME."""
 
-from config.providers import bundle_for, provider_home
+from exoma.config.providers import bundle_for, provider_home
 from tools.e2e.e2e_support import (
     Path,
     REPO_ROOT,
@@ -22,7 +22,7 @@ def _seed_project(project: Path, provider: str) -> None:
     instead of whatever this machine's config/second_agent.seed.json selected.
     """
     config = json.loads(
-        (REPO_ROOT / "config" / "second_agent.example.json").read_text(encoding="utf-8")
+        (REPO_ROOT / "src" / "exoma" / "config" / "second_agent.example.json").read_text(encoding="utf-8")
     )
     config["provider"] = provider
     (project / ".workflow").mkdir(parents=True, exist_ok=True)
@@ -37,18 +37,19 @@ def installer_checks(report: Report) -> None:
     """
     print("\n[INSTALLER] against a throwaway HOME")
 
-    if not (REPO_ROOT / "dist" / "manifest.json").exists():
-        report.record("installer dry run", SKIP, "dist/ not extracted")
+    if not (REPO_ROOT / "src" / "exoma" / "_bundle" / "manifest.json").exists():
+        report.record("installer dry run", SKIP, "bundle manifest missing")
         return
 
     fake_home = Path(tempfile.mkdtemp(prefix="e2e-home-"))
     env = {
         **os.environ,
-        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONPATH": str(REPO_ROOT / "src"),
         "PYTHONUTF8": "1",
         "USERPROFILE": str(fake_home),
         "HOME": str(fake_home),
         "AGENT_HOME": str(fake_home),
+        "EXOMA_HOME": str(fake_home / ".exoma"),
     }
     try:
         dry = subprocess.run(
@@ -134,7 +135,7 @@ def installer_checks(report: Report) -> None:
         intent_map = fake_home / ".claude" / "hooks" / "intent-map.json"
         report.check("intent-map.json installed", intent_map.exists())
         manifest = json.loads(
-            (REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8")
+            (REPO_ROOT / "src" / "exoma" / "_bundle" / "manifest.json").read_text(encoding="utf-8")
         )
         report.check(
             "manifest tracks intent-map.json",
@@ -519,10 +520,10 @@ def installer_checks(report: Report) -> None:
                     "-c",
                     "import json,sys,pathlib;"
                     "sys.path.insert(0, sys.argv[1]);"
-                    "from config.providers import provider_install_module;"
+                    "from exoma.config.providers import provider_install_module;"
                     "m = provider_install_module('codex');"
-                    "print(json.dumps(m.install_project_config(pathlib.Path(sys.argv[2]), sys.argv[1])))",
-                    str(REPO_ROOT),
+                    "print(json.dumps(m.install_project_config(pathlib.Path(sys.argv[2]))))",
+                    str(REPO_ROOT / "src"),
                     str(project),
                 ],
                 capture_output=True,
@@ -640,11 +641,12 @@ def installer_checks(report: Report) -> None:
     rollback_home = Path(tempfile.mkdtemp(prefix="e2e-rollback-home-"))
     rollback_env = {
         **os.environ,
-        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONPATH": str(REPO_ROOT / "src"),
         "PYTHONUTF8": "1",
         "USERPROFILE": str(rollback_home),
         "HOME": str(rollback_home),
         "AGENT_HOME": str(rollback_home),
+        "EXOMA_HOME": str(rollback_home / ".exoma"),
     }
     try:
         installed = subprocess.run(

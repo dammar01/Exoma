@@ -1,6 +1,6 @@
 # When to use it
 
-You do not have to route every task through agent-workflow. Choose per task.
+You do not have to route every task through Exoma. Choose per task.
 
 ## Use the coding agent directly when
 
@@ -9,7 +9,7 @@ You do not have to route every task through agent-workflow. Choose per task.
 - it is a trivial bug fix, rename, or copy change,
 - you need an answer in seconds.
 
-## Use agent-workflow when
+## Use Exoma when
 
 - the repository, or this part of it, is unfamiliar to you,
 - several modules are involved,
@@ -23,8 +23,8 @@ You do not have to route every task through agent-workflow. Choose per task.
 | Mode | You provide | What happens | Available |
 | --- | --- | --- | --- |
 | **Direct** | the exact change | the coding agent edits right away | yes |
-| **Assisted** | an objective and constraints | the workflow explores and plans; you answer open questions and explicitly approve `/.execute`; then `/.verify` | yes — this is how agent-workflow works today |
-| **Autonomous** | an outcome and constraints | explore, plan, implement, and verify without a checkpoint | **no** — `/.execute` always needs your explicit approval; it is an open research question ([RQ-09](../research/questions.md)) |
+| **Assisted** | an objective and constraints | the workflow explores and plans; you answer open questions and explicitly approve `/.execute`; then `/.verify` | yes — this is how Exoma works today |
+| **Autonomous** | an outcome and constraints | explore, plan, implement, and verify without a checkpoint | **no** — `/.execute` always needs your explicit approval; by design |
 
 ## Benefits and costs
 
@@ -46,13 +46,3 @@ cannot, start with the workflow.
 
 These are heuristics, not measured thresholds. Known limitations of the runtime:
 [limitations.md](../limitations.md).
-
-## How much of this is tested
-
-Each behavior choice is a decision record (`DEC-XXX`); each measurement is an experiment
-(`EXP-XXX`) testing a hypothesis (`H-XXX`). The
-[record inventory](../research/README.md#record-inventory) lists every one with its
-implementation and validation status, and
-[how to read it](../research/README.md#epistemic-status) explains the difference between
-`validated` (deliberately evaluated) and `observed` (used for real without a reported
-problem). Release notes name the records behind each change.

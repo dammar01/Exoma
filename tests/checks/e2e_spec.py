@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence.e2e.spec import (
+from exoma.core.evidence.e2e.spec import (
     SELECTOR_KEYS,
     SELECTOR_RANK,
     e2e_css,
@@ -281,7 +281,7 @@ def _test_e2e_spec_contract() -> None:
     for bad in ({"method": "GET", "path": "/items"}, {"method": "POST", "path": "items"}, {"method": "POST", "path": "/items?x=1"}, {"method": "POST", "path": "/items", "body": "{}"}):
         assert_true(any("request" in e for e in step_errors([dict(submit, request=bad)])), f"a malformed expected request is refused: {bad}")
     assert_true(any("sends none" in e for e in step_errors([{"action": "expect_url", "contains": "/", "claim_id": "login-valid-user", "request": {"method": "POST", "path": "/x"}}])), "an assertion sends no request")
-    from core.evidence.e2e.spec import request_path_matches
+    from exoma.core.evidence.e2e.spec import request_path_matches
 
     assert_true(request_path_matches("/items/:id", "/items/7") and request_path_matches("/items", "/items/"), "`:id` matches one segment, a trailing slash is the same path")
     assert_true(not request_path_matches("/items/:id", "/items") and not request_path_matches("/items/:id", "/items/7/edit") and not request_path_matches("/items", "/users"), "and nothing else")
@@ -379,7 +379,7 @@ def _test_e2e_spec_contract() -> None:
     assert_true(_SCENARIO["steps"][1]["value"] == "${E2E_USER}", "substitution never mutates the archived form")
 
     # Draft error taxonomy: the validator's own messages, counted by category.
-    from core.evidence.e2e.spec import DRAFT_ERROR_CATEGORY_NAMES, error_category
+    from exoma.core.evidence.e2e.spec import DRAFT_ERROR_CATEGORY_NAMES, error_category
 
     samples = {
         "[E2E SPEC] section missing": "section_missing",

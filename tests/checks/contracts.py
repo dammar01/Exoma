@@ -11,13 +11,13 @@ invisible if broken: `accepted=None` versus `accepted=False`, an absent duration
 zero one, and a reuse hit being recorded at all.
 """
 
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 import json
 import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence.contracts import (
+from exoma.core.evidence.contracts import (
     CONTRACT_VERSION,
     EvidenceBundle,
     RouteDecision,
@@ -27,10 +27,10 @@ from core.evidence.contracts import (
     correlation_id_for,
     usage_from_result,
 )
-from core.provider.executor import Executor
-from core.prompt.router import Router
-from core.evidence.runtime_io import write_usage_record
-from core.runtime.state import ensure_workflow_workspace
+from exoma.core.provider.executor import Executor
+from exoma.core.prompt.router import Router
+from exoma.core.evidence.runtime_io import write_usage_record
+from exoma.core.runtime.state import ensure_workflow_workspace
 from tests.checks.support import assert_true
 
 
@@ -388,7 +388,7 @@ def _finalize_is_idempotent() -> None:
     carries executor entries (evidence contract misses, task truncation), so a replace
     would fix the duplication by dropping them.
     """
-    from core.evidence.result_shaping import _finalize_verify_result
+    from exoma.core.evidence.result_shaping import _finalize_verify_result
 
     foreign = {"kind": "task_truncated", "detail": "120 chars cut from the instruction"}
     result = {
@@ -450,7 +450,7 @@ def _confidence_caps_keep_their_reasons() -> None:
     dependency graph used to record neither: the value needed no change, so the reason was
     dropped along with it, and the one signal saying why the run was weak never arrived.
     """
-    from core.evidence.contract import cap_confidence
+    from exoma.core.evidence.contract import cap_confidence
 
     already_low = cap_confidence({"confidence": "low"}, [("medium", "dependency graph is stale")])
     assert_true(
@@ -489,9 +489,9 @@ def _confidence_caps_keep_their_reasons() -> None:
 
 def _reused_evidence_reports_its_anchor_ratio() -> None:
     """A recalled digest says how much of it could be verified, in the block read first."""
-    from core.evidence import evidence_store
-    from core.evidence.runtime_io import write_response_snapshot
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence import evidence_store
+    from exoma.core.evidence.runtime_io import write_response_snapshot
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="anchor-ratio-"))
     try:
@@ -538,7 +538,7 @@ def _partial_anchor_evidence_is_priced_in() -> None:
     and the reader was told to read the digest FIRST and open the artifact only on a gap
     — so the one run whose gap most needed announcing was the one that announced nothing.
     """
-    from core.evidence.contract import anchor_cap, cap_confidence
+    from exoma.core.evidence.contract import anchor_cap, cap_confidence
 
     assert_true(
         anchor_cap(4, 4) is None and anchor_cap(0, 0) is None,
@@ -581,9 +581,9 @@ def _anchor_scan_reads_past_the_stored_prefix() -> None:
     The scan used to stop at 40, so a session's explore citing three nonexistent files
     after forty good ones reported `40/40 certified` and kept an uncapped confidence.
     """
-    from core.evidence import evidence_store
-    from core.evidence.contract import anchor_cap
-    from core.provider.executor import _anchor_counts
+    from exoma.core.evidence import evidence_store
+    from exoma.core.evidence.contract import anchor_cap
+    from exoma.core.provider.executor import _anchor_counts
 
     root = Path(tempfile.mkdtemp(prefix="anchor-scan-"))
     try:
@@ -647,7 +647,7 @@ def _anchor_scan_reads_past_the_stored_prefix() -> None:
             f"each claim says which of its refs this project can open: {claims}",
         )
 
-        from core.evidence.fact_store import _FILELINE
+        from exoma.core.evidence.fact_store import _FILELINE
 
         drive = "E:" + "\\" + "w" + "\\" + "r.py:16"
         shapes = {
@@ -675,7 +675,7 @@ def _anchor_scan_reads_past_the_stored_prefix() -> None:
 
 def _scope_gaps_cap_only_what_the_answer_needed() -> None:
     """Live state and external systems are disclosed, not priced in."""
-    from core.provider.result_prep import _scope_incomplete, scope_gaps, scope_warnings
+    from exoma.core.provider.result_prep import _scope_incomplete, scope_gaps, scope_warnings
 
     tagged = (
         "scope_not_covered:\n"

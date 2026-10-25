@@ -71,9 +71,8 @@ the per-call files live: [reference, command table](../reference.md#command) and
   proves only that files parse — **not** that the behavior is correct. The setting and what
   each mode checks: [verify modes in the reference](../reference.md#mode-verify).
 
-If a task is worth delegating but still too slow to be practical, say so: that feedback is
-recorded as research input ([research questions](../research/questions.md), RQ-04 and
-RQ-05) rather than dismissed.
+If a task is worth delegating but still too slow to be practical, say so in an issue: that
+feedback is worth more than a workaround.
 
 ## "It feels the same as the normal agent"
 

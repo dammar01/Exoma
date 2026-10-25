@@ -8,13 +8,13 @@ import threading
 import time
 from pathlib import Path
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,

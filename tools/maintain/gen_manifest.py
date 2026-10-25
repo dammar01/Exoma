@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate dist/manifest.json from the dist/ tree.
+"""Regenerate src/exoma/_bundle/manifest.json from the dist/ tree.
 
 dist/ is the canonical, Git-reviewed bundle; ~/.claude is an install target downstream of
 it. tools/maintain/extract_config.py still exists to *bootstrap* dist/ from a maintainer's ~/.claude,
@@ -10,7 +10,7 @@ hashing the same way extract_config.py does so the two stay interchangeable:
   sha256(read_text().encode("utf-8"))   # read_text normalises CRLF->LF (universal newlines)
 
 Usage:
-  python tools/maintain/gen_manifest.py            # rewrite dist/manifest.json
+  python tools/maintain/gen_manifest.py            # rewrite src/exoma/_bundle/manifest.json
   python tools/maintain/gen_manifest.py --check    # exit 1 if manifest is stale vs dist/
 """
 
@@ -23,10 +23,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from config.providers import PROVIDER_BUNDLES  # noqa: E402
+from exoma.config.providers import PROVIDER_BUNDLES  # noqa: E402
 
-DIST_DIR = REPO_ROOT / "dist"
+DIST_DIR = REPO_ROOT / "src" / "exoma" / "_bundle"
 DIST_CONFIG = DIST_DIR / "config"
 MANIFEST = DIST_DIR / "manifest.json"
 
@@ -140,7 +141,8 @@ def _component(rel: str) -> str:
 
 def _build() -> dict:
     sys.path.insert(0, str(REPO_ROOT))
-    from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from exoma.config.settings import COMPONENT_VERSIONS, TOOL_VERSION
 
     files_meta = []
     for rel in _dist_files():
@@ -170,10 +172,10 @@ def main() -> int:
     if check_only:
         current = MANIFEST.read_text(encoding="utf-8") if MANIFEST.exists() else ""
         if current == built:
-            print("[gen_manifest] OK — manifest in sync with dist/")
+            print("[gen_manifest] OK — manifest in sync with the bundle")
             return 0
         print(
-            "[gen_manifest] STALE — manifest does not match dist/. Run: python tools/maintain/gen_manifest.py"
+            "[gen_manifest] STALE — manifest does not match the bundle. Run: python tools/maintain/gen_manifest.py"
         )
         return 1
 

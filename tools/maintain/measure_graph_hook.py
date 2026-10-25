@@ -29,7 +29,7 @@ measurement on a real project.
   python tools/maintain/measure_graph_hook.py --project <root>
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale
-  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh --hook dist/config/claude/hooks/graph-refresh.sh
+  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh --hook src/exoma/_bundle/config/claude/hooks/graph-refresh.sh
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ import sys
 import time
 from pathlib import Path
 
-# The same lists as dist/config/claude/hooks/graph-refresh.py (a test parses both).
+# The same lists as src/exoma/_bundle/config/claude/hooks/graph-refresh.py (a test parses both).
 SOURCE_EXTENSIONS = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".php", ".go", ".rs", ".java", ".rb")
 SKIP_DIRS = frozenset({
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
@@ -179,7 +179,8 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
             raise SystemExit(f"hook not found: {hook}")
         # Git Bash on Windows (osutil.find_bash), as the installed settings run it.
         sys.path.insert(0, str(REPO_ROOT))
-        from utils.osutil import find_bash
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+        from exoma.utils.osutil import find_bash
 
         bash = find_bash()
         if not bash:

@@ -22,11 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Everything a user actually runs. `tools/` is included because init/upgrade shell out to
 # it, and `installer/` because it runs on the machine being set up.
-_SHIPPED = ("main.py", "check.py", "core", "config", "adapters", "utils", "tools", "installer")
+_SHIPPED = ("main.py", "check.py", "install.py", "src/exoma", "tools")
 
 # First-party package roots. Absolute imports of these are internal, not external.
 _INTERNAL = {
-    "main", "check", "core", "config", "adapters", "utils", "tools", "installer", "tests",
+    "exoma", "main", "check", "install", "tools", "tests",
 }
 
 _SKIP_PARTS = {"__pycache__", ".git", ".workflow", "graphify-out", "dist", "build"}
@@ -39,11 +39,7 @@ _SKIP_PARTS = {"__pycache__", ".git", ".workflow", "graphify-out", "dist", "buil
 # user could be surprised by", and a guarded lazy import is the one form that cannot
 # surprise anyone.
 _OPTIONAL_EXTRAS = {
-    "playwright": "core/evidence/e2e/",
-    # A development tool, not the runtime: research records are YAML, read only by the
-    # maintainer's check (requirements-dev.txt). Guarded like Playwright, so a runtime
-    # install without it still imports every shipped module.
-    "yaml": "tools/maintain/check_research.py",
+    "playwright": "src/exoma/core/evidence/e2e/",
 }
 _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 

@@ -8,21 +8,21 @@ import sys
 import tempfile
 from pathlib import Path
 
-from core.workspace.runtime_lock import (
+from exoma.core.workspace.runtime_lock import (
     _RuntimeTransitionGuard,
     acquire_runtime_lock,
     prune_runtime_guards,
     release_runtime_lock,
     remove_orphan_guard,
 )
-from core.workspace.workspace_paths import workflow_paths
+from exoma.core.workspace.workspace_paths import workflow_paths
 
 from tests.checks.support import assert_true
 
 _HOLD_GUARD = """
 import sys, time
 from pathlib import Path
-from core.workspace.runtime_lock import _RuntimeTransitionGuard
+from exoma.core.workspace.runtime_lock import _RuntimeTransitionGuard
 with _RuntimeTransitionGuard(Path(sys.argv[1])):
     print("held", flush=True)
     sys.stdin.readline()
@@ -76,7 +76,7 @@ def _test_runtime_guard_cleanup() -> None:
         holder = subprocess.Popen(
             [sys.executable, "-c", _HOLD_GUARD, str(held)],
             cwd=repo,
-            env={**os.environ, "PYTHONPATH": str(repo)},
+            env={**os.environ, "PYTHONPATH": str(repo / "src")},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,

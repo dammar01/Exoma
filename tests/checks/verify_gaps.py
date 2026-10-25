@@ -9,13 +9,13 @@ import threading
 import time
 from pathlib import Path
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -29,7 +29,7 @@ from tests.checks.support import (
 def _check_scope_width() -> None:
     """The working tree's width is measured, scoped only when a plan declared a scope, and
     called wide past the ceiling rather than at it."""
-    from core.evidence import quick_verify
+    from exoma.core.evidence import quick_verify
 
     repo = Path(tempfile.mkdtemp(prefix="scope-width-"))
     git = ["git", "-c", "user.email=t@example.test", "-c", "user.name=t"]
@@ -99,7 +99,7 @@ def _test_quick_verify_gaps() -> None:
     """Unavailable, deleted, and name-check failures cannot produce a pass verdict."""
     import shutil as _shutil
 
-    from core.evidence import quick_verify
+    from exoma.core.evidence import quick_verify
 
     _check_scope_width()
 
@@ -189,7 +189,7 @@ def _test_verification_routing() -> None:
     found nothing worth blocking still came back a failure — with the runtime naming a
     blocking finding it had just said belonged in notes.
     """
-    from core.evidence.contract import validate_verification_contract
+    from exoma.core.evidence.contract import validate_verification_contract
 
     def _report(section: str, finding: str) -> str:
         sections = {
@@ -259,7 +259,7 @@ def _test_empty_section_is_not_a_finding() -> None:
     asserted here too: it is what most reports use, and loosening the heading match must
     not quietly change it.
     """
-    from core.evidence.contract import _section_items, validate_verification_contract
+    from exoma.core.evidence.contract import _section_items, validate_verification_contract
 
     note = (
         "severity: low | origin: introduced | scope_relation: in_scope — checked "
@@ -380,14 +380,14 @@ def _test_empty_section_is_not_a_finding() -> None:
 
     # The browser reviewer's normalizer reads the same sentinel; it must not keep as a
     # finding what the validator above now drops.
-    from core.evidence.contract import _NONE_ITEM
+    from exoma.core.evidence.contract import _NONE_ITEM
 
     assert_true(
         not _NONE_ITEM.fullmatch("none - clean\ncaller X fails"),
         "text spanning lines is never a sentinel, whatever its first line says",
     )
 
-    from core.evidence.e2e.normalize import _reviewer_sections
+    from exoma.core.evidence.e2e.normalize import _reviewer_sections
 
     reviewed = _reviewer_sections(_report("\n- none; all clean", "\n- tidak ada"))
     assert_true(

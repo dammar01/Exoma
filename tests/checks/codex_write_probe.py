@@ -39,7 +39,7 @@ def _test_codex_sandbox_blocks_writes() -> None:
     if os.environ.get(PROBE_ENV) != "1":
         print(f"  codex-write-probe: skipped (set {PROBE_ENV}=1 to make a real codex call)")
         return
-    from adapters.providers.codex_adapter import CodexAdapter
+    from exoma.adapters.providers.codex_adapter import CodexAdapter
 
     adapter = CodexAdapter(timeout_seconds=300)
     if shutil.which(str(adapter.command)) is None:

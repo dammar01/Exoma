@@ -10,13 +10,13 @@ trail into a clean bill of health — an audit that reports 0 problems over 0 ro
 same output as one that reviewed a hundred calls and found nothing.
 """
 
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 import json
 import tempfile
 from pathlib import Path
 
-from core.audit.audit import load_audit, report
-from core.evidence.runtime_io import write_audit_record
+from exoma.core.audit.audit import load_audit, report
+from exoma.core.evidence.runtime_io import write_audit_record
 from tests.checks.support import assert_true
 
 

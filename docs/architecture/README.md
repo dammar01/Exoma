@@ -1,6 +1,6 @@
 # Architecture
 
-How a request moves through `agent-workflow`, verified against the source tree. The
+How a request moves through Exoma, verified against the source tree. The
 README image (`docs/assets/architecture.png`) is the illustrated overview; the diagram
 below is its text version, and the rest of this page is the authoritative detail (its
 steps 1–7 compress the 19 of the delegated path).
@@ -55,7 +55,7 @@ depends on the provider: see [Security](../security.md) and
     blocks gather tools)
  3 .workflow/run <cmd> <task> <session_id>
         │
-        └──────────► 4  runner ► main.py await --job-command
+        └──────────► 4  runner ► exoma await --job-command
                      5  submit ► JobManager (job record, heartbeat, recovery)
                         ► detached worker
                      6  main.run: session + runtime lock
@@ -90,7 +90,7 @@ validation result are added by the runtime after the adapter returns.
 
 | Step | Component | Source |
 | --- | --- | --- |
-| 2 | intent-gate hooks (Claude hook layer, not the Python runtime) | `dist/config/claude/hooks/intent-gate-{set,check}.*` |
+| 2 | intent-gate hooks (Claude hook layer, not the Python runtime) | `src/exoma/_bundle/config/claude/hooks/intent-gate-{set,check}.*` |
 | 4 | generated runner | `core/runtime/scripts.py` |
 | 5 | job submit, detached worker, await | `core/jobs/job_lifecycle.py`, `core/jobs/job_manager.py` |
 | 6 | session and runtime lock | `core/workspace/session_manager.py`, `core/workspace/runtime_lock.py` |
@@ -122,7 +122,7 @@ validation result are added by the runtime after the adapter returns.
 | --- | --- | --- | --- |
 | `.workflow/data/` | no | runtime | facts, evidence, usage, audit, redactions, graph-meta, graph-stale, sessions |
 | `.workflow/current/` | no | runtime | what is running now: session, progress, live browser-run events |
-| `storage/jobs/` in the tool checkout (`AGENT_PATH`) | no | JobManager | job records, heartbeat, logs |
+| `<data dir>/storage/jobs/` per user (`EXOMA_HOME`) | no | JobManager | job records, heartbeat, logs |
 | `graphify-out/graph.json` | project choice | external Graphify hook | candidate-file graph, read-only for the runtime |
 | `docs/project-knowledge/` | yes | `promote-write` only | verified operational knowledge, injected into exploration and reasoning prompts |
 

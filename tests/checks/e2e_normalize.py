@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from core.evidence.contract import validate_verification_contract, verify_exit_status
-from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_SCENARIO, ORIGIN_UNKNOWN, build_report, classify_step, diagnose, repeat_bucket
-from core.evidence.e2e.normalize import evidence_block, to_verification
+from exoma.core.evidence.contract import validate_verification_contract, verify_exit_status
+from exoma.core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_SCENARIO, ORIGIN_UNKNOWN, build_report, classify_step, diagnose, repeat_bucket
+from exoma.core.evidence.e2e.normalize import evidence_block, to_verification
 from tests.checks.support import assert_true
 
 _SCENARIO = {

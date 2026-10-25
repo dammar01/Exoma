@@ -20,18 +20,18 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from installer import rollback as rollback_mod
-from installer import settings as settings_mod
-from installer.base import (
+from exoma.installer import rollback as rollback_mod
+from exoma.installer import settings as settings_mod
+from exoma.installer.base import (
     _apply_intent_mode,
     _file_sha256,
     _merge_managed,
     _read_text_lenient,
 )
-from installer.check import _settings_would_change
-from installer.rollback import _run_rollback
-from installer.base import Plan
-from installer.settings import (
+from exoma.installer.check import _settings_would_change
+from exoma.installer.rollback import _run_rollback
+from exoma.installer.base import Plan
+from exoma.installer.settings import (
     _install_settings,
     _merge_hook_entries,
     _render_hook_commands,
@@ -335,7 +335,7 @@ def _check_hook_ownership_is_by_directory() -> None:
     Ownership used to be the script's stem alone, so a user's own `~/tools/task-events.sh`
     was refreshed, relocated and stripped as if the workflow had written it.
     """
-    from installer.settings import _hook_script_ids
+    from exoma.installer.settings import _hook_script_ids
 
     def ids(command: str) -> set[str]:
         return _hook_script_ids({"hooks": [{"type": "command", "command": command}]})
@@ -587,31 +587,37 @@ def _test_installer_drift_check() -> None:
 
 
 def _seed_fixture(root: Path) -> Path:
-    """A checkout with only the shipped example, as a fresh clone has it."""
+    """A data dir with no seed yet, beside a copy of the shipped example."""
+    from exoma.config.settings import PROVIDER_EXAMPLE_FILE
+
     (root / "config").mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(
-        Path(__file__).resolve().parents[2] / "config" / "second_agent.example.json",
-        root / "config" / "second_agent.example.json",
-    )
+    shutil.copyfile(PROVIDER_EXAMPLE_FILE, root / "config" / "second_agent.example.json")
     return root / "config" / "second_agent.seed.json"
+
+
+def _point_seed_at(install_mod, root: Path):
+    """Point the installer's seed and example at `root`; returns the originals."""
+    original = install_mod.SEED_DIR, install_mod.EXAMPLE_FILE
+    install_mod.SEED_DIR = root / "config"
+    install_mod.EXAMPLE_FILE = root / "config" / "second_agent.example.json"
+    return original
 
 
 @contextlib.contextmanager
 def _seed_repo(stdin_text: str | None = None):
-    """install.REPO_ROOT pointed at a temp checkout, with stdin optionally a fake tty.
+    """install's seed location pointed at a temp dir, with stdin optionally a fake tty.
 
-    The global is patched rather than the cwd because `_seed_second_agent_config` resolves
-    the destination from REPO_ROOT, and a test that changed directories instead would seed
-    the real repository the first time that resolution changed.
+    The globals are patched rather than EXOMA_HOME because `_seed_second_agent_config`
+    reads them at call time, and a test that relied on the environment instead would seed
+    the real data directory the first time that resolution changed.
     """
     import sys
 
-    import install as install_mod
+    from exoma import install as install_mod
 
     root = Path(tempfile.mkdtemp()) / "repo"
     dest = _seed_fixture(root)
-    original_root, original_stdin = install_mod.REPO_ROOT, sys.stdin
-    install_mod.REPO_ROOT = root
+    original_root, original_stdin = _point_seed_at(install_mod, root), sys.stdin
     if stdin_text is not None:
 
         class _Tty(io.StringIO):
@@ -623,7 +629,7 @@ def _seed_repo(stdin_text: str | None = None):
         with contextlib.redirect_stdout(io.StringIO()):
             yield install_mod, dest
     finally:
-        install_mod.REPO_ROOT = original_root
+        install_mod.SEED_DIR, install_mod.EXAMPLE_FILE = original_root
         sys.stdin = original_stdin
         shutil.rmtree(root.parent, ignore_errors=True)
 
@@ -705,12 +711,11 @@ def _test_installer_seed_is_non_interactive_without_a_tty() -> None:
     """CI and tools/e2e run install.py with no stdin; a prompt there would hang the run."""
     import sys
 
-    import install as install_mod
+    from exoma import install as install_mod
 
     root = Path(tempfile.mkdtemp()) / "repo"
     dest = _seed_fixture(root)
-    original_root, original_stdin = install_mod.REPO_ROOT, sys.stdin
-    install_mod.REPO_ROOT = root
+    original_root, original_stdin = _point_seed_at(install_mod, root), sys.stdin
     sys.stdin = io.StringIO("2\n1\n")  # readable, but isatty() is False
     try:
         plan = Plan()
@@ -733,7 +738,7 @@ def _test_installer_seed_is_non_interactive_without_a_tty() -> None:
             f"re-seeding from the verbatim example is a no-op, so re-install stays idempotent: {verbs}",
         )
     finally:
-        install_mod.REPO_ROOT = original_root
+        install_mod.SEED_DIR, install_mod.EXAMPLE_FILE = original_root
         sys.stdin = original_stdin
         shutil.rmtree(root.parent, ignore_errors=True)
 
@@ -781,7 +786,7 @@ def _test_installer_seed_prompt_answers() -> None:
 
 def _test_installer_seed_reports_unenforced_provider() -> None:
     """Choosing a provider with no read-only boundary has to say so at selection time."""
-    from config.providers import bundled_providers, provider_requires_opt_in
+    from exoma.config.providers import bundled_providers, provider_requires_opt_in
 
     unenforced = [p for p in bundled_providers() if provider_requires_opt_in(p)]
     assert_true(
@@ -803,7 +808,7 @@ def _test_installer_e2e_deps_are_opt_in() -> None:
     `subprocess` is replaced on the settings module only, so no pip or browser download can
     happen whatever the assertions decide.
     """
-    shipped = settings_mod.REPO_ROOT / "requirements-e2e.txt"
+    shipped = settings_mod.E2E_REQUIREMENTS_FILE
     body = [line for line in shipped.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
     assert_true(
         len(body) == 1 and re.match(r"^playwright==\d+\.\d+\.\d+$", body[0]),
@@ -819,8 +824,8 @@ def _test_installer_e2e_deps_are_opt_in() -> None:
         code = 1 if any(tool in argv for tool in failing) else 0
         return SimpleNamespace(returncode=code, stdout="", stderr="simulated failure" if code else "")
 
-    original_root, original_subprocess = settings_mod.REPO_ROOT, settings_mod.subprocess
-    settings_mod.REPO_ROOT = root
+    original_root, original_subprocess = settings_mod.E2E_REQUIREMENTS_FILE, settings_mod.subprocess
+    settings_mod.E2E_REQUIREMENTS_FILE = root / "requirements-e2e.txt"
     settings_mod.subprocess = SimpleNamespace(run=fake_run)
     requirements = root / "requirements-e2e.txt"
     pip = [sys.executable, "-m", "pip", "install", "-r", str(requirements)]
@@ -864,19 +869,19 @@ def _test_installer_e2e_deps_are_opt_in() -> None:
         settings_mod._install_deps(plan, True, True)
         assert_true(calls == [] and any("missing" in w for w in plan.warnings), "a checkout without the file installs nothing and warns")
     finally:
-        settings_mod.REPO_ROOT = original_root
+        settings_mod.E2E_REQUIREMENTS_FILE = original_root
         settings_mod.subprocess = original_subprocess
         shutil.rmtree(root, ignore_errors=True)
 
 
 def _test_installer_check_reports_second_agent_default() -> None:
     """--check describes the seed without counting its absence as drift."""
-    import installer.check as check_mod
+    import exoma.installer.check as check_mod
 
     root = Path(tempfile.mkdtemp()) / "repo"
     dest = _seed_fixture(root)
-    original_root = check_mod.REPO_ROOT
-    check_mod.REPO_ROOT = root
+    original_root = check_mod.SEED_DIR
+    check_mod.SEED_DIR = root / "config"
     try:
         assert_true(
             check_mod._second_agent_state().startswith("NOT SET"),
@@ -893,15 +898,15 @@ def _test_installer_check_reports_second_agent_default() -> None:
             "a config that no longer parses is the case this line exists to catch",
         )
     finally:
-        check_mod.REPO_ROOT = original_root
+        check_mod.SEED_DIR = original_root
         shutil.rmtree(root.parent, ignore_errors=True)
 
 
 def _test_provider_update() -> None:
     """--update-providers (DEC-057): to the stable release only, npm-global installs only,
     nothing changed while planning, each update verified, a failure named with its pin-back."""
-    from core.provider import model_catalog, versions
-    from installer import provider_update as pu
+    from exoma.core.provider import model_catalog, versions
+    from exoma.installer import provider_update as pu
 
     with tempfile.TemporaryDirectory() as tmp:
         prefix = Path(tmp) / "npm"

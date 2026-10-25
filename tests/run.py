@@ -14,12 +14,25 @@ inventing independence it does not have.
 """
 
 import argparse
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
+# Global state (job records, the main-session cache, the provider seed) goes to a
+# throwaway EXOMA_HOME, never the user's own data directory. Set before anything imports
+# exoma.config.settings, which resolves it once.
+if not os.environ.get("EXOMA_HOME"):
+    os.environ["EXOMA_HOME"] = tempfile.mkdtemp(prefix="exoma-test-home-")
+# Child interpreters the checks spawn (`python -c ...` lock holders, probes) import exoma
+# from this checkout's src/, as they used to import core/ from the repo root they ran in.
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    part for part in (str(REPO_ROOT / "src"), os.environ.get("PYTHONPATH", "")) if part
+)
 
 from tests.checks.adapters import (  # noqa: E402
     _test_adapter_error_normalization,
@@ -133,7 +146,6 @@ from tests.checks.os_resolvers import (  # noqa: E402
 from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
 from tests.checks.replay import _test_fact_replay  # noqa: E402
-from tests.checks.blind_sample import _test_blind_sample  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_key_pattern_needs_a_left_boundary, _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
@@ -149,7 +161,6 @@ from tests.checks.session_persistence import (  # noqa: E402
     _test_provider_thread_id_is_never_lost_silently,
     _test_result_names_the_provider_boundary,
 )
-from tests.checks.research import _test_research_records_follow_the_schema  # noqa: E402
 from tests.checks.workflow_layout import _test_workflow_layout  # noqa: E402
 from tests.checks.workspace_migration import _test_workspace_migration  # noqa: E402
 from tests.checks.installer_stale import _test_installer_leaves_no_stale_files  # noqa: E402
@@ -176,9 +187,8 @@ SUITES: dict[str, tuple] = {
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
     "hook-flavours": (_test_every_shipped_hook_is_a_launcher_and_its_module, "every shipped hook is a bash launcher beside its .py, all listed by workflow_hooks.py; no .ps1 ships"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
-    "manifest": (_test_manifest_matches_dist, "dist/manifest.json matches the dist/ tree it describes"),
+    "manifest": (_test_manifest_matches_dist, "src/exoma/_bundle/manifest.json matches the dist/ tree it describes"),
     "manifest-malformed": (_test_malformed_manifest_entry_fails_closed, "a malformed manifest entry fails bundle integrity by name"),
-    "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
     "workflow-layout": (_test_workflow_layout, ".workflow/ keeps editable files, data/ the rest; unmigrated workspaces and hooks follow the same rule"),
     "workspace-migration": (_test_workspace_migration, "v3.5.x -> data layout moves everything once with a backup, refuses under a live job, rolls back on failure; overrides-only config; current/ mirror"),
     "opencode-launch": (_test_opencode_prompt_never_reaches_cmd, "opencode's prompt travels as an attached file; cmd.exe-parsed arguments are refused"),
@@ -199,7 +209,6 @@ SUITES: dict[str, tuple] = {
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
     "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),
-    "blind-sample": (_test_blind_sample, "blind-judge export: gate blocks read from transcripts, EXP-008 strata, the key kept apart, category labels merged"),
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),
     "evidence-anchor-relocation": (_test_evidence_anchor_relocation, "evidence anchors survive a line moving"),
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),
@@ -289,7 +298,7 @@ SUITES: dict[str, tuple] = {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="agent-workflow tests")
+    parser = argparse.ArgumentParser(description="Exoma tests")
     parser.add_argument(
         "--only",
         action="append",
@@ -363,7 +372,7 @@ def _record_outcome(project_root: str, selected: list, failures: list) -> None:
     try:
         from datetime import datetime, timezone
 
-        from core.evidence.runtime_io import write_quality_record
+        from exoma.core.evidence.runtime_io import write_quality_record
 
         write_quality_record(
             Path(project_root),

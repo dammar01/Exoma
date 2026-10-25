@@ -23,12 +23,12 @@ import time
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
-from core.evidence.e2e import preflight as e2e_preflight
-from core.evidence.e2e.request import request_path
-from core.evidence.e2e.runner import FAKE_ENV
-from core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
-from core.provider.executor import Executor
-from core.runtime.state import ensure_workflow_workspace
+from exoma.core.evidence.e2e import preflight as e2e_preflight
+from exoma.core.evidence.e2e.request import request_path
+from exoma.core.evidence.e2e.runner import FAKE_ENV
+from exoma.core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
+from exoma.core.provider.executor import Executor
+from exoma.core.runtime.state import ensure_workflow_workspace
 from tests.checks.e2e_routing import _REVIEW_CLEAN
 from tests.checks.support import assert_true
 

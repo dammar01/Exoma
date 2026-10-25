@@ -14,6 +14,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
+# Global state (job records, the main-session cache, the provider seed) goes to a
+# throwaway EXOMA_HOME, never the user's own data directory. Set before anything imports
+# exoma.config.settings, which resolves it once.
+if not os.environ.get("EXOMA_HOME"):
+    os.environ["EXOMA_HOME"] = tempfile.mkdtemp(prefix="exoma-test-home-")
+# Child interpreters the checks spawn (`python -c ...` lock holders, probes) import exoma
+# from this checkout's src/, as they used to import core/ from the repo root they ran in.
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    part for part in (str(REPO_ROOT / "src"), os.environ.get("PYTHONPATH", "")) if part
+)
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIPPED"
 
@@ -47,7 +58,7 @@ def _run_cli(*args: str, cwd: Path | None = None) -> tuple[int, str]:
         encoding="utf-8",
         errors="replace",
         cwd=str(cwd or REPO_ROOT),
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONUTF8": "1"},
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src"), "PYTHONUTF8": "1"},
     )
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 

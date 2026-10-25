@@ -12,10 +12,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.audit.diagnostics import run_doctor
-from core.evidence.e2e import preflight as e2e_preflight
-from core.runtime.state import ensure_workflow_workspace
-from core.workspace.workspace_paths import read_json_file
+from exoma.core.audit.diagnostics import run_doctor
+from exoma.core.evidence.e2e import preflight as e2e_preflight
+from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.core.workspace.workspace_paths import read_json_file
 from tests.checks.support import assert_true
 
 

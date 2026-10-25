@@ -20,8 +20,8 @@ the same reason the accounting itself now lives in adapters/redaction.py.
 import re
 from pathlib import Path
 
-from adapters.providers import agy_adapter, codex_adapter, opencode_adapter
-from core.evidence.contract import ERROR_TYPES
+from exoma.adapters.providers import agy_adapter, codex_adapter, opencode_adapter
+from exoma.core.evidence.contract import ERROR_TYPES
 from tests.checks.support import assert_true
 
 # A key shaped like the real thing, kept obviously fake. Two distinct occurrences so a
@@ -111,7 +111,7 @@ def _test_adapter_redaction_is_shared() -> None:
     and then edits one copy — which is exactly how the original divergence appeared.
     Identity is the property that actually prevents a recurrence.
     """
-    from adapters.shared import redaction
+    from exoma.adapters.shared import redaction
 
     for name, module in _ADAPTERS:
         assert_true(

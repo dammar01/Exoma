@@ -17,14 +17,14 @@ against strings copied from prompt_builder. A test that pastes the expected head
 locks itself: change both and it stays green while the parser breaks.
 """
 
-from config.roles import ROLE_EXPLORATION, ROLE_REASONING, ROLE_VERIFICATION
+from exoma.config.roles import ROLE_EXPLORATION, ROLE_REASONING, ROLE_VERIFICATION
 import contextlib
 
-from config.providers import transport_budget
-from core.prompt import prompt_builder
-from config.settings import DEFAULT_MAX_TASK_CHARS
-from core.provider.continuation import _EVIDENCE_MARKERS
-from core.prompt.prompt_builder import build_prompt
+from exoma.config.providers import transport_budget
+from exoma.core.prompt import prompt_builder
+from exoma.config.settings import DEFAULT_MAX_TASK_CHARS
+from exoma.core.provider.continuation import _EVIDENCE_MARKERS
+from exoma.core.prompt.prompt_builder import build_prompt
 from tests.checks.support import assert_true
 
 # Accessor syntax that is code, never prose. Same list as messages.py, applied to text
@@ -291,7 +291,7 @@ def _test_task_cap_is_visible_in_and_out_of_band() -> None:
     # already holds.
     import os
 
-    from config import settings as _settings
+    from exoma.config import settings as _settings
 
     saved = os.environ.get("AI_PROXY_MAX_TASK_CHARS_NO_ARGV")
     os.environ["AI_PROXY_MAX_TASK_CHARS_NO_ARGV"] = "1200"
@@ -377,7 +377,7 @@ def _assert_serialized_argv_fits() -> None:
 
 @contextlib.contextmanager
 def _registered_tight_argv():
-    from config import providers
+    from exoma.config import providers
 
     providers.PROVIDER_TRANSPORT[_TIGHT_ARGV_PROVIDER] = dict(_TIGHT_ARGV)
     try:
@@ -404,9 +404,9 @@ def _assert_executor_sizes_for_long_argv() -> None:
     import tempfile
     from pathlib import Path
 
-    from core.prompt.router import Router
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.prompt.router import Router
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
 
     command_path = "C:/" + "d" * 200 + "/opencode.cmd"
     model = "m" * 1000

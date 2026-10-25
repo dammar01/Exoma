@@ -7,16 +7,16 @@ never emitted. Failing there discards a completed read and sends the user off to
 evidence that already exists in a live session.
 """
 
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence.contract import _DIGEST_HEADER, validate_verification_contract
-from core.provider.continuation import _VERIFY_SHAPE_KINDS
-from core.provider.executor import Executor
-from core.runtime.state import ensure_workflow_workspace
+from exoma.core.evidence.contract import _DIGEST_HEADER, validate_verification_contract
+from exoma.core.provider.continuation import _VERIFY_SHAPE_KINDS
+from exoma.core.provider.executor import Executor
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import assert_true
 
@@ -329,7 +329,7 @@ def _test_contract_continuation() -> None:
         )
         # Archival is diagnostics for a call that already succeeded. A disk that cannot
         # take the file must not turn a recovered run into a failed one.
-        import core.evidence.runtime_io as _io
+        import exoma.core.evidence.runtime_io as _io
 
         def _refuse(*_a, **_k):
             raise OSError("no space left on device")
@@ -420,7 +420,7 @@ def _test_contract_continuation() -> None:
         # A "nothing found" spelled in a way the parser does not take must be steered back
         # to `- none`. Asking only for tags is how the entry got tagged as a finding and a
         # clean verify became a fail (CASE-009).
-        from core.provider.continuation import _contract_gap
+        from exoma.core.provider.continuation import _contract_gap
 
         odd_none = _VERIFICATION.replace(
             "blocking_findings: none", "blocking_findings:\n- semua jalur bersih"
@@ -443,7 +443,7 @@ def _test_continuation_prompt_is_bounded() -> None:
     recovery itself — the adapter refuses the very call that existed to rescue the run,
     turning a recoverable stall into a lost one.
     """
-    from core.provider.continuation import _MISSING_CHARS, _continuation_prompt
+    from exoma.core.provider.continuation import _MISSING_CHARS, _continuation_prompt
 
     gap = {
         "reason": "verification contract emitted but malformed",

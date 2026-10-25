@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.workspace.workspace_paths import is_legacy_layout, workflow_paths
+from exoma.core.workspace.workspace_paths import is_legacy_layout, workflow_paths
 from tests.checks.support import assert_true
 
 
@@ -54,7 +54,7 @@ def _legacy_workspace() -> Path:
 
 
 def _check_migration_moves_everything_once() -> None:
-    from core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
+    from exoma.core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
 
     root = _legacy_workspace()
     wf = root / ".workflow"
@@ -99,7 +99,7 @@ def _check_migration_moves_everything_once() -> None:
 
 
 def _check_live_job_blocks_migration() -> None:
-    import core.runtime.upgrade as upgrade
+    import exoma.core.runtime.upgrade as upgrade
 
     root = _legacy_workspace()
     saved = upgrade.active_jobs_for_workspace
@@ -118,8 +118,9 @@ def _check_live_job_blocks_migration() -> None:
 
 
 def _check_failed_migration_is_rolled_back() -> None:
-    import core.runtime.migrations as migrations
-    from core.runtime.upgrade import upgrade_workflow_workspace
+    import exoma.core.runtime.migrations as migrations
+
+    from exoma.core.runtime.upgrade import upgrade_workflow_workspace
 
     root = _legacy_workspace()
     wf = root / ".workflow"
@@ -151,8 +152,9 @@ def _check_failed_migration_is_rolled_back() -> None:
 
 def _check_post_rename_failure_resumes() -> None:
     """Each post-rename step, failing once, leaves a workspace a second upgrade finishes."""
-    import core.runtime.migrations as migrations
-    from core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
+    import exoma.core.runtime.migrations as migrations
+
+    from exoma.core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
 
     targets = {
         "rewrite_evidence": "_rewrite_evidence_paths",
@@ -184,8 +186,8 @@ def _check_post_rename_failure_resumes() -> None:
                         f"{step}: data/ is live and the marker names the failed step first: {pending}")
             assert_true(needs_upgrade(root), f"{step}: an unfinished migration still needs an upgrade")
             if step == "convert_secrets":
-                from core.audit.diagnostics import run_doctor
-                from core.workspace.workspace_paths import read_json_file
+                from exoma.core.audit.diagnostics import run_doctor
+                from exoma.core.workspace.workspace_paths import read_json_file
 
                 meta = run_doctor(root, "does-not-exist", None)["meta"]
                 layout = read_json_file(Path(meta["doctor_report"]))["checks"]["workspace_layout"]
@@ -213,8 +215,9 @@ def _check_post_rename_failure_resumes() -> None:
 
 
 def _check_failed_backup_leaves_no_staging() -> None:
-    import core.runtime.migrations as migrations
-    from core.runtime.upgrade import upgrade_workflow_workspace
+    import exoma.core.runtime.migrations as migrations
+
+    from exoma.core.runtime.upgrade import upgrade_workflow_workspace
 
     root = _legacy_workspace()
     wf = root / ".workflow"
@@ -244,7 +247,7 @@ def _check_failed_backup_leaves_no_staging() -> None:
 
 
 def _check_staging_conflict_is_refused() -> None:
-    from core.runtime.upgrade import upgrade_workflow_workspace
+    from exoma.core.runtime.upgrade import upgrade_workflow_workspace
 
     root = _legacy_workspace()
     wf = root / ".workflow"
@@ -270,7 +273,7 @@ def _check_staging_conflict_is_refused() -> None:
 
 def _check_stranded_staging_is_recovered() -> None:
     """Every internal item staged, then death before the rename: no root marker, no data/."""
-    from core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
+    from exoma.core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
 
     root = _legacy_workspace()
     wf = root / ".workflow"
@@ -297,7 +300,7 @@ def _check_stranded_staging_is_recovered() -> None:
 
 def _check_staging_beside_live_data() -> None:
     """data/ created after the crash: empty scaffolding yields, real records refuse, backups carry over."""
-    from core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
+    from exoma.core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
 
     def stranded() -> Path:
         root = _legacy_workspace()
@@ -345,7 +348,7 @@ def _check_staging_beside_live_data() -> None:
     (wf / "data" / "usage.jsonl").write_text("", encoding="utf-8")
     (wf / "config.json").write_text(json.dumps({"runtime": {}}), encoding="utf-8")
     try:
-        import core.runtime.migrations as migrations
+        import exoma.core.runtime.migrations as migrations
 
         migrations.migrate_to_data_layout(root)
         assert_true(not (wf / "data.migrating").exists()
@@ -356,8 +359,7 @@ def _check_staging_beside_live_data() -> None:
 
 
 def _check_empty_tree_removal_never_deletes_a_file() -> None:
-    import core.runtime.migrations as migrations
-
+    import exoma.core.runtime.migrations as migrations
     root = Path(tempfile.mkdtemp(prefix="aw-empty-tree-"))
     try:
         (root / "data" / "sessions" / "a").mkdir(parents=True)
@@ -390,8 +392,7 @@ def _check_empty_tree_removal_never_deletes_a_file() -> None:
 
 
 def _check_linked_data_dir_is_never_touched() -> None:
-    import core.runtime.migrations as migrations
-
+    import exoma.core.runtime.migrations as migrations
     root = Path(tempfile.mkdtemp(prefix="aw-linked-data-"))
     wf = root / ".workflow"
     target = root / "elsewhere"
@@ -437,8 +438,7 @@ def _check_linked_data_dir_is_never_touched() -> None:
 
 
 def _check_untrusted_marker_reruns_everything() -> None:
-    import core.runtime.migrations as migrations
-
+    import exoma.core.runtime.migrations as migrations
     root = Path(tempfile.mkdtemp(prefix="aw-marker-"))
     data = root / ".workflow" / "data"
     data.mkdir(parents=True)
@@ -464,7 +464,7 @@ def _check_untrusted_marker_reruns_everything() -> None:
 
 
 def _check_evidence_paths_match_any_spelling() -> None:
-    from core.runtime.upgrade import upgrade_workflow_workspace
+    from exoma.core.runtime.upgrade import upgrade_workflow_workspace
 
     root = _legacy_workspace()
     wf = root / ".workflow"
@@ -488,8 +488,8 @@ def _check_evidence_paths_match_any_spelling() -> None:
 
 
 def _check_config_holds_overrides_only() -> None:
-    from core.runtime.config_defaults import effective_section, merge_config_defaults
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.runtime.config_defaults import effective_section, merge_config_defaults
+    from exoma.core.runtime.state import ensure_workflow_workspace
 
     root = Path(tempfile.mkdtemp(prefix="aw-overrides-"))
     try:
@@ -507,7 +507,7 @@ def _check_config_holds_overrides_only() -> None:
 
 
 def _check_current_mirrors_the_latest_dispatch() -> None:
-    from core.workspace import current
+    from exoma.core.workspace import current
     from tests.checks.e2e_routing import _adapter, _flow, _workspace
 
     root = _workspace("aw-current-")

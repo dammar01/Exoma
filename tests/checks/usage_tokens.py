@@ -12,15 +12,15 @@ rather than zeroed, because a zero reads as a measurement and averages into the 
 one.
 """
 
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 from pathlib import Path
 
-from adapters.providers.codex_adapter import CodexAdapter
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from adapters.shared.usage import merge_usage, normalize_usage, token_source_for
-from core.audit import telemetry
-from core.evidence.contracts import UsageRecord, billable_input, billable_output
-from core.policy.governance import budget_state
+from exoma.adapters.providers.codex_adapter import CodexAdapter
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.adapters.shared.usage import merge_usage, normalize_usage, token_source_for
+from exoma.core.audit import telemetry
+from exoma.core.evidence.contracts import UsageRecord, billable_input, billable_output
+from exoma.core.policy.governance import budget_state
 from tests.checks.support import assert_true
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "opencode"
@@ -367,8 +367,8 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
     import tempfile
     from pathlib import Path
 
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
 
     root = Path(tempfile.mkdtemp(prefix="aw-usage-rows-"))
     try:
@@ -508,8 +508,8 @@ def _the_common_single_call_path_records_who_reported_it() -> None:
     import tempfile
     from pathlib import Path
 
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
     from tests.checks.support import FakeOpenCodeAdapter
 
     root = Path(tempfile.mkdtemp(prefix="aw-usage-single-"))
@@ -557,11 +557,11 @@ def _a_failed_call_records_what_it_burned() -> None:
     import tempfile
     from pathlib import Path
 
-    from core.evidence.contract import make_error
-    from core.evidence.contracts import UsageRecord
-    from core.evidence.runtime_io import write_usage_record
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.evidence.contract import make_error
+    from exoma.core.evidence.contracts import UsageRecord
+    from exoma.core.evidence.runtime_io import write_usage_record
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
     from tests.checks.support import FakeOpenCodeAdapter
 
     class _Spawning:
@@ -706,9 +706,9 @@ def _a_continuation_that_never_spawned_does_not_double_the_first_call() -> None:
     import tempfile
     from pathlib import Path
 
-    from core.evidence.contract import make_error
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.evidence.contract import make_error
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
 
     class TruncatedThenRefusing:
         """Answers short enough to trigger a continuation, then refuses to make one."""
@@ -782,8 +782,8 @@ def _every_row_that_reached_a_provider_names_its_release() -> None:
     a single call's row spread the adapter's unstamped attribute, and a continuation's rows
     copied only the thread flags out of the snapshot — so opencode rows carried no version
     and codex rows no status."""
-    from core.provider import versions
-    from utils import osutil
+    from exoma.core.provider import versions
+    from exoma.utils import osutil
 
     class Versioned:
         adapter = "opencode"
@@ -826,8 +826,8 @@ def _rows_name_their_release(Versioned) -> None:
     import tempfile
     from pathlib import Path
 
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
 
     for answers, label in ((1, "single"), (2, "continuation")):
         root = Path(tempfile.mkdtemp(prefix="aw-usage-release-"))

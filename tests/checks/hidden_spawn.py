@@ -8,7 +8,7 @@ back in v3.7.3 through a new module that called `git` with a bare `subprocess.ru
 fix was never the problem — nothing said a new spawn site had to use it. This does.
 
 Scope is the code the worker runs: `core/`, `adapters/`, `utils/`, and the shipped hooks
-under `dist/config/claude/hooks/`, which Claude Code starts without a console too (v3.8.3:
+under `src/exoma/_bundle/config/claude/hooks/`, which Claude Code starts without a console too (v3.8.3:
 the Bash hook port brought the flash back through task-events' bare `git`). `tools/` and
 `installer/` run in the user's own terminal, where a child shares that console and
 nothing flashes.
@@ -28,14 +28,14 @@ from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_SCOPE = ("core", "adapters", "utils", "dist/config/claude/hooks")
+_SCOPE = ("src/exoma/core", "src/exoma/adapters", "src/exoma/utils", "src/exoma/_bundle/config/claude/hooks")
 _SKIP_PARTS = {"__pycache__"}
 _SPAWNERS = {"run", "Popen", "call", "check_call", "check_output"}
 _HIDING_HELPERS = {"hidden_run_kwargs", "detached_popen_kwargs"}
 
 # (file, first element of the argv list literal) -> why it never runs on Windows.
 _POSIX_ONLY = {
-    ("utils/osutil.py", "ps"): "the `else` branch of the Windows process-tree lookup",
+    ("src/exoma/utils/osutil.py", "ps"): "the `else` branch of the Windows process-tree lookup",
 }
 
 

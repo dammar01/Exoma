@@ -19,7 +19,7 @@ risk sits in what you did not know: an existing settings module you should have 
 a permission check every endpoint here goes through, a second client that also reads user
 settings.
 
-### Mode B — agent-workflow, objective-oriented
+### Mode B — Exoma, objective-oriented
 
 One request:
 

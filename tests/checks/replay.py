@@ -5,8 +5,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence import fact_store
-from core.workspace.workspace_paths import workflow_paths
+from exoma.core.evidence import fact_store
+from exoma.core.workspace.workspace_paths import workflow_paths
 from tests.checks.support import assert_true
 
 

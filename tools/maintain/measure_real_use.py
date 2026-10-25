@@ -55,8 +55,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from core.audit import metrics  # noqa: E402
-from core.audit.transcript import EDIT_TOOLS, is_human_turn, project_slug  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from exoma.core.audit import metrics  # noqa: E402
+from exoma.core.audit.transcript import EDIT_TOOLS, is_human_turn, project_slug  # noqa: E402
 
 BANNER = re.compile(r"Workflow Main Agent — v(\d+\.\d+\.\d+)")
 SESSION_BINDING = re.compile(r"MAIN_SESSION_ID=(main_[A-Za-z0-9_.-]+)")
@@ -232,8 +233,8 @@ def main() -> int:
     ap.add_argument("--projects-root", required=True, help="directory holding the projects")
     ap.add_argument("--transcripts", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--version", required=True, help="workflow version, e.g. 3.7.3")
-    ap.add_argument("--exclude", action="append", default=["agent-workflow"],
-                    help="project directory to leave out (default: agent-workflow itself)")
+    ap.add_argument("--exclude", action="append", default=["exoma", "agent-workflow"],
+                    help="project directory to leave out (default: the exoma and agent-workflow checkouts)")
     ap.add_argument("--idle-minutes", type=float, default=15.0)
     ap.add_argument("--show-names", action="store_true")
     ap.add_argument("--sample-rebuttals", type=int, default=0, metavar="N",

@@ -21,11 +21,10 @@ The calculation contract for every benchmark figure this project reports. The re
   else is refused naming its JSON path, never its value. A contributing project's name found
   as whole words in a value is refused too, at any length (`ui` as well as `shop-api`; `ui`
   does not match `build`). Under `per_project` and `by_project` every key must be a project
-  label the tools write (`PA`, `Project AB`), so a folder name there is refused by shape
-  (DEC-038). How to run them:
+  label the tools write (`PA`, `Project AB`), so a folder name there is refused by shape. How to run them:
   [Measure your own use](../team-guide/measure-your-use.md).
 - The statistics differ between producers on purpose: unifying them would change figures
-  already recorded (CASE-011, CASE-012). Each metric names its convention below.
+  already recorded. Each metric names its convention below.
 
 Registry version: **1**.
 
@@ -43,15 +42,15 @@ python tools/maintain/measure_task_outcomes.py --projects-root <folder> --labels
 # The same, also written to a file that may be shared (refused if it would carry a path or a project name)
 python tools/maintain/measure_real_use.py --projects-root <folder> --version 3.8.0 --export real-use.json
 
-# Fact retrieval replayed over archived calls, one-token against weighted (replay.*, EXP-013)
+# Fact retrieval replayed over archived calls, one-token against weighted (replay.*)
 python tools/maintain/replay_facts.py --projects-root <folder>
 
-# The same with the weighted arm capped at N facts for every role (EXP-016)
+# The same with the weighted arm capped at N facts for every role
 python tools/maintain/replay_facts.py --projects-root <folder> --weighted-limit 3
 ```
 
 `--transcripts` points at another transcript folder (default `~/.claude/projects`);
-`--exclude <dir>` leaves a project out (default: the clone itself, `agent-workflow`). The
+`--exclude <dir>` leaves a project out (default: the `exoma` and `agent-workflow` checkouts). The
 labels file maps a transcript file name to its category: `{"<session>.jsonl": "feature"}`.
 `--export` cannot be combined with `--show-names` or, for real use, `--sample-rebuttals`.
 
@@ -73,17 +72,17 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 
 | ID | Unit | Statistic | Definition | Denominator | Missing data |
 | --- | --- | --- | --- | --- | --- |
-| `runtime.command@1` | command | `count` | A delegated command: usage rows grouped by prompt_id (a continuation is one); a row without prompt_id is its own command. Report key `calls`/`commands`. | - | Rows of a provider-less browser run (no prompt_id, provider or tokens; CASE-014) are dropped before counting. |
+| `runtime.command@1` | command | `count` | A delegated command: usage rows grouped by prompt_id (a continuation is one); a row without prompt_id is its own command. Report key `calls`/`commands`. | - | Rows of a provider-less browser run (no prompt_id, provider or tokens) are dropped before counting. |
 | `runtime.provider_call@1` | provider invocation | `count` | One usage row. Report key `provider_calls`. | - | As runtime.command. |
 | `runtime.cost_tokens@1` | tokens | `sum` | Input plus output per row: the provider's actual count when present, else characters // 4. Cached input and reasoning are inside these counts, never added. Report key `cost`. | - | `token_source` says which rows were estimated. |
 | `runtime.accepted_task@1` | correlation_id | `count` | A correlation id (plan chain or derived task id) with at least one verify row whose derived verdict is pass. Report key `accepted_tasks`. | correlation ids with at least one judged verify | Never-verified ids are outside the denominator, not counted as failures. |
 | `runtime.first_pass_correctness@1` | correlation_id | `rate` | Share of judged correlation ids whose first judged verify passed. | correlation ids with at least one judged verify | As runtime.accepted_task. |
-| `runtime.rework@1` | correlation_id | `rate` | A judged correlation id whose judged verify rounds, ordered by recorded_at, hold a round that did not pass (fail or incomplete) followed by another round. extra_verification_rounds counts the rounds after that first failure. All-pass rounds (a plan verified phase by phase) are not rework (DEC-051). Report key `rework`. | correlation ids with at least one judged verify | As runtime.accepted_task. |
+| `runtime.rework@1` | correlation_id | `rate` | A judged correlation id whose judged verify rounds, ordered by recorded_at, hold a round that did not pass (fail or incomplete) followed by another round. extra_verification_rounds counts the rounds after that first failure. All-pass rounds (a plan verified phase by phase) are not rework. Report key `rework`. | correlation ids with at least one judged verify | As runtime.accepted_task. |
 | `runtime.time_to_completion@1` | seconds per command | `median_interpolated` | Summed provider duration_seconds of one command's rows. Browser time (browser_seconds) and runtime test time (tests_seconds) are not included. | commands with at least one measured duration | Unmeasured commands are counted apart, never averaged in. |
 | `runtime.evidence_reuse_rate@1` | command | `rate` | Exploration and reasoning commands served from a stored artifact. verify-browser drafts are not eligible. | exploration and reasoning commands | Rows without a role are named, not placed. |
 | `runtime.fact_lifecycle@1` | command | `sum` | Facts offered (candidates), served (injected), dropped as stale or below the relevance floor, and added or refused at ingest, summed per exploration/reasoning command. Report key `facts`. | commands whose final row carries fact counts | Commands recorded before the fact fields are counted as unrecorded_commands, never as zeros. |
 | `runtime.context_avoided@1` | tokens | `sum` | (answer characters - digest characters) // 4 on the row carrying the digest. Report key `premium_context_avoided`. | - | Rows without a digest contribute nothing. |
-| `runtime.workflow_task@1` | event run in one MAIN_SESSION_ID | `count` | Events from a session's first event to a verify whose derived verdict is pass after an edit (DEC-020). States completed, open, read_only, unknown. | - | Events without a session are `unknown`; events before DEC-020 carry no derived verdict and stay open. |
+| `runtime.workflow_task@1` | event run in one MAIN_SESSION_ID | `count` | Events from a session's first event to a verify whose derived verdict is pass after an edit. States completed, open, read_only, unknown. | - | Events without a session are `unknown`; older events carry no derived verdict and stay open. |
 
 ### Real use (`tools/maintain/measure_real_use.py`)
 
@@ -91,7 +90,7 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | --- | --- | --- | --- | --- | --- |
 | `real_use.session@1` | Claude Code transcript | `count` | One transcript file whose last bundle banner names the requested version, with at least one human prompt. | - | Transcripts without a banner are excluded. |
 | `real_use.prompts_per_session@1` | prompt | `nearest_rank` | Human turns, excluding interrupts, compaction summaries, shell echoes and argument-less built-in slash commands. | sessions | - |
-| `real_use.rebuttal@1` | follow-up prompt | `count` | A follow-up whose first 800 characters match the CORRECTION pattern (Indonesian and English). Recall measured 0.08 in CASE-011: a lower bound. | follow-up prompts | - |
+| `real_use.rebuttal@1` | follow-up prompt | `count` | A follow-up whose first 800 characters match the CORRECTION pattern (Indonesian and English). Recall is low: a lower bound. | follow-up prompts | - |
 | `real_use.active_minutes@1` | minutes per session | `nearest_rank` | Sum of gaps between consecutive transcript timestamps no longer than --idle-minutes (default 15). | sessions | - |
 | `real_use.delegated_call@2` | prompt answered by a provider | `count` | Distinct prompt_id (else correlation_id) among a session's usage rows that name a provider. A usage row belongs to one session: the earliest-starting transcript that binds its MAIN_SESSION_ID (@1 joined it to every such transcript; identical on all data recorded up to 2026-10-04, where no id was bound twice). Its `delegated_runtime` block is per row, not per command. | - | - |
 

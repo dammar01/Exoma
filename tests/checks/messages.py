@@ -19,8 +19,8 @@ from tests.checks.support import assert_true
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Directories whose strings reach a user or an agent.
-SCANNED = ("core", "adapters", "installer", "utils")
-ROOT_FILES = ("main.py", "install.py", "check.py")
+SCANNED = ("src/exoma/core", "src/exoma/adapters", "src/exoma/installer", "src/exoma/utils")
+ROOT_FILES = ("src/exoma/cli.py", "src/exoma/install.py", "src/exoma/check.py")
 
 # Substrings that are code, never prose. `_main().` is the one that actually shipped;
 # the others are the same mistake waiting in the modules that use self-accessors.

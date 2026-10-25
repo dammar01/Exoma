@@ -13,7 +13,7 @@ interpret in the remaining arguments is refused before spawning.
 """
 
 from __future__ import annotations
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 
 import contextlib
 import os
@@ -21,8 +21,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from adapters.providers import opencode_adapter
-from adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.adapters.providers import opencode_adapter
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
 from tests.checks.support import assert_true
 
 # Every hostile shape the old argv transport broke on, in one prompt.
@@ -167,7 +167,7 @@ def _check_missing_model_is_refused(root: Path) -> None:
 
 
 def _check_doctor_names_free_tier_models() -> None:
-    from core.audit.diagnostics import _free_tier_models
+    from exoma.core.audit.diagnostics import _free_tier_models
 
     found = _free_tier_models(
         {

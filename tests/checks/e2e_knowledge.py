@@ -7,15 +7,15 @@ only well-proven anchored entries are offered to /.promote.
 """
 
 from __future__ import annotations
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 
 import json
 import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence.e2e import knowledge
-from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_UNKNOWN, build_report, classify_step, diagnose
+from exoma.core.evidence.e2e import knowledge
+from exoma.core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_UNKNOWN, build_report, classify_step, diagnose
 from tests.checks.support import assert_true
 
 BASE = "http://app.test"
@@ -243,7 +243,7 @@ def _save_report(scenario: dict, winner: int | None, *, status: str = "passed", 
 def _check_proven_selectors_rank_first_and_demote() -> None:
     """DEC-016: the candidate that matched is recorded, may lead the next draft as `proven`,
     and drops back to the usual order after one miss and retires after two."""
-    from core.evidence.e2e.spec import validate_scenario
+    from exoma.core.evidence.e2e.spec import validate_scenario
 
     root = _project()
     try:
@@ -300,7 +300,7 @@ def _check_proven_selectors_rank_first_and_demote() -> None:
             )
         # The citation is read like the tagging pass reads a line: the exact attribute value,
         # in an opening tag, in a template file, outside a comment.
-        from core.evidence.e2e.spec import _cites_e2e
+        from exoma.core.evidence.e2e.spec import _cites_e2e
 
         (root / "src" / "Cases.vue").write_text(
             '<div data-e2e="save-delete">save</div>\n'
@@ -503,7 +503,7 @@ def _check_dynamic_routes_share_a_scope() -> None:
     is proven on `/users/456/edit`, and no row is keyed by the id (a navigation row keeps
     the step's own URL in its body, the address a next draft can open); a page with other
     route words (`/users/123/view`, `/users`) is still another route."""
-    from core.evidence.e2e.spec import validate_scenario
+    from exoma.core.evidence.e2e.spec import validate_scenario
 
     for url, route in (
         ("/users/123/edit", "/users/:id/edit"),
@@ -548,7 +548,7 @@ def _check_proven_is_scoped_by_route_and_within() -> None:
     """A selector proven on one route under one `within` is proven there only: another route
     or container neither may cite it as proven nor demotes it. A store row written before
     scopes were recorded stays readable and is a hint, not proven."""
-    from core.evidence.e2e.spec import validate_scenario
+    from exoma.core.evidence.e2e.spec import validate_scenario
 
     root = _project()
     try:

@@ -34,7 +34,7 @@ kind of request you are making:
 Before running a delegated command, Claude Code prints one line such as
 `[INTENT] explore — location question`. If it guessed wrong, press Esc and rephrase, or use
 the explicit form (`/.explore`, `/.analyze`, `/.plan`, `/.verify`, `/.verify-browser`). The full list of trigger
-phrases lives in the shipped Claude Code configuration (`dist/config/claude/CLAUDE.md`,
+phrases lives in the shipped Claude Code configuration (`src/exoma/_bundle/config/claude/CLAUDE.md`,
 "Command registry").
 
 ## Three things that surprise new users

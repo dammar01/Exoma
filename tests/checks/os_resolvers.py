@@ -13,10 +13,10 @@ import types
 from pathlib import Path
 
 from tests.checks.support import assert_true
-from utils import osutil
+from exoma.utils import osutil
 
 REPO = Path(__file__).resolve().parents[2]
-_ENTRY_POINTS = ("main.py", "install.py", "check.py")
+_ENTRY_POINTS = ("src/exoma/cli.py", "src/exoma/install.py", "src/exoma/check.py")
 _GUARD = re.compile(r"^if sys\.version_info < \((\d+), (\d+)\):\n(?:    .*\n|\n)+", re.MULTILINE)
 
 
@@ -35,7 +35,7 @@ def _test_entry_points_refuse_an_old_python() -> None:
             (int(match.group(1)), int(match.group(2))) == osutil.MIN_PYTHON,
             f"{name}'s guard names osutil.MIN_PYTHON {osutil.MIN_PYTHON}: {match.group(0)!r}",
         )
-        first_project_import = re.search(r"^(?:from|import) (?:config|core|installer|utils|adapters)\b", text, re.MULTILINE)
+        first_project_import = re.search(r"^(?:from|import) (?:exoma|config|core|installer|utils|adapters)\b", text, re.MULTILINE)
         assert_true(
             first_project_import is None or match.start() < first_project_import.start(),
             f"{name}'s guard runs before the first project import, or an old python never reaches it",

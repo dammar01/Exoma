@@ -54,7 +54,7 @@ the bytes it would have to check.
 | `[OPTIONS]` block and the confidence triple in `/.plan` | Appear in main_agent's **output**. Since 3.9.0 their mechanical half is checked when main_agent records the plan (`plan-record`: one to three options, each with a `minus`, exactly one recommended; all three confidence levels; a `proceed` with open questions or `solution_path` below `high` is refused). What the prose says is still unreachable. |
 | Per-claim attribution tags | Output-side, never routed back through the runtime. |
 | Intent detection without the `/.` prefix | Matches on the **user's** message. No Python path receives one. |
-| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose, which no hook reads. The `status-guard` Stop hook reads only the reply's `[EXECUTION RESULT]` fields (`status`, `verification`) and warns when they claim more than not_run (DEC-068); it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
+| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose, which no hook reads. The `status-guard` Stop hook reads only the reply's `[EXECUTION RESULT]` fields (`status`, `verification`) and warns when they claim more than not_run; it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
 | `commands.auto_verify_after_execute` | Whether main_agent chains `/.verify` after an execution is still its own behavior; the runtime records the verdict once a verify runs. |
 | `/.verify-browser` interview | The questions happen in main_agent's thread, and only after a draft reports the target unconfigured or unreachable. The runtime only sees the request file written afterwards. |
 | Proxy-failure hard gate | Stopping, printing `[PROXY GAGAL]`, and waiting for a yes/no before any local fallback is main_agent behavior after it reads `ok:false`. The runtime returns the failure; it cannot stop main_agent from gathering on its own. |
@@ -64,7 +64,7 @@ the bytes it would have to check.
 One prompt contract is enforced **partly outside Python**: the pre-flight gate for
 delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode, once the user
 names a delegated command explicitly (`/.analyze ...` or the slash-command payload; a prompt
-that only resembles one under the NL map gets an `[INTENT HINT]` instead, DEC-068), the
+that only resembles one under the NL map gets an `[INTENT HINT]` instead), the
 `intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools (including
 the `PowerShell` tool, and writes to the runner scripts) until `.workflow/run` dispatches;
 a Bash or PowerShell call passes only when one shared tokeniser reads it as one plain call to
@@ -73,16 +73,16 @@ literal in both shells, so `$`, `;`, `|`, `&`, redirects and newlines pass only 
 quotes, and double quotes, `bash -c` and the retired `run.ps1` do not; a leading
 `cd <dir inside the root> && ` is allowed — and a Read (or a one-file `cat`) passes when it
 names an existing `.md` whose real path lies inside `~/.claude/skills` (the skill that says
-how to dispatch, DEC-039; `~` and `/c/...` spellings resolved first), a background task's
-`<temp>/claude.../tasks/<id>.output` (DEC-068), or is a precision read: a project file outside `.workflow/`, at
+how to dispatch; `~` and `/c/...` spellings resolved first), a background task's
+`<temp>/claude.../tasks/<id>.output`, or is a precision read: a project file outside `.workflow/`, at
 most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
-`runtime/delegated.reads` keyed to the marker's `set_at` (DEC-043). That enforcement lives in the agent host, not in this runtime,
+`runtime/delegated.reads` keyed to the marker's `set_at`. That enforcement lives in the agent host, not in this runtime,
 and it fails open. The hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
 on Windows, named by absolute path in `settings.json`, which also sets
 `env.CLAUDE_CODE_GIT_BASH_PATH`) that runs the Python pinned in `~/.claude/hooks/python.path`
 (else resolves a Python 3.10+ by running it) and execs `workflow_hooks.py <hook>`, which reads
 the payload from stdin as UTF-8 and runs `<hook>.py` with it in memory — never through the
-environment, which Windows caps at 32767 characters per variable; no `.ps1` ships (DEC-068). The full prompt-layer list, with what each contract requires, is in
+environment, which Windows caps at 32767 characters per variable; no `.ps1` ships. The full prompt-layer list, with what each contract requires, is in
 [reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
 What *is* checkable is the second agent's output, because it comes back through the
@@ -90,7 +90,7 @@ runtime: see `core.evidence.contract.contract_warnings`. Those are reported, nev
 
 The `execution-gate` hook records its own refusals: one line per block or warning in the
 bound session's `runtime/gate-blocks.jsonl` (rule, tool, mode, exit code, plan id; never the
-path or command), fail-open. The runtime does not read it; it is EXP-014's count of how often
+path or command), fail-open. The runtime does not read it; it counts how often
 the gate fires, and whether a block was legitimate is still judged from the transcript.
 
 ## /.verify-browser
@@ -274,7 +274,7 @@ outcome that could never accumulate, which is the outcome most worth braking on.
 reason still travels in the record as the detail the refusal quotes back.
 
 Since 3.7.3 the `app` bucket is narrowed by a failure signature
-(`classify.failure_signature`, versioned `v1:<digest>`, DEC-008). An `app` streak continues
+(`classify.failure_signature`, versioned `v1:<digest>`). An `app` streak continues
 only when the new failure has the same signature: the same page (`url_after` through
 `sanitize_endpoint`, query and fragment dropped, identifier segments folded to `:id`), the
 same action, the same field (the step's `selector`/`selector_candidates`/`within` as the
@@ -593,7 +593,7 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   tokens are never recorded. An
   HTTP 2xx proves nothing on its own — the assertions do;
 - every request the page sends, reads included, is also recorded as metadata for page
-  optimization (`core/evidence/e2e/network.py`, DEC-014), apart from the ledger above: `seq`,
+  optimization (`core/evidence/e2e/network.py`), apart from the ledger above: `seq`,
   `start_ms` from the start of the run, `method`, `url` (`sanitize_endpoint`: no query,
   fragment or credentials, id-shaped segments `:id`), `resource_type`, `navigation`,
   `redirected_from`, `step_id`, `status`, `from_service_worker`, `failure`, `duration_ms` and
@@ -612,7 +612,7 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   e2e, text, css), each with a `selector_provenance` (`source`, `existing_test`,
   `runtime_probe`, `heuristic` or `proven`; optionally `ref`, a `path[:line]`), optionally
   scoped by `within` (a selector for the modal, form or table). Two kinds of candidate may
-  lead the list ahead of that order (`spec.leads_rank`, DEC-016): an `e2e` with provenance
+  lead the list ahead of that order (`spec.leads_rank`): an `e2e` with provenance
   `source` and a `path:line` ref whose cited line, in a template file inside the project and
   outside an HTML comment, has an opening tag with `data-e2e` set to exactly that value
   (read like the tagging pass reads a line; checked at validation; without a project root
@@ -621,8 +621,7 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   lists for this origin, route and `within` (`knowledge.proven_selectors` returns
   `{selector, route, within}`; elsewhere the selector is an ordinary candidate). The route is
   the URL path with identifier segments as `:id`, by `sanitize_endpoint`'s rule
-  (`/users/123/edit` and `/users/456/edit` are `/users/:id/edit`; route words stay apart,
-  DEC-040); an entry recorded under a raw id route matches nothing until a clean run
+  (`/users/123/edit` and `/users/456/edit` are `/users/:id/edit`; route words stay apart); an entry recorded under a raw id route matches nothing until a clean run
   re-proves it. `proven` is checked against the
   store at validation; one it does not back is `spec_invalid`. Once the usual order starts,
   every later candidate obeys it, so a role-first list stays valid;
@@ -746,7 +745,7 @@ Metrics: every run (not a draft) appends one `kind: e2e_run` row to
 (`fake`, `smoke`, `project`), an optional `WORKFLOW_E2E_LABEL`, the base_url `origin`, and
 the network summary as `network`. `meta.e2e.page_requests` carries the same summary plus
 `since_last_run`: the change in requests, failures, response bytes and per-type counts and
-bytes against the last run of the same kind on the same origin (None for the first). `main.py --command
+bytes against the last run of the same kind on the same origin (None for the first). `exoma --command
 report` derives `e2e` from those rows, split by run kind: verdict, incomplete-by-reason
 and origin rates, browser runs per claim, probes, screenshots kept against screenshots
 sent to a model, tokens per run (joined through `usage.jsonl`), reproducibility across
@@ -768,8 +767,8 @@ report` adds `e2e.drafts`, per run kind: drafts, ready/invalid/blocked, ready ra
 attempted and recovered, first-error and remaining-category distributions, and drafts that
 carried a literal credential.
 
-Dependency policy: Playwright is an optional extra, pinned in `requirements-e2e.txt` and
-installed only by `python install.py --apply --with-e2e` (pip, then
+Dependency policy: Playwright is an optional extra (`exoma[e2e]`), pinned in the bundled
+`requirements-e2e.txt` and installed by `exoma install --apply --with-e2e` (pip, then
 `python -m playwright install chromium`). The runtime stays stdlib-only;
 `core/evidence/e2e/preflight.py` and `browser.py` import it inside the call, under an
 `ImportError` guard, and `tests/checks/deps.py` permits exactly that shape in exactly that
@@ -787,10 +786,10 @@ A project runs on its own `.workflow/second_agent.json` and nothing else
 (`config.settings.resolve_provider_config_for`). There is no machine-wide fallback: a missing
 file resolves `source: missing` and an unparseable one `source: invalid`, and the executor
 refuses both before any provider call (`provider_config_missing`, `provider_config_invalid`,
-each with a next_action). The tool-level `config/second_agent.seed.json` is a template `init`
-copies into a new workspace and `install.py --apply` rebuilds from
+each with a next_action). The per-user `second_agent.seed.json` (in the data directory) is a
+template `init` copies into a new workspace and `exoma install --apply` rebuilds from
 `second_agent.example.json` on every run, carrying only the previous selection (provider,
-default model, per-route models). The old `config/second_agent.json`, written once and never
+default model, per-route models). An old `second_agent.json` beside it, written once and never
 refreshed, is renamed `.retired` and its selection is not carried over.
 
 Selectable routes are `explore plan analyze verify e2e_spec`. An opencode call whose route
@@ -814,7 +813,7 @@ Writes are a separate axis, declared per bundle as `boundary.writes` in `config/
 and read through `provider_boundary()`: opencode `denied` (permission map), codex `sandboxed`,
 agy `unbounded`. codex's `sandboxed` takes TWO flags on every call, resumed ones included:
 `--sandbox read-only` (an `exec` option, so `exec --sandbox read-only resume <id>` on a resumed
-call; `-c sandbox_mode=` there made codex 0.155+ refuse every resume on Windows, DEC-053)
+call; `-c sandbox_mode=` there made codex 0.155+ refuse every resume on Windows)
 confines shell commands, and
 `-c approval_policy="never"` makes codex reject an `apply_patch` outside the writable roots —
 without it, codex-cli 0.154.0 on Windows wrote a file through that tool under a read-only
@@ -846,9 +845,9 @@ injection. Any remaining argument that cmd.exe would interpret (`" & | < > ^ %` 
 in the command path, prompt-file path, model, agent or effort) is refused before spawning
 as `unsafe_command_line`.
 
-## install.py --apply and leftovers
+## exoma install --apply and leftovers
 
-`--apply` refuses a `dist/` that does not match `dist/manifest.json` (dry run warns). After
+`--apply` refuses a bundle (`exoma/_bundle/config/`) that does not match `exoma/_bundle/manifest.json` (dry run warns). After
 installing, it removes files an earlier release installed and this one no longer ships —
 only a file an install recorded writing (the ledger `~/.claude/.workflow-installed.json`, or
 any install receipt), in a family installed file by file (skills, commands, hooks, provider
@@ -857,12 +856,12 @@ Each removal is backed up under `backups/install_*/stale/` and receipted as `rem
 `--rollback` restores. settings.json loses the hook commands that run a retired script and
 has a `statusLine` that runs a workflow script refreshed; a statusLine or hook running the
 user's own script is theirs. `--check` reports leftovers. `init`/`upgrade` point a workspace
-at the build running the command first, then `$AGENT_PATH`, and only then the path recorded
-in config.json.
+at the build running the command; `$AGENT_PATH` and the agent-workflow paths a workspace
+recorded are reported (`doctor` `runtime_resolver.legacy`) and never followed.
 
 An instruction file with markers (`CLAUDE.md`, each provider `AGENTS.md`) that does not
 exist yet is written as the managed block alone, as a later install would splice it; text
-outside the markers in `dist/` is never installed. Hook entries are merged per event by the
+outside the markers in the bundle is never installed. Hook entries are merged per event by the
 script they run; a shipped script's command on an event whose template entries no longer
 name it is removed from that event (`_drop_relocated_hooks`), so a hook that moved does not
 keep running in its old place.
@@ -938,12 +937,12 @@ one-byte file carrying an OS byte-range lock, kept between uses:
 | File | Kind | Content | Lifetime |
 | --- | --- | --- | --- |
 | `facts.jsonl.lock`, `e2e-knowledge.jsonl.lock`, `promote.lock` | `OwnedFileLock` | `{pid, token, at}` | Removed on release; a leftover empty one is a writer that crashed between create and write, reclaimed after the TTL |
-| `storage/jobs/locks/<session>.lock` (agent install, not the project) | job session lock | job id and token | Removed on release |
-| `graphify-out/.refresh.lock` | graph-refresh Stop hook, then its detached worker | `{pid, token, started, beat, graphify_pid}` | Removed by the worker holding the token. Held while `beat` is younger than 120 s, whatever the lock's age: the worker rewrites it every 15 s and graphify has no time limit (DEC-042). A lock without `beat` keeps the old rule (live pid, younger than 15 minutes). A stale one is removed by the next hook or by `clean`; nothing kills a process |
+| `<data dir>/storage/jobs/locks/<session>.lock` (per user, not the project) | job session lock | job id and token | Removed on release |
+| `graphify-out/.refresh.lock` | graph-refresh Stop hook, then its detached worker | `{pid, token, started, beat, graphify_pid}` | Removed by the worker holding the token. Held while `beat` is younger than 120 s, whatever the lock's age: the worker rewrites it every 15 s and graphify has no time limit. A lock without `beat` keeps the old rule (live pid, younger than 15 minutes). A stale one is removed by the next hook or by `clean`; nothing kills a process |
 | `evidence.jsonl.lock` | OS lock on byte 0 | one NUL byte | Kept: the lock is the open handle, released by closing it |
 | `<lock>.reclaim` | OS lock on byte 0 | one NUL byte | Kept, one per `OwnedFileLock` that was ever reclaimed |
-| `storage/jobs/.capacity.guard`, `<session>.lock.guard`, `<claim>.guard` | OS lock on byte 0 (`JobManager._exclusive_file_guard`) | one NUL byte | Kept, one per session or claim path; they accumulate (CASE-007) |
-| `sessions/<id>/runtime/lock.guard` | OS lock on byte 0 (`_RuntimeTransitionGuard`) | one NUL byte | Kept between uses; `clean` removes it when the session has no live runtime lock and the guard can be locked without waiting (DEC-013). A holder keeps it. On POSIX it is unlinked while locked and a process that was waiting on it reopens the path; Windows refuses the delete while another process has it open, and that refusal keeps it |
+| `<data dir>/storage/jobs/.capacity.guard`, `<session>.lock.guard`, `<claim>.guard` | OS lock on byte 0 (`JobManager._exclusive_file_guard`) | one NUL byte | Kept, one per session or claim path; they accumulate |
+| `sessions/<id>/runtime/lock.guard` | OS lock on byte 0 (`_RuntimeTransitionGuard`) | one NUL byte | Kept between uses; `clean` removes it when the session has no live runtime lock and the guard can be locked without waiting. A holder keeps it. On POSIX it is unlinked while locked and a process that was waiting on it reopens the path; Windows refuses the delete while another process has it open, and that refusal keeps it |
 
 A one-byte file shows as empty in most editors; its content is `\0`, which the Windows
 byte-range lock (`msvcrt.locking`) needs to lock. Deleting a kept file while no process runs is
@@ -951,7 +950,7 @@ harmless: it is recreated on the next use. Deleting it while a process holds it 
 design rules out: Windows refuses the delete, and on POSIX the next writer creates a new,
 unlocked file, so two writers run at once. The `evidence-lock-file` test suite checks both,
 and that a second process waits for the holder. The runtime guard is the one exception made
-safe on purpose (DEC-013): `_RuntimeTransitionGuard` re-checks on POSIX that the path still
+safe on purpose: `_RuntimeTransitionGuard` re-checks on POSIX that the path still
 names the file it locked and reopens it if not, which is what lets `clean` remove it.
 
 ## Call telemetry
@@ -967,7 +966,7 @@ fail differently:
   is never left standing in for this one. For exploration and reasoning calls it also holds
   `served_facts`, the facts `fact_store.load_relevant` served (`key`, `file`, `line`; `[]`
   when none), recorded before the prompt is built so the archived call names exactly what the
-  second agent was shown (EXP-013, DEC-070).
+  second agent was shown.
 - **Usage and audit rows** (`_record_usage`: `write_usage_record`, then `write_audit_record`)
   are written separately, on the return path. A failure there is swallowed silently — no
   `call_meta_error`, no field on the result. A missing usage or audit row is therefore not
@@ -1018,12 +1017,12 @@ Contract version 4 adds two fields and drops one kind of row:
 
 ## Task events
 
-`tasks.jsonl` (DEC-015, `core/audit/task_telemetry.py`) is append-only and has two writers.
+`tasks.jsonl` (`core/audit/task_telemetry.py`) is append-only and has two writers.
 The executor appends one `source: runtime` event per delegated command from `_record_usage`,
 after the usage and audit rows and inside the same fail-open block: `skill` (the command),
 `verdict` (verify only: the reply's declared verdict, `NEEDS FIX` when the contract finds a
 blocking finding), `derived` (verify only: the runtime's derived verdict, `pass`,
-`incomplete` or `fail`; DEC-020), `next_action`, `prompt_id`. A finalised browser run is `verify`, its draft
+`incomplete` or `fail`), `next_action`, `prompt_id`. A finalised browser run is `verify`, its draft
 `verify-browser`, including a run that reached no provider and so wrote no usage row. The
 `task-events` hook appends `source: hook` events (`v: 2`) for what never reaches the runtime:
 
@@ -1048,12 +1047,12 @@ MAIN_SESSION_ID through `~/.claude/session_registry.json`, writes only when
 
 Nothing is derived at write time. `derive_tasks` walks the events in order per session: the
 first event opens a task; an `edit` clears a verdict seen before it; a verify whose
-`derived` is `pass`, on a task that edited something, closes it as `completed` (DEC-020).
+`derived` is `pass`, on a task that edited something, closes it as `completed`.
 A commit closes nothing: one whose `paths` include a file the open task edited joins that
 task's sequence, otherwise one that includes a file of the task the session last completed
 joins that one; a commit hash is taken once it is claimed (a copy another session logged first does not hide
 it from its own session); a distinct commit no copy claims is `unclaimed_commits`. A task still open at the end is `open`, or `read_only` (no edits);
-events without a session are `unknown`. Events written before DEC-020 carry no `derived`,
+events without a session are `unknown`. Older events carry no `derived`,
 so their tasks stay `open`.
 
 ## Workspace layout

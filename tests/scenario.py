@@ -1,4 +1,4 @@
-"""Unit and integration checks for agent-workflow.
+"""Unit and integration checks for Exoma.
 
     python tests/run.py               # everything
     python tests/run.py --list        # what can be run on its own
@@ -23,14 +23,25 @@ from pathlib import Path
 # root, so every `import main` below would miss without this.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
+# Global state (job records, the main-session cache, the provider seed) goes to a
+# throwaway EXOMA_HOME, never the user's own data directory. Set before anything imports
+# exoma.config.settings, which resolves it once.
+if not os.environ.get("EXOMA_HOME"):
+    os.environ["EXOMA_HOME"] = tempfile.mkdtemp(prefix="exoma-test-home-")
+# Child interpreters the checks spawn (`python -c ...` lock holders, probes) import exoma
+# from this checkout's src/, as they used to import core/ from the repo root they ran in.
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    part for part in (str(REPO_ROOT / "src"), os.environ.get("PYTHONPATH", "")) if part
+)
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -143,7 +154,6 @@ from tests.checks.session_persistence import (
     _test_provider_thread_id_is_never_lost_silently,
     _test_result_names_the_provider_boundary,
 )
-from tests.checks.research import _test_research_records_follow_the_schema
 from tests.checks.workflow_layout import _test_workflow_layout
 from tests.checks.workspace_migration import _test_workspace_migration
 from tests.checks.installer_stale import _test_installer_leaves_no_stale_files
@@ -168,7 +178,6 @@ from tests.checks.os_resolvers import (
 from tests.checks.verify_tests import _test_verify_runtime_tests
 from tests.checks.metrics import _test_metrics_contract
 from tests.checks.replay import _test_fact_replay
-from tests.checks.blind_sample import _test_blind_sample
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
 from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider
 from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates
@@ -199,7 +208,6 @@ def run_tests() -> None:
     _test_stamp_version_reads_versions_not_addresses()
     _test_manifest_matches_dist()
     _test_malformed_manifest_entry_fails_closed()
-    _test_research_records_follow_the_schema()
     _test_workflow_layout()
     _test_workspace_migration()
     _test_installer_leaves_no_stale_files()
@@ -218,7 +226,6 @@ def run_tests() -> None:
     _test_verify_runtime_tests()
     _test_metrics_contract()
     _test_fact_replay()
-    _test_blind_sample()
     _test_opencode_prompt_never_reaches_cmd()
     _test_statusline_failed_calls_are_not_estimates()
     _test_provider_seam()
@@ -279,7 +286,9 @@ def run_tests() -> None:
         )
         claude_contract = (
             REPO_ROOT
-            / "dist"
+            / "src"
+            / "exoma"
+            / "_bundle"
             / "config"
             / "claude"
             / "CLAUDE.md"
@@ -628,9 +637,9 @@ def run_tests() -> None:
         main.JOB_MANAGER.fail_job(dead_attach["job_id"], "test cleanup")
 
         # 11. Structured errors, idempotency, reaper, digest, guard, router
-        from core.evidence.contract import extract_digest, make_error, validate_verification_contract
-        from core.prompt.router import Router
-        from utils import osutil, path_guard
+        from exoma.core.evidence.contract import extract_digest, make_error, validate_verification_contract
+        from exoma.core.prompt.router import Router
+        from exoma.utils import osutil, path_guard
 
         # next_action mandatory
         enforced = False
@@ -815,7 +824,9 @@ confidence: high — all requested checks ran
         project_policy = json.loads(
             (
                 REPO_ROOT
-                / "dist"
+                / "src"
+                / "exoma"
+                / "_bundle"
                 / "config"
                 / "opencode"
                 / "opencode.project.json"
@@ -840,7 +851,7 @@ confidence: high — all requested checks ran
             "project policy must deny out-of-root access for every agent, not just plan",
         )
         plan_permission = json.loads(
-            (REPO_ROOT / "dist" / "config" / "opencode" / "opencode.template.json").read_text(
+            (REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "opencode" / "opencode.template.json").read_text(
                 encoding="utf-8"
             )
         )["agent"]["plan"]["permission"]
@@ -891,9 +902,9 @@ confidence: high — all requested checks ran
         assert_true(rich_res["meta"].get("next_action") == "STOP, ask user", "job path must preserve next_action")
 
         # 12. Liveness tri-state, heartbeat, runtime ceiling, probe
-        from core.evidence import fact_store
-        from core.graph import graph_index
-        from core.jobs import job_manager as jm_mod
+        from exoma.core.evidence import fact_store
+        from exoma.core.graph import graph_index
+        from exoma.core.jobs import job_manager as jm_mod
 
         # Stall detection and the runtime ceiling are separate managers on purpose: the
         # ceiling outranks stall in get_result (a hard backstop must win over a probe
@@ -1127,8 +1138,8 @@ confidence: high — all requested checks ran
         )
 
         # 13. Sub-agent fan-out: instruction gating and honest usage detection
-        from core.evidence.contract import detect_subagent_usage
-        from core.runtime.config_defaults import subagent_fanout_enabled
+        from exoma.core.evidence.contract import detect_subagent_usage
+        from exoma.core.runtime.config_defaults import subagent_fanout_enabled
 
         def _p(has_leads, fanout):
             return build_prompt(
@@ -1223,7 +1234,7 @@ confidence: high — all requested checks ran
         import json as _json
 
         example = (
-            REPO_ROOT / "config" / "second_agent.example.json"
+            REPO_ROOT / "src" / "exoma" / "config" / "second_agent.example.json"
         )
         shipped = _json.loads(example.read_text(encoding="utf-8"))
         models = [shipped.get("default_model")] + [

@@ -12,7 +12,7 @@ found next to git, never WSL's bash, which cannot read a Windows path.
 """
 
 from __future__ import annotations
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 
 import json
 import os
@@ -24,10 +24,10 @@ import tempfile
 from pathlib import Path
 
 from tests.checks.support import assert_true
-from utils.osutil import find_bash
+from exoma.utils.osutil import find_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOOKS = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
+HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 _MEASURED = {"session_id": "main-1", "ok": True, "prompt_id": "p1", "token_source": "provider",

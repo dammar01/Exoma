@@ -34,8 +34,9 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from core.audit import metrics  # noqa: E402
-from core.evidence import fact_store  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from exoma.core.audit import metrics  # noqa: E402
+from exoma.core.evidence import fact_store  # noqa: E402
 
 ROLES = ("exploration", "reasoning")
 ONE_TOKEN_LIMIT = 3  # 3.8.4 RELEVANT_LIMIT

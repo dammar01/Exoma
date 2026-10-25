@@ -18,7 +18,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from installer.base import _RECEIPT, Plan
+from exoma.installer.base import _RECEIPT, Plan
 from tests.checks.support import assert_true
 
 
@@ -29,8 +29,8 @@ def _sha(path: Path) -> str:
 @contextlib.contextmanager
 def _sandbox():
     """A fake ~/.claude with its install history, wired into the installer modules."""
-    import installer.rollback as rollback
-    import installer.stale as stale
+    import exoma.installer.rollback as rollback
+    import exoma.installer.stale as stale
 
     root = Path(tempfile.mkdtemp(prefix="aw-install-stale-"))
     home = root / "home" / ".claude"
@@ -60,7 +60,7 @@ def _receipt(backups: Path, name: str, entries: list[dict]) -> Path:
 
 
 def _check_only_our_unedited_leftovers_go() -> None:
-    import installer.stale as stale
+    import exoma.installer.stale as stale
 
     with _sandbox() as (home, backups):
         old = home / "skills" / "retired.md"
@@ -109,7 +109,7 @@ def _check_only_our_unedited_leftovers_go() -> None:
         )
 
         # --rollback restores a removed file from its receipt.
-        from installer.rollback import _run_rollback
+        from exoma.installer.rollback import _run_rollback
 
         (install_dir / "install_receipt.json").write_text(
             json.dumps({"schema_version": 2, "entries": list(_RECEIPT)}), encoding="utf-8"
@@ -121,7 +121,7 @@ def _check_only_our_unedited_leftovers_go() -> None:
 
 
 def _check_ledger_is_evidence_too() -> None:
-    import installer.stale as stale
+    import exoma.installer.stale as stale
 
     with _sandbox() as (home, _backups):
         skill = home / "skills" / "from-ledger.md"
@@ -133,9 +133,9 @@ def _check_ledger_is_evidence_too() -> None:
 
 
 def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
-    import installer.stale as stale
-    from installer.base import DIST_CONFIG
-    from installer.settings import _drop_retired_hooks, _install_settings
+    import exoma.installer.stale as stale
+    from exoma.installer.base import DIST_CONFIG
+    from exoma.installer.settings import _drop_retired_hooks, _install_settings
 
     hooks = {
         "Stop": [
@@ -171,7 +171,7 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
         plan = Plan()
         _install_settings(src, dest, plan, True, backups / "install_29990101_000001")
         written = json.loads(dest.read_text(encoding="utf-8"))
-        from installer.settings import _render_hook_commands, _resolve_in_json
+        from exoma.installer.settings import _render_hook_commands, _resolve_in_json
 
         expected_status = _render_hook_commands(_resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None))["statusLine"]
         assert_true(written["statusLine"] == expected_status, f"a workflow statusLine is refreshed to the shipped command: {written['statusLine']}")
@@ -200,8 +200,8 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
 
 
 def _check_unstamped_dist_is_refused() -> None:
-    from installer.check import _bundle_stale
-    from installer.base import MANIFEST
+    from exoma.installer.check import _bundle_stale
+    from exoma.installer.base import MANIFEST
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert_true(_bundle_stale(manifest) == [], "fixture assumption: the shipped bundle is stamped")
@@ -216,8 +216,8 @@ def _check_unstamped_dist_is_refused() -> None:
 
 
 def _check_upgrade_points_at_the_running_build() -> None:
-    from config.settings import MAIN_PY
-    from core.runtime.upgrade import resolve_agent_workflow_path
+    from exoma.config.settings import PACKAGE_PARENT
+    from exoma.core.runtime.upgrade import resolve_runtime
 
     root = Path(tempfile.mkdtemp(prefix="aw-resolve-"))
     try:
@@ -228,9 +228,11 @@ def _check_upgrade_points_at_the_running_build() -> None:
         (root / ".workflow" / "config.json").write_text(
             json.dumps({"runtime": {"agent_workflow_path": str(old_clone)}}), encoding="utf-8"
         )
-        resolved = resolve_agent_workflow_path(root)
+        resolved = resolve_runtime(root)
         assert_true(
-            resolved["source"] == "running_build" and Path(resolved["path"]) == MAIN_PY.resolve(),
+            resolved["source"] == "running_build"
+            and Path(resolved["package_root"]) == PACKAGE_PARENT
+            and resolved["legacy"]["workflow_config"] == {"agent_workflow_path": str(old_clone)},
             f"an old clone recorded in config.json must not outrank the build doing the upgrade: {resolved}",
         )
     finally:

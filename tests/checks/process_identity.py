@@ -8,15 +8,15 @@ import tempfile
 import time
 from pathlib import Path
 
-from core.jobs.job_manager import JobManager
-from utils import osutil
+from exoma.core.jobs.job_manager import JobManager
+from exoma.utils import osutil
 
 from tests.checks.support import assert_true
 
 _HOLD_LOCK = """
 import sys
 from pathlib import Path
-from utils import osutil
+from exoma.utils import osutil
 handle = osutil.open_lock_file(Path(sys.argv[1]))
 osutil.lock_file(handle)
 print("held", flush=True)
@@ -165,7 +165,7 @@ def _test_byte_lock_excludes_handles_and_processes() -> None:
             first.close()
         assert_true(path.stat().st_size == 1, "reopening a lock file does not grow it")
 
-        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2]))
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
         holder = subprocess.Popen(
             [sys.executable, "-c", _HOLD_LOCK, str(path)],
             stdin=subprocess.PIPE,

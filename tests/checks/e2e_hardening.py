@@ -14,11 +14,11 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from core.evidence.contract import validate_verification_contract
-from core.evidence.e2e.browser import Session
-from core.evidence.e2e.classify import build_report
-from core.evidence.e2e.normalize import to_verification
-from core.evidence.e2e.redact import sanitize_endpoint
+from exoma.core.evidence.contract import validate_verification_contract
+from exoma.core.evidence.e2e.browser import Session
+from exoma.core.evidence.e2e.classify import build_report
+from exoma.core.evidence.e2e.normalize import to_verification
+from exoma.core.evidence.e2e.redact import sanitize_endpoint
 from tests.checks.support import assert_true
 
 _SCENARIO = {"version": 1, "claims": [{"id": "login", "severity": "blocking"}], "steps": []}
@@ -110,7 +110,7 @@ def _check_tokens_leave_the_ledger() -> None:
 
 
 def _check_headed_without_a_display_runs_headless(root: Path) -> None:
-    import core.evidence.e2e.runner as runner
+    import exoma.core.evidence.e2e.runner as runner
 
     captured: dict = {}
     saved_display, saved_player, saved_preflight = runner.display_available, runner.run_player, runner.preflight
@@ -150,7 +150,7 @@ def _check_fake_player_reports_cleanup() -> None:
     import json
     import sys
 
-    from core.evidence.e2e import player
+    from exoma.core.evidence.e2e import player
 
     scenario = {"steps": [{"id": "make", "action": "click", "selector": {"text": "Add"}}],
                 "cleanup": [{"id": "undo", "cleans": "make", "action": "click", "selector": {"text": "Delete"}}]}
@@ -169,7 +169,7 @@ def _check_fake_player_reports_cleanup() -> None:
 
 
 def _check_budget_covers_retries(root: Path) -> None:
-    from core.evidence.e2e.runner import _enforce_artifact_budget
+    from exoma.core.evidence.e2e.runner import _enforce_artifact_budget
 
     run_dir = root / "budget"
     (run_dir / "retry1").mkdir(parents=True)
@@ -185,7 +185,7 @@ def _check_budget_covers_retries(root: Path) -> None:
 
 
 def _check_browser_job_is_not_resumed() -> None:
-    import core.jobs.job_lifecycle as lifecycle
+    import exoma.core.jobs.job_lifecycle as lifecycle
 
     failed: list[dict] = []
 
@@ -229,8 +229,8 @@ def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
     scenario between attempts, so a step-level key reset every time. Keying on the outcome
     is what makes the streak survive those edits.
     """
-    from core.evidence.e2e.classify import repeat_bucket
-    from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
+    from exoma.core.evidence.e2e.classify import repeat_bucket
+    from exoma.core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
 
     (root / ".workflow").mkdir(parents=True, exist_ok=True)
     (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
@@ -312,8 +312,8 @@ def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
     # and without deriving one the next run matched nothing and restarted a streak that
     # had already counted to two — the brake losing its count at exactly the moment it was
     # about to fire.
-    from core.runtime.state import load_workspace_state
-    from core.workspace.workspace_paths import atomic_write_json
+    from exoma.core.runtime.state import load_workspace_state
+    from exoma.core.workspace.workspace_paths import atomic_write_json
 
     loaded = load_workspace_state(root, "sid-legacy")
     loaded["state"]["e2e_repeat"] = {"origin": origin, "reason": "stuck", "streak": 2}
@@ -343,7 +343,7 @@ def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
 
 
 def _check_a_blocked_delete_asks_instead_of_only_refusing() -> None:
-    from core.evidence.e2e.runner import _destructive_requests
+    from exoma.core.evidence.e2e.runner import _destructive_requests
 
     pending = _destructive_requests(
         {
@@ -378,7 +378,7 @@ def _check_permissions_file_fails_closed(root: Path) -> None:
     """
     import json
 
-    from core.evidence.e2e.request import load_permissions, permissions_path
+    from exoma.core.evidence.e2e.request import load_permissions, permissions_path
 
     path = permissions_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -433,7 +433,7 @@ def _check_permissions_file_fails_closed(root: Path) -> None:
 
     # And the run does not start on a file that could not be read in full: the loader
     # returning an error is only half of failing closed.
-    from core.evidence.e2e.request import REQUEST_VERSION, load_request, request_path
+    from exoma.core.evidence.e2e.request import REQUEST_VERSION, load_request, request_path
 
     path.write_text(json.dumps({"blocked_requests": ["* /api/payments", "bad"]}), encoding="utf-8")
     session = "sid-permissions"
@@ -457,8 +457,8 @@ def _check_preflight_failures_reach_the_brake(root: Path) -> None:
     failures it must NOT count, the caller's own `spec_invalid` or `secrets_invalid`, are
     corrected by coming back with better input.
     """
-    from core.evidence.e2e.classify import repeat_bucket
-    from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
+    from exoma.core.evidence.e2e.classify import repeat_bucket
+    from exoma.core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
 
     (root / ".workflow").mkdir(parents=True, exist_ok=True)
     (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
@@ -475,7 +475,7 @@ def _check_preflight_failures_reach_the_brake(root: Path) -> None:
     # And the gate counts by reason, not by "preflight failed". `preflight` returns
     # `spec_invalid` for a base_url or write policy the request itself named, which the
     # caller fixes by asking again — counting it would refuse the corrected request.
-    from core.evidence.e2e.runner import _REPEATABLE_PREFLIGHT
+    from exoma.core.evidence.e2e.runner import _REPEATABLE_PREFLIGHT
 
     assert_true(
         "spec_invalid" not in _REPEATABLE_PREFLIGHT
@@ -494,8 +494,8 @@ def _check_a_passing_preflight_clears_the_environment_streak(root: Path) -> None
     what they count is exactly what preflight just disproved; `app` is not, because a
     reachable base URL says nothing about whether the application behind it still fails.
     """
-    from core.evidence.e2e.runner import _REPEATABLE_PREFLIGHT
-    from core.runtime.state import e2e_repeat_state, note_e2e_outcome
+    from exoma.core.evidence.e2e.runner import _REPEATABLE_PREFLIGHT
+    from exoma.core.runtime.state import e2e_repeat_state, note_e2e_outcome
 
     (root / ".workflow").mkdir(parents=True, exist_ok=True)
     (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
@@ -593,7 +593,7 @@ def _check_the_brake_has_one_way_past_it(root: Path) -> None:
     """
     import json
 
-    from core.evidence.e2e.request import REQUEST_VERSION, default_settings, load_request, request_path
+    from exoma.core.evidence.e2e.request import REQUEST_VERSION, default_settings, load_request, request_path
 
     assert_true(
         default_settings()["ignore_repeat_brake"] is False,
@@ -627,8 +627,8 @@ def _check_the_brake_remembers_the_newest_project_state(root: Path) -> None:
     """The streak keeps the fingerprint of its LAST failure. Comparing against the first
     would release the brake for a change made before the second failure, which that
     failure already showed did not help."""
-    from core.evidence.e2e.fingerprint import project_fingerprint
-    from core.runtime.state import e2e_repeat_state, note_e2e_outcome
+    from exoma.core.evidence.e2e.fingerprint import project_fingerprint
+    from exoma.core.runtime.state import e2e_repeat_state, note_e2e_outcome
 
     session = "sid-fingerprint"
     origin = "http://localhost:3000"
@@ -648,7 +648,7 @@ def _check_the_brake_remembers_the_newest_project_state(root: Path) -> None:
 
 def _check_failure_signature_names_page_field_and_condition() -> None:
     """The signature is what makes two app failures "the same": page, field, condition."""
-    from core.evidence.e2e.classify import failure_signature
+    from exoma.core.evidence.e2e.classify import failure_signature
 
     scenario = {"steps": [
         {"id": "fill-email", "action": "fill", "selector": {"label": "Email Address"}, "value": "${E2E_USER}"},

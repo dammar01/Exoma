@@ -8,10 +8,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from core.evidence import verify_tests
-from core.evidence.contract import validate_verification_contract
-from core.runtime.state import ensure_workflow_workspace
-from core.workspace.workspace_paths import read_json_file, workflow_paths
+from exoma.core.evidence import verify_tests
+from exoma.core.evidence.contract import validate_verification_contract
+from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
 from tests.checks.support import assert_true
 
 _REVIEW = """[VERIFICATION]
@@ -171,7 +171,7 @@ def _check_no_test_line_is_not_a_check() -> None:
 def _check_runtime_gaps_exit_nonzero() -> None:
     """A gap the runtime injected (no request, unusable request, refused command) exits
     nonzero; one the agent declared itself keeps the gap-only exit 0."""
-    from core.evidence.contract import verify_exit_status
+    from exoma.core.evidence.contract import verify_exit_status
 
     root = _workspace([f'"{sys.executable}" -c'])
     try:
@@ -221,7 +221,7 @@ def _check_unrunnable_commands_never_crash() -> None:
             f"a control character is refused up front, and never reaches the block: {outcome}",
         )
         # Should a spawn still raise ValueError, it is an `error` outcome, not a crash.
-        from utils import osutil
+        from exoma.utils import osutil
 
         real = osutil.run_bounded
 
@@ -241,8 +241,8 @@ def _check_unrunnable_commands_never_crash() -> None:
         )
 
         # And anything else escaping apply: the executor keeps the review and adds a gap.
-        from core.evidence.contract import verify_exit_status
-        from core.provider import executor as executor_module
+        from exoma.core.evidence.contract import verify_exit_status
+        from exoma.core.provider import executor as executor_module
 
         real_apply = verify_tests.apply
 
@@ -317,7 +317,7 @@ def _check_exited_runner_is_not_held_by_its_orphan() -> None:
     """A runner that exits 0 but leaves a grandchild holding stdout (a dev server, a
     watcher) waited on the pipe for the whole timeout and came back as a timeout — a false
     fail — leaking the orphan. Its exit ends the run; the orphan is killed."""
-    from utils import osutil
+    from exoma.utils import osutil
 
     marker = f"aw-orphan-{os.getpid()}-{time.monotonic_ns()}"
     script = (
@@ -346,7 +346,7 @@ def _orphan_alive(marker: str) -> bool:
     """Whether any process has `marker` on its command line. Best-effort, stdlib only."""
     import subprocess
 
-    from utils import osutil
+    from exoma.utils import osutil
 
     if osutil.IS_WINDOWS:
         args = [
@@ -517,9 +517,9 @@ class _FailThenReviewAdapter:
 def _check_failed_provider_call_does_not_feed_the_next_job() -> None:
     """CASE-023 end to end: a verify job whose provider call returns ok:false through the real
     Executor leaves its claim; the next verify job, with no new request, runs no test."""
-    import main
-    from core.jobs.job_manager import JobManager
-    from core.provider.executor import Executor
+    from exoma import cli as main
+    from exoma.core.jobs.job_manager import JobManager
+    from exoma.core.provider.executor import Executor
 
     python = f'"{sys.executable}"'
     root = _workspace([f"{python} -c"])
@@ -554,8 +554,8 @@ def _check_failed_provider_call_does_not_feed_the_next_job() -> None:
 def _check_submit_claims_only_for_a_new_job() -> None:
     """The claim happens where the job is created: a new verify job claims, a recovery of
     the same job does not, and a job after a failed one drops the leftover."""
-    import main
-    from core.jobs.job_manager import JobManager
+    from exoma import cli as main
+    from exoma.core.jobs.job_manager import JobManager
 
     python = f'"{sys.executable}"'
     root = _workspace([f"{python} -c"])
@@ -592,8 +592,8 @@ def _check_submit_claims_only_for_a_new_job() -> None:
 
 def _check_prompt_tests_line_follows_allowlist() -> None:
     """The second agent is told not to run tests only where the runtime runs them."""
-    from core.prompt.prompt_builder import build_prompt
-    from config.roles import ROLE_VERIFICATION
+    from exoma.core.prompt.prompt_builder import build_prompt
+    from exoma.config.roles import ROLE_VERIFICATION
 
     line = "do NOT run test runners"
     for prefixes, expected in (([f'"{sys.executable}" -c'], True), ([], False)):
@@ -613,7 +613,7 @@ def _check_prompt_tests_line_follows_allowlist() -> None:
 def _check_doctor_verify_warnings() -> None:
     """doctor warns on an empty test allowlist and on an old install's header left outside
     the managed block of ~/.claude/CLAUDE.md; neither is an issue."""
-    from core.audit.diagnostics import run_doctor
+    from exoma.core.audit.diagnostics import run_doctor
 
     home = Path(tempfile.mkdtemp(prefix="doctor-home-"))
     saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE")}

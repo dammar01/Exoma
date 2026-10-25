@@ -13,9 +13,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence.e2e.classify import build_report
-from core.evidence.e2e.network import CHUNK_ROWS, NetworkLedger
-from core.evidence.e2e.supervisor import MAX_EVENT_LINE
+from exoma.core.evidence.e2e.classify import build_report
+from exoma.core.evidence.e2e.network import CHUNK_ROWS, NetworkLedger
+from exoma.core.evidence.e2e.supervisor import MAX_EVENT_LINE
 from tests.checks.support import assert_true
 
 _SECRET = "tok_live_9f8e7d6c5b4a"
@@ -157,8 +157,8 @@ def _check_event_bytes_and_failure_text() -> None:
 
 
 def _check_next_run_reports_the_difference() -> None:
-    from core.evidence.e2e.runner import _network_diff
-    from core.evidence.runtime_io import write_quality_record
+    from exoma.core.evidence.e2e.runner import _network_diff
+    from exoma.core.evidence.runtime_io import write_quality_record
 
     root = Path(tempfile.mkdtemp(prefix="aw-e2e-network-"))
     try:
@@ -193,7 +193,7 @@ def _check_run_meta_keeps_preflight_network() -> None:
     summary must not overwrite it."""
     import time
 
-    from core.evidence.e2e.runner import _record_run
+    from exoma.core.evidence.e2e.runner import _record_run
 
     root = Path(tempfile.mkdtemp(prefix="aw-e2e-network-meta-"))
     try:

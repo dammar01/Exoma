@@ -12,19 +12,19 @@ import threading
 import time
 from pathlib import Path
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.policy.secret_patterns import (
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.policy.secret_patterns import (
     CODEX_PERMISSION_PROFILE,
     SECRET_READ_ALLOWLIST,
     SECRET_READ_PATTERNS,
     codex_secret_globs,
 )
-from core.runtime.state import ensure_workflow_workspace
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -43,7 +43,7 @@ def _test_provider_seam() -> None:
     particular is the only thing between a v3.4.2 workspace and silent loss of the
     user's tuning, so it is asserted on values, not just on the absence of a crash.
     """
-    from adapters.contract.registry import (
+    from exoma.adapters.contract.registry import (
         UnknownProviderError,
         available_providers,
         hint_conflict,
@@ -51,8 +51,8 @@ def _test_provider_seam() -> None:
         resolve_adapter,
         selected_provider,
     )
-    from core.workspace.provider_migration import migrate_provider_keys
-    from core.workspace.workspace_paths import atomic_write_json
+    from exoma.core.workspace.provider_migration import migrate_provider_keys
+    from exoma.core.workspace.workspace_paths import atomic_write_json
 
     assert_true(
         "opencode" in available_providers(),
@@ -145,7 +145,7 @@ def _test_provider_seam() -> None:
 
     # Second line of defence: nothing forces a user to run upgrade before their next
     # delegated call, so SessionManager repairs a legacy record on read as well.
-    from core.workspace.session_manager import SessionManager
+    from exoma.core.workspace.session_manager import SessionManager
 
     stray = workflow_dir / "stray-sessions"
     stray.mkdir()
@@ -184,7 +184,7 @@ def _test_provider_seam() -> None:
     # v3.4.3 rename produced a correct second_agent.json that no reader opened, because
     # the resolver still named the v3.4.2 file. Every project silently ran on tool
     # defaults — wrong model, wrong timeouts, wrong quota — and this suite stayed green.
-    from config.settings import (
+    from exoma.config.settings import (
         load_provider_config_for,
         resolve_provider_config_for,
     )
@@ -258,7 +258,7 @@ def _test_provider_seam() -> None:
     )
 
     # And the executor refuses both before any provider is called.
-    from core.provider.executor import Executor
+    from exoma.core.provider.executor import Executor
     from tests.checks.support import FakeOpenCodeAdapter
 
     for root, expected in ((bare_root, "provider_config_missing"), (broken_root, "provider_config_invalid")):
@@ -308,10 +308,10 @@ def _test_provider_seam() -> None:
         [
             sys.executable,
             "-c",
-            "from config.settings import DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES;"
+            "from exoma.config.settings import DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES;"
             "print(DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES)",
         ],
-        cwd=str(Path(__file__).resolve().parents[2]),
+        cwd=str(Path(__file__).resolve().parents[2] / "src"),
         env=env,
         capture_output=True,
         text=True,
@@ -371,7 +371,7 @@ def _test_provider_seam() -> None:
         def run(self, prompt, session, model=None, work_dir=None):
             return {"ok": True, "content": "[EVIDENCE]", "meta": {}}
 
-    from adapters.contract.base import SecondAgentAdapter
+    from exoma.adapters.contract.base import SecondAgentAdapter
 
     register(_ProbeProvider)
     assert_true(
@@ -431,7 +431,7 @@ def _test_provider_selection() -> None:
     Asserted on the FILE, not just the return value: a refusal that still wrote is the
     failure mode worth catching, and it looks identical from the outside.
     """
-    from core.provider import model_catalog
+    from exoma.core.provider import model_catalog
 
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-provider-"))
     workflow_dir = temp_root / ".workflow"
@@ -458,8 +458,8 @@ def _assert_live_model_catalog(temp_root: Path, config_file: Path) -> None:
     Readers are replaced with fixed lists: the point is the ordering and the write, not
     whichever models this machine's CLIs happen to know today.
     """
-    from core.provider import model_catalog, provider_select
-    from core.workspace.workspace_paths import read_json_file
+    from exoma.core.provider import model_catalog, provider_select
+    from exoma.core.workspace.workspace_paths import read_json_file
 
     readers = dict(model_catalog._READERS)
     saved = (model_catalog.LIVE_ENABLED, model_catalog.CACHE_TTL_SECONDS)
@@ -580,7 +580,7 @@ def _assert_live_catalog_readers(temp_root: Path) -> None:
     a live run. What this pins is that each documented shape parses, and that every way a
     read can fail ends in the shortlist rather than a broken picker.
     """
-    from core.provider import model_catalog
+    from exoma.core.provider import model_catalog
 
     work = temp_root / "catalog-readers"
     (work / "xdg" / "opencode").mkdir(parents=True)
@@ -746,11 +746,11 @@ def _assert_live_catalog_readers(temp_root: Path) -> None:
 
 
 def _provider_selection_static(temp_root: Path, workflow_dir: Path, config_file: Path) -> None:
-    from config.providers import effort_args, model_efforts, provider_models
-    from config.settings import validate_provider_config
-    from core.provider import provider_select
-    from core.evidence.result_shaping import _verify_exit_code
-    from core.workspace.workspace_paths import atomic_write_json, read_json_file
+    from exoma.config.providers import effort_args, model_efforts, provider_models
+    from exoma.config.settings import validate_provider_config
+    from exoma.core.provider import provider_select
+    from exoma.core.evidence.result_shaping import _verify_exit_code
+    from exoma.core.workspace.workspace_paths import atomic_write_json, read_json_file
 
     catalog = provider_select.run(temp_root, "")
     listed = {entry["name"]: entry for entry in catalog["meta"]["providers"]}
@@ -874,8 +874,8 @@ def _provider_selection_static(temp_root: Path, workflow_dir: Path, config_file:
     # A model that takes NO effort. Empty means "none" only for a model the shortlist
     # actually lists; for anything else it means "unknown", and the two must not be
     # collapsed — one has to refuse, the other has to allow.
-    from config import providers as providers_module
-    from core.prompt.router import Router
+    from exoma.config import providers as providers_module
+    from exoma.core.prompt.router import Router
 
     original = providers_module.PROVIDER_BUNDLES["codex"]["models"]
     providers_module.PROVIDER_BUNDLES["codex"]["models"] = (
@@ -949,10 +949,10 @@ def _provider_selection_static(temp_root: Path, workflow_dir: Path, config_file:
     # A workspace initialized before `effort` existed gets the key on the next install
     # pass, at its default of None — the backfill is what carries new keys into projects
     # that were set up once and left alone.
-    from adapters.install.opencode_install import _merge_provider_config
+    from exoma.adapters.install.opencode_install import _merge_provider_config
 
     atomic_write_json(config_file, {"provider": "codex", "timeout_seconds": 1800})
-    added = _merge_provider_config(temp_root, "")
+    added = _merge_provider_config(temp_root)
     assert_true(
         "effort" in added and read_json_file(config_file)["effort"] is None,
         f"backfill must add `effort` to a pre-existing workspace, unset: {added}",
@@ -970,9 +970,9 @@ def _test_doctor_read_boundary_warning() -> None:
     Choosing one is trusting it, which is the user's call — so doctor warns on every run
     instead of failing readiness. Reads and writes are warned apart: codex's sandbox stops
     writes, so it gets the read warning only; agy gets both; opencode neither."""
-    from core.audit.diagnostics import run_doctor
-    from core.runtime.state import ensure_workflow_workspace
-    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, read_json_file, workflow_paths
+    from exoma.core.audit.diagnostics import run_doctor
+    from exoma.core.runtime.state import ensure_workflow_workspace
+    from exoma.core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, read_json_file, workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="doctor-read-boundary-"))
     try:
@@ -1031,16 +1031,16 @@ def _test_agy_provider() -> None:
     tokens — the one thing a live call would prove that these do not is that agy still
     speaks this dialect, and that is what `probe` is for.
     """
-    from adapters.providers.agy_adapter import AgyAdapter
-    from adapters.contract.registry import adapter_class, available_providers
-    from config.providers import (
+    from exoma.adapters.providers.agy_adapter import AgyAdapter
+    from exoma.adapters.contract.registry import adapter_class, available_providers
+    from exoma.config.providers import (
         PROVIDER_BUNDLES,
         effort_args,
         provider_opt_in_env,
     )
-    from core.policy import agy_guard
-    from core.provider import provider_select
-    from core.workspace.workspace_paths import read_json_file
+    from exoma.core.policy import agy_guard
+    from exoma.core.provider import provider_select
+    from exoma.core.workspace.workspace_paths import read_json_file
 
     assert_true(
         "agy" in available_providers(),
@@ -1205,14 +1205,14 @@ def _test_agy_provider() -> None:
     # all. `core/runtime/upgrade.py` and `installer/settings.py` both dispatch through
     # `provider_install_module`, which RAISES on a bundle that declares none — so a
     # provider without one crashes the install path instead of being skipped by it.
-    from config.providers import provider_install_module
+    from exoma.config.providers import provider_install_module
 
     assert_true(
-        PROVIDER_BUNDLES["agy"]["install_module"] == "adapters.install.agy_install",
+        PROVIDER_BUNDLES["agy"]["install_module"] == "exoma.adapters.install.agy_install",
         "agy must declare an install module, or the boundary install path raises on it",
     )
     boundary = provider_install_module("agy").install_project_config(
-        Path(tempfile.gettempdir()), ""
+        Path(tempfile.gettempdir())
     )
     assert_true(
         boundary["status"] == "not_enforceable"
@@ -1431,16 +1431,16 @@ def _assert_codex_provider() -> None:
     Everything here is argv- and parser-level. Nothing spawns codex — the CLI may not be
     installed, and a test that needs it would be skipped exactly where it matters.
     """
-    from adapters.contract.base import SecondAgentAdapter
-    from adapters.providers.codex_adapter import CodexAdapter
-    from adapters.contract.registry import (
+    from exoma.adapters.contract.base import SecondAgentAdapter
+    from exoma.adapters.providers.codex_adapter import CodexAdapter
+    from exoma.adapters.contract.registry import (
         available_providers,
         hint_conflict,
         resolve_adapter,
         selected_provider,
     )
-    from config.providers import bundle_for, provider_install_module
-    from core.audit.mcp_scan import _mcp_config_candidates
+    from exoma.config.providers import bundle_for, provider_install_module
+    from exoma.core.audit.mcp_scan import _mcp_config_candidates
 
     assert_true(
         "codex" in available_providers(),
@@ -1662,8 +1662,8 @@ def _assert_codex_provider() -> None:
                 ),
             }
 
-    import adapters.providers.codex_adapter as codex_module
-    from core.provider import versions as versions_module
+    import exoma.adapters.providers.codex_adapter as codex_module
+    from exoma.core.provider import versions as versions_module
 
     # The live codex-write-probe runs later in this process and reports this cache, so the
     # fake release is put back however the block ends.
@@ -1687,7 +1687,7 @@ def _assert_codex_provider() -> None:
         )
         # A resumed thread refused by the sandbox is told apart from a fresh one (CASE-016): its
         # own reason, the failing release and the pin named in the advice, the type unchanged.
-        from config.providers import provider_stable_version
+        from exoma.config.providers import provider_stable_version
 
         assert_true(
             refused["meta"].get("reason") == "resume_sandbox_failed"
@@ -1739,7 +1739,7 @@ def _assert_codex_provider() -> None:
 
     # Provider releases against the bundle's stable_version (core/provider/versions.py):
     # advisory statuses, the same rule for every provider.
-    from config.providers import PROVIDER_BUNDLES, provider_stable_version
+    from exoma.config.providers import PROVIDER_BUNDLES, provider_stable_version
 
     for name in PROVIDER_BUNDLES:
         stable = provider_stable_version(name)
@@ -1752,7 +1752,7 @@ def _assert_codex_provider() -> None:
     # Every provider's invocation is stamped, not only codex's: the usage row is the trail.
     from types import SimpleNamespace
 
-    from core.provider.executor import Executor
+    from exoma.core.provider.executor import Executor
 
     versions_module._CACHE[codex_module.osutil.resolve_exe("opencode-fake-cli")] = "1.0.0"
     stamped = {}
@@ -1771,7 +1771,7 @@ def _assert_codex_provider() -> None:
     # The seam itself: defaults must follow the SELECTED provider. Before this, a config
     # naming codex came back holding opencode's binary and opencode's `plan` persona, and
     # the workspace backfill then wrote those wrong values into the file permanently.
-    from config.settings import default_provider_config
+    from exoma.config.settings import default_provider_config
 
     codex_defaults = default_provider_config("codex")
     assert_true(
@@ -1804,11 +1804,11 @@ def _assert_codex_provider() -> None:
         (selected / ".workflow" / "second_agent.json").write_text(
             json.dumps({"provider": "codex"}), encoding="utf-8"
         )
-        from config.settings import (
+        from exoma.config.settings import (
             load_provider_config_for,
             resolve_provider_config_for,
         )
-        from core.provider.executor import Executor
+        from exoma.core.provider.executor import Executor
 
         effective = load_provider_config_for(selected)
         assert_true(
@@ -1875,7 +1875,7 @@ def _assert_codex_provider() -> None:
             callable(getattr(module, function, None)),
             f"codex install module must answer {function}()",
         )
-    boundary = module.install_project_config(Path("."), ".")
+    boundary = module.install_project_config(Path("."))
     assert_true(
         boundary["status"] == "not_enforceable" and boundary["path"] is None,
         "codex installs no boundary FILE and enforces no read boundary either — it must say "
@@ -1929,7 +1929,9 @@ def _assert_codex_provider() -> None:
     # provider the author happened not to be thinking about.
     project_json = (
         Path(__file__).resolve().parents[2]
-        / "dist"
+        / "src"
+        / "exoma"
+        / "_bundle"
         / "config"
         / "opencode"
         / "opencode.project.json"
@@ -1960,7 +1962,7 @@ def _assert_codex_provider() -> None:
 
     # /.commit skips the same names when it stages on its own (DEC-061): the skill carries the
     # list as prose for main_agent, so the list is checked here, in order, and so is what it means.
-    skill = (Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "skills" / "commit.md").read_text(encoding="utf-8")
+    skill = (Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "skills" / "commit.md").read_text(encoding="utf-8")
     block = re.search(r"<!-- secret-patterns:.*?-->(.*?)<!-- /secret-patterns -->", skill, re.S)
     assert_true(block is not None, "commit.md marks its secret-pattern block")
     lists = {key: re.findall(r"`([^`]+)`", body) for key, body in re.findall(r"(skip|keep):(.*?)(?=\n\s*(?:skip|keep):|\Z)", block.group(1), re.S)}
@@ -1976,7 +1978,7 @@ def _assert_codex_provider() -> None:
         )
 
     for path, skipped in (
-        ("docs/research/decisions/DEC-060-commit-stages-targeted-paths-and-skips-secret-names.yaml", False),
+        ("docs/notes/commit-stages-targeted-paths-and-skips-secret-names.md", False),
         ("docs/secret-handling.md", False),
         ("src/credential_store.py", False),
         (".env", True),
@@ -1991,7 +1993,7 @@ def _assert_codex_provider() -> None:
 
     # The boundary is only real if it is on the argv of BOTH call shapes. A resumed thread
     # that dropped it would leave a hole that opens on the second call of a session.
-    from adapters.providers.codex_adapter import CodexAdapter
+    from exoma.adapters.providers.codex_adapter import CodexAdapter
 
     adapter = CodexAdapter()
     for resume_id in (None, "01999999-0000-7000-8000-000000000000"):

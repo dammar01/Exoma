@@ -3,17 +3,17 @@
 import os
 import json
 
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.jobs.job_manager import JobManager
-from core.provider.executor import Executor
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
-from adapters.providers.opencode_adapter import OpenCodeAdapter as _OpenCodeAdapterForParsing
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.provider.executor import Executor
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter as _OpenCodeAdapterForParsing
 
 clean_output = _OpenCodeAdapterForParsing.clean_output
 extract_session_id = _OpenCodeAdapterForParsing.extract_session_id
-import check
-import main
+from exoma import check
+from exoma import cli as main
 import shutil
 import sys
 import tempfile
@@ -30,7 +30,7 @@ EXAMPLE_SEED = "second_agent.example.json"
 
 
 def isolate_provider_seed() -> None:
-    from adapters.install import opencode_install
+    from exoma.adapters.install import opencode_install
 
     opencode_install.PROVIDER_SEED_NAME = EXAMPLE_SEED
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from core.audit import metrics, telemetry
+from exoma.core.audit import metrics, telemetry
 from tests.checks.support import assert_true
 
 DOC = Path(__file__).resolve().parents[2] / "docs" / "evaluation" / "metrics.md"
@@ -256,7 +256,7 @@ def _test_metrics_contract() -> None:
     # --- the tool's commit comes only from the repository whose top is the install root ---
     repo = Path(__file__).resolve().parents[2]
     if shutil.which("git") and (repo / ".git").exists():
-        assert_true(metrics.tool_commit(repo / "core") is None,
+        assert_true(metrics.tool_commit(repo / "src") is None,
                     "a root inside some other work tree stamps no commit")
         assert_true(metrics.tool_commit(repo) is not None, "the repository's own top stamps its commit")
         # A status that fails is not a clean tree: no stamp, rather than a hash claiming one.
@@ -280,7 +280,7 @@ def _hook_literal(source: str, name: str):
 
 def _graph_hook_scan(graph_hook) -> None:
     # The tool times the hook's scan, so its lists are the hook's lists.
-    hook = (graph_hook.REPO_ROOT / "dist" / "config" / "claude" / "hooks" / "graph-refresh.py").read_text(encoding="utf-8")
+    hook = (graph_hook.REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "graph-refresh.py").read_text(encoding="utf-8")
     assert_true(set(_hook_literal(hook, "SKIP_DIRS")) == set(graph_hook.SKIP_DIRS)
                 and tuple(_hook_literal(hook, "SOURCE_EXT")) == graph_hook.SOURCE_EXTENSIONS,
                 "measure_graph_hook skips and matches exactly what graph-refresh.py does")
@@ -310,7 +310,7 @@ def _graph_hook_scan(graph_hook) -> None:
 
         hook_file = root / "graph-refresh.sh"
         hook_file.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        with mock.patch("utils.osutil.find_bash", return_value=None):
+        with mock.patch("exoma.utils.osutil.find_bash", return_value=None):
             try:
                 graph_hook.measure(root, hook=hook_file, repeat=1, run_hook=True, run_graphify=False)
                 refused = None
@@ -319,7 +319,7 @@ def _graph_hook_scan(graph_hook) -> None:
         assert_true(refused is not None and "no bash" in refused,
                     f"without Bash the hook is refused, never run through a guessed shell: {refused}")
 
-        from utils.osutil import find_bash
+        from exoma.utils.osutil import find_bash
         if find_bash():
             # A space and a non-ASCII letter in the path: Windows Git Bash and POSIX alike.
             odd = root / "hook dir é"
@@ -415,7 +415,7 @@ def _feature_segments() -> None:
 def _check_tool_exports(root: Path) -> None:
     """Run both offline tools end to end on a fixture whose project folders are named
     `data` and `main`, and export: the real report must pass the allowlist."""
-    from core.audit.transcript import project_slug
+    from exoma.core.audit.transcript import project_slug
     from tools.maintain import measure_real_use, measure_task_outcomes
 
     projects, transcripts = root / "projects", root / "transcripts"

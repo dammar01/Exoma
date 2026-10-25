@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from core.evidence.e2e import tagging
+from exoma.core.evidence.e2e import tagging
 from tests.checks.support import assert_true
 
 _BUTTON = '  <button class="primary" onclick="save()">Simpan</button>'
@@ -61,7 +61,7 @@ def _test_e2e_tagging() -> None:
     # --- the line rewrite ------------------------------------------------------------
     # One test attribute across the runtime: what tagging writes is what an `e2e` selector
     # reads. A drift here is the data-testid/data-e2e split this pairing exists to prevent.
-    from core.evidence.e2e.spec import E2E_ATTRIBUTE, e2e_css
+    from exoma.core.evidence.e2e.spec import E2E_ATTRIBUTE, e2e_css
 
     assert_true(tagging.TAG_ATTRIBUTE == E2E_ATTRIBUTE == "data-e2e", "tagging and selectors share one attribute")
     assert_true("testid" not in tagging.tagged_line(_BUTTON, "save-item"), "a proposal never writes data-testid")

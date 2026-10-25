@@ -29,7 +29,7 @@ minutes and spend the secondary agent's quota.
 | `/.memory` | a lesson should be kept in your personal notes across projects |
 | `/.provider` | you want a different secondary agent, model, or reasoning effort |
 | `/.doctor` | a project's workflow setup seems broken, or before relying on a new one |
-| `/.init`, `/.upgrade` | setting up a project, or refreshing it after updating agent-workflow |
+| `/.init`, `/.upgrade` | setting up a project, or refreshing it after updating Exoma |
 | `/.caveman` | you want shorter answers |
 | `/.help` | you want the command list in the terminal |
 

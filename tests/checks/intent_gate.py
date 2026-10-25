@@ -15,9 +15,9 @@ import tempfile
 from pathlib import Path
 
 from tests.checks.support import assert_true
-from utils.osutil import find_bash
+from exoma.utils.osutil import find_bash
 
-HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 
 
 def _hook_runners(stem: str) -> list[tuple[str, list[str]]]:

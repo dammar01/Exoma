@@ -28,7 +28,7 @@ from tests.checks.support import assert_true
 
 
 def _check_owned_lock() -> None:
-    from utils.owned_lock import OwnedFileLock
+    from exoma.utils.owned_lock import OwnedFileLock
 
     root = Path(tempfile.mkdtemp(prefix="aw-lock-"))
     path = root / "store.lock"
@@ -80,7 +80,7 @@ _COUNTER_WORKER = r"""
 import json, sys, time
 sys.path.insert(0, sys.argv[1])
 from pathlib import Path
-from utils.owned_lock import OwnedFileLock
+from exoma.utils.owned_lock import OwnedFileLock
 lock_path, counter = Path(sys.argv[2]), Path(sys.argv[3])
 for _ in range(int(sys.argv[4])):
     with OwnedFileLock(lock_path, ttl_seconds=30, wait_seconds=60):
@@ -127,7 +127,7 @@ _GUARD_HOLDER = r"""
 import sys, time
 sys.path.insert(0, sys.argv[1])
 from pathlib import Path
-from utils.owned_lock import _try_os_lock
+from exoma.utils.owned_lock import _try_os_lock
 handle = _try_os_lock(Path(sys.argv[2]))
 print("held" if handle else "busy", flush=True)
 time.sleep(float(sys.argv[3]))
@@ -140,7 +140,7 @@ def _check_reclaim_guard_cannot_be_taken_from_a_live_holder() -> None:
     The age rule this replaced handed a paused reclaimer's guard to the next one after 5s,
     and the paused one then deleted the lock the next writer had taken meanwhile.
     """
-    from utils.owned_lock import OwnedFileLock
+    from exoma.utils.owned_lock import OwnedFileLock
 
     root = Path(tempfile.mkdtemp(prefix="aw-guard-"))
     try:
@@ -178,10 +178,10 @@ def _check_reclaim_guard_cannot_be_taken_from_a_live_holder() -> None:
 
 
 def _check_store_locks_share_the_owner_rules() -> None:
-    from core.evidence.e2e.knowledge import _Lock as E2EKnowledgeLock
-    from core.evidence.fact_store import _FactLock
-    from core.knowledge.store import _KnowledgeLock
-    from utils.owned_lock import OwnedFileLock
+    from exoma.core.evidence.e2e.knowledge import _Lock as E2EKnowledgeLock
+    from exoma.core.evidence.fact_store import _FactLock
+    from exoma.core.knowledge.store import _KnowledgeLock
+    from exoma.utils.owned_lock import OwnedFileLock
 
     for lock in (_FactLock, _KnowledgeLock, E2EKnowledgeLock):
         assert_true(
@@ -194,8 +194,8 @@ def _check_store_locks_share_the_owner_rules() -> None:
 
 
 def _check_migration_rollback_failure_is_reported() -> None:
-    import core.runtime.migrations as migrations
-    from core.runtime.upgrade import upgrade_workflow_workspace
+    import exoma.core.runtime.migrations as migrations
+    from exoma.core.runtime.upgrade import upgrade_workflow_workspace
     from tests.checks.workspace_migration import _legacy_workspace
 
     root = _legacy_workspace()
@@ -241,7 +241,7 @@ def _check_migration_rollback_failure_is_reported() -> None:
 
 
 def _check_installer_receipt_is_incremental() -> None:
-    from installer import base
+    from exoma.installer import base
 
     root = Path(tempfile.mkdtemp(prefix="aw-receipt-"))
     try:
@@ -278,7 +278,7 @@ def _check_installer_receipt_is_incremental() -> None:
 
 
 def _check_job_lock_released_when_save_fails() -> None:
-    from core.jobs.job_manager import JobManager
+    from exoma.core.jobs.job_manager import JobManager
 
     root = Path(tempfile.mkdtemp(prefix="aw-joblock-"))
     try:
@@ -322,9 +322,9 @@ def _check_job_lock_released_when_save_fails() -> None:
 
 
 def _check_telemetry_failure_keeps_the_result() -> None:
-    import core.provider.executor as executor_module
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    import exoma.core.provider.executor as executor_module
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
     from tests.checks.continuation import _EVIDENCE, _ScriptedAdapter, _session
 
     root = Path(tempfile.mkdtemp(prefix="aw-telemetry-"))
@@ -356,8 +356,8 @@ def _check_telemetry_failure_keeps_the_result() -> None:
 
 
 def _check_opencode_env_is_project_scoped() -> None:
-    from adapters.providers.opencode_adapter import OpenCodeAdapter
-    from adapters.shared.child_env import parse_dotenv, project_scoped_env
+    from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+    from exoma.adapters.shared.child_env import parse_dotenv, project_scoped_env
 
     root = Path(tempfile.mkdtemp(prefix="aw-env-"))
     try:
@@ -417,7 +417,7 @@ def _check_opencode_env_is_project_scoped() -> None:
 
 
 def _check_browser_read_refuses_metadata_addresses() -> None:
-    import core.evidence.e2e.preflight as preflight
+    import exoma.core.evidence.e2e.preflight as preflight
 
     saved = preflight.host_addresses
     answers = {
@@ -511,11 +511,11 @@ def _check_browser_read_refuses_metadata_addresses() -> None:
 
 
 def _check_argv_and_redaction_shapes() -> None:
-    from adapters.providers import opencode_adapter
-    from adapters.providers.agy_adapter import AgyAdapter
-    from core.evidence import fact_store, quick_verify
-    from core.runtime.config_defaults import default_policies
-    from utils.redact import redact
+    from exoma.adapters.providers import opencode_adapter
+    from exoma.adapters.providers.agy_adapter import AgyAdapter
+    from exoma.core.evidence import fact_store, quick_verify
+    from exoma.core.runtime.config_defaults import default_policies
+    from exoma.utils.redact import redact
 
     assert_true(
         fact_store.RECURRENCE_THRESHOLD == default_policies()["fact_recurrence_threshold"],

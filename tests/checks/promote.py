@@ -16,7 +16,7 @@ from tests.checks.support import assert_true
 
 
 def _configure(root: Path, knowledge_dir: str) -> None:
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     config = workflow_paths(root)["config"]
     config.parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +53,7 @@ def _doc(doc_id: str = "auth") -> dict:
 
 
 def _knowledge_dir_is_contained() -> None:
-    from core.knowledge import store
+    from exoma.core.knowledge import store
 
     root = Path(tempfile.mkdtemp(prefix="knowledge-contain-"))
     outside = Path(tempfile.mkdtemp(prefix="knowledge-outside-"))
@@ -114,7 +114,7 @@ def _knowledge_dir_is_contained() -> None:
 
 
 def _knowledge_is_part_of_evidence_identity() -> None:
-    from core.provider.result_prep import _evidence_context, knowledge_fingerprint
+    from exoma.core.provider.result_prep import _evidence_context, knowledge_fingerprint
 
     route = {"role": "reasoning", "model": "m"}
     entry = {"id": "auth", "claims": [{"id": "c1", "statement": "f returns 1"}]}

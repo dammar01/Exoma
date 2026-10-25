@@ -9,7 +9,7 @@ selected again.
 """
 
 from __future__ import annotations
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 
 import json
 import os
@@ -17,10 +17,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.prompt.router import Router
-from core.provider.executor import Executor
-from core.runtime.state import ensure_workflow_workspace
-from core.workspace.session_manager import SessionManager, bind_provider
+from exoma.core.prompt.router import Router
+from exoma.core.provider.executor import Executor
+from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.core.workspace.session_manager import SessionManager, bind_provider
 from tests.checks.continuation import _EVIDENCE
 from tests.checks.support import assert_true
 

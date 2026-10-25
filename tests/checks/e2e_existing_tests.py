@@ -9,8 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from core.evidence.e2e.classify import build_report
-from core.evidence.e2e.existing_tests import build_argv, run, select
+from exoma.core.evidence.e2e.classify import build_report
+from exoma.core.evidence.e2e.existing_tests import build_argv, run, select
 from tests.checks.support import assert_true
 
 _PASS = "import os, sys; print('files', sys.argv[1:]); print('user', os.environ.get('E2E_UNIT_USER')); sys.exit(0)"

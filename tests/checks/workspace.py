@@ -10,13 +10,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -31,11 +31,11 @@ def _test_workspace_release_guards() -> None:
     """Runtime generations, upgrade corruption, and unborn staged diffs fail safely."""
     import shutil as _shutil
 
-    from core.audit.diagnostics import run_sweep
-    from core.evidence.runtime_io import write_evidence_sidecars, write_prompt_handoff
-    from core.workspace.runtime_lock import acquire_runtime_lock, release_runtime_lock
-    from core.runtime.upgrade import upgrade_workflow_workspace
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.audit.diagnostics import run_sweep
+    from exoma.core.evidence.runtime_io import write_evidence_sidecars, write_prompt_handoff
+    from exoma.core.workspace.runtime_lock import acquire_runtime_lock, release_runtime_lock
+    from exoma.core.runtime.upgrade import upgrade_workflow_workspace
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="workspace-release-"))
     try:
@@ -255,7 +255,7 @@ def _test_project_session_isolation() -> None:
     """Default and provider sessions must not cross project or sanitized-ID boundaries."""
     import shutil as _shutil
 
-    from config import settings
+    from exoma.config import settings
 
     root = Path(tempfile.mkdtemp(prefix="session-isolation-"))
     project_a = root / "a"
@@ -409,9 +409,9 @@ def _test_init_upgrade_and_session_guard() -> None:
     consumed programmatically and the run script is dispatched as a background task whose
     stderr nobody opens. A safeguard that only fires where nobody looks is not one.
     """
-    from core.runtime.upgrade import needs_upgrade, workspace_versions
-    from core.workspace.workspace_paths import workflow_paths
-    from utils import osutil
+    from exoma.core.runtime.upgrade import needs_upgrade, workspace_versions
+    from exoma.core.workspace.workspace_paths import workflow_paths
+    from exoma.utils import osutil
 
     root = Path(tempfile.mkdtemp(prefix="init-upgrade-"))
     try:
@@ -447,6 +447,48 @@ def _test_init_upgrade_and_session_guard() -> None:
             workspace_versions(root)["installed_tool_version"]
             == workspace_versions(root)["current_tool_version"],
             "the version stamp must be current after init auto-upgrades",
+        )
+
+        # A workspace agent-workflow wrote: its runtime block names a checkout's main.py.
+        # Upgrade takes it over — the old paths go, the scripts call `-m exoma`.
+        from exoma.core.runtime.upgrade import upgrade_workflow_workspace
+        from exoma.core.workspace.workspace_paths import LEGACY_RUNTIME_KEYS
+
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        old_clone = str(root / "agent-workflow" / "main.py")
+        config["version"] = "3.9.0"
+        config["runtime"] = {
+            "agent_workflow_path": old_clone,
+            "main_py_path": old_clone,
+            "check_py_path": str(root / "agent-workflow" / "check.py"),
+            "tool_dir": str(root / "agent-workflow"),
+            "tool_version": "3.9.0",
+            "runtime_version": "3.9.0",
+            "second_agent": config["runtime"]["second_agent"],
+        }
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        upgrade_workflow_workspace(root)
+        runtime = json.loads(config_path.read_text(encoding="utf-8"))["runtime"]
+        assert_true(
+            not any(key in runtime for key in LEGACY_RUNTIME_KEYS)
+            and runtime.get("python") and runtime.get("package_root"),
+            f"upgrade replaces agent-workflow's checkout paths with the running build: {runtime}",
+        )
+        run_sh = (workflow_paths(root)["workflow_dir"] / "run.sh").read_text(encoding="utf-8")
+        assert_true(
+            "-m exoma" in run_sh and "main.py" not in run_sh,
+            "the regenerated runner calls `-m exoma`, never a checkout's main.py",
+        )
+        inspected = subprocess.run(
+            [osutil.find_bash() or "bash", str(workflow_paths(root)["workflow_dir"] / "inspect.sh")],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        assert_true(
+            inspected.returncode == 0 and json.loads(inspected.stdout).get("ok") is not None,
+            f"the generated inspect.sh reaches the runtime through -m exoma: rc={inspected.returncode} {inspected.stderr[-300:]!r}",
         )
 
         # The generated entry script, run for real. Only the refusal path is exercised:

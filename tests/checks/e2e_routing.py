@@ -22,16 +22,16 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
-from core.evidence.contract import validate_verification_contract
-from core.evidence.e2e import preflight as e2e_preflight
-from core.evidence.e2e import runner as e2e_runner
-from core.evidence.e2e.request import CONFIG_ONLY_SETTINGS, config_settings, draft_path, load_request, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
-from core.evidence.e2e.runner import FAKE_ENV
-from core.evidence.e2e.spec import parse_spec
-from core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
-from core.provider.executor import Executor
-from core.runtime.state import ensure_workflow_workspace
-from core.workspace.workspace_paths import read_json_file, workflow_paths
+from exoma.core.evidence.contract import validate_verification_contract
+from exoma.core.evidence.e2e import preflight as e2e_preflight
+from exoma.core.evidence.e2e import runner as e2e_runner
+from exoma.core.evidence.e2e.request import CONFIG_ONLY_SETTINGS, config_settings, draft_path, load_request, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
+from exoma.core.evidence.e2e.runner import FAKE_ENV
+from exoma.core.evidence.e2e.spec import parse_spec
+from exoma.core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
+from exoma.core.provider.executor import Executor
+from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
 from tests.checks.support import assert_true
 
 _SOURCE_MARKER = "SOURCE-MARKER-e2e-7f3a"
@@ -342,7 +342,7 @@ def _check_browser_usage_is_one_row_per_invocation(root: Path) -> None:
     the executor's own continuation. Every provider invocation is one usage row with its own
     tokens and its stage; the browser's time is on the run's final row only; and the call
     count the report and the statusline print is commands, not invocations."""
-    from core.audit import telemetry
+    from exoma.core.audit import telemetry
 
     spec_only_unfenced = _SPEC_ONLY.replace("```json\n", "").replace("\n```", "")
     review_cut = _REVIEW_CLEAN.split("not_verified:")[0]
@@ -467,7 +467,7 @@ def _test_e2e_routing() -> None:
             "e2e" not in shipped,
             f"config.json holds overrides only: a fresh workspace pins nothing for the browser: {shipped.get('e2e')}",
         )
-        from core.runtime.config_defaults import effective_section
+        from exoma.core.runtime.config_defaults import effective_section
 
         effective = effective_section(shipped, "e2e")
         assert_true(
@@ -620,8 +620,8 @@ def _test_e2e_routing() -> None:
         assert_true(result["meta"].get("verdict") == "incomplete" and "unknown origin" in result["content"], "unknown origin is incomplete, not harness")
 
         # --- scenario: a guessed selector missed → scenario_error, not retried, not counted -----
-        from core.evidence.e2e import knowledge as e2e_knowledge_store
-        from core.runtime.state import e2e_repeat_state as _repeat_state, note_e2e_outcome as _note
+        from exoma.core.evidence.e2e import knowledge as e2e_knowledge_store
+        from exoma.core.runtime.state import e2e_repeat_state as _repeat_state, note_e2e_outcome as _note
 
         root = workspace("e2e-scenario-")
         # A harness streak already standing: a scenario typo must neither add to it nor clear it.
@@ -712,7 +712,7 @@ def _test_e2e_routing() -> None:
         # it the run goes ahead. A run whose preflight fails under the setting still reports
         # the environment and leaves the record as it found it — stepping past the brake is
         # not spending it.
-        from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
+        from exoma.core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
 
         root = workspace("e2e-bypass-")
         adapter = _adapter()
@@ -764,7 +764,7 @@ def _test_e2e_routing() -> None:
         # The project fingerprint cannot see the runtime. A streak built on a runtime bug
         # (a poll that held the page's events back) survived the runtime fix and refused the
         # run that would have shown it. A record written by another runtime is let go.
-        from core.evidence.e2e.runner import runtime_identity
+        from exoma.core.evidence.e2e.runner import runtime_identity
 
         note_e2e_outcome(root, _SESSION_ID, origin, None)
         for _ in range(E2E_REPEAT_LIMIT):
@@ -804,8 +804,8 @@ def _test_e2e_routing() -> None:
         # retires it.
         import subprocess
 
-        from core.evidence.e2e import knowledge as e2e_knowledge
-        from core.evidence.e2e.fingerprint import project_fingerprint
+        from exoma.core.evidence.e2e import knowledge as e2e_knowledge
+        from exoma.core.evidence.e2e.fingerprint import project_fingerprint
 
         root = workspace("e2e-release-")
         git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
@@ -1101,7 +1101,7 @@ def _test_e2e_routing() -> None:
             ],
             "template profile names are validated as names",
         )
-        from core.evidence.e2e.request import template_profiles
+        from exoma.core.evidence.e2e.request import template_profiles
 
         assert_true(
             template_profiles({"secrets_profile": "admin", "secrets_template_profiles": ["qa"]}) == ["admin", "qa"] and template_profiles({}) == ["default"],
@@ -1206,7 +1206,7 @@ def _test_e2e_routing() -> None:
         )
 
         # --- writes: loopback and .test by name, every other host by ADDRESS, pinned -------
-        import core.evidence.e2e.preflight as _pf
+        import exoma.core.evidence.e2e.preflight as _pf
 
         saved_resolver = _pf.host_addresses
         try:
@@ -1428,7 +1428,7 @@ def _test_e2e_routing() -> None:
             all(r.get("graph_status") == "absent" and isinstance(r.get("graph_ms"), int) for r in rows),
             f"each browser command records whether a graph refresh ran beside it: {[(r.get('graph_status'), r.get('graph_ms')) for r in rows]}",
         )
-        from core.audit.task_telemetry import load_events
+        from exoma.core.audit.task_telemetry import load_events
 
         task_events = load_events(root)
         assert_true(

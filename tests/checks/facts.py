@@ -8,13 +8,13 @@ import threading
 import time
 from pathlib import Path
 
-import check
-import main
-from adapters.providers.opencode_adapter import OpenCodeAdapter
-from core.provider.executor import Executor
-from core.jobs.job_manager import JobManager
-from core.prompt.prompt_builder import build_prompt
-from core.runtime.state import ensure_workflow_workspace
+from exoma import check
+from exoma import cli as main
+from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+from exoma.core.provider.executor import Executor
+from exoma.core.jobs.job_manager import JobManager
+from exoma.core.prompt.prompt_builder import build_prompt
+from exoma.core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -35,8 +35,8 @@ def _test_facts_concurrency() -> None:
     import json as _json
     import shutil as _shutil
 
-    from core.evidence import fact_store
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence import fact_store
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="facts-conc-"))
     try:
@@ -89,8 +89,8 @@ def _test_anchor_relocation() -> None:
     """
     import shutil as _shutil
 
-    from core.evidence import fact_store
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence import fact_store
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="facts-reloc-"))
     try:
@@ -172,8 +172,8 @@ def _test_fact_selection() -> None:
     import json as _json
     import shutil as _shutil
 
-    from core.evidence import fact_store
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence import fact_store
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="facts-select-"))
     try:
@@ -292,9 +292,9 @@ def _test_evidence_anchor_relocation() -> None:
     insertion above one cited line used to discard a whole artifact and force a re-run."""
     import shutil as _shutil
 
-    from core.evidence import evidence_store
-    from core.evidence.runtime_io import write_response_snapshot
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence import evidence_store
+    from exoma.core.evidence.runtime_io import write_response_snapshot
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="evidence-reloc-"))
     try:
@@ -354,7 +354,7 @@ def _test_evidence_anchor_relocation() -> None:
 _HOLD_EVIDENCE_LOCK = """
 import sys, time
 from pathlib import Path
-from core.evidence.evidence_store import _EvidenceLock
+from exoma.core.evidence.evidence_store import _EvidenceLock
 with _EvidenceLock(Path(sys.argv[1])):
     print("held", flush=True)
     time.sleep(float(sys.argv[2]))
@@ -371,8 +371,8 @@ def _test_evidence_lock_file() -> None:
     import subprocess
     import sys
 
-    from core.evidence.evidence_store import _EvidenceLock
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence.evidence_store import _EvidenceLock
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     repo = Path(__file__).resolve().parents[2]
     root = Path(tempfile.mkdtemp(prefix="evidence-lock-"))
@@ -391,7 +391,7 @@ def _test_evidence_lock_file() -> None:
             holder = subprocess.Popen(
                 [sys.executable, "-c", _HOLD_EVIDENCE_LOCK, str(root), str(hold_s)],
                 cwd=repo,
-                env={**os.environ, "PYTHONPATH": str(repo)},
+                env={**os.environ, "PYTHONPATH": str(repo / "src")},
                 stdout=subprocess.PIPE,
                 text=True,
             )
@@ -439,9 +439,9 @@ def _test_evidence_reuse() -> None:
     """Reuse must read immutable, hash-checked artifacts and preserve concurrent rows."""
     import shutil as _shutil
 
-    from core.evidence import evidence_store
-    from core.evidence.runtime_io import write_response_snapshot
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.core.evidence import evidence_store
+    from exoma.core.evidence.runtime_io import write_response_snapshot
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="evidence-reuse-"))
     try:
@@ -575,8 +575,8 @@ def _test_evidence_reuse() -> None:
             # The widening admits a drive letter and nothing else. A prose colon reads like
             # `name:line` to a pattern that stops requiring an extension, and one anchor
             # invented out of a ratio is a claim the reader is told was verified.
-            from core.evidence import contract as evidence_contract
-            from core.evidence.fact_store import _FILELINE
+            from exoma.core.evidence import contract as evidence_contract
+            from exoma.core.evidence.fact_store import _FILELINE
 
             for prose in ("a ratio 3:14 of runs", "at 09:30 today", "chapter 2:4"):
                 assert_true(

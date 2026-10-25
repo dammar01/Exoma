@@ -1,6 +1,6 @@
 # Task framing
 
-How you phrase a request decides how much agent-workflow can do for you.
+How you phrase a request decides how much Exoma can do for you.
 
 ## Two ways to ask
 
@@ -31,7 +31,7 @@ The difference is not the command. It is **who does the decomposition and the re
 discovery**.
 
 - Procedural: you do both, in your head, before you type. The agent only executes.
-  agent-workflow has little to add, because the exploring has already been done — by you,
+  Exoma has little to add, because the exploring has already been done — by you,
   possibly with gaps.
 - Objective-oriented: the workflow explores the repository, finds the conventions and the
   affected areas, and proposes the decomposition as a plan. You review and decide.

@@ -21,10 +21,10 @@ from pathlib import Path
 
 from tests.checks.hook_repro import check_repro_matrix
 from tests.checks.support import assert_true
-from utils import osutil
+from exoma.utils import osutil
 
 REPO = Path(__file__).resolve().parents[2]
-HOOKS = REPO / "dist" / "config" / "claude" / "hooks"
+HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 K5 = REPO / "tests" / "fixtures" / "hooks" / "gate_k5.json"
 # settings.template.json: graph-refresh 60s, task-events 10s, gate set/check 15s; session-bind
 # and the statusline carry none, so the shortest one stands in for them.

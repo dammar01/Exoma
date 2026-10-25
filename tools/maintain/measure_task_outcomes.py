@@ -25,7 +25,7 @@ Per task, from the transcript, the project's Git history, and the runtime's usag
                session spent before its first edit is its ramp-up (`continuation_cost`)
   prompts      follow-up prompts classified as plan, execute, fix, question, verify,
                explore_analyze, change_request, or other, from the slash command or the
-               intent map shipped in dist/config/claude/hooks/intent-map.json
+               intent map shipped in src/exoma/_bundle/config/claude/hooks/intent-map.json
   delegation   delegated calls: distinct prompt ids of the session's usage rows that a provider
                answered (a skill runs `.workflow/run` in a subagent, so the transcript's main
                thread does not show it); verify-browser's spec and review stages are each a call
@@ -63,11 +63,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from core.audit import metrics, task_telemetry  # noqa: E402
-from core.audit.telemetry import load_quality  # noqa: E402
-from core.audit.transcript import project_slug  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from exoma.core.audit import metrics, task_telemetry  # noqa: E402
+from exoma.core.audit.telemetry import load_quality  # noqa: E402
+from exoma.core.audit.transcript import project_slug  # noqa: E402
 from tools.maintain.measure_real_use import CORRECTION, load_usage, read_transcript  # noqa: E402
-from utils import osutil  # noqa: E402
+from exoma.utils import osutil  # noqa: E402
 
 CODING = ("feature", "bug", "performance", "migration", "refactor")
 # Defaults of the outcome rule (metric outcome.solved / outcome.solved_fixed); each can be set
@@ -77,7 +78,7 @@ FIX_WINDOW = timedelta(hours=24)
 SEARCH_WINDOW = timedelta(days=30)
 AUTHOR_BEFORE, AUTHOR_AFTER = timedelta(minutes=5), timedelta(minutes=1)
 IDLE_SECONDS = 900
-INTENT_MAP = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks" / "intent-map.json"
+INTENT_MAP = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "intent-map.json"
 TESTFILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.[jt]sx?$|Test\.php$", re.I)
 
 
@@ -483,8 +484,8 @@ def saved_tokens(project: str, rows: list[dict]) -> tuple[int, int]:
     `max(0, response_chars - digest_chars) // 4`, from the reply archived under the session's
     logs. A continuation's first row stays empty, as the runtime intends.
     """
-    from core.evidence.contract import extract_digest
-    from core.evidence.contracts import _digest_chars
+    from exoma.core.evidence.contract import extract_digest
+    from exoma.core.evidence.contracts import _digest_chars
 
     recorded = recovered = 0
     for r in rows:
@@ -672,7 +673,7 @@ def main() -> int:
     ap.add_argument("--labels", required=True, help="JSON: {transcript file name: category}")
     ap.add_argument("--version", action="append", required=True)
     ap.add_argument("--transcripts", default=os.path.expanduser("~/.claude/projects"))
-    ap.add_argument("--exclude", action="append", default=["agent-workflow"])
+    ap.add_argument("--exclude", action="append", default=["exoma", "agent-workflow"])
     ap.add_argument("--show-names", action="store_true")
     ap.add_argument("--solved-share", type=float, default=SOLVED_SHARE)
     ap.add_argument("--partial-share", type=float, default=PARTIAL_SHARE)

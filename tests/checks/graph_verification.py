@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.graph import graph_index, graph_meta
+from exoma.core.graph import graph_index, graph_meta
 from tests.checks.support import assert_true
 
 

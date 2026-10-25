@@ -12,8 +12,8 @@ from tools.e2e.e2e_support import (
     sys,
     tempfile,
 )
-from utils.osutil import find_bash  # noqa: E402 - after e2e_support puts the repo on sys.path
-from core.workspace.workspace_paths import data_dir  # noqa: E402 - after e2e_support puts the repo on sys.path
+from exoma.utils.osutil import find_bash  # noqa: E402 - after e2e_support puts the repo on sys.path
+from exoma.core.workspace.workspace_paths import data_dir  # noqa: E402 - after e2e_support puts the repo on sys.path
 
 
 def integrity_checks(report: Report) -> None:
@@ -21,15 +21,15 @@ def integrity_checks(report: Report) -> None:
     fact-store provenance, config validation, and the lazy runtime-upgrade gate."""
     print("\n[INTEGRITY] fact store, config validation, lazy upgrade")
 
-    from config.settings import COMPONENT_VERSIONS
-    from core.evidence import fact_store
-    from core.runtime.config_defaults import validate_config
-    from core.runtime.state import ensure_workflow_workspace
-    from core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
-    from core.workspace.workspace_paths import workflow_paths
+    from exoma.config.settings import COMPONENT_VERSIONS
+    from exoma.core.evidence import fact_store
+    from exoma.core.runtime.config_defaults import validate_config
+    from exoma.core.runtime.state import ensure_workflow_workspace
+    from exoma.core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
+    from exoma.core.workspace.workspace_paths import workflow_paths
 
     # --- claim anchors + structural output checks (pure) ---
-    from core.evidence.contract import STRUCTURAL_KINDS, contract_warnings, split_claim
+    from exoma.core.evidence.contract import STRUCTURAL_KINDS, contract_warnings, split_claim
 
     bracketed = split_claim("entry point defined [app/main.py:1]")
     bare = split_claim("dispatch happens in app/main.py:48 before the lock")
@@ -89,7 +89,7 @@ def integrity_checks(report: Report) -> None:
     )
 
     # --- config validation (pure, no workspace needed) ---
-    from core.runtime.config_defaults import default_commands, default_policies
+    from exoma.core.runtime.config_defaults import default_commands, default_policies
 
     clean = {"commands": default_commands(), "policies": default_policies()}
     report.check(
@@ -139,7 +139,7 @@ def integrity_checks(report: Report) -> None:
         )
         # config.json holds overrides only, so this fallback is the value every project
         # without the key actually runs on; it must be the documented default, not a copy.
-        from core.runtime.config_defaults import default_policies
+        from exoma.core.runtime.config_defaults import default_policies
 
         report.check(
             "fact_store: recurrence fallback equals the config default",
@@ -247,9 +247,9 @@ def integrity_checks(report: Report) -> None:
             )
         else:
             script.write_text("# drifted\n", encoding="utf-8")
-            from core.runtime.scripts import script_drift
+            from exoma.core.runtime.scripts import script_drift
 
-            seen = script_drift(project, str(REPO_ROOT / "main.py"))
+            seen = script_drift(project)
             report.check(
                 "doctor: reports a drifted entry script",
                 any(
@@ -266,7 +266,7 @@ def integrity_checks(report: Report) -> None:
             )
             report.check(
                 "doctor: drift clears once upgrade has rewritten the script",
-                script_drift(project, str(REPO_ROOT / "main.py")) == [],
+                script_drift(project) == [],
             )
             # A run.ps1 an earlier release generated is unmaintained by every generator
             # now, so it must be reported and then removed — not quietly kept.
@@ -276,7 +276,7 @@ def integrity_checks(report: Report) -> None:
                 "doctor: flags a retired PowerShell entry script",
                 any(
                     d["script"] == other.name and d["state"] == "retired_leftover"
-                    for d in script_drift(project, str(REPO_ROOT / "main.py"))
+                    for d in script_drift(project)
                 ),
             )
             upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
@@ -320,8 +320,8 @@ def integrity_checks(report: Report) -> None:
                 )
 
         # --- fan-out capability probe ---
-        from core.evidence.contract import reported_no_spawn_tool
-        from core.runtime.state import fanout_capability, set_fanout_capability
+        from exoma.core.evidence.contract import reported_no_spawn_tool
+        from exoma.core.runtime.state import fanout_capability, set_fanout_capability
 
         report.check(
             "fan-out: detects opencode 'no spawn tool' self-report",
@@ -339,7 +339,7 @@ def integrity_checks(report: Report) -> None:
 
         # A dispatch that forgot its [cN] tags stays unconfirmed — but it must not read as
         # "no fan-out was attempted", which is the one thing that did not happen.
-        from core.evidence.contract import FANOUT_MISMATCH, detect_subagent_usage
+        from exoma.core.evidence.contract import FANOUT_MISMATCH, detect_subagent_usage
 
         untagged = detect_subagent_usage(
             "subagents: c0, c1 (dispatched wf-slice)\n- Router routes by command [x.py:1]"
@@ -364,8 +364,8 @@ def integrity_checks(report: Report) -> None:
         shutil.rmtree(project, ignore_errors=True)
 
     # --- active fan-out contract and compact prompt ---
-    from config.roles import ROLE_EXPLORATION
-    from core.prompt.prompt_builder import build_prompt
+    from exoma.config.roles import ROLE_EXPLORATION
+    from exoma.core.prompt.prompt_builder import build_prompt
 
     explore_prompt = build_prompt(
         role=ROLE_EXPLORATION,
@@ -384,11 +384,13 @@ def integrity_checks(report: Report) -> None:
         command="verify",
         project_root=str(REPO_ROOT),
     )
-    from config.providers import bundle_for
+    from exoma.config.providers import bundle_for
 
     agents_contract = (
         REPO_ROOT
-        / "dist"
+        / "src"
+        / "exoma"
+        / "_bundle"
         / "config"
         / "opencode"
         / bundle_for("opencode")["instructions"][0]
@@ -423,14 +425,14 @@ def integrity_checks(report: Report) -> None:
             and {
                 path.stem
                 for path in (
-                    REPO_ROOT / "dist" / "config" / "opencode" / "agents"
+                    REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "opencode" / "agents"
                 ).glob("*.md")
             }
             <= {name for name, action in policy.items() if action == "allow"}
         )(
             json.loads(
                 (
-                    REPO_ROOT / "dist" / "config" / "opencode" / "opencode.template.json"
+                    REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "opencode" / "opencode.template.json"
                 ).read_text(encoding="utf-8")
             )["agent"]["plan"]["permission"].get("task", {})
         ),
@@ -458,7 +460,7 @@ def integrity_checks(report: Report) -> None:
     )
 
     # --- stdout slimming: drop heavy diagnostic meta on success only ---
-    from main import _slim_result
+    from exoma.cli import _slim_result
 
     success = {
         "ok": True,

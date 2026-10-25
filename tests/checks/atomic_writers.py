@@ -52,7 +52,7 @@ class _Patched:
         self.replacement = replacement
 
     def __enter__(self):
-        from core.workspace import workspace_paths
+        from exoma.core.workspace import workspace_paths
 
         self._wp = workspace_paths
         self._replace = os.replace
@@ -67,7 +67,7 @@ class _Patched:
 
 
 def _test_atomic_helpers_keep_their_contract() -> None:
-    from core.workspace.workspace_paths import atomic_write_bytes, atomic_write_text
+    from exoma.core.workspace.workspace_paths import atomic_write_bytes, atomic_write_text
 
     root = Path(tempfile.mkdtemp(prefix="atomic-helpers-"))
     try:
@@ -111,15 +111,15 @@ def _test_atomic_helpers_keep_their_contract() -> None:
 
 def _writers(root: Path) -> list[tuple[str, callable, callable, bool]]:
     """(name, write, landed, raises_when_held) for every migrated writer."""
-    from config import settings
-    from core.evidence import evidence_store, fact_store
-    from core.evidence.e2e import knowledge, tagging
-    from core.graph import graph_index
-    from core.provider import versions
-    from core.runtime import migrations
-    from core.workspace import current
-    from core.workspace.workspace_paths import workflow_paths
-    from installer import base, stale
+    from exoma.config import settings
+    from exoma.core.evidence import evidence_store, fact_store
+    from exoma.core.evidence.e2e import knowledge, tagging
+    from exoma.core.graph import graph_index
+    from exoma.core.provider import versions
+    from exoma.core.runtime import migrations
+    from exoma.core.workspace import current
+    from exoma.core.workspace.workspace_paths import workflow_paths
+    from exoma.installer import base, stale
 
     paths = workflow_paths(root, "s1")
 

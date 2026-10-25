@@ -12,13 +12,13 @@ from tools.e2e.e2e_support import (
     subprocess,
     tempfile,
 )
-from utils.osutil import find_bash  # noqa: E402 - after e2e_support puts the repo on sys.path
+from exoma.utils.osutil import find_bash  # noqa: E402 - after e2e_support puts the repo on sys.path
 
 
 def delegated_checks(report: Report, session_id: str) -> None:
     """Real opencode calls. Minutes and real quota — only via --full."""
     print("\n[DELEGATED] real opencode — costs quota")
-    from core.evidence.contract import REQUIRED_FIELDS
+    from exoma.core.evidence.contract import REQUIRED_FIELDS
 
     project = Path(tempfile.mkdtemp(prefix="e2e-delegated-project-"))
     try:

@@ -6,14 +6,14 @@ task instead of per call, first-pass correctness kept apart from eventual accept
 every rate carrying the denominator that makes it readable.
 """
 
-from core.workspace.workspace_paths import data_dir
+from exoma.core.workspace.workspace_paths import data_dir
 import shutil
 import tempfile
 from pathlib import Path
 
-from core.audit import telemetry
-from core.evidence.contracts import UsageRecord
-from core.evidence.runtime_io import write_quality_record, write_usage_record
+from exoma.core.audit import telemetry
+from exoma.core.evidence.contracts import UsageRecord
+from exoma.core.evidence.runtime_io import write_quality_record, write_usage_record
 from tests.checks.support import assert_true
 
 
@@ -381,8 +381,8 @@ def _torn_row_is_skipped_not_fatal() -> None:
 def _torn_multibyte_row_is_skipped_not_fatal() -> None:
     """A write killed mid UTF-8 character leaves bytes no decoder accepts. Strict decoding
     raised on the whole file and took `report` down with it; the torn row is skipped."""
-    from core.audit import task_telemetry
-    from core.evidence.contracts import QUALITY_STREAM_NAME, TASK_STREAM_NAME, USAGE_STREAM_NAME
+    from exoma.core.audit import task_telemetry
+    from exoma.core.evidence.contracts import QUALITY_STREAM_NAME, TASK_STREAM_NAME, USAGE_STREAM_NAME
 
     root = Path(tempfile.mkdtemp(prefix="aw-torn-utf8-"))
     try:
@@ -436,7 +436,7 @@ def _provider_less_browser_runs_are_not_calls() -> None:
 
 def _fact_lifecycle_counts_commands_not_invocations() -> None:
     """Fact counts ride the command's final row; old rows are unrecorded, not zero."""
-    from core.evidence.contracts import TaskSpec, usage_from_result
+    from exoma.core.evidence.contracts import TaskSpec, usage_from_result
 
     spec = TaskSpec(command="analyze", task="t", session_id="s", correlation_id="c")
     built = usage_from_result(
@@ -481,10 +481,10 @@ def _call_meta_names_the_facts_it_served() -> None:
     """call.meta.json lists the facts a call was served, so a replay need not guess (EXP-013)."""
     import os
 
-    import core.provider.executor as executor_module
-    from core.evidence import fact_store
-    from core.provider.executor import Executor
-    from core.runtime.state import ensure_workflow_workspace
+    import exoma.core.provider.executor as executor_module
+    from exoma.core.evidence import fact_store
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
     from tests.checks.continuation import _EVIDENCE, _ScriptedAdapter, _session
 
     root = Path(tempfile.mkdtemp(prefix="aw-served-facts-"))

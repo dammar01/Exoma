@@ -17,11 +17,11 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from core.evidence.e2e import browser as e2e_browser
-from core.evidence.e2e.browser import Session, run_scenario
-from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_SCENARIO, ORIGIN_UNKNOWN, build_report, classify_step
-from core.evidence.e2e.normalize import evidence_block
-from core.evidence.e2e.spec import e2e_css
+from exoma.core.evidence.e2e import browser as e2e_browser
+from exoma.core.evidence.e2e.browser import Session, run_scenario
+from exoma.core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_SCENARIO, ORIGIN_UNKNOWN, build_report, classify_step
+from exoma.core.evidence.e2e.normalize import evidence_block
+from exoma.core.evidence.e2e.spec import e2e_css
 from tests.checks.support import assert_true
 
 
@@ -715,7 +715,7 @@ def _test_e2e_browser_session() -> None:
         "allow_side_effects still admits any non-destructive method, as it always did",
     )
 
-    from core.evidence.e2e.spec import carries_method_override
+    from exoma.core.evidence.e2e.spec import carries_method_override
 
     part = (
         '--x\r\nContent-Disposition: form-data; name="_method"\r\n\r\nDELETE\r\n--x--'
@@ -741,7 +741,7 @@ def _test_e2e_browser_session() -> None:
     # A UTF-16 body carries a null beside every ASCII character, and one made mostly of
     # non-ASCII text carries few nulls overall — which is how a ratio test missed it.
     # Both readings are produced and either finding the field is enough.
-    from core.evidence.e2e.browser import _decode_body
+    from exoma.core.evidence.e2e.browser import _decode_body
 
     utf16 = ("漢字" * 500 + "&_method=DELETE").encode("utf-16-le")
     assert_true(
@@ -1158,7 +1158,7 @@ def _test_e2e_browser_session() -> None:
     # --- confirmed reads: a POST the user confirmed as read-only passes; a GraphQL write never does ---
     import json as _json
 
-    from core.evidence.e2e.browser import read_only_refusal
+    from exoma.core.evidence.e2e.browser import read_only_refusal
 
     def post(url, body=None, **config):
         seen: list[str] = []
@@ -1298,7 +1298,7 @@ def _test_e2e_browser_session() -> None:
     assert_true(report["browser_verdict"] == "pass" and report["app_errors"] == [], f"the beacon stays a warning: {report['browser_verdict']} {report['app_errors']}")
 
     # --- request ledger: attributed to the step's window, status and duration from the lifecycle ----
-    from core.evidence.e2e.redact import sanitize_endpoint
+    from exoma.core.evidence.e2e.redact import sanitize_endpoint
 
     for url, expected in (
         ("http://localhost:8000/items/42?token=abc#x", "http://localhost:8000/items/:id"),
@@ -1353,7 +1353,7 @@ def _test_e2e_browser_session() -> None:
     assert_true("trail:" in block and "requests:" in block and "HTTP 201" in block and "uncertain (after create-item)" in block, f"the reviewer sees the trail and the ledger:\n{block}")
 
     # --- cleanup: runs after the steps, pass or fail, reported apart ---------------------------------
-    from core.evidence.e2e.normalize import to_verification
+    from exoma.core.evidence.e2e.normalize import to_verification
 
     def cleanup_page(*, delete_button: bool = True) -> _Page:
         page = _Page()
@@ -1396,7 +1396,7 @@ def _test_e2e_browser_session() -> None:
         f"a failed cleanup step stops its group: {[e['status'] for e in events if e['type'] == 'cleanup']}",
     )
     assert_true(report["browser_verdict"] == "pass" and report["claims"]["login"]["status"] == "proven", "the test's own result is untouched by its cleanup")
-    from core.evidence.contract import validate_verification_contract, verify_exit_status
+    from exoma.core.evidence.contract import validate_verification_contract, verify_exit_status
 
     norm = to_verification(report, reviewer_content=clean_review)
     assert_true(
@@ -1661,7 +1661,7 @@ def _test_e2e_browser_session() -> None:
             launch_calls[-1]["args"] == ["--host-resolver-rules=MAP devbox.lan 192.168.1.40"],
             f"an approved write host is pinned at launch: {launch_calls[-1]}",
         )
-        from core.evidence.e2e.browser import _launch_args
+        from exoma.core.evidence.e2e.browser import _launch_args
 
         assert_true(
             _launch_args({"host_pins": {"devbox.lan": "192.168.1.40"}, "browser": "firefox"}) == [] and _launch_args({"browser": "chromium"}) == [],

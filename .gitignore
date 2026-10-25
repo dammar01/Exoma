@@ -9,3 +9,5 @@ second_agent.json
 second_agent.json.retired
 second_agent.seed.json
 docs/research-drafts/
+dist/
+.venv/
