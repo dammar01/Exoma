@@ -1,0 +1,46 @@
+name: publish
+
+# Release tag to PyPI through Trusted Publishing: no API token is stored anywhere. The
+# wheel uploaded is the artifact ci.yml built and installed in a clean venv, so what
+# passed the gates is byte-for-byte what users get from `uv tool install exoma`.
+# PyPI side: the project's trusted publisher must name this repository, this file
+# (`publish.yml`) and the `pypi` environment, or the upload is refused.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/exoma/
+    permissions:
+      # The OIDC token PyPI exchanges for a short-lived upload credential. Only this job
+      # gets it; the test jobs above never can.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Tag matches the built version
+        # A PyPI version can never be re-uploaded, only yanked. A tag that disagrees with
+        # TOOL_VERSION would burn the number on the wrong build.
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="exoma-${GITHUB_REF_NAME#v}-py3-none-any.whl"
+          ls dist/
+          [ -f "dist/$want" ] || { echo "tag $GITHUB_REF_NAME has no dist/$want"; exit 1; }
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

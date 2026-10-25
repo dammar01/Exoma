@@ -9,6 +9,9 @@ on:
     branches: [main, dev]
   pull_request:
   workflow_dispatch:
+  # publish.yml calls this file on a release tag, so the wheel PyPI receives is the one
+  # these jobs built and smoke-tested — not a second build nobody checked.
+  workflow_call:
 
 permissions:
   contents: read
@@ -77,3 +80,53 @@ jobs:
         # checks stay opt-in because they cost real money and need credentials this
         # workflow deliberately does not hold.
         run: python tools/e2e/e2e.py
+
+  dist:
+    name: dist (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The source suites above import from src/. Only an installed wheel proves the
+        # runtime finds its _bundle through the package path, and that path is
+        # platform-shaped (Scripts/ vs bin/, drive letters), so both OSes again.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Wheel in a clean environment
+        # RELEASE.md step 6 "the wheel in a clean environment", run instead of remembered.
+        # Every home variable points at a temp dir so the dry run cannot read or describe
+        # the runner's real ~/.claude.
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          python -m venv "$tmp/venv"
+          bin="$tmp/venv/bin"; [ -d "$bin" ] || bin="$tmp/venv/Scripts"
+          "$bin/python" -m pip install --quiet dist/exoma-*-py3-none-any.whl
+          export HOME="$tmp/home" USERPROFILE="$tmp/home" AGENT_HOME="$tmp/home" EXOMA_HOME="$tmp/home"
+          mkdir -p "$HOME" "$tmp/project"
+          cd "$tmp"
+          "$bin/python" -c 'import exoma, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b; print("bundle", b)'
+          "$bin/exoma" --version
+          "$bin/exoma" install
+          "$bin/exoma" init --work-dir "$tmp/project"
+          bash "$tmp/project/.workflow/inspect.sh"
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7

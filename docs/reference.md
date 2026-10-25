@@ -1409,12 +1409,13 @@ exoma --command doctor --work-dir . --pretty
 
 ## CI
 
-Two GitHub Actions workflows run the gates that someone would otherwise have to remember
+Three GitHub Actions workflows run the gates that someone would otherwise have to remember
 to run themselves.
 
 | File | Trigger |
 |---|---|
-| `.github/workflows/ci.yml` | push to `main`/`dev`, pull request, manual |
+| `.github/workflows/ci.yml` | push to `main`/`dev`, pull request, manual, `workflow_call` (from `publish.yml`) |
+| `.github/workflows/publish.yml` | push of a `v*` tag |
 | `.github/workflows/e2e-full.yml` | manual only |
 
 Gates run by the free path, in order:
@@ -1453,8 +1454,16 @@ the other platform's results.
 `concurrency: cancel-in-progress` so that a pipeline overtaken on the same ref is cancelled
 instead of being left to finish against a stale commit. Job permissions are locked to `contents: read`.
 
-What CI does **not** do: bump, tag, publish. The steps that remain human-owned
-are in `RELEASE.md`.
+The `dist` job builds the sdist and wheel, installs the wheel into a clean venv with every
+home variable pointed at a temp directory, and runs `exoma --version`, `exoma install` (dry
+run), `exoma init` and the generated `inspect.sh`; on Linux it uploads `dist/` as an artifact.
+`ci.yml` also accepts `workflow_call`.
+
+`.github/workflows/publish.yml` runs on a pushed `v*` tag: it calls `ci.yml`, refuses a tag
+whose name does not match the built wheel's version, and uploads that same artifact to PyPI
+through Trusted Publishing (`id-token: write`, environment `pypi`, no stored token).
+
+What CI does **not** do: bump or tag. The steps that remain human-owned are in `RELEASE.md`.
 
 ---
 

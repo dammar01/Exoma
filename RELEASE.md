@@ -95,16 +95,25 @@ accident.
    git push origin v<version>
    ```
 
-8. **Publish.** Build from the tagged commit and upload:
+8. **Publish.** Pushing the tag is the publish. `.github/workflows/publish.yml` runs all of
+   `ci.yml` on the tagged commit, refuses a tag whose name does not match the built wheel's
+   version, and uploads the `dist/` artifact CI built and smoke-tested through PyPI Trusted
+   Publishing. Nothing is rebuilt between the gate and the upload, and no token exists.
+
+   One-time setup before the first tag: on PyPI, add a trusted publisher for this
+   repository with workflow `publish.yml` and environment `pypi` (a pending publisher, if
+   the project does not exist yet); on GitHub, create the `pypi` environment, with a
+   required reviewer if a human should approve each upload.
+
+   Fallback when the workflow cannot run, from the tagged commit:
 
    ```
    uv build
    uv publish
    ```
 
-   Prefer PyPI Trusted Publishing (a GitHub Actions workflow with `id-token: write`, which
-   `uv publish` picks up without a token) over a long-lived API token. A token, when used,
-   is passed as `UV_PUBLISH_TOKEN` and never committed.
+   with the token passed as `UV_PUBLISH_TOKEN` and never committed. A PyPI version cannot
+   be re-uploaded, only yanked: a bad upload costs the number.
 
 9. **Verify the tag reproduces.** From a clean checkout of the tag:
 
@@ -119,11 +128,12 @@ accident.
 
 ## What CI already covers
 
-`.github/workflows/ci.yml` runs steps 2, 3 and 6 (without `e2e-smoke`, `--full`, the clean
-wheel install, or real use) on every push and pull request, on Linux and Windows.
+`.github/workflows/ci.yml` runs steps 2, 3 and 6 (without `e2e-smoke`, `--full`, or real
+use) on every push and pull request, on Linux and Windows. Its `dist` job covers the clean
+wheel install of step 6.
 
-CI bumps nothing, tags nothing, publishes nothing. A release still requires a human to decide
-the number and run steps 1, 4, 5, 7, 8 and 9. The delegated end-to-end run
+CI bumps nothing and tags nothing. A pushed tag triggers `publish.yml` (step 8); everything
+else — deciding the number and running steps 1, 4, 5, 7 and 9 — is still a human's. The delegated end-to-end run
 (`.github/workflows/e2e-full.yml`) is manual and covers no release step: it exists to spend
 quota deliberately, not on a schedule.
 
