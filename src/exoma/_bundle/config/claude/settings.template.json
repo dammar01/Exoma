@@ -84,7 +84,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Skill|Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Skill|Edit|Write|MultiEdit|NotebookEdit|Read",
         "hooks": [
           {
             "type": "command",

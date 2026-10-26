@@ -4,25 +4,28 @@ argument-hint: [--local] <topic>
 
 ## Trigger
 /.analyze <topic>          → 1-call
-/.analyze --local <topic>  → Claude langsung (skip proxy)
+/.analyze --local <topic>  → Claude directly (skips the proxy)
 
 ## Run (1-call)
-Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' analyze '<topic>' '<MAIN_SESSION_ID>'
-<MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent). Reuse LAST_EXPLORE_RESULT jika relevan.
-Task nyentuh library eksternal → sebut nama library; proxy baca context7 docs dulu → temuan di external (bukan tebakan API).
-GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
-  STOP → "[PROXY GAGAL] <alasan>. Lanjut /.local? (yes/no)" → TUNGGU user. JANGAN auto-fallback, JANGAN reasoning dari garbage.
---local atau [LOCAL_MODE]=true → skip run, /.local flow (bukan fallback diam-diam — mode eksplisit user).
+Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' analyze '<topic>' '<MAIN_SESSION_ID>'
+<MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as the 3rd argument (concurrent isolation). Reuse LAST_EXPLORE_RESULT when relevant.
+The task touches an external library → name the library; the proxy reads the context7 docs first → findings in external (not a guessed API).
+FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:
+  STOP → "[PROXY FAILED] <reason>. Continue with /.local? (yes/no)" → WAIT for the user. Do NOT auto-fallback, do NOT reason from garbage.
+--local or [LOCAL_MODE]=true → skip the run, /.local flow (not a silent fallback — an explicit user mode).
 
 ## Output [ANALYSIS RESULT]
-Relay digest + isi dari content. confidence (3 sub) + uncertainties WAJIB.
+Relay the digest + fill from content. confidence (3 parts) + uncertainties REQUIRED.
 source: second_agent (1-call) | claude (local)
-confidence: { problem_understanding, root_cause, solution_path } — masing low|medium|high — <alasan>
-findings: <dari content, atribusi grounded/assumption> | (kosong: alasan)
-implications: <dampak> | (kosong: alasan)
-impacted_features: <fitur/modul lain terdampak — dari dependents/reverse-dep> [file:line] | (tidak ada: alasan)
-uncertainties: - uncertainty: <N>. <tak terkonfirmasi> → cara tutup: <apa> | (tidak ada)
-               NON-blocking: nyatakan asumsi, lanjut. Butuh keputusan user → naikkan jadi
-               `question: <N>. <pertanyaan> | <opsi A> | <opsi B>` dan sajikan interaktif.
+confidence: { problem_understanding, root_cause, solution_path } — each low|medium|high — <reason>
+findings: <from content, grounded/assumption attribution> | (empty: reason)
+implications: <impact> | (empty: reason)
+impacted_features: <other features/modules affected — from dependents/reverse deps> [file:line] | (none: reason)
+uncertainties: - uncertainty: <N>. <unconfirmed> → how to close: <what> | (none)
+               NON-blocking: state the assumption, continue. Needs a user decision → raise it as
+               `question: <N>. <question> | <option A> | <option B>` and present it interactively.
+Before acting on a finding, read the anchor it rests on yourself: the runtime proves a cited
+line exists, not that the claim about it is true. A synthesis written with no cited anchor
+opened gets an [ANCHOR CHECK] note at the end of the turn.
 
-## Rules: zero code changes, zero file mods.
+## Rules: zero code changes, zero file modifications.

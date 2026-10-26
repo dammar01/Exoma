@@ -1,88 +1,91 @@
 # Skill: plan
-description: Structured planning — evidence (1-call) + reasoning main_agent. Atribusi klaim + decision gate mekanis.
+description: Structured planning — evidence (1-call) + main_agent reasoning. Claim attribution + a mechanical decision gate.
 argument-hint: <task>
 
 ## Trigger
 /.plan <task>
 
 ## STEP 1 — Evidence
-Reuse LAST_EXPLORE_RESULT jika ada di context. Else 1-call:
-  Semua OS (tool Bash): bash '<work_dir>/.workflow/run.sh' plan '<task>' '<MAIN_SESSION_ID>'
-<MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent).
-- GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
-  STOP → "[PROXY GAGAL] <alasan>. Lanjut plan via /.local atau tanpa evidence? (yes/no)" → TUNGGU. JANGAN auto-fallback.
-- [LOCAL_MODE]=true → skip run, pakai /.local flow sebagai evidence.
-- Proxy scope-bounded ke file yg kamu sebut. Lintas-sistem (saldo, UX, perf, security) TAK dilihat proxy kecuali kamu inject ke task. Inject eksplisit ATAU tandai not_investigated. Tugasmu sambung, bukan proxy.
-- Instruksikan proxy trace REVERSE-dep (siapa consume/panggil target perubahan) → `dependents`. Tiap fitur/modul lain yg terdampak WAJIB masuk `risks` dgn [proxy:file:line] bukti coupling.
-- Task nyentuh library/framework eksternal → SEBUT nama library di task; proxy WAJIB baca docs via context7 DULU (versi + API resmi) → temuan di `external`. Jangan biar API library dari tebakan masuk plan.
+Reuse LAST_EXPLORE_RESULT when it is in context. Otherwise 1-call:
+  Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' plan '<task>' '<MAIN_SESSION_ID>'
+<MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as the 3rd argument (concurrent isolation).
+- FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:
+  STOP → "[PROXY FAILED] <reason>. Continue the plan via /.local or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.
+- [LOCAL_MODE]=true → skip the run, use the /.local flow as evidence.
+- The proxy is scope-bounded to the files you name. Cross-system concerns (balances, UX, perf, security) are NOT seen by the proxy unless you inject them into the task. Inject them explicitly OR mark them not_investigated. Connecting them is your job, not the proxy's.
+- Instruct the proxy to trace REVERSE deps (who consumes/calls the change target) → `dependents`. Every other affected feature/module MUST go into `risks` with [proxy:file:line] proof of the coupling.
+- The task touches an external library/framework → NAME the library in the task; the proxy MUST read the docs through context7 FIRST (version + official API) → findings in `external`. Never let a guessed library API into the plan.
 
 ## STEP 2 — Output [PLAN]
-TIAP klaim di assumptions/steps/dependencies/risks WAJIB atribusi sumber:
-  [proxy:file:line] berbukti | [main_agent-inference] simpulanmu | [user-provided] | [PLACEHOLDER-perlu-kalibrasi] angka/metrik tanpa basis.
-DILARANG sajikan tebakan (angka, dependency, regresi) sebagai fakta tak berlabel. Belum ada evidence → minta evidence baru ATAU label. Jangan naikkan kepercayaan diam-diam saat didorong.
+EVERY claim in assumptions/steps/dependencies/risks MUST carry a source:
+  [proxy:file:line] proven | [main_agent-inference] your conclusion | [user-provided] | [PLACEHOLDER-needs-calibration] numbers/metrics without a basis.
+Do NOT present guesses (numbers, dependencies, regressions) as unlabeled fact. No evidence yet → ask for new evidence OR label it. Do not quietly raise confidence when pushed.
+Read the anchor a step rests on yourself before committing to it: the runtime proves a cited
+line exists, not that the claim about it is true. A [PLAN] written with no cited anchor opened
+gets an [ANCHOR CHECK] note at the end of the turn.
 
 [PLAN]
 task:            <restatement>
 evidence_source: second_agent (1-call) | graphify+claude (local) | none
-assumptions:     - <statement + atribusi> | (tidak ada: alasan)
-open_questions:  - question: <N>. <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | <opsi A> :: <deskripsi A> | <opsi B> :: <deskripsi B>   | (tidak ada: alasan)
-                 Bernomor, opsi dipisah " | ", deskripsi opsional setelah " :: ". Jawabannya memang pilihan → opsi WAJIB.
-                 Sajikan lewat pertanyaan interaktif, satu per pertanyaan — jangan paksa user membaca struktur mentah.
-                 Renderer = tool AskUserQuestion. Batasnya keras, langgar = call ditolak:
-                   - MAX 4 pertanyaan per call, tiap pertanyaan 2-4 opsi. Lebih → pecah jadi call berikutnya, jangan padatkan.
-                   - `header` tiap pertanyaan MAX 12 karakter. Teks panjang taruh di `question`, bukan header.
-                   - Pilih-banyak → `multiSelect: true`. Pilih-satu → false. Jangan pakai multiSelect utk pertanyaan biner.
-                   - Bagian " :: " jadi `description` opsi; tanpa deskripsi user menebak arti label.
-                   - User selalu dapat opsi bebas "Other" — jangan buat opsi "lainnya" sendiri.
-                   - AskUserQuestion TIDAK tersedia di subagent. Render di main thread; DILARANG delegasikan tanya-user ke Task/subagent.
-resolvable_uncertainties: - uncertainty: <N>. <bisa ditutup> → cara: <read/grep/explore apa> | (tidak ada)
-                 NON-blocking. JANGAN tanyakan ke user — nyatakan asumsi, lanjut.
-steps:           1. <concrete + atribusi> 2. ...
-dependencies:    - A→B [bukti:file:line] | A→B [ASUMSI-belum-verified] | (tidak ada)
+assumptions:     - <statement + attribution> | (none: reason)
+open_questions:  - question: <N>. <an architecture/implementation decision ONLY the user can make; BLOCKING> | <option A> :: <description A> | <option B> :: <description B>   | (none: reason)
+                 Numbered, options separated by " | ", an optional description after " :: ". The answer is a choice → options REQUIRED.
+                 Present them as interactive questions, one per question — do not make the user read raw structure.
+                 Renderer = the AskUserQuestion tool. Its limits are hard; break one = the call is refused:
+                   - MAX 4 questions per call, 2-4 options per question. More → split into the next call, do not cram.
+                   - Each question's `header` MAX 12 characters. Long text goes in `question`, not the header.
+                   - Multi-choice → `multiSelect: true`. Single choice → false. Do not use multiSelect for a yes/no question.
+                   - The " :: " part becomes the option's `description`; without one the user guesses what the label means.
+                   - The user always gets a free "Other" option — do not add an "other" option yourself.
+                   - AskUserQuestion is NOT available in subagents. Render in the main thread; do NOT delegate asking the user to a Task/subagent.
+resolvable_uncertainties: - uncertainty: <N>. <can be closed> → how: <what read/grep/explore> | (none)
+                 NON-blocking. Do NOT ask the user — state the assumption, continue.
+steps:           1. <concrete + attribution> 2. ...
+dependencies:    - A→B [proof:file:line] | A→B [ASSUMPTION-not-verified] | (none)
 files_affected:  <list>
-risks:           - <breakage/side-effect + fitur lain terdampak (blast radius dari dependents) + atribusi> | (tidak ada: alasan)
+risks:           - <breakage/side effect + other affected features (blast radius from dependents) + attribution> | (none: reason)
 confidence:
-  problem_understanding: low|medium|high — <alasan>
-  root_cause:            low|medium|high — <alasan>
-  solution_path:         low|medium|high — <alasan>
+  problem_understanding: low|medium|high — <reason>
+  root_cause:            low|medium|high — <reason>
+  solution_path:         low|medium|high — <reason>
 decision:        proceed | clarify | re-explore
-  MEKANIS: open_questions ada ATAU solution_path<high ATAU jalur kritis berat [main_agent-inference] → clarify (DILARANG proceed/tawar execute). root_cause rendah → re-explore. Selain itu → proceed.
+  MECHANICAL: open_questions exist OR solution_path<high OR a heavy critical path rests on [main_agent-inference] → clarify (proceed/offering execute FORBIDDEN). Low root_cause → re-explore. Otherwise → proceed.
 
-## STEP 2b — Output [OPTIONS] (WAJIB, setelah [PLAN])
-Rencana di atas = SATU jalan. Sajikan alternatifnya, jangan sembunyikan pilihan di kepalamu.
+## STEP 2b — Output [OPTIONS] (REQUIRED, after [PLAN])
+The plan above = ONE path. Present the alternatives; do not hide choices in your head.
 
 [OPTIONS]
-Opsi A — <nama>  (= rencana di atas)
-  plus:   <keunggulan nyata>
-  minus:  <ongkos/risiko nyata>
-  effort: kecil|sedang|besar · risiko utama: <satu hal>
-  atribusi: [proxy:file:line] | [main_agent-inference]
-Opsi B — <pendekatan BEDA> (idem)
-Opsi C — <opsional, idem>
-rekomendasi: <SATU opsi> — <alasan pendek, sebut trade-off yang kamu terima>
+Option A — <name>  (= the plan above)
+  plus:   <a real advantage>
+  minus:  <a real cost/risk>
+  effort: small|medium|large · main risk: <one thing>
+  attribution: [proxy:file:line] | [main_agent-inference]
+Option B — <a DIFFERENT approach> (same)
+Option C — <optional, same>
+recommendation: <ONE option> — <a short reason, naming the trade-off you accept>
 
-BOUNDED (langgar = output invalid):
-- MAX 3 opsi. Tiap opsi max 5 baris.
-- Opsi hanya SAH kalau beda ARSITEKTUR, beda DEPENDENCY, atau beda ARAH IMPLEMENTASI keseluruhan. Beda kosmetik/urutan/penamaan = BUKAN opsi. Varian sejenis / subset / parametrik dari rencana yang sama juga BUKAN opsi (mis. "rencana penuh" vs "setengah rencana", "nilai cap 3000 vs 4000" = satu rencana, bukan dua arah). Tak ada fork arah yang nyata → satu opsi saja (lihat bawah), JANGAN pecah rencana jadi opsi semu demi mengisi blok.
-- Wajib DALAM scope task. DILARANG usul rewrite, ganti stack, ganti arsitektur kalau task-nya bukan itu. Opsi di luar scope = scope creep, bukan pilihan.
-- Atribusi sama ketatnya dengan [PLAN]. Opsi tanpa basis evidence tetap dilabel [main_agent-inference].
-- `minus` WAJIB diisi jujur, termasuk untuk opsi yang kamu rekomendasikan. Opsi tanpa minus = kamu belum memikirkannya.
-- Opsi yang bertentangan dengan evidence WAJIB ditandai ❌ + sebut evidence yang membantahnya. Jangan disajikan setara.
-- rekomendasi WAJIB SATU. Tak bisa memilih → itu open_question, bukan opsi. Naikkan ke [PLAN].
-- Opsi cuma satu yang masuk akal → tulis "Opsi A saja — <alasan tak ada alternatif bounded>". Jangan karang opsi B demi memenuhi format.
+BOUNDED (break it = invalid output):
+- MAX 3 options. At most 5 lines per option.
+- An option is VALID only when it differs in ARCHITECTURE, DEPENDENCY, or overall IMPLEMENTATION DIRECTION. Cosmetic/order/naming differences are NOT options. A variant / subset / parametric version of the same plan is NOT an option either (e.g. "full plan" vs "half the plan", "cap 3000 vs 4000" = one plan, not two directions). No real fork in direction → a single option (see below); do NOT split the plan into fake options to fill the block.
+- Must be WITHIN the task's scope. Do NOT propose a rewrite, a stack change, or an architecture change when that is not the task. An option outside the scope = scope creep, not a choice.
+- Attribution as strict as in [PLAN]. An option without an evidence basis is still labeled [main_agent-inference].
+- `minus` MUST be filled honestly, including for the option you recommend. An option without a minus = you have not thought it through.
+- An option the evidence contradicts MUST be marked ❌ + name the evidence against it. Do not present it as an equal.
+- recommendation MUST be ONE. Cannot choose → that is an open_question, not an option. Raise it into [PLAN].
+- Only one sensible option → write "Option A only — <why no bounded alternative exists>". Do not invent an option B to fill the format.
 
 ## STEP 3
-resolvable_uncertainties WAJIB kamu coba tutup DULU sebelum tanya user; sisakan open_questions saja ke user.
-Catat plan ke runtime — tiap kali [PLAN] terbit atau berubah (termasuk sesudah jawaban open_questions):
-  tulis `<work_dir>/.workflow/data/sessions/<MAIN_SESSION_ID>/runtime/plan.input.json`:
+You MUST try to close resolvable_uncertainties FIRST before asking the user; leave only open_questions for the user.
+Record the plan in the runtime — every time a [PLAN] is issued or changes (including after open_questions answers):
+  write `<work_dir>/.workflow/data/sessions/<MAIN_SESSION_ID>/runtime/plan.input.json`:
   {"task", "decision", "confidence": {problem_understanding, root_cause, solution_path},
    "open_questions": [...], "options": [{"name", "plus", "minus", "recommended"}], "files": [<execution scope>]}
-  lalu: bash '<work_dir>/.workflow/run.sh' plan-record '<path itu>' '<MAIN_SESSION_ID>'
-Runtime MENOLAK `proceed` yang masih punya open_questions, solution_path < high, `files`
-kosong, opsi tanpa `minus`, atau rekomendasi ≠ satu (`plan_invalid`). Ditolak → itu bukan
-proceed: perbaiki plan atau tulis decision clarify. /.execute -y hanya membuka plan yang tercatat.
-decision=proceed → "Setuju? Jalankan /.execute -y". clarify → tanya open_questions. JANGAN auto-execute.
-Jawaban open_questions masuk → perbarui [PLAN] (assumptions, confidence, decision) → decision baru
-proceed → "Setuju? Jalankan /.execute -y" → BERHENTI. Jawaban itu BUKAN persetujuan eksekusi;
-nol edit sampai user memberi /.execute -y.
-User pilih opsi non-rekomendasi → JALANKAN pilihannya, jangan debat ulang. Sudah kamu sebut minus-nya; keputusan miliknya.
+  then: bash '<work_dir>/.workflow/run.sh' plan-record '<that path>' '<MAIN_SESSION_ID>'
+The runtime REFUSES a `proceed` that still has open_questions, solution_path < high, empty
+`files`, an option without `minus`, or a recommendation count ≠ one (`plan_invalid`). Refused → it is not
+proceed: fix the plan or write decision clarify. /.execute -y only opens a recorded plan.
+decision=proceed → "Agree? Run /.execute -y". clarify → ask the open_questions. Do NOT auto-execute.
+open_questions answers arrive → update [PLAN] (assumptions, confidence, decision) → new decision
+proceed → "Agree? Run /.execute -y" → STOP. Those answers are NOT execution approval;
+zero edits until the user gives /.execute -y.
+The user picks a non-recommended option → CARRY OUT their choice, do not argue it again. You already named its minus; the decision is theirs.

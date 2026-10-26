@@ -188,11 +188,9 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
     """
     from exoma.config.providers import (
         bundled_providers,
-        opt_in_granted,
+        provider_boundary,
         provider_command_default,
         provider_models,
-        provider_opt_in_env,
-        provider_requires_opt_in,
     )
 
     providers = sorted(bundled_providers())
@@ -201,8 +199,8 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
     for index, name in enumerate(providers, start=1):
         command = provider_command_default(name, os.getenv)
         notes = ["on PATH" if shutil.which(command) else f"{command} not on PATH"]
-        if provider_requires_opt_in(name) and not opt_in_granted(name):
-            notes.append(f"no enforced boundary — needs {provider_opt_in_env(name)}")
+        if provider_boundary(name)["reads"] == "unbounded":
+            notes.append("no enforced read boundary — trusted provider")
         print(f"    {index}) {name:<10} ({'; '.join(notes)})")
     choice = _ask(f"  provider [1-{len(providers)}, blank = keep the example default]: ")
     if not choice.isdigit() or not 1 <= int(choice) <= len(providers):
@@ -255,9 +253,7 @@ def _seed_second_agent_config(
     """
     from exoma.config.providers import (
         model_is_listed,
-        opt_in_granted,
-        provider_opt_in_env,
-        provider_requires_opt_in,
+        provider_boundary_warning,
     )
     from exoma.core.workspace.workspace_paths import (
         JSON_INDENT,
@@ -315,11 +311,9 @@ def _seed_second_agent_config(
         detail = f"from {src.name} (provider=opencode, model unset; pass --provider to choose)"
         payload = src.read_text(encoding="utf-8")
     else:
-        if provider_requires_opt_in(provider) and not opt_in_granted(provider):
-            plan.warn(
-                f"{provider} enforces no read-only boundary; the runtime refuses it "
-                f"until {provider_opt_in_env(provider)} is set"
-            )
+        boundary_warning = provider_boundary_warning(provider)
+        if boundary_warning:
+            plan.warn(boundary_warning)
         if model and not model_is_listed(provider, model):
             plan.warn(
                 f"{model!r} is not on {provider}'s shortlist — pinned anyway, but "

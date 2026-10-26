@@ -786,19 +786,23 @@ def _test_installer_seed_prompt_answers() -> None:
 
 def _test_installer_seed_reports_unenforced_provider() -> None:
     """Choosing a provider with no read-only boundary has to say so at selection time."""
-    from exoma.config.providers import bundled_providers, provider_requires_opt_in
+    from exoma.config.providers import bundled_providers, provider_boundary
 
-    unenforced = [p for p in bundled_providers() if provider_requires_opt_in(p)]
+    unenforced = [p for p in bundled_providers() if provider_boundary(p)["reads"] == "unbounded"]
     assert_true(
         bool(unenforced),
-        "fixture assumption: at least one bundled provider requires opt-in",
+        "fixture assumption: at least one bundled provider enforces no read boundary",
     )
     with _seed_repo() as (install_mod, _dest):
         plan = Plan()
         install_mod._seed_second_agent_config(plan, True, unenforced[0], None)
         assert_true(
-            any("OPT_IN" in warning for warning in plan.warnings),
-            "the missing opt-in must be named while the choice is being made",
+            any("enforces no read-only boundary" in warning for warning in plan.warnings),
+            f"the missing boundary must be named while the choice is being made: {plan.warnings}",
+        )
+        assert_true(
+            not any("OPT_IN" in warning for warning in plan.warnings),
+            f"no opt-in variable is asked for: {plan.warnings}",
         )
 
 

@@ -44,10 +44,10 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
         # it fired — the caller runs this as a background task and never reads that stream —
         # so the script refuses. Local commands are unaffected: a shared default session
         # costs them nothing.
-        'if [ "$SESSION" = "default" ] && [ -z "${AI_PROXY_ALLOW_DEFAULT_SESSION:-}" ]; then\n'
+        'if [ "$SESSION" = "default" ] && [ -z "${EXOMA_ALLOW_DEFAULT_SESSION:-${AI_PROXY_ALLOW_DEFAULT_SESSION:-}}" ]; then\n'
         '  case " explore plan analyze verify verify-browser " in\n'
         '    *" $COMMAND "*)\n'
-        '      echo "[workflow] ERROR: session=default on delegated command \'$COMMAND\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set AI_PROXY_ALLOW_DEFAULT_SESSION=1." >&2\n'
+        '      echo "[workflow] ERROR: session=default on delegated command \'$COMMAND\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set EXOMA_ALLOW_DEFAULT_SESSION=1." >&2\n'
         "      exit 2 ;;\n"
         "  esac\n"
         "fi\n"

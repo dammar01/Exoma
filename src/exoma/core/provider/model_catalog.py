@@ -43,12 +43,13 @@ import time
 from pathlib import Path
 
 from exoma.config.providers import provider_command_default, provider_models
+from exoma.config.settings import getenv
 from exoma.core.workspace.workspace_paths import atomic_write_text
 from exoma.utils import osutil
 
-# `AI_PROXY_MODEL_CATALOG=static` turns the live read off (offline machines, or a CLI
+# `EXOMA_MODEL_CATALOG=static` turns the live read off (offline machines, or a CLI
 # whose listing is known to hang). Tests flip `LIVE_ENABLED` instead.
-CATALOG_ENV = "AI_PROXY_MODEL_CATALOG"
+CATALOG_ENV = "EXOMA_MODEL_CATALOG"
 LIVE_ENABLED = True
 CACHE_TTL_SECONDS = 600
 # Overridable for tests; None resolves the per-user location below.
@@ -67,7 +68,7 @@ _VERSION_PART = re.compile(r"\d+")
 
 
 def live_enabled() -> bool:
-    return LIVE_ENABLED and (os.getenv(CATALOG_ENV) or "").strip().lower() != "static"
+    return LIVE_ENABLED and (getenv(CATALOG_ENV) or "").strip().lower() != "static"
 
 
 # ------------------------------------------------------------------ public

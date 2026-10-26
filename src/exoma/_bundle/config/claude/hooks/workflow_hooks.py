@@ -3,7 +3,7 @@
     <python> workflow_hooks.py <hook>      (stdin: the hook's JSON from Claude Code)
 
 Runs <hook>.py from this directory as __main__ with the payload as the module global
-HOOK_RAW and this directory as HOOK_DIR (DEC-068). The payload never goes through the
+HOOK_RAW and this directory as HOOK_DIR. The payload never goes through the
 environment: Windows refuses a variable longer than 32767 characters, so every Edit/Write
 or prompt past that size crashed the hook and the gates failed open. stdin is read as bytes
 and decoded as UTF-8, the encoding Claude Code writes, whatever the locale code page is.

@@ -33,7 +33,16 @@ dot. The distinction is the whole boundary for the files that matter most: if it
 `.netrc`, `.pgpass` and `.git-credentials`. So `codex_secret_globs()` ships BOTH spellings
 of every pattern rather than betting on the permissive reading. The duplicate costs one
 extra map entry each; the bet would have cost the secret.
+A third consumer reads the same list without translating it: `find_secret_files()` names
+the files in a project that the patterns match, for the providers that cannot deny them.
+`doctor` reports those names, and `agy_guard` watches their size and mtime around each
+call, because `git status` never shows a `.gitignore`d `.env`. Neither reads a file's
+contents: the name is the whole signal, and a secret with an innocent name stays invisible.
 """
+
+import fnmatch
+import os
+from pathlib import Path
 
 # Canonical patterns, written in opencode's dialect because that is the dialect already
 # shipped in dist/. Everything else translates FROM this.
@@ -86,6 +95,58 @@ SECRET_READ_ALLOWLIST: tuple[str, ...] = (
     "*.env.sample",
     "*.env.template",
 )
+
+# Directories `find_secret_files` never descends into. Dependency and build trees hold
+# thousands of files and, by convention, no credentials of this project; walking them would
+# make every `doctor` and every agy call pay for a `node_modules` it has no reason to read.
+# `.git` is skipped for the same reason, and `.workflow` because it is the runtime's own.
+_SCAN_SKIP_DIRS = frozenset({
+    ".git", ".workflow", "node_modules", "vendor", ".venv", "venv", "__pycache__",
+    "dist", "build", "target", ".next", "coverage", ".tox", ".mypy_cache",
+})
+
+# Upper bound on entries visited per scan. Reaching it is reported (`truncated: True`), so a
+# huge tree degrades to "these were found, the scan stopped" rather than to silence.
+_SCAN_MAX_ENTRIES = 50_000
+
+
+def is_secret_path(relative_path: str) -> bool:
+    """Whether a project-relative path matches the canonical deny-list.
+
+    Matched in opencode's dialect: `fnmatch` lets `*` cross `/` and match nothing, which is
+    the reading opencode gives the same patterns (`*.env` covers `.env` and `api/.env`).
+    The allowlist wins, as it does in opencode.
+    """
+    path = relative_path.replace("\\", "/")
+    if any(fnmatch.fnmatchcase(path, allowed) for allowed in SECRET_READ_ALLOWLIST):
+        return False
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in SECRET_READ_PATTERNS)
+
+
+def find_secret_files(project_root, *, max_entries: int = _SCAN_MAX_ENTRIES) -> dict:
+    """Files under `project_root` whose path matches the deny-list: `{files, truncated}`.
+
+    `files` are project-relative, `/`-separated and sorted. Ignored files are included on
+    purpose — they are the ones `git status` cannot see. Symlinked directories are not
+    followed, so the scan stays inside the project. Contents are never opened.
+    """
+    root = Path(project_root) if project_root else None
+    if root is None or not root.is_dir():
+        return {"files": [], "truncated": False}
+    found: list[str] = []
+    visited = 0
+    for current, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in _SCAN_SKIP_DIRS]
+        base = Path(current).relative_to(root)
+        for name in files:
+            visited += 1
+            if visited > max_entries:
+                return {"files": sorted(found), "truncated": True}
+            relative = (base / name).as_posix()
+            if is_secret_path(relative):
+                found.append(relative)
+    return {"files": sorted(found), "truncated": False}
+
 
 # The codex profile this workflow asserts. Named rather than reusing "default" so a user
 # reading `codex doctor` output can tell which profile came from here.

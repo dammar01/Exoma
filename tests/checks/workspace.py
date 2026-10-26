@@ -26,6 +26,7 @@ from tests.checks.support import (
     clean_output,
     extract_session_id,
 )
+from tests.checks.support import no_console
 
 def _test_workspace_release_guards() -> None:
     """Runtime generations, upgrade corruption, and unborn staged diffs fail safely."""
@@ -41,7 +42,7 @@ def _test_workspace_release_guards() -> None:
     try:
         subprocess_result = main.subprocess.run(
             ["git", "init", "-q", str(root)], capture_output=True, text=True
-        )
+        , **no_console())
         assert_true(subprocess_result.returncode == 0, "workspace fixture git init failed")
         ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
         paths = workflow_paths(root, "lock-session")
@@ -219,13 +220,13 @@ def _test_workspace_release_guards() -> None:
         try:
             init = main.subprocess.run(
                 ["git", "init", "-q", str(root2)], capture_output=True, text=True
-            )
+            , **no_console())
             assert_true(init.returncode == 0, "unborn sweep fixture git init failed")
             ensure_workflow_workspace(root2, os.getenv("AGENT_PATH"))
             (root2 / "staged.py").write_text("value = 1\n", encoding="utf-8")
             added = main.subprocess.run(
                 ["git", "add", "staged.py"], cwd=root2, capture_output=True, text=True
-            )
+            , **no_console())
             assert_true(added.returncode == 0, f"git add failed: {added.stderr}")
             swept = run_sweep(root2, "unborn")
             assert_true(
@@ -264,7 +265,7 @@ def _test_project_session_isolation() -> None:
     project_b.mkdir()
     initialized = main.subprocess.run(
         ["git", "init", "-q", str(project_a)], capture_output=True, text=True
-    )
+    , **no_console())
     assert_true(initialized.returncode == 0, "session isolation git init failed")
     project_a_subdir = project_a / "src"
     project_a_subdir.mkdir()
@@ -485,6 +486,7 @@ def _test_init_upgrade_and_session_guard() -> None:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **no_console(),
         )
         assert_true(
             inspected.returncode == 0 and json.loads(inspected.stdout).get("ok") is not None,
@@ -506,6 +508,7 @@ def _test_init_upgrade_and_session_guard() -> None:
             env=env,
             capture_output=True,
             text=True,
+            **no_console(),
         )
         assert_true(
             refused.returncode == 2,
@@ -521,6 +524,7 @@ def _test_init_upgrade_and_session_guard() -> None:
             env=env,
             capture_output=True,
             text=True,
+            **no_console(),
         )
         assert_true(
             allowed.returncode != 2,

@@ -20,6 +20,57 @@ E2E_REQUIREMENTS_FILE = BUNDLE_DIR / "requirements-e2e.txt"
 PROVIDER_EXAMPLE_FILE = PACKAGE_DIR / "config" / "second_agent.example.json"
 
 
+# Runtime knobs are read from `EXOMA_<NAME>`. Before the package was renamed they were
+# `AI_PROXY_<NAME>`, and those spellings are still read as a fallback so an existing shell
+# profile keeps working; `doctor` names every legacy variable it finds set
+# (`legacy_env_in_use`). The new spelling wins when both are set.
+ENV_PREFIX = "EXOMA_"
+LEGACY_ENV_PREFIX = "AI_PROXY_"
+
+
+def legacy_env_name(name: str) -> str | None:
+    """The pre-rename spelling of an `EXOMA_*` variable, or None for any other name."""
+    if name.startswith(ENV_PREFIX):
+        return LEGACY_ENV_PREFIX + name[len(ENV_PREFIX):]
+    return None
+
+
+def getenv(name: str, default=None):
+    """`os.getenv` that falls back from `EXOMA_<X>` to the legacy `AI_PROXY_<X>`."""
+    value = os.environ.get(name)
+    if value is None:
+        legacy = legacy_env_name(name)
+        if legacy is not None:
+            value = os.environ.get(legacy)
+    return default if value is None else value
+
+
+# The `<NAME>` part of every `EXOMA_<NAME>` the runtime reads with the legacy fallback.
+# Only these are reported by `legacy_env_in_use`: an `AI_PROXY_*` name outside the list was
+# never read (an `AI_PROXY_OPENCODE_COMMAND` is not the `OPENCODE_COMMAND` override), and
+# telling the user to rename it would promise an effect it never had. `ALLOW_DEFAULT_SESSION`
+# is read by the generated `run.sh` (`core/runtime/scripts.py`), `MODEL_CATALOG` by
+# `core/provider/model_catalog.py`; the rest below.
+LEGACY_ENV_NAMES = frozenset({
+    "PROVIDER", "MAIN_SESSION_CACHE_TTL_SECONDS", "TIMEOUT_SECONDS", "BOOTSTRAP_TIMEOUT_SECONDS",
+    "POLL_INTERVAL_SECONDS", "STALL_THRESHOLD_SECONDS", "IDLE_STALL_SECONDS",
+    "PROBE_TIMEOUT_SECONDS", "PROBE_RECHECK_SECONDS", "MAX_PROBES", "JOB_MAX_RUNTIME_SECONDS",
+    "MAX_TASK_CHARS", "MAX_TASK_CHARS_NO_ARGV", "TASK_TRUNCATION_HARD_RATIO", "SLIM_CONTENT",
+    "CONTENT_PREVIEW_CHARS", "SLIM_CONTENT_MIN_CHARS", "OPENCODE_AGENT", "FANOUT_RECHECK_HOURS",
+    "JOB_POLL_INTERVAL_SECONDS", "JOB_POLL_TIMEOUT_SECONDS", "MAX_GLOBAL_WORKERS",
+    "MODEL_CATALOG", "ALLOW_DEFAULT_SESSION",
+})
+
+
+def legacy_env_in_use(environ=None) -> list[str]:
+    """Every set `AI_PROXY_*` variable that still works under its `EXOMA_*` name, sorted."""
+    source = os.environ if environ is None else environ
+    return sorted(
+        key for key in source
+        if key.startswith(LEGACY_ENV_PREFIX) and key[len(LEGACY_ENV_PREFIX):] in LEGACY_ENV_NAMES
+    )
+
+
 def _data_dir() -> Path:
     """Per-user state: global job records, the main-session cache, the provider seed.
 
@@ -49,7 +100,7 @@ JOB_DIR = STORAGE_DIR / "jobs"
 PROVIDER_SEED_FILE = DATA_DIR / "config" / "second_agent.seed.json"
 # Which adapter serves as second_agent. Read by adapters.contract.registry; a workspace
 # config.json may override it per project.
-DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
+DEFAULT_PROVIDER = getenv("EXOMA_PROVIDER", "opencode")
 
 TOOL_VERSION = "0.1.0"
 
@@ -81,7 +132,11 @@ def _env_number(name: str, default, cast):
     zero, and a negative timeout fails much later, far from the env var that caused it.
     Zero IS allowed — several knobs use it deliberately to mean "disabled".
     """
-    raw = os.getenv(name)
+    raw = os.environ.get(name)
+    legacy = legacy_env_name(name)
+    if raw is None and legacy is not None and legacy in os.environ:
+        # Warnings below name the variable the user actually set, not its new spelling.
+        name, raw = legacy, os.environ[legacy]
     if raw is None or not raw.strip():
         return default
     try:
@@ -114,41 +169,41 @@ def _env_float(name: str, default: float) -> float:
 # is replaced instead of capturing the next agent's work. Deliberately longer than the lock
 # TTLs — a main agent idles for minutes at a time while the user types.
 MAIN_SESSION_CACHE_TTL_SECONDS = _env_int(
-    "AI_PROXY_MAIN_SESSION_CACHE_TTL_SECONDS", 3600
+    "EXOMA_MAIN_SESSION_CACHE_TTL_SECONDS", 3600
 )
 
 # Overall delegated-call timeout; 0 disables it.
-DEFAULT_TIMEOUT_SECONDS = _env_int("AI_PROXY_TIMEOUT_SECONDS", 1800)
+DEFAULT_TIMEOUT_SECONDS = _env_int("EXOMA_TIMEOUT_SECONDS", 1800)
 # Bootstrap only says "READY"; it must never inherit the long task budget.
 DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = _env_int(
-    "AI_PROXY_BOOTSTRAP_TIMEOUT_SECONDS", 180
+    "EXOMA_BOOTSTRAP_TIMEOUT_SECONDS", 180
 )
 # Gap between liveness ticks while opencode runs.
-DEFAULT_POLL_INTERVAL_SECONDS = _env_float("AI_PROXY_POLL_INTERVAL_SECONDS", 2.0)
+DEFAULT_POLL_INTERVAL_SECONDS = _env_float("EXOMA_POLL_INTERVAL_SECONDS", 2.0)
 # No heartbeat for this long while the PID is still alive => stalled, probe it.
 DEFAULT_STALL_THRESHOLD_SECONDS = _env_int(
-    "AI_PROXY_STALL_THRESHOLD_SECONDS", 360
+    "EXOMA_STALL_THRESHOLD_SECONDS", 360
 )
 # Unlike heartbeat age, this measures how long the output stream has been idle.
-DEFAULT_IDLE_STALL_SECONDS = _env_int("AI_PROXY_IDLE_STALL_SECONDS", 240)
-DEFAULT_PROBE_TIMEOUT_SECONDS = _env_int("AI_PROXY_PROBE_TIMEOUT_SECONDS", 45)
+DEFAULT_IDLE_STALL_SECONDS = _env_int("EXOMA_IDLE_STALL_SECONDS", 240)
+DEFAULT_PROBE_TIMEOUT_SECONDS = _env_int("EXOMA_PROBE_TIMEOUT_SECONDS", 45)
 # Cadence for re-probing a stalled job.
-DEFAULT_PROBE_RECHECK_SECONDS = _env_int("AI_PROXY_PROBE_RECHECK_SECONDS", 120)
+DEFAULT_PROBE_RECHECK_SECONDS = _env_int("EXOMA_PROBE_RECHECK_SECONDS", 120)
 # Max fresh-session probes for one stalled job before probing stops entirely. Each probe
 # spends quota, so a job that stays alive-but-silent must not re-probe forever — after the
 # budget the job_max_runtime backstop is what ends it. The recheck interval also backs off
 # (doubles) between probes so the budget is not spent in one tight burst.
-DEFAULT_MAX_PROBES = _env_int("AI_PROXY_MAX_PROBES", 3)
+DEFAULT_MAX_PROBES = _env_int("EXOMA_MAX_PROBES", 3)
 # Hard ceiling: a job running past this is failed even if its PID looks alive.
 # Backstop for the OOM case, where the worker dies in a way PID checks miss.
 DEFAULT_JOB_MAX_RUNTIME_SECONDS = _env_int(
-    "AI_PROXY_JOB_MAX_RUNTIME_SECONDS", 5400
+    "EXOMA_JOB_MAX_RUNTIME_SECONDS", 5400
 )
 # The delegated prompt is passed as ONE CLI arg (Windows caps argv at 8191 chars; the
 # adapter's _too_long_for_cmd is the hard backstop). Scaffolding is fixed cost, so the
 # task string is the only variable-size part worth capping here — cap it before assembly
 # so a long task degrades to a visible truncation instead of a deterministic call failure.
-DEFAULT_MAX_TASK_CHARS = _env_int("AI_PROXY_MAX_TASK_CHARS", 3000)
+DEFAULT_MAX_TASK_CHARS = _env_int("EXOMA_MAX_TASK_CHARS", 3000)
 # The cap for transports that have no command-line limit to respect: opencode attaches
 # its prompt as a file, codex writes it to stdin. Neither can overflow argv, and both
 # were being cut at the number chosen for the transport that can — the arrangement was
@@ -157,44 +212,44 @@ DEFAULT_MAX_TASK_CHARS = _env_int("AI_PROXY_MAX_TASK_CHARS", 3000)
 # default: length was never the property worth bounding here. What matters is how wide
 # the resulting change is, and `quick_verify.scope_width` measures that directly instead
 # of guessing at it from the size of the instruction.
-DEFAULT_MAX_TASK_CHARS_NO_ARGV = _env_int("AI_PROXY_MAX_TASK_CHARS_NO_ARGV", 0)
+DEFAULT_MAX_TASK_CHARS_NO_ARGV = _env_int("EXOMA_MAX_TASK_CHARS_NO_ARGV", 0)
 # Fraction of the task that may be cut before the call is refused instead of degraded.
 # A tail trimmed off a long instruction usually costs nothing; losing a third of it means
 # the second agent answered a different question than the one asked — and it answers with
 # full confidence either way, which is the part that misleads.
 DEFAULT_TASK_TRUNCATION_HARD_RATIO = _env_float(
-    "AI_PROXY_TASK_TRUNCATION_HARD_RATIO", 0.2
+    "EXOMA_TASK_TRUNCATION_HARD_RATIO", 0.2
 )
 # A delegated result ships the evidence text in `content` AND the path it was archived to
 # in `evidence_ref.artifact_path` — the same bytes, twice. Delegation exists to keep raw
 # code out of main_agent's context window, and carrying both puts it straight back in.
 # Opt-in rather than default: a consumer that reads `content` without checking
 # `meta.content_mode` would get a preview and have no way to notice.
-SLIM_CONTENT_ENV = "AI_PROXY_SLIM_CONTENT"
-DEFAULT_CONTENT_PREVIEW_CHARS = _env_int("AI_PROXY_CONTENT_PREVIEW_CHARS", 500)
+SLIM_CONTENT_ENV = "EXOMA_SLIM_CONTENT"
+DEFAULT_CONTENT_PREVIEW_CHARS = _env_int("EXOMA_CONTENT_PREVIEW_CHARS", 500)
 # Below roughly twice the preview there is nothing to reclaim and a whole answer to lose,
 # so short results are left whole no matter what the flag says.
 DEFAULT_SLIM_CONTENT_MIN_CHARS = _env_int(
-    "AI_PROXY_SLIM_CONTENT_MIN_CHARS", DEFAULT_CONTENT_PREVIEW_CHARS * 2
+    "EXOMA_SLIM_CONTENT_MIN_CHARS", DEFAULT_CONTENT_PREVIEW_CHARS * 2
 )
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 # The opencode agent that runs delegated calls. `plan` is opencode's own read-only
 # primary, and the workflow deliberately adds no second primary: every wf-* agent ships
 # as a subagent that `plan` spawns through the `task` tool.
-DEFAULT_PROVIDER_AGENT = os.getenv("AI_PROXY_OPENCODE_AGENT", "plan")
+DEFAULT_PROVIDER_AGENT = getenv("EXOMA_OPENCODE_AGENT", "plan")
 # How long a learned "this project cannot fan out" verdict stands before it is retried.
 # It is inferred from one sentence the second agent wrote about itself, and that sentence
 # has been wrong: an agent listed `task` among its tools and still called itself incapable.
 # Without an expiry the wrong verdict is permanent, because a project with fan-out off
 # stops sending the fan-out plan and can never produce the evidence that would undo it.
-DEFAULT_FANOUT_RECHECK_HOURS = _env_float("AI_PROXY_FANOUT_RECHECK_HOURS", 24.0)
-DEFAULT_JOB_POLL_INTERVAL_SECONDS = _env_float("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", 2.0)
-DEFAULT_JOB_POLL_TIMEOUT_SECONDS = _env_int("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", 0)
+DEFAULT_FANOUT_RECHECK_HOURS = _env_float("EXOMA_FANOUT_RECHECK_HOURS", 24.0)
+DEFAULT_JOB_POLL_INTERVAL_SECONDS = _env_float("EXOMA_JOB_POLL_INTERVAL_SECONDS", 2.0)
+DEFAULT_JOB_POLL_TIMEOUT_SECONDS = _env_int("EXOMA_JOB_POLL_TIMEOUT_SECONDS", 0)
 # Global ceiling on concurrent in-flight delegated workers across ALL sessions. Per-session
 # concurrency is already 1 (session lock); this bounds the machine-wide fan-out so a burst of
 # parallel main-agents cannot spawn unbounded opencode processes. Admission is serialized
 # across processes so the configured ceiling is a hard bound for this runtime version.
-DEFAULT_MAX_GLOBAL_WORKERS = _env_int("AI_PROXY_MAX_GLOBAL_WORKERS", 6)
+DEFAULT_MAX_GLOBAL_WORKERS = _env_int("EXOMA_MAX_GLOBAL_WORKERS", 6)
 
 
 def _provider_defaults(provider: str) -> tuple[str, str | None]:
@@ -211,8 +266,8 @@ def _provider_defaults(provider: str) -> tuple[str, str | None]:
 
     try:
         return (
-            provider_command_default(provider, os.getenv),
-            provider_agent_default(provider, os.getenv),
+            provider_command_default(provider, getenv),
+            provider_agent_default(provider, getenv),
         )
     except ValueError:
         return provider, None
@@ -250,7 +305,7 @@ def default_provider_config(provider: str | None = None) -> dict:
 # from somewhere else, so editing them in the workspace changed nothing while reading as
 # configuration. README said so in prose; the file kept offering the knob anyway.
 #
-#   job_max_runtime_seconds  -> DEFAULT_JOB_MAX_RUNTIME_SECONDS (env AI_PROXY_*), core/jobs/job_manager.py
+#   job_max_runtime_seconds  -> DEFAULT_JOB_MAX_RUNTIME_SECONDS (env EXOMA_*), core/jobs/job_manager.py
 #   job_poll_timeout_seconds -> the CLI's --poll-timeout, main.py
 #   agent_workflow_path      -> .workflow/config.json `runtime.agent_workflow_path`, or AGENT_PATH
 #
@@ -259,7 +314,7 @@ def default_provider_config(provider: str | None = None) -> dict:
 # workspace written before this change still carries them, and calling those files
 # malformed would be blaming the user for a default this tool shipped.
 RETIRED_PROVIDER_KEYS: dict[str, str] = {
-    "job_max_runtime_seconds": "the hard ceiling comes from AI_PROXY_JOB_MAX_RUNTIME_SECONDS or its default",
+    "job_max_runtime_seconds": "the hard ceiling comes from EXOMA_JOB_MAX_RUNTIME_SECONDS or its default",
     "job_poll_timeout_seconds": "polling timeout comes from the CLI flag --poll-timeout",
     "agent_workflow_path": "the tool path comes from .workflow/config.json runtime.agent_workflow_path or AGENT_PATH",
 }

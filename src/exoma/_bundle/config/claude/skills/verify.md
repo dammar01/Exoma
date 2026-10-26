@@ -1,76 +1,76 @@
 # Skill: verify
-description: 3-step verification — logic, falsification, reality. Kedalaman dari commands.verify_mode.
+description: 3-step verification — logic, falsification, reality. Depth from commands.verify_mode.
 
 ## Trigger
-/.verify (auto setelah /.execute -y bila `commands.auto_verify_after_execute=true`)
+/.verify (automatic after /.execute -y when `commands.auto_verify_after_execute=true`)
 
-## Mode (runtime baca .workflow/config.json → commands.verify_mode)
-delegated (default) → verifikasi penuh second_agent, Protocol di bawah.
-syntax → QUICK: runtime check parse lokal file berubah (git diff HEAD + untracked). NOL test, NOL second_agent.
-  Output [QUICK VERIFY] sudah final. pass = file parse, BUKAN fitur bekerja — sebut batas ini.
-  not_checked/skipped relay apa adanya, JANGAN dihitung pass.
-  DILARANG verdict DONE untuk masalah runtime/behavior; maksimal "syntax OK, behavior belum diverifikasi" + saran set verify_mode=delegated.
+## Mode (the runtime reads .workflow/config.json → commands.verify_mode)
+delegated (default) → full second_agent verification, Protocol below.
+syntax → QUICK: the runtime parse-checks the changed files locally (git diff HEAD + untracked). ZERO tests, ZERO second_agent.
+  The [QUICK VERIFY] output is final. pass = the file parses, NOT that the feature works — state this limit.
+  Relay not_checked/skipped as they are; do NOT count them as pass.
+  A DONE verdict for a runtime/behavior problem is FORBIDDEN; at most "syntax OK, behavior not yet verified" + suggest setting verify_mode=delegated.
 
-## Pilih test DULU (verify_mode=delegated — WAJIB sebelum run)
-Second agent cuma baca + telusur; runtime yang menjalankan test. Kamu yang memilih:
-1. Dari diff + dependents (siapa memanggil yang berubah), pilih test yang menutup perubahan.
-   Targeted — file/suite terkait saja, BUKAN seluruh suite. Tak ada test relevan (docs, config
-   murni) ATAU project tak punya test suite sama sekali → TETAP tulis tests.json berisi
-   `commands: []` + alasan (mis. "project tanpa test suite"). Itu permintaan eksplisit
-   "nol test", BUKAN gap: runtime cuma mencatat `runtime: no test requested` dan verdict
-   bertumpu pada review. Melewatkan tests.json = gap runtime, exit nonzero.
+## Pick the tests FIRST (verify_mode=delegated — REQUIRED before the run)
+The second agent only reads and traces; the runtime runs the tests. You choose them:
+1. From the diff + dependents (who calls what changed), pick the tests that cover the change.
+   Targeted — related files/suites only, NOT the whole suite. No relevant test (docs, pure
+   config) OR the project has no test suite at all → STILL write tests.json with
+   `commands: []` + a reason (e.g. "project without a test suite"). That is an explicit request
+   for "zero tests", NOT a gap: the runtime only records `runtime: no test requested` and the
+   verdict rests on the review. Skipping tests.json = a runtime gap, exit nonzero.
 2. Write `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`:
-   `{"commands": ["<cmd>", ...], "reason": "<kenapa test ini menutup perubahan>"}` (max 5).
-3. Runtime hanya menjalankan command yang diawali prefix di `commands.verify_test_commands`
-   (`.workflow/config.json`), tanpa shell (`&&`/pipe/redirect ditolak). Di luar allowlist →
-   `not_verified`. Allowlist kosong → sebut ke user, sarankan prefix yang perlu ditambahkan;
-   project tanpa test suite → tak ada prefix untuk disarankan, tulis `commands: []` (langkah 1).
-Gate: selama marker verify aktif (sebelum `.workflow/run verify`) yang lolos HANYA `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
-(boleh diawali `cd <dir di dalam root> && `; selain itu nol pipe/`&&`/redirect), Read `.workflow/config.json` + tests.json sesi ini, dan Write tests.json itu. Baca isi file src/test → ke-block; cukup nama file dari diff.
-Tanpa tests.json → verify jadi `incomplete` (gap `tests:`, exit nonzero). `commands: []` eksplisit ≠ tanpa tests.json. Test gagal → blocking.
-tests.json milik SATU job verify (runtime mengklaimnya saat job dibuat). Rerun sesudah verify gagal = job baru → tulis tests.json lagi; pilihan lama tidak dipakai ulang.
+   `{"commands": ["<cmd>", ...], "reason": "<why these tests cover the change>"}` (max 5).
+3. The runtime only runs commands starting with a prefix in `commands.verify_test_commands`
+   (`.workflow/config.json`), without a shell (`&&`/pipe/redirect refused). Outside the allowlist →
+   `not_verified`. Empty allowlist → tell the user and suggest the prefixes to add;
+   a project without a test suite → there is no prefix to suggest, write `commands: []` (step 1).
+Gate: while the verify marker is active (before `.workflow/run verify`) ONLY these pass: `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
+(may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect), Read of `.workflow/config.json` + this session's tests.json, and Write of that tests.json. Reading src/test file contents → blocked; the file names from the diff are enough.
+No tests.json → verify becomes `incomplete` (gap `tests:`, exit nonzero). An explicit `commands: []` ≠ no tests.json. A failing test → blocking.
+tests.json belongs to ONE verify job (the runtime claims it when the job is created). A rerun after a failed verify = a new job → write tests.json again; the old choice is not reused.
 
 ## Protocol (verify_mode=delegated)
-1. Logic: solve problem? assumptions valid? konsisten pola codebase? → PASS/FAIL + reason
-2. Falsification: kondisi gagal? edge case? malformed input? → list
-3. Reality: test pilihanmu dijalankan runtime (lihat di atas); hasilnya masuk `checks_run`
-   sebagai `runtime: ...` dan, bila gagal, `blocking_findings`. Relay apa adanya.
+1. Logic: does it solve the problem? are the assumptions valid? consistent with codebase patterns? → PASS/FAIL + reason
+2. Falsification: failure conditions? edge cases? malformed input? → list
+3. Reality: the tests you chose are run by the runtime (see above); their results land in `checks_run`
+   as `runtime: ...` and, when failing, in `blocking_findings`. Relay as is.
 
-## Gate 3-dimensi (verify_mode=delegated — WAJIB)
-TIAP temuan bawa TIGA tag:
+## 3-dimension gate (verify_mode=delegated — REQUIRED)
+EVERY finding carries THREE tags:
 severity:       critical | high | medium | low
 origin:         introduced | regression | pre_existing | unknown
 scope_relation: in_scope | out_of_scope
 
-critical = data loss | security | hasil salah diam-diam | semua command rusak
-high     = jalur normal fitur rusak | caller existing regresi | kontrak dilanggar
-medium   = edge case | degradasi | defect dgn workaround
-low      = naming/style/doc drift | hipotetis tanpa trigger
+critical = data loss | security | silently wrong results | every command broken
+high     = a feature's normal path broken | an existing caller regresses | a contract violated
+medium   = edge case | degradation | a defect with a workaround
+low      = naming/style/doc drift | hypothetical with no trigger
 
-SEVERITY SENDIRIAN TAK MENENTUKAN BLOCKING. Rute pakai tabel:
+SEVERITY ALONE DOES NOT DECIDE BLOCKING. Route with the table:
 introduced/regression + in_scope     + critical|high → BLOCKING
-introduced/regression + out_of_scope + critical|high → BLOCKING (+ pelanggaran scope)
+introduced/regression + out_of_scope + critical|high → BLOCKING (+ scope violation)
 introduced/regression + out_of_scope + medium|low    → ESCALATION
-unknown               + apa pun      + critical|high → BLOCKING (fail closed)
-pre_existing          + apa pun      + critical|high → ESCALATION
-selain itu                                          → NOTE
+unknown               + anything     + critical|high → BLOCKING (fail closed)
+pre_existing          + anything     + critical|high → ESCALATION
+anything else                                        → NOTE
 
-`unknown` bukan pintu keluar: turun dari unknown WAJIB sebut bukti (diff/git history/versi sebelum). Tak bisa → tetap memblokir.
-ESCALATION tak ubah verdict TAPI BUKAN note — critical/high nyata yang user harus putuskan. DILARANG disembunyikan di notes.
-Tanpa file:line + skenario gagal konkret → TAK BOLEH critical/high, turunkan jadi note + sebut evidence kurang.
-Aturan itu soal MUTU EVIDENCE, bukan meredam masalah sistemik: defect tersebar banyak tempat TETAP critical/high — kutip file:line perwakilan + sebut luasnya.
-DILARANG naikkan sever biar diperhatikan / turunkan biar lolos.
+`unknown` is not an exit: moving off unknown REQUIRES naming the proof (diff/git history/previous version). Cannot → it still blocks.
+An ESCALATION does not change the verdict BUT is NOT a note — a real critical/high the user must decide on. Hiding it in notes is FORBIDDEN.
+Without file:line + a concrete failure scenario → it MAY NOT be critical/high; lower it to a note + say the evidence is missing.
+That rule is about EVIDENCE QUALITY, not about damping systemic problems: a defect spread across many places STAYS critical/high — cite representative file:line + state how widespread it is.
+Do NOT raise severity to get attention / lower it to get through.
 
 ## Output
 [VERIFICATION]
-mode: delegated | syntax          ← kamu yang isi; second_agent tak tahu mode (syntax nol lewat dia)
-verdict: DONE | NEEDS FIX  ← NEEDS FIX HANYA bila blocking_findings ada
-blocking_findings: - severity|origin|scope_relation — <problem> [file:line] — trigger — impact — fix | (tidak ada: apa yg dicek bersih)
-escalations: - severity|origin|scope_relation — <problem> [file:line] — kenapa tak memblokir | (tidak ada)
-notes: - severity|origin|scope_relation — <problem> [file:line] | (tidak ada)
-checks_run: <yang dijalankan/dibaca + hasil>
-not_verified: <tak bisa dicek + alasan> | (tidak ada)
-confidence: low|medium|high — <alasan>
-NEEDS FIX → fix blocking dulu → re-run /.verify. JANGAN output final sebelum done.
-escalations + notes JANGAN dibuang — tampilkan, user yang putuskan garap sekarang/nanti.
-Verdict runtime (`meta.verdict`) ditulis otomatis ke execution sesi (`runtime/execution.json`): pass | fail | incomplete, dan `syntax_only` untuk mode syntax — parse OK tak pernah tercatat sebagai pass.
+mode: delegated | syntax          ← you fill this in; the second_agent does not know the mode (syntax never goes through it)
+verdict: DONE | NEEDS FIX  ← NEEDS FIX ONLY when blocking_findings exist
+blocking_findings: - severity|origin|scope_relation — <problem> [file:line] — trigger — impact — fix | (none: what was checked clean)
+escalations: - severity|origin|scope_relation — <problem> [file:line] — why it does not block | (none)
+notes: - severity|origin|scope_relation — <problem> [file:line] | (none)
+checks_run: <what was run/read + result>
+not_verified: <what could not be checked + reason> | (none)
+confidence: low|medium|high — <reason>
+NEEDS FIX → fix the blocking ones first → re-run /.verify. Do NOT output a final before done.
+Do NOT drop escalations + notes — show them; the user decides whether to work on them now or later.
+The runtime verdict (`meta.verdict`) is written automatically into the session's execution (`runtime/execution.json`): pass | fail | incomplete, and `syntax_only` for syntax mode — parse OK is never recorded as pass.

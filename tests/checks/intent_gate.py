@@ -16,6 +16,7 @@ from pathlib import Path
 
 from tests.checks.support import assert_true
 from exoma.utils.osutil import find_bash
+from tests.checks.support import no_console
 
 HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 
@@ -58,7 +59,7 @@ def _check_prompt_field() -> None:
                 # What the bash wrapper hands its embedded python.
                 "CLAUDE_HOOK_RAW": payload, "HOOK_DIR": str(HOOKS),
             }
-            subprocess.run(command, input=payload, text=True, env=env, capture_output=True, timeout=60)
+            subprocess.run(command, input=payload, text=True, env=env, capture_output=True, timeout=60, **no_console())
             marker = project / ".workflow" / "data" / "sessions" / "m1" / "runtime" / "delegated.marker"
             assert_true(marker.is_file(), f"[{label}] a delegated prompt in Claude Code's `prompt` field arms the gate")
 
@@ -66,7 +67,7 @@ def _check_prompt_field() -> None:
             # text matches the NL map neither arms the gate nor clears the user's marker.
             def notify(text: str) -> None:
                 note = json.dumps({"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": text})
-                subprocess.run(command, input=note, text=True, env={**env, "CLAUDE_HOOK_RAW": note}, capture_output=True, timeout=60)
+                subprocess.run(command, input=note, text=True, env={**env, "CLAUDE_HOOK_RAW": note}, capture_output=True, timeout=60, **no_console())
 
             notification = (
                 "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
@@ -92,7 +93,7 @@ def _check_prompt_field() -> None:
             sentence = json.dumps({"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit",
                                    "prompt": "saat saya analisa, ada titik dimana terlogout"})
             done = subprocess.run(command, input=sentence, text=True, env={**env, "CLAUDE_HOOK_RAW": sentence},
-                                  capture_output=True, timeout=60)
+                                  capture_output=True, timeout=60, **no_console())
             assert_true(not marker.exists(), f"[{label}] an NL sentence does not arm the gate and clears the last marker")
             assert_true("[INTENT HINT]" in done.stdout and "/.analyze" in done.stdout,
                         f"[{label}] an NL sentence gets an intent hint: {done.stdout[:200]!r}")
@@ -105,7 +106,7 @@ def _check_prompt_field() -> None:
                 body = {"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": case["prompt"]}
                 body.update(case.get("payload") or {})
                 raw = json.dumps(body)
-                subprocess.run(command, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60)
+                subprocess.run(command, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60, **no_console())
 
             for case in _HOST_TURNS["host"]:
                 assert_true(_matches_map(case["prompt"]), f"fixture `{case['name']}` must match the NL map to test anything")
@@ -174,6 +175,7 @@ def _check_subagent_stays_gated() -> None:
             done = subprocess.run(
                 command, input=payload, text=True, env={**env, "CLAUDE_HOOK_RAW": payload},
                 capture_output=True, timeout=60,
+                **no_console(),
             )
             assert_true(done.returncode == 2, f"[{label}] a subagent's gather call stays gated by a real marker: {done.returncode}")
         finally:
@@ -216,6 +218,7 @@ def _check_verify_lane() -> None:
                 done = subprocess.run(
                     command, input=payload, text=True, env={**env, "CLAUDE_HOOK_RAW": payload},
                     capture_output=True, timeout=60,
+                    **no_console(),
                 )
                 return done.returncode
 
@@ -418,6 +421,7 @@ class _ArmedGate:
         done = subprocess.run(
             self.command, input=payload, text=True, encoding="utf-8", errors="replace",
             env={**self.env, "CLAUDE_HOOK_RAW": payload}, capture_output=True, timeout=60,
+            **no_console(),
         )
         return done.returncode
 
@@ -579,7 +583,7 @@ def _test_intent_gate_non_ascii_root() -> None:
                 **os.environ, "HOME": str(home), "USERPROFILE": str(home),
                 "CLAUDE_HOOK_RAW": payload, "HOOK_DIR": str(HOOKS),
             }
-            subprocess.run(command, input=payload, text=True, encoding="utf-8", errors="replace", env=env, capture_output=True, timeout=60)
+            subprocess.run(command, input=payload, text=True, encoding="utf-8", errors="replace", env=env, capture_output=True, timeout=60, **no_console())
             marker = project / ".workflow" / "data" / "sessions" / "m1" / "runtime" / "delegated.marker"
             assert_true(marker.is_file(), f"[{label}] intent-gate-set must arm the gate under a non-ASCII root")
         finally:

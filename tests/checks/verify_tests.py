@@ -13,6 +13,7 @@ from exoma.core.evidence.contract import validate_verification_contract
 from exoma.core.runtime.state import ensure_workflow_workspace
 from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 _REVIEW = """[VERIFICATION]
 verdict: DONE
@@ -531,7 +532,7 @@ def _check_failed_provider_call_does_not_feed_the_next_job() -> None:
         "ok": True, "content": "worker started", "meta": {"pid": os.getpid()},
     }
     try:
-        main.subprocess.run(["git", "init", "-q", str(root)], capture_output=True, text=True)
+        main.subprocess.run(["git", "init", "-q", str(root)], capture_output=True, text=True, **no_console())
         _request(root, {"commands": [f"{python} -c pass"], "reason": "job 1"})
         first = main.submit("verify", "check it", "s1", str(root), None)
         failed = main.run_worker(first["job_id"])

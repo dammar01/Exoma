@@ -25,6 +25,7 @@ from tests.checks.support import (
     clean_output,
     extract_session_id,
 )
+from tests.checks.support import no_console
 
 def _check_scope_width() -> None:
     """The working tree's width is measured, scoped only when a plan declared a scope, and
@@ -37,15 +38,15 @@ def _check_scope_width() -> None:
     original_lines = quick_verify.SCOPE_WIDE_LINES
     try:
         assert_true(
-            main.subprocess.run(["git", "init", "-q", str(repo)], capture_output=True).returncode == 0,
+            main.subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console()).returncode == 0,
             "scope width git init failed",
         )
         (repo / "src").mkdir()
         (repo / "src" / "a.py").write_text("one\ntwo\n", encoding="utf-8")
-        main.subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        main.subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, **no_console())
         committed = main.subprocess.run(
             [*git, "commit", "-q", "-m", "base"], cwd=repo, capture_output=True, text=True
-        )
+        , **no_console())
         assert_true(committed.returncode == 0, f"scope width commit failed: {committed.stderr}")
 
         (repo / "src" / "a.py").write_text("one\nTWO\nthree\n", encoding="utf-8")  # +2 -1
@@ -159,12 +160,12 @@ def _test_quick_verify_gaps() -> None:
         try:
             initialized = main.subprocess.run(
                 ["git", "init", "-q", str(unborn)], capture_output=True, text=True
-            )
+            , **no_console())
             assert_true(initialized.returncode == 0, "quick verify git init failed")
             (unborn / "staged.json").write_text('{"ok": true}\n', encoding="utf-8")
             staged = main.subprocess.run(
                 ["git", "add", "staged.json"], cwd=unborn, capture_output=True, text=True
-            )
+            , **no_console())
             assert_true(staged.returncode == 0, f"quick verify git add failed: {staged.stderr}")
             result = quick_verify.run(unborn, "verify-unborn-staged")
             assert_true(

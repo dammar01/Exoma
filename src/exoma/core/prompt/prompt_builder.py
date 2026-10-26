@@ -123,7 +123,7 @@ def _transport_cap(
     def _no_ceiling() -> tuple[int, dict]:
         """The answer whenever no command line is actually being protected.
 
-        Uncapped by default; `AI_PROXY_MAX_TASK_CHARS_NO_ARGV` restores a limit for
+        Uncapped by default; `EXOMA_MAX_TASK_CHARS_NO_ARGV` restores a limit for
         anyone who wants one. `task_cap: None` rather than a number, because reporting a
         figure nothing enforced was how the old arrangement read as deliberate.
         """

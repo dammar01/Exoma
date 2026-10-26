@@ -1,6 +1,6 @@
 # execution-gate.py - PreToolUse hook (execution scope, project root, commit approval).
 # Matcher (settings.json): Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell.
-# The deterministic half of the plan -> execute chain (core/runtime/execution.py, DEC-067):
+# The deterministic half of the plan -> execute chain (core/runtime/execution.py):
 #   1. A file write outside the session's project root is blocked unless it lands in the
 #      system temp dir, under ~/.claude, or under a path the user listed in
 #      .workflow/config.json policies.write_allowed_outside_root.
@@ -17,7 +17,7 @@
 # a PreToolUse hook can see reliably, and claiming otherwise would overstate the gate.
 # Session or workspace absent -> allow (fail-open). exit 2 = block; every other path exits 0.
 # Every refusal, blocked or warned, appends one line to runtime/gate-blocks.jsonl: when, which
-# rule, tool, mode, exit code and plan id; never the path or command (EXP-014, DEC-070).
+# rule, tool, mode, exit code and plan id; never the path or command.
 import datetime, fnmatch, json, os, re, sys, tempfile
 
 
@@ -63,7 +63,7 @@ def in_scope(relative, scope):
 # An option's value may be quoted and hold spaces: `git -C "repo with spaces" commit`. The
 # executable may be named with its Windows suffix or by a quoted path (`git.exe commit`,
 # `"C:/Program Files/Git/cmd/git.exe" commit`); without that, those spellings committed
-# with no approval at all (DEC-068).
+# with no approval at all.
 _ARG = r"(?:\"[^\"]*\"|'[^']*'|\S+)"
 _GIT_COMMIT = re.compile(
     r"\bgit(?:\.exe)?\b[\"']?(?:\s+(?:-[cC]\s+" + _ARG + r"|--?[\w-]+(?:=" + _ARG + r")?))*\s+commit\b",

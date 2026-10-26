@@ -11,4 +11,5 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 0.2.0 | [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md) | Provider choice confirmed at selection (no opt-in variable), secret files named by doctor and watched by the agy guard, threat model, `EXOMA_*` environment variables, English bundle, no console flash on Windows |
 | 0.1.0 | [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md) | First Exoma release: agent-workflow v3.9.0 repackaged as the pip-installable `exoma` library and CLI, with automatic migration of existing workspaces |

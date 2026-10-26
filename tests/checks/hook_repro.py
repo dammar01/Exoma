@@ -23,6 +23,7 @@ from pathlib import Path
 
 from tests.checks.support import assert_true
 from exoma.utils import osutil
+from tests.checks.support import no_console
 
 HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 BIG = 40_000  # past the 32767-character limit Windows puts on one environment variable
@@ -56,7 +57,7 @@ class _Repro:
     def run(self, hook: str, payload=None, raw: bytes | None = None, **env) -> tuple[int, str, str]:
         data = raw if raw is not None else json.dumps(payload).encode("utf-8")
         done = subprocess.run([self.bash, str(self.hooks / f"{hook}.sh")], input=data, capture_output=True,
-                              env=self.env(**env), timeout=60)
+                              env=self.env(**env), timeout=60, **no_console())
         return done.returncode, done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace")
 
     def bind(self, sid: str, source: str = "startup") -> str:
@@ -298,7 +299,7 @@ def _registry_concurrency(r: _Repro) -> None:
             payload = json.dumps({"session_id": sid, "cwd": str(r.project), "source": "startup",
                                   "hook_event_name": "SessionStart"}).encode("utf-8")
             p = subprocess.Popen([r.bash, str(HOOKS / "session-bind.sh")], stdin=subprocess.PIPE,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=r.env())
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=r.env(), **no_console())
             procs.append((p, payload))
         for p, payload in procs:
             p.communicate(payload, timeout=60)

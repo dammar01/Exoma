@@ -3,7 +3,7 @@
 # Resolves an interpreter and hands this hook's stdin to workflow_hooks.py, which runs
 # intent-gate-set.py. The hook's own contract is described at the top of intent-gate-set.py.
 # Interpreter: the one `exoma install` pinned in python.path beside this file, the Python the
-# requirements went into and the one .workflow/run.sh names (DEC-068). Without that file:
+# requirements went into and the one .workflow/run.sh names. Without that file:
 # the first of python3, python, `py -3` that RUNS and is >= 3.10 (utils/osutil.py
 # MIN_PYTHON). A name on PATH is not enough: Windows' WindowsApps aliases open the Store
 # instead of running, and an old python3 can shadow a newer python. None found: fail open.

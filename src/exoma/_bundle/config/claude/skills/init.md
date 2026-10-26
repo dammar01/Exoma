@@ -1,31 +1,31 @@
 # Skill: init
-description: Buat/regenerate .workflow/ workspace. Local. Bootstrap lewat CLI `exoma`.
+description: Create/regenerate the .workflow/ workspace. Local. Bootstraps through the `exoma` CLI.
 
 ## Trigger
 /.init
 
-## STEP 1 — Resolve bootstrap source (WAJIB — urutan ini, JANGAN dilewati)
-PENTING: runtime TIDAK ada di project. Ia package Python `exoma` (`pip install exoma` / `uv tool install exoma`).
-Resolve berurutan:
-1. `exoma --version` jalan → INI SUMBER. Lanjut STEP 2 dengan `exoma`.
-2. Tak ada di PATH tapi `<python> -m exoma --version` jalan → pakai `<python> -m exoma`.
-3. Masih tak ada → minta user install dulu: `uv tool install exoma` atau `pip install exoma`.
-`$AGENT_PATH` (checkout agent-workflow) = alias lama: dibaca hanya kalau user menyebutnya, BUKAN sumber utama.
-JANGAN simpulkan "package missing" sebelum cek `exoma --version` dan `<python> -m exoma --version`.
+## STEP 1 — Resolve the bootstrap source (REQUIRED — in this order, do NOT skip)
+IMPORTANT: the runtime is NOT in the project. It is the Python package `exoma` (`pip install exoma` / `uv tool install exoma`).
+Resolve in order:
+1. `exoma --version` runs → THIS IS THE SOURCE. Continue to STEP 2 with `exoma`.
+2. Not on PATH but `<python> -m exoma --version` runs → use `<python> -m exoma`.
+3. Still nothing → ask the user to install it first: `uv tool install exoma` or `pip install exoma`.
+`$AGENT_PATH` (an agent-workflow checkout) = the old alias: read only when the user names it, NOT the main source.
+Do NOT conclude "package missing" before checking `exoma --version` and `<python> -m exoma --version`.
 
 ## STEP 2 — Run init
-work_dir = absolute path project aktif.
-Semua OS (tool Bash): exoma init --work-dir "<work_dir>" --pretty
+work_dir = absolute path of the active project.
+Every OS (Bash tool): exoma init --work-dir "<work_dir>" --pretty
 (fallback: `<python> -m exoma init --work-dir "<work_dir>" --pretty`)
-<python> = yang pertama JALAN dan ≥ 3.10 dari `python3`, `python`, `py -3` (Windows sering `python`, mac/linux sering cuma `python3`). Lebih tua → exoma menolak dengan satu pesan; pakai interpreter lain, jangan tebak "package missing".
-init otomatis: generate scripts (run/inspect/check .sh, bash di semua OS, memanggil `<python> -m exoma`) + config (interpreter + package root, abs-path) + copy second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
-init SCAFFOLD, bukan pembaruan: config.json dan second_agent.json yang SUDAH ADA tidak ditimpa (tak ada active-job guard di init — itu milik /.upgrade). Workspace dari build lama tetap versi lama sesudah init. `meta.upgrade_needed: true` + `meta.versions` di output = jalankan /.upgrade.
+<python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.10 (Windows often has `python`, mac/linux often only `python3`). Older → exoma refuses with one message; use another interpreter, do not guess "package missing".
+init automatically: generates scripts (run/inspect/check .sh, bash on every OS, calling `<python> -m exoma`) + config (interpreter + package root, abs-path) + copies second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, created lazily on the first delegated call (NOT at the root).
+init is a SCAFFOLD, not an update: an EXISTING config.json and second_agent.json are not overwritten (init has no active-job guard — that belongs to /.upgrade). A workspace from an old build stays at the old version after init. `meta.upgrade_needed: true` + `meta.versions` in the output = run /.upgrade.
 
 ## Output
 [INIT]
-bootstrap: exoma <versi> (<exoma | python -m exoma>)
+bootstrap: exoma <version> (<exoma | python -m exoma>)
 generated: run/inspect/check.sh + config.json (v0.1.0, python + package_root abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
-upgrade_needed: <meta.upgrade_needed> (true → sebut versi dari meta.versions + tawarkan /.upgrade)
+upgrade_needed: <meta.upgrade_needed> (true → name the versions from meta.versions + offer /.upgrade)
 status: READY
-".workflow siap. Coba /.explore atau /.doctor."
+".workflow is ready. Try /.explore or /.doctor."

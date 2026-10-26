@@ -22,6 +22,7 @@ from pathlib import Path
 from tests.checks.hook_repro import check_repro_matrix
 from tests.checks.support import assert_true
 from exoma.utils import osutil
+from tests.checks.support import no_console
 
 REPO = Path(__file__).resolve().parents[2]
 HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
@@ -72,6 +73,7 @@ class _Workspace:
         done = subprocess.run(
             command, input=json.dumps(payload), text=True, encoding="utf-8", errors="replace",
             env=self.env, capture_output=True, timeout=90, cwd=str(self.project),
+            **no_console(),
         )
         self.last_stderr = done.stderr
         return done.returncode, done.stdout, time.perf_counter() - started
@@ -156,6 +158,38 @@ def _case_task_events(ws: _Workspace, run) -> None:
     assert_true(code == 0, f"task-events exits 0, got {code}")
     assert_true([(r.get("kind"), r.get("skill")) for r in rows] == [("skill", "execute")], f"task-events records the skill event: {rows}")
     _silent(ws, out, "task-events")
+
+    # Anchor reads: a synthesis written from a plan/analyze digest without opening any cited
+    # anchor is named once per run; a Read that overlaps a cited range clears it.
+    (ws.project / "src").mkdir(exist_ok=True)
+    (ws.project / "src" / "app.py").write_text("".join(f"line {n}\n" for n in range(1, 31)), encoding="utf-8")
+    logs = ws.runtime.parent / "logs"
+    first = logs / "20261025_000001_000000_analyze_aa11"
+    first.mkdir(parents=True)
+    (first / "output.raw.md").write_text("- claim [src/app.py:10-12] and [missing.py:3]\n", encoding="utf-8")
+    stop = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "Stop"}
+    code, out, _ = run({**stop, "last_assistant_message": "Ringkasan biasa tanpa blok."})
+    assert_true(code == 0 and not out.strip(), f"a reply without its own [PLAN]/[ANALYSIS RESULT] is not judged: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": "```\n[ANALYSIS RESULT]\n```"})
+    assert_true(code == 0 and not out.strip(), f"a fenced block is not this reply's synthesis: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": "**[ANALYSIS RESULT]**\nroot cause ..."})
+    assert_true(code == 0 and "ANCHOR CHECK" in out, f"a synthesis with no anchor opened is named: {out[:200]!r}")
+    code, out, _ = run({**stop, "last_assistant_message": "**[ANALYSIS RESULT]**\nagain"})
+    assert_true(code == 0 and not out.strip(), f"the warning fires once per run: {out[:200]!r}")
+
+    second = logs / "20261025_000002_000000_plan_bb22"
+    second.mkdir(parents=True)
+    (second / "output.raw.md").write_text("[src/app.py:10-12]\n", encoding="utf-8")
+    read = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "PostToolUse", "tool_name": "Read"}
+    code, out, _ = run({**read, "tool_input": {"file_path": str(ws.project / "src" / "app.py"), "offset": 20, "limit": 5}})
+    assert_true(code == 0 and not out.strip(), f"a Read hook prints nothing: {out[:200]!r}")
+    state = json.loads((ws.runtime / "anchor-reads.json").read_text(encoding="utf-8")) if (ws.runtime / "anchor-reads.json").exists() else {}
+    assert_true(not state.get("opened") or state.get("run") != second.name, f"a Read outside the cited range opens nothing: {state}")
+    run({**read, "tool_input": {"file_path": str(ws.project / "src" / "app.py"), "offset": 5, "limit": 10}})
+    state = json.loads((ws.runtime / "anchor-reads.json").read_text(encoding="utf-8"))
+    assert_true(state.get("run") == second.name and state.get("opened") == ["src/app.py:10"], f"an overlapping Read is recorded: {state}")
+    code, out, _ = run({**stop, "last_assistant_message": "[PLAN]\ntask: ..."})
+    assert_true(code == 0 and not out.strip(), f"a synthesis after opening an anchor is not named: {out[:200]!r}")
 
 
 def _case_statusline(ws: _Workspace, run) -> None:

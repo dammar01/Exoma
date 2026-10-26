@@ -515,16 +515,37 @@ def run_doctor(
         # a warning the user must see here, not a NOT_READY, because the choice is theirs.
         active = str((resolved.get("config") or {}).get("provider") or "")
         if active in _UNBOUNDED_READ_PROVIDERS:
+            # Name the files, not only the risk: a warning that reads the same in a repo
+            # with no secrets and in one holding three `.env` files gets skimmed in both.
+            # Names only — `find_secret_files` never opens a file.
+            from exoma.core.policy.secret_patterns import find_secret_files
+
+            secrets = find_secret_files(project_root)
             checks["second_agent_read_boundary"] = {
                 "provider": active,
                 "status": "not_enforceable",
                 "trusted": True,
+                "secret_files": {
+                    "count": len(secrets["files"]),
+                    "sample": secrets["files"][:10],
+                    "truncated": secrets["truncated"],
+                },
             }
+            if secrets["files"]:
+                shown = ", ".join(secrets["files"][:5])
+                more = len(secrets["files"]) - 5
+                found = f"{shown}{f' and {more} more' if more > 0 else ''}"
+                exposure = (
+                    f"and {len(secrets['files'])} file(s) here match the secret patterns "
+                    f"({found})"
+                )
+            else:
+                exposure = "although no file here matches the secret patterns"
             recommended_fixes.append(
                 f"WARNING: second_agent provider '{active}' can read every file in this project "
-                "(`.env` and key files included) and receives the full environment — it is "
-                "treated as a trusted provider. Switch to opencode with /.provider if the "
-                "project's secrets must stay unreadable to the second agent"
+                f"(`.env` and key files included), {exposure}, and receives the full "
+                "environment — it is treated as a trusted provider. Switch to opencode with "
+                "/.provider if the project's secrets must stay unreadable to the second agent"
             )
         elif active:
             checks["second_agent_read_boundary"] = {"provider": active, "status": "enforceable"}
@@ -541,6 +562,16 @@ def run_doctor(
                     "detects a write after it happened. Review `git status` after delegated "
                     "calls, or switch to codex/opencode with /.provider"
                 )
+        from exoma.config.settings import legacy_env_in_use
+
+        legacy = legacy_env_in_use()
+        if legacy:
+            checks["legacy_env"] = legacy
+            recommended_fixes.append(
+                "Rename the pre-rename environment variable(s) "
+                + ", ".join(legacy)
+                + " to their EXOMA_* spelling; they are still read, and EXOMA_* wins when both are set"
+            )
         if active:
             # Which provider CLI release this project runs, against the release this workflow
             # version was tested on. codex's Windows sandbox broke between releases (CASE-015);

@@ -34,6 +34,7 @@ from tests.checks.support import (
     clean_output,
     extract_session_id,
 )
+from tests.checks.support import no_console
 
 
 def _test_provider_seam() -> None:
@@ -315,6 +316,7 @@ def _test_provider_seam() -> None:
         env=env,
         capture_output=True,
         text=True,
+        **no_console(),
     )
     assert_true(
         probe.returncode == 0,
@@ -463,8 +465,6 @@ def _assert_live_model_catalog(temp_root: Path, config_file: Path) -> None:
 
     readers = dict(model_catalog._READERS)
     saved = (model_catalog.LIVE_ENABLED, model_catalog.CACHE_TTL_SECONDS)
-    opt_in = os.environ.get("AI_PROXY_AGY_OPT_IN")
-    os.environ["AI_PROXY_AGY_OPT_IN"] = "1"
     model_catalog.LIVE_ENABLED = True
     model_catalog.CACHE_TTL_SECONDS = 0
     model_catalog._READERS.update(
@@ -522,8 +522,9 @@ def _assert_live_model_catalog(temp_root: Path, config_file: Path) -> None:
 
         newer = provider_select.run(temp_root, "codex|gpt-new|max")
         assert_true(
-            newer["ok"] and not newer["meta"]["warnings"],
-            f"a live model newer than the shortlist must apply without a warning: {newer}",
+            # codex always carries its read-boundary warning; no OTHER warning may appear.
+            newer["ok"] and not [w for w in newer["meta"]["warnings"] if "read-only boundary" not in w],
+            f"a live model newer than the shortlist must apply without a model warning: {newer}",
         )
         typed = provider_select.run(temp_root, "codex gpt-old low")
         assert_true(
@@ -566,10 +567,6 @@ def _assert_live_model_catalog(temp_root: Path, config_file: Path) -> None:
         model_catalog._READERS.clear()
         model_catalog._READERS.update(readers)
         model_catalog.LIVE_ENABLED, model_catalog.CACHE_TTL_SECONDS = saved
-        if opt_in is None:
-            os.environ.pop("AI_PROXY_AGY_OPT_IN", None)
-        else:
-            os.environ["AI_PROXY_AGY_OPT_IN"] = opt_in
 
 
 def _assert_live_catalog_readers(temp_root: Path) -> None:
@@ -638,7 +635,7 @@ def _assert_live_catalog_readers(temp_root: Path) -> None:
             raise answer
         return answer
 
-    saved_env = {key: os.environ.get(key) for key in ("XDG_CACHE_HOME", "CODEX_HOME", "AI_PROXY_AGY_OPT_IN")}
+    saved_env = {key: os.environ.get(key) for key in ("XDG_CACHE_HOME", "CODEX_HOME")}
     saved = (
         model_catalog.osutil.run_bounded,
         model_catalog.osutil.resolve_exe,
@@ -647,7 +644,7 @@ def _assert_live_catalog_readers(temp_root: Path) -> None:
         model_catalog.CACHE_PATH,
         dict(model_catalog._READERS),
     )
-    os.environ.update(XDG_CACHE_HOME=str(work / "xdg"), CODEX_HOME=str(work / "codex"), AI_PROXY_AGY_OPT_IN="1")
+    os.environ.update(XDG_CACHE_HOME=str(work / "xdg"), CODEX_HOME=str(work / "codex"))
     model_catalog.osutil.run_bounded = fake_run
     model_catalog.osutil.resolve_exe = lambda name: name
     model_catalog.LIVE_ENABLED = True
@@ -985,6 +982,10 @@ def _test_doctor_read_boundary_warning() -> None:
         ):
             config = read_json_file(config_path)
             config["provider"] = provider
+            # Not the real CLI: doctor runs `<provider_command> --version`, and the real agy
+            # opens a console window of its own on every start. The boundary checks below
+            # do not depend on the version; a missing command only adds a version note.
+            config["provider_command"] = "exoma-test-no-such-provider-cli"
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
             meta = run_doctor(root, "does-not-exist", "doctor-read-boundary")["meta"]
             checks = read_json_file(Path(meta["doctor_report"]))["checks"]
@@ -1023,6 +1024,118 @@ def _test_doctor_read_boundary_warning() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _test_secret_files() -> None:
+    """Secret files are found by name (ignored ones included), the agy guard sees a change to
+    an ignored `.env`, codex is selected without any opt-in variable but says what it can read,
+    and the legacy `AI_PROXY_*` spelling of every aliased `EXOMA_*` variable still reads."""
+    from exoma.config import settings
+    from exoma.core.audit.diagnostics import run_doctor
+    from exoma.core.policy import agy_guard
+    from exoma.core.policy.secret_patterns import find_secret_files, is_secret_path
+    from exoma.core.provider import provider_select
+    from exoma.core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, read_json_file, workflow_paths
+
+    assert_true(
+        is_secret_path(".env") and is_secret_path("api/.env.local") and is_secret_path("keys/id_rsa")
+        and not is_secret_path(".env.example") and not is_secret_path("src/app.py"),
+        "the deny-list must match dotfile and nested secrets and leave the allowlist out",
+    )
+
+    root = Path(tempfile.mkdtemp(prefix="secret-files-"))
+    names = ("EXOMA_MAX_PROBES", "AI_PROXY_MAX_PROBES", "AI_PROXY_OPENCODE_COMMAND")
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ.pop(name, None)
+        init = subprocess.run(["git", "init", "-q", str(root)], capture_output=True, text=True, **no_console())
+        assert_true(init.returncode == 0, f"fixture git init failed: {init.stderr}")
+        ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
+        (root / ".gitignore").write_text(".env\nnode_modules/\n", encoding="utf-8")
+        (root / ".env").write_text("TOKEN=1\n", encoding="utf-8")
+        (root / ".env.example").write_text("TOKEN=\n", encoding="utf-8")
+        (root / "keys").mkdir()
+        (root / "keys" / "id_rsa").write_text("k", encoding="utf-8")
+        (root / "node_modules" / "pkg").mkdir(parents=True)
+        (root / "node_modules" / "pkg" / ".env").write_text("x", encoding="utf-8")
+
+        found = find_secret_files(root)
+        assert_true(
+            found == {"files": [".env", "keys/id_rsa"], "truncated": False},
+            f"ignored secrets are found, samples and dependency trees are not: {found}",
+        )
+        capped = find_secret_files(root, max_entries=1)
+        assert_true(capped["truncated"], f"a scan that stops early must say so: {capped}")
+
+        # git status never lists the ignored `.env`; the guard must still see it change.
+        before = agy_guard.snapshot(root)
+        (root / ".env").write_text("TOKEN=changed-by-the-call\n", encoding="utf-8")
+        os.utime(root / ".env", ns=(before["secrets"][".env"][1] + 10**9,) * 2)
+        verdict = agy_guard.verdict(before, agy_guard.snapshot(root))
+        assert_true(
+            verdict["mutated"] and verdict.get("secrets_changed") == [".env"],
+            f"a write to an ignored secret file must be reported: {verdict}",
+        )
+
+        # codex: no variable gates it; the apply result says what it can reach. Its sandbox
+        # stops writes, so the warning must not claim it can write.
+        applied = provider_select.run(root, "codex|gpt-5.5")
+        assert_true(applied["ok"], f"codex must be selectable without any opt-in variable: {applied}")
+        boundary = [w for w in applied["meta"].get("warnings") or [] if "read-only boundary" in w]
+        assert_true(
+            len(boundary) == 1 and "can read every file" in boundary[0] and "AND write" not in boundary[0],
+            f"applying codex must return its read-only boundary warning: {applied['meta'].get('warnings')}",
+        )
+
+        # Doctor on the now-codex workspace: the files are named, and nothing asks for a
+        # variable — the read warning is the whole report, never an issue.
+        config_path = workflow_paths(root)["workflow_dir"] / PROVIDER_CONFIG_NAME
+        assert_true(read_json_file(config_path).get("provider") == "codex", "fixture selects codex")
+        meta = run_doctor(root, "does-not-exist", "doctor-secret-files")["meta"]
+        fixes = meta["recommended_fixes"]
+        assert_true(
+            any("can read every file" in fix and ".env" in fix and "keys/id_rsa" in fix for fix in fixes),
+            f"the read warning must name the secret files found: {fixes}",
+        )
+        assert_true(
+            not any("OPT_IN" in text for text in fixes + meta["issues"]),
+            f"doctor must not ask for an opt-in variable: {fixes} {meta['issues']}",
+        )
+
+        # The alias itself.
+        os.environ["AI_PROXY_MAX_PROBES"] = "7"
+        assert_true(settings.getenv("EXOMA_MAX_PROBES") == "7", "the legacy spelling is the fallback")
+        os.environ["EXOMA_MAX_PROBES"] = "9"
+        assert_true(settings.getenv("EXOMA_MAX_PROBES") == "9", "the EXOMA_ spelling wins when both are set")
+        os.environ["AI_PROXY_OPENCODE_COMMAND"] = "x"
+        legacy = settings.legacy_env_in_use()
+        assert_true(
+            "AI_PROXY_MAX_PROBES" in legacy and "AI_PROXY_OPENCODE_COMMAND" not in legacy,
+            f"only a legacy name the runtime still reads is reported: {legacy}",
+        )
+        # The list of aliased names is the list of EXOMA_ names the runtime reads, both ways.
+        read = set()
+        repo = Path(__file__).resolve().parents[2]
+        for source in (repo / "src" / "exoma").rglob("*.py"):
+            read |= set(re.findall(r'"EXOMA_([A-Z_]+)"', source.read_text(encoding="utf-8")))
+        scripts = (repo / "src" / "exoma" / "core" / "runtime" / "scripts.py").read_text(encoding="utf-8")
+        read |= set(re.findall(r"EXOMA_([A-Z_]+):-", scripts))
+        read.discard("HOME")
+        assert_true(
+            read == set(settings.LEGACY_ENV_NAMES),
+            f"LEGACY_ENV_NAMES must match the EXOMA_ names read: missing {sorted(read - settings.LEGACY_ENV_NAMES)}, "
+            f"stale {sorted(settings.LEGACY_ENV_NAMES - read)}",
+        )
+        assert_true(settings.getenv("OPENCODE_COMMAND", "x") == os.environ.get("OPENCODE_COMMAND", "x"),
+                    "a name outside the EXOMA_ prefix reads plainly")
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_agy_provider() -> None:
     """agy: parsing, argv, and the guard that stands in for a boundary it does not have.
 
@@ -1036,7 +1149,6 @@ def _test_agy_provider() -> None:
     from exoma.config.providers import (
         PROVIDER_BUNDLES,
         effort_args,
-        provider_opt_in_env,
     )
     from exoma.core.policy import agy_guard
     from exoma.core.provider import provider_select
@@ -1154,7 +1266,7 @@ def _test_agy_provider() -> None:
     try:
         init = subprocess.run(
             ["git", "init", "-q", str(guard_root)], capture_output=True, text=True
-        )
+        , **no_console())
         assert_true(init.returncode == 0, f"guard fixture git init failed: {init.stderr}")
 
         before = agy_guard.snapshot(guard_root)
@@ -1231,48 +1343,36 @@ def _test_agy_provider() -> None:
     )
 
     select_root = Path(tempfile.mkdtemp(prefix="agent-workflow-agy-select-"))
-    opt_in_env = provider_opt_in_env("agy")
-    previous_opt_in = os.environ.get(opt_in_env)
     try:
         (select_root / ".workflow").mkdir(parents=True, exist_ok=True)
         config_path = select_root / ".workflow" / "second_agent.json"
 
-        # Without the acknowledgement, agy is a provider the picker names and refuses to
-        # write. Asserted on the FILE as well as the verdict: a refusal that still wrote
-        # would leave a workspace pointed at an unbounded second_agent while reporting
-        # that it had declined to do exactly that.
-        os.environ.pop(opt_in_env, None)
-        blocked = provider_select.run(select_root, "agy|claude-sonnet-4-6")
-        assert_true(
-            not blocked["ok"]
-            and blocked["meta"]["error_type"] == "invalid_provider_selection"
-            and "read-only boundary" in blocked["content"],
-            f"agy must be refused without an explicit opt-in: {blocked}",
-        )
-        assert_true(
-            not config_path.exists(),
-            "a refused agy selection must write nothing at all",
-        )
-        assert_true(
-            opt_in_env in (blocked["meta"].get("next_action") or ""),
-            f"the refusal must name the variable that lifts it: {blocked['meta']}",
-        )
+        # The boundary warnings are the point here, not the model lists, so the live catalog
+        # stays off: reading it runs `agy models`, and the real agy opens a console window.
+        from exoma.core.provider import model_catalog
 
-        catalog = provider_select.run(select_root, "")
+        live_before = model_catalog.LIVE_ENABLED
+        model_catalog.LIVE_ENABLED = False
+        try:
+            catalog = provider_select.run(select_root, "")
+        finally:
+            model_catalog.LIVE_ENABLED = live_before
         entries = {entry["name"]: entry for entry in catalog["meta"]["providers"]}
         assert_true(
-            entries["agy"]["requires_opt_in"]
-            and not entries["agy"]["opt_in_granted"]
-            and not entries["opencode"]["requires_opt_in"],
-            # The picker offering agy as though it were interchangeable, only for the
-            # write to fail a second later, is the menu lying about itself.
-            f"the catalog must mark agy as gated and the others as not: {entries['agy']}",
+            "read AND write" in (entries["agy"]["boundary_warning"] or "")
+            and entries["opencode"]["boundary_warning"] is None,
+            # The picker offering agy as though it were interchangeable would be the menu
+            # hiding what choosing it means; the warning is what the confirmation quotes.
+            f"the catalog must carry agy's boundary warning and none for opencode: {entries['agy']}",
         )
 
-        os.environ[opt_in_env] = "1"
+        # No variable to set first: the choice is acknowledged where it is made, and the
+        # result still says what was accepted, for the paths that ask nothing.
         applied = provider_select.run(select_root, "agy|claude-sonnet-4-6")
+        assert_true(applied["ok"], f"agy must be selectable without any opt-in variable: {applied}")
         assert_true(
-            applied["ok"], f"agy must be selectable once acknowledged: {applied}"
+            any("read AND write" in warning for warning in applied["meta"].get("warnings") or []),
+            f"applying agy must return its boundary warning: {applied['meta'].get('warnings')}",
         )
         written = read_json_file(config_path)
         assert_true(
@@ -1298,10 +1398,6 @@ def _test_agy_provider() -> None:
             f"an unverified effort must be refused for agy: {refused}",
         )
     finally:
-        if previous_opt_in is None:
-            os.environ.pop(opt_in_env, None)
-        else:
-            os.environ[opt_in_env] = previous_opt_in
         shutil.rmtree(select_root, ignore_errors=True)
 
     # Resume health reaches last_call_meta, which is what the usage row reads.

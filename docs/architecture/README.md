@@ -73,7 +73,7 @@ depends on the provider: see [Security](../security.md) and
                           truncated? ► max 1 continuation
                     15  digest extraction + result shaping
                           (heavy meta dropped; content ► preview +
-                           content_mode=ref_only when AI_PROXY_SLIM_CONTENT)
+                           content_mode=ref_only when EXOMA_SLIM_CONTENT)
                     16  persist:
                           explore/plan/analyze ► facts + evidence (immutable, anchored)
                           all delegated        ► usage + audit

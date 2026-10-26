@@ -15,7 +15,7 @@
 # So does a Read of a background task's output (<temp>/claude.../tasks/<id>.output): that is
 # where a delegation run in the background returns. `cat <file>` (Get-Content) of either
 # passes too, and `~` or /c/... spellings of a path are read the way the shell reads them.
-# So does a precision read (DEC-043): a project file outside .workflow, at most 200 lines
+# So does a precision read: a project file outside .workflow, at most 200 lines
 # (`limit`, or a file that short), two per marker, counted in runtime/delegated.reads.
 # Escapes: WORKFLOW_LOCAL_MODE=1 / local_mode.flag. Marker/session absent -> allow (fail-open).
 # exit 2 = block ; every other path exits 0. Exit code flows from python (no trailing exit).
@@ -90,7 +90,7 @@ RUNNERS = ("run.sh", "check.sh", "inspect.sh")
 def runner_target(candidate, root):
     # True when candidate names exactly <root>/.workflow/{run,check,inspect}.sh AND the file
     # it reaches, every link followed, is still inside this project's .workflow: a run.sh
-    # that is a symlink to a script elsewhere is not the runner (DEC-068). A runner that does
+    # that is a symlink to a script elsewhere is not the runner. A runner that does
     # not exist yet passes like before: running it fails, and the gate refuses writes to it
     # while armed, so nothing can be put there between this check and the call.
     # Unresolvable -> False. The .ps1 runners an earlier release generated are retired: a call to one is
@@ -161,7 +161,7 @@ def skill_read(candidate, home):
         return False
 
 
-# A precision read (DEC-043): the small slice the main agent may read itself to attribute a
+# A precision read: the small slice the main agent may read itself to attribute a
 # claim to file:line, as CLAUDE.md allows. Bounded by span and by count so it cannot become
 # the bulk gather the gate exists to route to second_agent.
 PRECISION_READ_LINES = 200

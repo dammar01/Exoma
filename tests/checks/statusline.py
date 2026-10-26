@@ -25,6 +25,7 @@ from pathlib import Path
 
 from tests.checks.support import assert_true
 from exoma.utils.osutil import find_bash
+from tests.checks.support import no_console
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
@@ -62,7 +63,7 @@ def _render(command: list[str], rows: list[dict]) -> str:
         # The bash wrapper hands stdin to python through this variable; the direct python
         # runner reads it from the same place.
         env = {**os.environ, "CLAUDE_CONFIG_DIR": str(claude_dir), "CLAUDE_STATUSLINE_RAW": context}
-        done = subprocess.run(command, input=context, capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+        done = subprocess.run(command, input=context, capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, **no_console())
         return _ANSI.sub("", done.stdout)
     finally:
         shutil.rmtree(root, ignore_errors=True)

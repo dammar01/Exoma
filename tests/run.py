@@ -121,6 +121,7 @@ from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
     _test_agy_provider,
     _test_doctor_read_boundary_warning,
+    _test_secret_files,
     _test_provider_seam,
     _test_provider_selection,
 )
@@ -204,6 +205,7 @@ SUITES: dict[str, tuple] = {
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
+    "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
@@ -272,7 +274,7 @@ SUITES: dict[str, tuple] = {
     "installer-seed": (_test_installer_seeds_second_agent_config, "second_agent.json is seeded once and never overwritten"),
     "installer-seed-tty": (_test_installer_seed_is_non_interactive_without_a_tty, "no tty, no prompt: CI and e2e cannot hang"),
     "installer-seed-prompt": (_test_installer_seed_prompt_answers, "every answer the provider/model picker accepts"),
-    "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
+    "installer-seed-boundary": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider is named as one while it is chosen, with no opt-in variable"),
     "provider-update": (_test_provider_update, "DEC-057: --update-providers pins npm-global CLIs to stable_version only, verified, failures named"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),

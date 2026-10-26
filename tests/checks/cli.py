@@ -13,6 +13,7 @@ from pathlib import Path
 
 from exoma import cli as main
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,6 +27,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         timeout=60,
+        **no_console(),
     )
 
 

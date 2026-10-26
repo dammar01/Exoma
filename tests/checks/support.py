@@ -112,3 +112,16 @@ class FakeJobProcess:
 def assert_true(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def no_console() -> dict:
+    """Kwargs that keep a test's child process from opening a console window on Windows.
+
+    The suite runs from Claude Code's Bash tool and from CI, neither with a console, so each
+    bare `git`/`bash`/`python` child flashed a window of its own. Only `CREATE_NO_WINDOW`:
+    unlike `osutil.hidden_run_kwargs()` it starts no new process group, so a test's signals
+    and kill semantics stay what the test was written against. Empty off Windows.
+    """
+    import subprocess
+
+    return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}

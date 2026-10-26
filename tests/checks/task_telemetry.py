@@ -14,6 +14,7 @@ from exoma.core.audit.task_telemetry import derive_tasks
 
 from tests.checks.support import assert_true
 from exoma.utils.osutil import find_bash
+from tests.checks.support import no_console
 
 HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
 
@@ -128,7 +129,7 @@ def _runners() -> list[tuple[str, list[str]]]:
 
 
 def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, **no_console())
 
 
 def _check_hook_flavours() -> None:
@@ -196,7 +197,7 @@ def _check_hook_flavours() -> None:
                     payload["prompt"] = prompt
                 raw = json.dumps(payload)
                 # The .sh wrapper hands its stdin to the embedded python as CLAUDE_HOOK_RAW.
-                subprocess.run(argv, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60)
+                subprocess.run(argv, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60, **no_console())
                 if after:
                     after()
             stream = project / ".workflow" / "data" / "tasks.jsonl"
@@ -242,7 +243,7 @@ def _check_without_git() -> None:
                 "session_id": "claude-1", "cwd": str(project),
                 "hook_event_name": "UserPromptSubmit", "prompt": "/.execute -y",
             })
-            subprocess.run(argv, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60)
+            subprocess.run(argv, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60, **no_console())
             stream = project / ".workflow" / "data" / "tasks.jsonl"
             rows = [json.loads(line) for line in stream.read_text(encoding="utf-8").splitlines()] if stream.exists() else []
             assert_true(

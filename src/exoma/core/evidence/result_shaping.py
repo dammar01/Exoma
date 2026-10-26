@@ -7,9 +7,7 @@ ref_only path against a short fixture. Importing them here by value would freeze
 defaults, and the test would assert against knobs nothing reads.
 """
 
-import os
-
-from exoma.config.settings import SLIM_CONTENT_ENV
+from exoma.config.settings import SLIM_CONTENT_ENV, getenv
 from exoma.core.evidence.contract import validate_verification_contract, verify_exit_status
 from exoma.utils.redact import redact_value
 
@@ -137,11 +135,11 @@ def _slim_result(result: dict, slim_content: bool | None = None) -> dict:
     """Redact every payload and trim bulky success-only diagnostics.
 
     `slim_content` additionally drops the evidence text in favour of the artifact pointer
-    (see _as_ref_only). Left to the AI_PROXY_SLIM_CONTENT environment variable when not
+    (see _as_ref_only). Left to the EXOMA_SLIM_CONTENT environment variable when not
     passed; tests pass it directly so they need no environment of their own.
     """
     if slim_content is None:
-        slim_content = os.getenv(SLIM_CONTENT_ENV, "") not in ("", "0", "false", "False")
+        slim_content = getenv(SLIM_CONTENT_ENV, "") not in ("", "0", "false", "False")
     clean, redactions = redact_value(_without_raw_args(result))
     if not isinstance(clean, dict):
         return clean

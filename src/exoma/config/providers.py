@@ -24,7 +24,6 @@ disagree about it.
 """
 
 import importlib
-import os
 from pathlib import Path
 
 PROVIDER_BUNDLES: dict[str, dict] = {
@@ -66,7 +65,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "update": {"method": "npm", "package": "opencode-ai"},
         # `plan` is opencode's own read-only primary; the workflow adds no second primary.
         "default_agent": "plan",
-        "agent_env": "AI_PROXY_OPENCODE_AGENT",
+        "agent_env": "EXOMA_OPENCODE_AGENT",
         # How this provider spells reasoning effort on the command line. Rendered with
         # `{value}`; an empty/absent template means the provider takes none.
         "effort_arg": ("--variant", "{value}"),
@@ -218,10 +217,6 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "agent_env": None,
         # `--effort low|medium|high`, straight from `agy --help`.
         "effort_arg": ("--effort", "{value}"),
-        # Selecting this provider takes an acknowledgement the other two do not, for the
-        # reason spelled out directly below. `provider_requires_opt_in` reads this key and
-        # `core/provider_select.py` refuses the write without it.
-        "requires_opt_in": True,
         # THE READ-ONLY BOUNDARY DOES NOT EXIST FOR THIS PROVIDER, and the flag names
         # actively suggest otherwise. Probed against the installed binary: `--sandbox` and
         # `--mode plan` both leave 56 tools enabled and `permission_mode: always-proceed`,
@@ -268,7 +263,7 @@ def provider_command_default(provider: str, getenv) -> str:
     bundle = bundle_for(provider)
     fallback = bundle.get("default_command") or provider
     name = bundle.get("command_env")
-    return getenv(name, fallback) if name else fallback
+    return _aliased_getenv(getenv, name, fallback) if name else fallback
 
 
 def provider_agent_default(provider: str, getenv) -> str | None:
@@ -276,42 +271,45 @@ def provider_agent_default(provider: str, getenv) -> str | None:
     bundle = bundle_for(provider)
     fallback = bundle.get("default_agent")
     name = bundle.get("agent_env")
-    return getenv(name, fallback) if name else fallback
+    return _aliased_getenv(getenv, name, fallback) if name else fallback
 
 
-def provider_opt_in_env(provider: str) -> str:
-    """The environment variable that acknowledges `provider`'s missing boundary.
+def _aliased_getenv(getenv, name: str, fallback):
+    """`getenv(name, fallback)`, also trying the legacy `AI_PROXY_*` spelling of an `EXOMA_*` name.
 
-    Derived rather than declared so a fourth provider in the same position inherits the
-    convention instead of needing a name invented for it.
+    Callers pass their own `getenv` (tests pass a lambda that ignores the environment), so
+    the alias is applied here rather than by swapping in `settings.getenv`.
     """
-    return f"AI_PROXY_{provider.upper()}_OPT_IN"
+    from exoma.config.settings import legacy_env_name
+
+    value = getenv(name, None)
+    legacy = legacy_env_name(name)
+    if value is None and legacy is not None:
+        value = getenv(legacy, None)
+    return fallback if value is None else value
 
 
-def provider_requires_opt_in(provider: str) -> bool:
-    """Does selecting `provider` need an explicit acknowledgement first?
+def provider_boundary_warning(provider: str) -> str | None:
+    """The warning a selection of `provider` carries, or None when its boundary holds.
 
-    True for a provider that enforces no read-only boundary. The default is False, so a
-    bundle says nothing here unless it has something to admit: the flag marks the
-    exception, and a provider that keeps its side of the contract never mentions it.
+    There is no gate behind it. Choosing a provider that enforces no read boundary is the
+    user's decision, acknowledged where it is made — the `/.provider` picker asks before it
+    applies, and every other way of selecting returns this text — never through a variable
+    that has to be set first. The wording follows the provider's actual `boundary`: codex's
+    sandbox still stops writes, agy stops neither.
     """
     try:
-        bundle = bundle_for(provider)
+        boundary = provider_boundary(provider)
     except Exception:
-        return False
-    return bool(bundle.get("requires_opt_in"))
-
-
-def opt_in_granted(provider: str, getenv=os.getenv) -> bool:
-    """Has the acknowledgement been given for `provider` in this environment?
-
-    Any non-empty value counts. The variable existing at all is the deliberate act; making
-    the user also guess which spelling of yes is accepted would add a second way to fail
-    while adding no second decision.
-    """
-    if not provider_requires_opt_in(provider):
-        return True
-    return bool((getenv(provider_opt_in_env(provider)) or "").strip())
+        return None
+    if boundary["reads"] != "unbounded":
+        return None
+    reach = "read AND write" if boundary["writes"] == "unbounded" else "read"
+    return (
+        f"{provider} enforces no read-only boundary: its second_agent can {reach} every file in "
+        "the project (`.env` and key files included) and receives the full environment. It is "
+        "treated as a trusted provider; use opencode if the project's secrets must stay unreadable."
+    )
 
 
 def provider_models(provider: str) -> tuple[dict, ...]:
@@ -415,7 +413,7 @@ def transport_budget(provider: str | None) -> dict | None:
 
     None means the caller cannot know there is a command line to protect, and the caller
     treats that the same as stdin or a file: no ceiling, unless
-    `AI_PROXY_MAX_TASK_CHARS_NO_ARGV` sets one. See `prompt_builder._no_ceiling`. An
+    `EXOMA_MAX_TASK_CHARS_NO_ARGV` sets one. See `prompt_builder._no_ceiling`. An
     earlier draft of this docstring said the caller fell back to the static cap; it never
     did, and a reader pricing a new provider's prompt against that sentence would have
     been budgeting for a limit that was not there.

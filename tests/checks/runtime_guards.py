@@ -18,6 +18,7 @@ from exoma.core.workspace.runtime_lock import (
 from exoma.core.workspace.workspace_paths import workflow_paths
 
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 _HOLD_GUARD = """
 import sys, time
@@ -80,6 +81,7 @@ def _test_runtime_guard_cleanup() -> None:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
+            **no_console(),
         )
         try:
             assert_true(holder.stdout.readline().strip() == "held", "the holder process took the guard")

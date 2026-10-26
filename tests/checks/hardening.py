@@ -22,6 +22,7 @@ import http.server
 from pathlib import Path
 
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 
 # ------------------------------------------------------------------------------ locks
@@ -32,7 +33,7 @@ def _check_owned_lock() -> None:
 
     root = Path(tempfile.mkdtemp(prefix="aw-lock-"))
     path = root / "store.lock"
-    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], **no_console())
     try:
         # A live foreign holder, however old its file, is waited for and never taken.
         path.write_text(json.dumps({"pid": sleeper.pid, "token": "foreign"}), encoding="utf-8")
@@ -50,7 +51,7 @@ def _check_owned_lock() -> None:
         )
 
         # A dead holder is replaced at once.
-        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, **no_console())
         path.write_text(json.dumps({"pid": int(done.stdout.strip()), "token": "dead"}), encoding="utf-8")
         with OwnedFileLock(path, ttl_seconds=30, wait_seconds=2) as lock:
             assert_true(
@@ -101,14 +102,14 @@ def _check_owned_lock_under_process_contention() -> None:
     try:
         lock_path, counter = root / "c.lock", root / "counter"
         counter.write_text("0")
-        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, **no_console())
         lock_path.write_text(json.dumps({"pid": int(done.stdout.strip()), "token": "dead"}), encoding="utf-8")
         script = root / "worker.py"
         script.write_text(_COUNTER_WORKER, encoding="utf-8")
         repo = str(Path(__file__).resolve().parents[2])
         workers, rounds = 6, 15
         procs = [
-            subprocess.Popen([sys.executable, str(script), repo, str(lock_path), str(counter), str(rounds)])
+            subprocess.Popen([sys.executable, str(script), repo, str(lock_path), str(counter), str(rounds)], **no_console())
             for _ in range(workers)
         ]
         codes = [proc.wait(timeout=120) for proc in procs]
@@ -146,14 +147,14 @@ def _check_reclaim_guard_cannot_be_taken_from_a_live_holder() -> None:
     try:
         lock_path = root / "g.lock"
         guard_path = root / "g.lock.reclaim"
-        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+        done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, **no_console())
         lock_path.write_text(json.dumps({"pid": int(done.stdout.strip()), "token": "dead"}), encoding="utf-8")
         script = root / "holder.py"
         script.write_text(_GUARD_HOLDER, encoding="utf-8")
         repo = str(Path(__file__).resolve().parents[2])
         holder = subprocess.Popen(
             [sys.executable, str(script), repo, str(guard_path), "30"], stdout=subprocess.PIPE, text=True
-        )
+        , **no_console())
         try:
             assert_true(holder.stdout.readline().strip() == "held", "fixture: the holder took the guard")
             old = guard_path.stat().st_mtime - 3600

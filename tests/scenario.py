@@ -131,6 +131,7 @@ from tests.checks.messages import _test_no_code_in_messages
 from tests.checks.provider import (
     _test_agy_provider,
     _test_doctor_read_boundary_warning,
+    _test_secret_files,
     _test_provider_seam,
     _test_provider_selection,
 )
@@ -200,6 +201,7 @@ from tests.checks.prompt import (
     _test_unknown_role_is_refused,
     _test_verify_branch_carries_routing_contract,
 )
+from tests.checks.support import no_console
 
 def run_tests() -> None:
     _test_every_check_is_registered()
@@ -239,6 +241,7 @@ def run_tests() -> None:
     _test_provider_selection()
     _test_agy_provider()
     _test_doctor_read_boundary_warning()
+    _test_secret_files()
     _test_no_code_in_messages()
     _test_adapter_error_normalization()
     _test_error_types_are_registered()
@@ -264,7 +267,7 @@ def run_tests() -> None:
     work_dir = str(temp_root)
     git_init = main.subprocess.run(
         ["git", "init", "-q", str(temp_root)], capture_output=True, text=True
-    )
+    , **no_console())
     assert_true(git_init.returncode == 0, f"test fixture git init failed: {git_init.stderr}")
     ensure_workflow_workspace(temp_root, os.getenv("AGENT_PATH"))
 

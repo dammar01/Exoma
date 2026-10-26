@@ -31,6 +31,7 @@ from exoma.core.provider.executor import Executor
 from exoma.core.runtime.state import ensure_workflow_workspace
 from tests.checks.e2e_routing import _REVIEW_CLEAN
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 SMOKE_ENV = "WORKFLOW_E2E_SMOKE"
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "e2e_app"
@@ -274,7 +275,7 @@ def _playwright_browser_processes() -> int | None:
     else:
         command = ["sh", "-c", "ps -eo args | grep -c '[m]s-playwright'"]
     try:
-        out = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(command, capture_output=True, text=True, timeout=30, **no_console())
         return int((out.stdout or "").strip().splitlines()[-1])
     except (OSError, subprocess.SubprocessError, ValueError, IndexError):
         return None

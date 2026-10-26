@@ -9,7 +9,7 @@ executor.
 Selection order, first hit wins:
   1. explicit `name` argument (tests, CLI overrides)
   2. `provider` in the workspace .workflow/second_agent.json
-  3. AI_PROXY_PROVIDER / the built-in default
+  3. EXOMA_PROVIDER (legacy AI_PROXY_PROVIDER) / the built-in default
 
 `runtime.second_agent` in .workflow/config.json is a HINT, not a choice. v3.4.3 let it
 select, and the result was a project that named codex there running every call against

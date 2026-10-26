@@ -1,10 +1,10 @@
-# status-guard.py - Stop hook (the "never say done before verify" rule, DEC-067).
+# status-guard.py - Stop hook (the "never say done before verify" rule).
 # Reads the session's runtime/execution.json (core/runtime/execution.py). When an execution
 # exists whose verification is still `not_run`, and the assistant message that just ended
 # the turn carries an [EXECUTION RESULT] block whose own fields claim more than that — a
 # `status` outside implemented|partial|blocked (skills/execute.md), or a `verification`
 # other than not_run — the hook reports it as a systemMessage the user sees. Warning only.
-# It reads the structured fields the execute skill defines, never prose (DEC-068): a word
+# It reads the structured fields the execute skill defines, never prose: a word
 # list fired on "begitu selesai, saya lanjut" and on every quoted digest, in any language,
 # for any model. A reply with no [EXECUTION RESULT] is not judged.
 # The message is `last_assistant_message` when the host sends it, otherwise the last

@@ -8,10 +8,10 @@ behaviour and hands back a real regression surface. It owns the queries promote
 needs, and is where those three belong when one of them next needs editing anyway.
 
 Every subprocess here carries `osutil.hidden_run_kwargs()`. On Windows a console
-program inherits its parent's console, and allocates a NEW one when the parent has none
-— which is exactly the delegated worker's situation, spawned DETACHED_PROCESS with no
-console of its own. Without the flags, `core/knowledge/retrieve.py` asking for the
-current branch flashes a console window on the user's screen once per delegated call.
+program inherits its parent's console, and allocates a NEW one when the parent has none.
+The delegated worker now runs with a hidden console of its own
+(`osutil.detached_popen_kwargs`), but the flags stay: a caller without one would otherwise
+flash a console window on the user's screen once per call.
 
 Every function answers with None on failure rather than raising. A promote precondition
 that cannot resolve the repository must produce a readable block reason, not a traceback

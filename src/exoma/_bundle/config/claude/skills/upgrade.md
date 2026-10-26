@@ -11,9 +11,9 @@ The workspace is always repointed at the build running the command. A workspace 
 agent-workflow (its `runtime` names a checkout's `main.py`) is taken over: those paths are
 removed and the scripts call `<python> -m exoma`.
 
-Semua OS (tool Bash): exoma upgrade --work-dir "<work_dir>" --pretty
-<python> = yang pertama JALAN dan ≥ 3.10 dari `python3`, `python`, `py -3`. Upgrade juga menghapus
-`run.ps1`/`inspect.ps1`/`check.ps1` lama: runner sekarang `.sh` saja, di semua OS.
+Every OS (Bash tool): exoma upgrade --work-dir "<work_dir>" --pretty
+<python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.10. Upgrade also removes
+the old `run.ps1`/`inspect.ps1`/`check.ps1`: the runners are `.sh` only now, on every OS.
 
 Upgrade refuses while delegated jobs are active. On a workspace still on the v3.5.x layout it
 first MIGRATES: backup to `.workflow/data/backups/<stamp>/`, internal files moved into

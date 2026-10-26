@@ -40,11 +40,9 @@ from pathlib import Path
 
 from exoma.config.providers import (
     bundled_providers,
-    opt_in_granted,
     provider_agent_default,
+    provider_boundary_warning,
     provider_command_default,
-    provider_opt_in_env,
-    provider_requires_opt_in,
 )
 from exoma.config.routing import COMMAND_ROUTES
 from exoma.core.provider import model_catalog
@@ -112,12 +110,9 @@ def _catalog(project_root: Path) -> dict:
                 # showing: a provider that is "not installed" because PATH points at a
                 # different binary is a different problem from one never installed.
                 "detail": detail,
-                # Two fields rather than one because the picker has two things to say: that
-                # this provider needs an acknowledgement at all, and whether the current
-                # environment has already given it. Offering it as a choice and refusing
-                # the write a second later would be the picker lying about its own menu.
-                "requires_opt_in": provider_requires_opt_in(name),
-                "opt_in_granted": opt_in_granted(name),
+                # What choosing it means, when it keeps no read boundary; None when it does.
+                # The picker shows it and asks for confirmation before applying.
+                "boundary_warning": provider_boundary_warning(name),
                 # Newest first, so the picker's first option is the one to recommend.
                 "models": listing["models"],
                 "newest": listing["newest"],
@@ -264,23 +259,11 @@ def _apply(project_root: Path, payload: str) -> dict:
             next_action=f"Known providers: {', '.join(known)}",
         )
 
-    # A provider that enforces no read-only boundary is selectable, but not by accident.
-    # The refusal sits here, before the write, because this is the only place a workspace
-    # acquires one: `selected_provider` merely reads the file back, and refusing there
-    # would take `doctor` down at the moment its job is to say which provider is
-    # configured. A `second_agent.json` that already names one keeps working — this
-    # guards the door, not the room, and the release notes say so.
-    if not opt_in_granted(provider):
-        env_name = provider_opt_in_env(provider)
-        return _refuse(
-            f"{provider} enforces no read-only boundary and needs an explicit opt-in",
-            next_action=(
-                f"Set {env_name}=1 to acknowledge that an {provider} second_agent can "
-                f"read AND write every file in this project, then select it again."
-            ),
-        )
-
-    warnings: list[str] = []
+    # A provider that enforces no read-only boundary is selectable without any gate: the
+    # choice is the user's, made here. Its warning travels in `meta.warnings` on every apply,
+    # so a selection that skipped the picker's question still says what it accepted.
+    boundary_warning = provider_boundary_warning(provider)
+    warnings: list[str] = [boundary_warning] if boundary_warning else []
     # Checked against what the CLI lists now, falling back to the shortlist: a model the
     # picker offered from the live catalog must not be refused for being newer than it.
     entry = model_catalog.lookup(provider, model)

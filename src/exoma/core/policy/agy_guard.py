@@ -15,21 +15,28 @@ DETECTS. The write has already happened by the time the second snapshot is taken
 this buys is that the change is named in the result instead of discovered days later in a
 diff nobody attributed to a delegated call.
 
-Three things it does not see, stated here rather than in a footnote, because a guard
-trusted past its range is worse than no guard:
-
-  * anything matched by .gitignore — build output, caches, .env
-  * any project that is not a git repository, where it reports itself unavailable
-  * a file written and restored within the same call
-
-`git status --porcelain` is the whole mechanism. It is fast enough to run twice per
+`git status --porcelain` is the main mechanism. It is fast enough to run twice per
 delegated call on a large repo, it already understands the ignore rules, and it needs no
 state of our own to keep in sync.
+
+Those same ignore rules hide the files that matter most: a `.gitignore`d `.env` never
+appears in `git status`. So the snapshot also records the size and mtime of every file the
+canonical secret patterns match (`secret_patterns.find_secret_files`), ignored or not, and a
+change there is reported as `secrets_changed`. Contents are never read or hashed.
+
+What it still does not see, stated here rather than in a footnote, because a guard trusted
+past its range is worse than no guard:
+
+  * an ignored file that matches no secret pattern — build output, caches
+  * a secret whose name matches no pattern
+  * any project that is not a git repository, where it reports itself unavailable
+  * a file written and restored within the same call, mtime included
 """
 
 import subprocess
 from pathlib import Path
 
+from exoma.core.policy import secret_patterns
 from exoma.utils import osutil
 
 # A snapshot must never be the reason a call fails. Ten seconds is far past what
@@ -88,7 +95,26 @@ def snapshot(project_root) -> dict:
     # a quote or a newline in it survives the round trip. Renames emit two records; both
     # are kept, which is what we want — a rename is a write on both sides.
     entries = frozenset(part for part in proc.stdout.split("\0") if part.strip())
-    return {"available": True, "entries": entries, "reason": None}
+    return {"available": True, "entries": entries, "secrets": _secret_stats(root), "reason": None}
+
+
+def _secret_stats(root: Path) -> dict:
+    """`{relative_path: (size, mtime_ns)}` for every secret-pattern file under `root`."""
+    stats: dict = {}
+    for relative in secret_patterns.find_secret_files(root)["files"]:
+        try:
+            st = (root / relative).stat()
+        except OSError:
+            continue
+        stats[relative] = (st.st_size, st.st_mtime_ns)
+    return stats
+
+
+def _secrets_changed(before: dict, after: dict) -> list[str]:
+    """Secret-pattern paths that appeared, disappeared, or changed size or mtime."""
+    old = (before or {}).get("secrets") or {}
+    new = (after or {}).get("secrets") or {}
+    return sorted(path for path in set(old) | set(new) if old.get(path) != new.get(path))
 
 
 def diff(before: dict, after: dict) -> dict | None:
@@ -103,14 +129,18 @@ def diff(before: dict, after: dict) -> dict | None:
 
     added = (after["entries"] or frozenset()) - (before["entries"] or frozenset())
     removed = (before["entries"] or frozenset()) - (after["entries"] or frozenset())
-    if not added and not removed:
+    secrets = _secrets_changed(before, after)
+    if not added and not removed and not secrets:
         return None
-    return {
+    changed = {
         "appeared": sorted(added),
         # A status line that DISAPPEARED means a file the tree had reported as modified
         # now matches HEAD again: something reverted it. That is still a write.
         "cleared": sorted(removed),
     }
+    if secrets:
+        changed["secrets_changed"] = secrets
+    return changed
 
 
 def verdict(before: dict, after: dict) -> dict:

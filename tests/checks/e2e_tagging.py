@@ -15,13 +15,14 @@ from pathlib import Path
 
 from exoma.core.evidence.e2e import tagging
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 _BUTTON = '  <button class="primary" onclick="save()">Simpan</button>'
 
 
 def _repo() -> Path:
     root = Path(tempfile.mkdtemp(prefix="e2e-tagging-")).resolve()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=False, capture_output=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=False, capture_output=True, **no_console())
     (root / ".gitignore").write_text("secret/\n", encoding="utf-8")
     (root / "templates").mkdir()
     (root / "templates" / "form.html").write_text(f'<div>\n{_BUTTON}\n</div>\n  <a href="/x">link</a>\n', encoding="utf-8")

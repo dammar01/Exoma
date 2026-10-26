@@ -1,4 +1,4 @@
-# task-events.py - task telemetry hook (DEC-015).
+# task-events.py - task telemetry hook.
 # Registered on UserPromptSubmit (a local skill invoked as /.<name>), PostToolUse
 # Skill|Edit|Write|MultiEdit|NotebookEdit (the Skill tool, a file edited) and Stop (commits
 # made since the last look). Records what the runtime never sees into
@@ -7,6 +7,15 @@
 # .workflow/data/task-hook/, and each Stop (or the next prompt) records the commits since
 # and moves the snapshot. Only appends; task state is derived at report time
 # (core/audit/task_telemetry.py). Never blocks, exit 0.
+#
+# Anchor reads (PostToolUse Read, Stop). The runtime proves a cited `file:line` exists; it
+# cannot prove the primary agent looked at it. So a Read whose file and line range overlap
+# an anchor cited by the session's newest delegated run is recorded in
+# runtime/anchor-reads.json, and at Stop, when the reply carries its own [PLAN] or
+# [ANALYSIS RESULT] block (a header opening a line, outside code fences — never prose)
+# while that run is a plan or analyze with no anchor opened, a systemMessage says so, once
+# per run. Warning only: a Read through the shell is not seen, and a Read proves a look, not
+# a verified claim. `policies.enforcement: off` turns the warning off.
 import datetime, json, os, re, subprocess
 
 LOCAL_SKILLS = {
@@ -119,6 +128,122 @@ def commits_since_snapshot(payload, root):
     return commits
 
 
+# `path/to/file.ext:12` or `:12-40`, the shape every delegated citation takes.
+ANCHOR = re.compile(r"([A-Za-z0-9_.\-]+(?:[/\\][A-Za-z0-9_.\-]+)*\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?")
+ANCHOR_COMMANDS = {"plan", "analyze"}
+ANCHOR_SCAN_LIMIT = 200
+RUN_DIR = re.compile(r"_(explore|plan|analyze|verify|verify-browser)_[0-9a-f]+$")
+SYNTHESIS_HEADER = re.compile(r"^[ \t#*_-]*\[(PLAN|ANALYSIS RESULT)\]", re.MULTILINE)
+FENCE = re.compile(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1[^\n]*$|\Z)", re.DOTALL | re.MULTILINE)
+
+
+def session_dir(root, main_id):
+    return os.path.join(root, ".workflow", "data", "sessions", main_id) if main_id else None
+
+
+def latest_run(sdir):
+    """(run directory name, command) of the session's newest delegated run, or (None, None)."""
+    logs = os.path.join(sdir, "logs")
+    try:
+        names = sorted(n for n in os.listdir(logs) if RUN_DIR.search(n))
+    except OSError:
+        return None, None
+    if not names:
+        return None, None
+    return names[-1], RUN_DIR.search(names[-1]).group(1)
+
+
+def run_anchors(root, sdir, run):
+    """{relative path: [(start, end), ...]} cited in the run's output that exist in `root`."""
+    try:
+        with open(os.path.join(sdir, "logs", run, "output.raw.md"), encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return {}
+    found = {}
+    for match in ANCHOR.finditer(text):
+        if sum(len(spans) for spans in found.values()) >= ANCHOR_SCAN_LIMIT:
+            break
+        rel = match.group(1).replace("\\", "/")
+        if rel not in found and not os.path.isfile(os.path.join(root, rel)):
+            continue
+        start = int(match.group(2))
+        found.setdefault(rel, []).append((start, int(match.group(3) or start)))
+    return found
+
+
+def read_state(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            state = json.load(fh)
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_state(path, state):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+
+
+def note_anchor_read(payload, root):
+    """Record the anchors of the newest delegated run that this Read overlapped."""
+    ti = payload.get("tool_input") or {}
+    rel = inside(root, ti.get("file_path"))
+    sdir = session_dir(root, main_session(payload.get("session_id")))
+    if not rel or not sdir:
+        return
+    run, _command = latest_run(sdir)
+    if not run:
+        return
+    spans = run_anchors(root, sdir, run).get(rel)
+    if not spans:
+        return
+    first = int(ti.get("offset") or 1)
+    limit = ti.get("limit")
+    last = first + int(limit) - 1 if limit else float("inf")
+    hits = [f"{rel}:{a}" for a, b in spans if a <= last and b >= first]
+    if not hits:
+        return
+    path = os.path.join(sdir, "runtime", "anchor-reads.json")
+    state = read_state(path)
+    if state.get("run") != run:
+        state = {"run": run, "opened": [], "warned": False}
+    state["opened"] = sorted(set(state["opened"]) | set(hits))
+    write_state(path, state)
+
+
+def anchor_warning(payload, root):
+    """The Stop-time systemMessage, or None."""
+    policies = (read_state(os.path.join(root, ".workflow", "config.json")).get("policies") or {})
+    if str(policies.get("enforcement") or "hybrid") == "off":
+        return None
+    text = FENCE.sub("", str(payload.get("last_assistant_message") or ""))
+    if not SYNTHESIS_HEADER.search(text):
+        return None
+    sdir = session_dir(root, main_session(payload.get("session_id")))
+    if not sdir:
+        return None
+    run, command = latest_run(sdir)
+    if not run or command not in ANCHOR_COMMANDS or not run_anchors(root, sdir, run):
+        return None
+    path = os.path.join(sdir, "runtime", "anchor-reads.json")
+    state = read_state(path)
+    if state.get("run") != run:
+        state = {"run": run, "opened": [], "warned": False}
+    if state["opened"] or state.get("warned"):
+        return None
+    state["warned"] = True
+    write_state(path, state)
+    return (
+        "[ANCHOR CHECK] this %s was written from the %s digest without opening any anchor it "
+        "cites. The runtime proved those lines exist, not that the claims about them hold; "
+        "read the anchor a decision rests on before acting on it." % (
+            "[PLAN]" if "[PLAN]" in text else "[ANALYSIS RESULT]", command)
+    )
+
+
 def events_for(payload, root):
     hook = payload.get("hook_event_name")
     if hook == "UserPromptSubmit":
@@ -145,6 +270,18 @@ def events_for(payload, root):
 try:
     payload = json.loads(globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", ""))
     root = project_root(payload.get("cwd"))
+    if root and payload.get("hook_event_name") == "PostToolUse" and payload.get("tool_name") == "Read":
+        try:
+            note_anchor_read(payload, root)
+        except Exception:
+            pass
+    if root and payload.get("hook_event_name") == "Stop":
+        try:
+            message = anchor_warning(payload, root)
+        except Exception:
+            message = None
+        if message:
+            print(json.dumps({"systemMessage": message}))
     events = events_for(payload, root) if root else []
     if events:
         session = main_session(payload.get("session_id"))

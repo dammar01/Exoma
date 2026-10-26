@@ -2,7 +2,7 @@
 # Maps Claude Code session lifecycle -> second_agent (opencode) MAIN_SESSION_ID.
 #   startup | clear | compact  -> NEW  MAIN_SESSION_ID
 #   fork                       -> NEW  MAIN_SESSION_ID (/branch, /fork, --fork-session: a new
-#                                 conversation id with its own runtime state, DEC-068)
+#                                 conversation id with its own runtime state)
 #   resume                     -> REUSE MAIN_SESSION_ID
 # Registry: $HOME/.claude/session_registry.json (key = claude session_id)
 # Output: JSON hookSpecificOutput.additionalContext -> injects MAIN_SESSION_ID.
@@ -11,11 +11,11 @@ import os, sys, json, datetime, random, time
 
 # The registry is read, changed and replaced as one step under a sidecar lock file, so two
 # sessions starting together cannot each write back a registry missing the other's binding
-# (DEC-068). O_CREAT|O_EXCL behaves the same on every OS and needs nothing beyond the
+# O_CREAT|O_EXCL behaves the same on every OS and needs nothing beyond the
 # standard library. The lock holds its owner's token: a holder removes only its own lock,
 # and a lock older than LOCK_STALE_S (its holder died) is removed only while it still holds
 # the token judged stale. What is left is the instant between that last check and the
-# removal; a lock file cannot close it, only an OS lock could (DEC-068 records the choice).
+# removal; a lock file cannot close it, only an OS lock could (the choice is deliberate).
 # After LOCK_WAIT_S the bind goes ahead unlocked rather than delay the session start.
 LOCK_WAIT_S = 2.0
 LOCK_STALE_S = 10.0

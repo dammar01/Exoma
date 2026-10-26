@@ -13,6 +13,12 @@ Two roles, strictly separated:
 - **main_agent** — the agent you use (Claude Code, Codex, Cursor, etc.). Orchestrator, user interface, and the **only** one allowed to write files.
 - **second_agent** — the selected provider (OpenCode, Codex, or Agy), a **read-only** evidence gatherer by role. Not the final answer. Only OpenCode enforces that boundary; each provider's write boundary differs, see [Security](security.md).
 
+Terms: `main_agent` and `second_agent` are the identifiers the runtime, hooks, skills and
+JSON fields use. Prose elsewhere may say *primary agent* and *second agent* (or *secondary
+agent*) for the same two roles. The *proxy* is the runtime path that calls the second agent;
+*evidence* is its output, an *anchor* is a cited `path:line` in it, and a *marker* is the file a
+hook writes to arm a gate (`delegated.marker`).
+
 This runtime sits between the two: it receives a command, assembles a structured prompt, runs the selected provider's CLI (e.g. `opencode run`), validates the output shape, stores per-session state, then returns a stable JSON contract:
 
 ```json
@@ -56,9 +62,9 @@ Every result has the shape `{ok, content, meta}`. Other fields are conditional:
 |---|---|---|
 | `digest` | second_agent output carries a parseable `[DIGEST]` block | summary to be relayed. `digest.anchors = {certified, total, scanned_all}` is added when the evidence records anchors — up to 200 distinct citations are certified, and `scanned_all: false` means the scan stopped before the content ended (confidence capped at `medium` even when `certified == total`); a confidence lowered because of anchors/graph keeps its original value in `digest.confidence_reported` and the reason in `digest.confidence_capped_by` |
 | `evidence_ref` | only the explore/plan/analyze evidence path | `{artifact_path, anchors, certified_anchors, scanned_all, reused}`; `anchors` counts certified-or-not citations, of which the first 40 are stored for reuse. `reused: true` = an artifact from a past session was reused (see [Evidence reuse and boundary](#evidence-reuse-and-boundary)) |
-| `meta.task_cap`, `meta.task_cap_source` | every delegated call | effective task length limit. `task_cap_source`: `transport` (computed from the remaining argv command-line space), `floor` (scaffolding nearly fills the command line; minimum value), `policy` (opt-in `AI_PROXY_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; stdin/file transport, or argv outside Windows) |
+| `meta.task_cap`, `meta.task_cap_source` | every delegated call | effective task length limit. `task_cap_source`: `transport` (computed from the remaining argv command-line space), `floor` (scaffolding nearly fills the command line; minimum value), `policy` (opt-in `EXOMA_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; stdin/file transport, or argv outside Windows) |
 | `meta.task_truncated` | task cut by the cap | signal to shorten the instruction, not to split the call |
-| `meta.content_mode`, `meta.content_full_chars` | `AI_PROXY_SLIM_CONTENT` is active, content is long, and the artifact exists on disk | `content_mode: "ref_only"`: `content` is only a preview; the full text is at `evidence_ref.artifact_path` |
+| `meta.content_mode`, `meta.content_full_chars` | `EXOMA_SLIM_CONTENT` is active, content is long, and the artifact exists on disk | `content_mode: "ref_only"`: `content` is only a preview; the full text is at `evidence_ref.artifact_path` |
 | `meta.claims[].ref_status` | exploration/reasoning results with grounded claims | one status per ref: `certified`, `unverified` (a `file:line` this project cannot open; also raises a `claim_ref_unverified` contract warning), `not_a_file` |
 | `meta.uncertified_anchors` | a citation failed to certify | up to 10 `file:line` refs that did not hash to a line in this project |
 | `meta.scope_warnings` | `scope_not_covered` lists non-capping gaps | `[{category, detail}]` for `live_state`, `external`, `out_of_scope` bullets. Only `in_scope_unreachable` and untagged bullets cap confidence at `medium` |
@@ -244,8 +250,8 @@ An old `second_agent.json` beside the seed (written once, never refreshed — th
 The non-interactive path is not an oversight: `tools/e2e/e2e_installer.py` and CI call
 `exoma install` without stdin, and a prompt there would **hang** the run, not fail it.
 
-The prompt shows each provider along with whether its CLI is on `PATH` and whether it requires
-opt-in (`AI_PROXY_<PROVIDER>_OPT_IN`), then a shortlist of the selected provider's models with
+The prompt shows each provider along with whether its CLI is on `PATH` and whether it keeps a
+read boundary (codex and agy are marked as trusted providers), then a shortlist of the selected provider's models with
 the reasoning efforts each accepts. Blank on the provider cancels the selection
 (the example is copied). Blank on the model leaves `default_model` empty — for opencode that is
 rejected at call time (`model_unset`), because without `-m` opencode uses the last model
@@ -778,6 +784,17 @@ use `await` as in the example above. `sweep` and other local commands finish dir
 
 ## Configuration
 
+### Environment variables
+
+Runtime knobs are read from `EXOMA_<NAME>` (`EXOMA_TIMEOUT_SECONDS`, `EXOMA_PROVIDER`,
+`EXOMA_SLIM_CONTENT`, …; the full list is `LEGACY_ENV_NAMES` in
+`src/exoma/config/settings.py`). Each one is still read under its pre-rename spelling
+`AI_PROXY_<NAME>` as a fallback; when both are set, `EXOMA_<NAME>` wins. `doctor` lists every
+such `AI_PROXY_*` variable it finds set (`checks.legacy_env`) with a recommended fix to rename
+it; an `AI_PROXY_*` name outside that list was never read and is not reported.
+Variables named after a provider CLI (`OPENCODE_COMMAND`, `AGY_COMMAND`) and `EXOMA_HOME` have
+no legacy spelling.
+
 ### `.workflow/config.json`
 
 Created at `init`, and contains **overrides only**: an empty/absent `commands`, `policies`, `e2e` section means every key uses the default built into the running build. Write only the keys you want to change; absent keys are never filled in automatically, so defaults that change in a later release reach this project too.
@@ -844,7 +861,6 @@ At `init`, its source is the user's `second_agent.seed.json` if present, or the 
 
 `model: null` means use OpenCode's default model.
 
-<a id="memilih-provider--dan-konsekuensi-keamanannya"></a>
 #### Choosing a provider — and its security consequences
 
 `provider` accepts `opencode`, `codex`, or `agy`. The three are not equivalent choices:
@@ -852,11 +868,12 @@ At `init`, its source is the user's `second_agent.seed.json` if present, or the 
 | | `opencode` | `codex` | `agy` |
 | --- | --- | --- | --- |
 | Secret-file read boundary | **enforced** via `<project_root>/opencode.json` | **none** | **none** |
-| Write sandbox | yes | yes (`--sandbox read-only` + `approval_policy="never"`) | **no** — writes in the working tree are only *detected* (`core/policy/agy_guard.py`), not prevented |
+| Write sandbox | yes | yes (`--sandbox read-only` + `approval_policy="never"`) | **no** — writes in the working tree, and changes to files matching the secret patterns (ignored ones included), are only *detected* (`core/policy/agy_guard.py`), not prevented |
+| Selection | no question | confirmed in the `/.provider` picker | confirmed in the `/.provider` picker |
 | Project-root boundary config | file, refreshed on every `init`/`upgrade` | no such layer | no such layer |
 | `boundary` (`config/providers.py`) | `reads: secrets_denied`, `writes: denied` | `reads: unbounded`, `writes: sandboxed` | `reads: unbounded`, `writes: unbounded` |
 
-`codex` and `agy` are both reported by `doctor` as `not_enforceable` with `trusted: true`: both can read every project file and receive the full process environment — their boundary is the agent's obligation, not runtime enforcement. Choosing `agy` also requires explicit acknowledgement (`requires_opt_in`); `/.provider` refuses to write it without that.
+`codex` and `agy` are both reported by `doctor` as `not_enforceable` with `trusted: true`: both can read every project file and receive the full process environment — their boundary is the agent's obligation, not runtime enforcement. Choosing `codex` or `agy` needs no variable or config key. The `/.provider` catalog gives each provider a `boundary_warning` (null for opencode) — `providers.provider_boundary_warning`, worded from the provider's `boundary`: codex "can read every file", agy "can read AND write every file" — and the picker quotes it in one confirmation question before applying. Every apply of such a provider, including direct mode (`/.provider <provider> ...`) and `exoma install --provider`, which ask nothing, returns the same text first in `meta.warnings` (the installer prints it as a plan warning). Nothing is refused: the acknowledgement is prompt-level, not runtime-enforced.
 
 The write side is reported separately. `doctor` writes `checks.second_agent_write_boundary` (`{provider, writes}`) and, only for `writes: unbounded` (`agy`), one additional `WARNING: second_agent provider '<p>' can WRITE ...` in `recommended_fixes` — still not an issue. Every delegated result that reaches the provider stage (success or failure) carries `meta.provider_boundary` (`{reads, writes}`), and for `agy` also `meta.provider_write_warning`.
 
@@ -889,7 +906,7 @@ This means a codex second_agent can read every file in the project you point it 
 
 Use `codex` when the project holds no secrets, or when you accept the risk. For a project whose secrets must stay unreadable to second_agent, use `opencode`.
 
-Since v3.7.1 this position is explicit: `codex` and `agy` are treated as **trusted providers**. Besides having no read boundary, both adapters pass the full process environment to the provider CLI (credentials in env become visible). That is accepted as a risk, not fixed with an allowlist — an allowlist could break the provider CLI's auth, and a provider that can already read `.env` is protected by nothing through a trimmed env. Instead, the risk is always visible: `/.doctor` writes a `second_agent_read_boundary` check and one `WARNING` in `recommended_fixes` whenever the active provider is `codex`/`agy` (not an issue — readiness stays READY), and `/.provider` mentions it when selecting.
+Since v3.7.1 this position is explicit: `codex` and `agy` are treated as **trusted providers**. Besides having no read boundary, both adapters pass the full process environment to the provider CLI (credentials in env become visible). That is accepted as a risk, not fixed with an allowlist — an allowlist could break the provider CLI's auth, and a provider that can already read `.env` is protected by nothing through a trimmed env. Instead, the risk is always visible: `/.doctor` writes a `second_agent_read_boundary` check and one `WARNING` in `recommended_fixes` whenever the active provider is `codex`/`agy` (not an issue — readiness stays READY), and `/.provider` mentions it when selecting. The check carries `secret_files: {count, sample, truncated}` from `core/policy/secret_patterns.find_secret_files`: project files whose path matches the canonical secret patterns, ignored files included, skipping dependency and build directories (`node_modules`, `vendor`, `.venv`, `dist`, `build`, …) and `.git`/`.workflow`, at most 50,000 entries per scan (`truncated: true` past that). The warning names up to five of them. Files are matched by name only; contents are never opened. The threat model behind these choices: [security.md](security.md).
 
 #### `/.provider` model catalog
 
@@ -918,7 +935,7 @@ expensive; a model outside the shortlist is treated there as "unknown" (effort k
 CLI missing, timeout (30 s), or unrecognized format → `models_source: static`, the shortlist
 is used. Live results are cached for 10 minutes in `<cache user>/exoma/model-catalog.json`
 so that the catalog and apply within one picker session see the same list.
-`AI_PROXY_MODEL_CATALOG=static` turns off live reading.
+`EXOMA_MODEL_CATALOG=static` turns off live reading.
 
 Direct mode: `/.provider <provider> <model> [effort] [routes]` (e.g. `/.provider codex
 gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — safe because no
@@ -943,7 +960,7 @@ Per route is also possible: `"plan": { "model": "...", "timeout_seconds": 3600 }
 
 **Three retired keys.** `job_max_runtime_seconds`, `job_poll_timeout_seconds`, and
 `agent_workflow_path` used to be written to this file and were never read by anyone. All three
-are no longer written; their values come from `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`, the CLI
+are no longer written; their values come from `EXOMA_JOB_MAX_RUNTIME_SECONDS`, the CLI
 `--poll-timeout`, and `.workflow/config.json → runtime.python`/`runtime.package_root`.
 The upgrade to the `data/` layout (v3.6.0) drops retired keys from `config.json`; before that, `doctor` flags them
 `retired — never read` and they are safe to delete manually.
@@ -1221,7 +1238,7 @@ lookup for that invocation.
 Before delegation, relative paths are resolved against the project root; traversal, absolute paths
 outside the root, home-relative paths, and bare sensitive files such as `credentials.json`
 are rejected. OpenCode uses `external_directory: deny` at the root level of the project's `opencode.json`
-(applying to any agent, including the `AI_PROXY_OPENCODE_AGENT` override) and in
+(applying to any agent, including the `EXOMA_OPENCODE_AGENT` override) and in
 `agent.plan`; file discovery must go through the built-in Read/Grep/Glob. Bash only allows
 the registered read-only Git commands.
 
@@ -1356,7 +1373,7 @@ The normal `await` path reads `stall_threshold_seconds`, `idle_stall_seconds`, a
 - probe fails for another reason → terminate/reap as `second_agent_unavailable`;
 - PID gone at any time → reap as `worker_died`.
 
-The JobManager hard ceiling remains as a safety net: default 5400 seconds, changeable via the env `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`. A job that exceeds it fails as `job_expired` even if the PID appears alive. A project-local key with the same name does not yet change this value.
+The JobManager hard ceiling remains as a safety net: default 5400 seconds, changeable via the env `EXOMA_JOB_MAX_RUNTIME_SECONDS`. A job that exceeds it fails as `job_expired` even if the PID appears alive. A project-local key with the same name does not yet change this value.
 
 Every call that reaches `OpenCodeAdapter` writes a redacted `call.meta.json`
 (exit code, duration, timeout, kill method, safe stderr tail, and argv aggregates) to

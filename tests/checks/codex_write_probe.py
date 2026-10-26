@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 PROBE_ENV = "WORKFLOW_CODEX_PROBE"
 _SHELL_MARKER = "probe-shell-write.txt"
@@ -48,7 +49,7 @@ def _test_codex_sandbox_blocks_writes() -> None:
 
     root = Path(tempfile.mkdtemp(prefix="codex-write-probe-"))
     try:
-        subprocess.run(["git", "init", "-q", str(root)], capture_output=True, check=False)
+        subprocess.run(["git", "init", "-q", str(root)], capture_output=True, check=False, **no_console())
         (root / "README.md").write_text("probe fixture\n", encoding="utf-8")
         result = adapter.run(_PROMPT, {"session_id": "codex-write-probe"}, work_dir=str(root))
         meta = result.get("meta") or {}

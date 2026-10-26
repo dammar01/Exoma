@@ -2,7 +2,7 @@
 # A DELEGATED command the user named (`/.analyze ...` typed, or the slash-command payload)
 # -> write .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker ; else delete
 # stale. A prompt that only resembles one under the NL map (intent-map.json) arms nothing:
-# it gets an [INTENT HINT] as additionalContext (DEC-068). Pasted content is not classified.
+# it gets an [INTENT HINT] as additionalContext. Pasted content is not classified.
 # Also records the user's own approvals beside it: execute.token for `/.execute -y`
 # (consumed by `exoma --command execute-begin`) and commit.marker for a turn that asks
 # to commit (read by execution-gate.py).
@@ -27,7 +27,7 @@ def workflow_data_dir(root):
 # are someone's own words and stay classified. Neither list is documented by Claude Code, so
 # a project extends both with policies.prompt_sources {"user": [...], "host": [...]} in
 # .workflow/config.json, and a label in neither is counted in ~/.claude/prompt-sources.json
-# (DEC-068). An unknown label is treated as the user's, with one limit: an approval
+# An unknown label is treated as the user's, with one limit: an approval
 # (execute.token, commit.marker) then needs the command at the start of the prompt.
 _HOST_SOURCES = ("system", "loop_wakeup", "schedule_wakeup", "poll_event")
 _USER_SOURCES = ("user", "sdk")
@@ -89,7 +89,7 @@ def note_unknown_source(home, label):
 
 
 def not_user_prompt(payload, prompt, host_sources=_HOST_SOURCES):
-    """True for a turn the user did not write (DEC-045, DEC-059).
+    """True for a turn the user did not write.
 
     Such a turn quotes task names, agent reports and output excerpts, which match the NL map
     as easily as a request does: a subagent's hand-back armed `verify`, then `analyze`, in the
@@ -142,7 +142,7 @@ _EXECUTE_TAG = re.compile(r"<command-name>/?\.execute</command-name>\s*<command-
 _COMMIT_TAG = re.compile(r"<command-name>/?\.commit</command-name>", re.IGNORECASE)
 
 # A delegated command the user named: typed with its prefix, or the slash-command payload.
-# Only these arm the gate (DEC-068). A sentence that merely matches the NL map gets a hint.
+# Only these arm the gate. A sentence that merely matches the NL map gets a hint.
 _DELEGATED = "explore|plan|analyze|verify-browser|verify"
 _COMMAND_TAG = re.compile(r"<command-name>/?\.(%s)</command-name>" % _DELEGATED, re.IGNORECASE)
 
@@ -206,7 +206,7 @@ try:
 
     # A background task's completion or a subagent's hand-back reaches this hook as a prompt,
     # but the user did not write it. It neither arms nor clears a marker; the user's own
-    # prompt decides (DEC-045, DEC-059).
+    # prompt decides.
     user_sources, host_sources = prompt_sources(root)
     if not_user_prompt(payload, prompt, host_sources):
         sys.exit(0)
@@ -256,7 +256,7 @@ try:
 
     # Only a command the user named arms the gate. A sentence that resembles one under the NL
     # map ("saat saya analisa...", a question that mentions playwright) is not a request to
-    # delegate; reading it as one blocked the main agent on its own reply (DEC-068). It gets
+    # delegate; reading it as one blocked the main agent on its own reply. It gets
     # a hint instead, which the main agent weighs like any other context.
     resolved = explicit_command(text, mp.get("prefix_regex"))
     hinted = None if resolved else nl_command(text, mp)
@@ -281,7 +281,7 @@ try:
             "claude_sid": claude_sid,
             "prompt_excerpt": prompt[:160],
             # Provenance, so the next false arming names its source instead of leaving
-            # only an excerpt (DEC-059).
+            # only an excerpt.
             "source": payload.get("source"),
             "has_agent_id": bool(payload.get("agent_id")),
             "prompt_id": payload.get("prompt_id"),

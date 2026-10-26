@@ -13,6 +13,11 @@ the Bash hook port brought the flash back through task-events' bare `git`). `too
 `installer/` run in the user's own terminal, where a child shares that console and
 nothing flashes.
 
+`tests/` is in scope too. The suite runs from Claude Code's Bash tool and from CI, neither
+with a console, so a test's bare `git` or hook launcher flashed a window per call — dozens
+per run. Tests hide with `**no_console()` (`tests/checks/support.py`), which sets only
+`CREATE_NO_WINDOW` and leaves process groups alone.
+
 A call passes when it carries `**hidden_run_kwargs()`, `**detached_popen_kwargs()`, an
 explicit `creationflags=`, or `**<name>` where the same file puts a `creationflags` key in
 that dict (the hooks are stdlib-only and cannot import the helpers). A call that can only
@@ -28,10 +33,10 @@ from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_SCOPE = ("src/exoma/core", "src/exoma/adapters", "src/exoma/utils", "src/exoma/_bundle/config/claude/hooks")
+_SCOPE = ("src/exoma/core", "src/exoma/adapters", "src/exoma/utils", "src/exoma/_bundle/config/claude/hooks", "tests")
 _SKIP_PARTS = {"__pycache__"}
 _SPAWNERS = {"run", "Popen", "call", "check_call", "check_output"}
-_HIDING_HELPERS = {"hidden_run_kwargs", "detached_popen_kwargs"}
+_HIDING_HELPERS = {"hidden_run_kwargs", "detached_popen_kwargs", "no_console"}
 
 # (file, first element of the argv list literal) -> why it never runs on Windows.
 _POSIX_ONLY = {
@@ -119,17 +124,50 @@ def _check_scanner_sees_the_known_shapes() -> None:
         "subprocess.Popen(['b'], **flags)\n"
         "other = {'cwd': '.'}\n"
         "subprocess.run(['c'], **other)\n"
+        "subprocess.run(['d'], **no_console())\n"
     )
     tree = ast.parse(source)
     dicts = _hiding_dicts(tree)
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and _is_subprocess_spawn(node)]
-    assert_true(len(calls) == 8, f"scanner found {len(calls)} spawn calls in the sample, expected 8")
+    assert_true(len(calls) == 9, f"scanner found {len(calls)} spawn calls in the sample, expected 9")
     bare = sorted(call.lineno for call in calls if not _hides_console(call, dicts))
     assert_true(bare == [2, 6, 13], f"scanner flagged lines {bare} as bare, expected [2, 6, 13]")
 
 
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _check_detached_workers_keep_a_hidden_console() -> None:
+    """Windows ignores CREATE_NO_WINDOW next to DETACHED_PROCESS. A worker started that way
+    has no console, and a venv `python.exe` (a launcher that starts the base interpreter)
+    then opened a visible terminal window per job. Both detached spawners must use
+    CREATE_NO_WINDOW alone."""
+    import os
+    import re
+    import subprocess
+
+    if os.name == "nt":
+        from exoma.utils import osutil
+
+        flags = osutil.detached_popen_kwargs()["creationflags"]
+        assert_true(
+            flags & _CREATE_NO_WINDOW and not flags & _DETACHED_PROCESS,
+            f"detached_popen_kwargs must hide a console, not drop it: {flags:#x}",
+        )
+        assert_true(subprocess.DETACHED_PROCESS == _DETACHED_PROCESS, "flag constant drifted")
+    hook = (REPO_ROOT / "src/exoma/_bundle/config/claude/hooks/graph-refresh.py").read_text(encoding="utf-8")
+    assigned = re.findall(r'flags\["creationflags"\] = ([0-9xa-fA-F| ]+)', hook)
+    values = [sum(int(part, 0) for part in expr.split("|")) for expr in assigned]
+    assert_true(
+        values and all(v & _CREATE_NO_WINDOW and not v & _DETACHED_PROCESS for v in values),
+        f"graph-refresh's detached worker must hide a console, not drop it: {assigned}",
+    )
+
+
 def _test_every_spawn_hides_its_console() -> None:
     _check_scanner_sees_the_known_shapes()
+    _check_detached_workers_keep_a_hidden_console()
 
     files = _python_files()
     assert_true(
@@ -164,9 +202,10 @@ def _test_every_spawn_hides_its_console() -> None:
     )
     assert_true(
         not offenders,
-        "a runtime subprocess call does not hide its console, so on Windows every call "
-        "flashes a window from the detached worker:\n  "
+        "a subprocess call does not hide its console, so on Windows every call flashes a "
+        "window (from the detached worker, a hook, or the test suite):\n  "
         + "\n  ".join(offenders)
-        + "\n\nPass **osutil.hidden_run_kwargs() (or detached_popen_kwargs() for a worker), "
-        "or add the call to _POSIX_ONLY with the reason it never runs on Windows.",
+        + "\n\nPass **osutil.hidden_run_kwargs() (or detached_popen_kwargs() for a worker; "
+        "**no_console() in tests/), or add the call to _POSIX_ONLY with the reason it never "
+        "runs on Windows.",
     )

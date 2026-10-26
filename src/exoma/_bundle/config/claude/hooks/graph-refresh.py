@@ -2,8 +2,8 @@
 # Regenerates graphify-out/ after main_agent actually changed code. Two gates:
 #   1. Did this turn implement? ([EXECUTION RESULT] in last message)
 #   2. Is the graph older than the sources? (mtime compare, skip dirs pruned before descent)
-# Both must pass. The refresh is detached (DEC-012): the hook starts a worker that runs
-# `graphify update` only (never init/build/watch) with no time limit (DEC-042), beats the
+# Both must pass. The refresh is detached: the hook starts a worker that runs
+# `graphify update` only (never init/build/watch) with no time limit, beats the
 # lock while it runs, records one row in the quality stream, and removes
 # graphify-out/.refresh.lock. Readers treat the graph as stale while the lock is held,
 # because graphify rewrites graph.json in place.
@@ -19,7 +19,7 @@ SKIP_DIRS = {
     "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
     "storage", "site-packages", ".tox",
 }
-# graphify runs without a time limit (DEC-042): a large graph takes as long as it takes, and
+# graphify runs without a time limit: a large graph takes as long as it takes, and
 # the worker never kills it. The lock is held while the worker keeps rewriting `beat`, every
 # BEAT_INTERVAL_S; a lock whose beat is BEAT_STALE_S old has no worker behind it. A lock
 # without `beat` was written before this rule and keeps the old one: LEGACY_MAX_AGE_S and a
@@ -72,8 +72,8 @@ def beat(graphify_pid):
 
 hide = {}
 if os.name == "nt":
-    # This worker has no console; without SW_HIDE a console child (graphify.cmd) would
-    # open a visible window of its own.
+    # The worker's console is hidden and graphify would inherit it; the flags hide graphify
+    # anyway, so a worker started some other way still cannot open a window through it.
     info = subprocess.STARTUPINFO()
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 0
@@ -309,7 +309,10 @@ try:
         info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         info.wShowWindow = 0
         flags["startupinfo"] = info
-        flags["creationflags"] = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
+        # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW, not DETACHED_PROCESS: with that flag
+        # Windows ignores CREATE_NO_WINDOW, and a venv interpreter (a launcher that starts the
+        # base python) then opens a visible console window (osutil.detached_popen_kwargs).
+        flags["creationflags"] = 0x00000200 | 0x08000000
     else:
         flags["start_new_session"] = True
     worker = subprocess.Popen(

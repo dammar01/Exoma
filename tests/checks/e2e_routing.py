@@ -33,6 +33,7 @@ from exoma.core.provider.executor import Executor
 from exoma.core.runtime.state import ensure_workflow_workspace
 from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
 from tests.checks.support import assert_true
+from tests.checks.support import no_console
 
 _SOURCE_MARKER = "SOURCE-MARKER-e2e-7f3a"
 _SESSION_ID = "e2e-session"
@@ -809,9 +810,9 @@ def _test_e2e_routing() -> None:
 
         root = workspace("e2e-release-")
         git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-        subprocess.run([*git, "init", "-q"], check=True)
-        subprocess.run([*git, "add", "src"], check=True)
-        subprocess.run([*git, "commit", "-q", "-m", "app"], check=True)
+        subprocess.run([*git, "init", "-q"], check=True, **no_console())
+        subprocess.run([*git, "add", "src"], check=True, **no_console())
+        subprocess.run([*git, "commit", "-q", "-m", "app"], check=True, **no_console())
         before = project_fingerprint(root)
         assert_true(bool(before), "a Git project has a fingerprint")
         adapter = _adapter()

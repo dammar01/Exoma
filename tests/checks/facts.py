@@ -24,6 +24,7 @@ from tests.checks.support import (
     clean_output,
     extract_session_id,
 )
+from tests.checks.support import no_console
 
 def _test_facts_concurrency() -> None:
     """Concurrent ingest must not lose updates and must leave valid JSONL.
@@ -394,6 +395,7 @@ def _test_evidence_lock_file() -> None:
                 env={**os.environ, "PYTHONPATH": str(repo / "src")},
                 stdout=subprocess.PIPE,
                 text=True,
+                **no_console(),
             )
             try:
                 assert_true(holder.stdout.readline().strip() == "held", "the holder process took the lock")

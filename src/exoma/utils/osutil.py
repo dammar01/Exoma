@@ -194,18 +194,23 @@ def make_executable(path: Path) -> None:
 
 
 def detached_popen_kwargs() -> dict:
-    """Kwargs to spawn a fully detached background worker, per OS."""
+    """Kwargs to spawn a fully detached background worker, per OS.
+
+    Windows: a new process group with its own hidden console, NOT `DETACHED_PROCESS`.
+    Windows ignores `CREATE_NO_WINDOW` when `DETACHED_PROCESS` is set, so the worker used to
+    run with no console at all — and a console program it started without flags of its own
+    allocated a fresh, visible one. A venv's `python.exe` is such a program: a launcher that
+    starts the base interpreter, so every worker spawned through a venv flashed a terminal
+    window. A hidden console is inherited by the whole tree, and the worker still shares
+    nothing with the caller's console.
+    """
     if IS_WINDOWS:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0
         return {
             "startupinfo": startupinfo,
-            "creationflags": (
-                subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NO_WINDOW
-            ),
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
         }
     # POSIX: new session detaches from the controlling terminal/parent group.
     return {"start_new_session": True}

@@ -93,7 +93,7 @@ _FANOUT_WARNINGS = {
     ),
     FANOUT_INCAPABLE: (
         "second_agent reports no spawn tool; fan-out is off for this project and will be "
-        "retried automatically after AI_PROXY_FANOUT_RECHECK_HOURS (default 24h). To "
+        "retried automatically after EXOMA_FANOUT_RECHECK_HOURS (default 24h). To "
         "retry now, delete .workflow/capabilities.json"
     ),
     FANOUT_DECLINED: (
@@ -1335,7 +1335,7 @@ class Executor:
                 make_error(
                     "invalid_evidence",
                     detail,
-                    next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                    next_action="STOP. Warn user [PROXY FAILED]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
                     meta=verify_meta,
                     raw_preview=(result.get("content") or "")[:240],
                 ),
@@ -1367,7 +1367,7 @@ class Executor:
                     make_error(
                         "invalid_evidence",
                         detail,
-                        next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                        next_action="STOP. Warn user [PROXY FAILED]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
                         meta=result.get("meta", {}),
                         raw_preview=(result.get("content") or "")[:240],
                     ),

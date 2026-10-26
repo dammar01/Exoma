@@ -16,7 +16,9 @@ Working on Exoma itself: [development.md](development.md) (the checkout, tests, 
 development build away from your daily `~/.claude`, and staging a release in
 agent-workflow).
 
-Supporting documents: [limitations.md](limitations.md), the
+Supporting documents: [limitations.md](limitations.md),
+[why-not-subagent.md](why-not-subagent.md) (why evidence goes to a second agent rather than
+a native subagent, with the figures behind it), the
 [metrics registry](evaluation/metrics.md) behind every figure `report` prints, and the
 release history: the index in [CHANGELOG.md](../CHANGELOG.md), per-version notes in
 [releases/](releases/).

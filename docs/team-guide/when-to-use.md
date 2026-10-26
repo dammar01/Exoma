@@ -39,6 +39,9 @@ The decision is yours to make per task: *"This change touches parts of the syste
 know; a few extra minutes of exploration is worth it"*, or *"This is a two-line fix, I'll ask
 the agent directly."* Both are correct uses.
 
+Why the exploration goes to a separate second agent instead of one of Claude Code's own
+subagents: [why-not-subagent.md](../why-not-subagent.md).
+
 ## A quick check
 
 If you can already write the list of files you are going to change, go direct. If you
