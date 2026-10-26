@@ -498,7 +498,7 @@ def _test_init_upgrade_and_session_guard() -> None:
         env = {
             key: value
             for key, value in os.environ.items()
-            if key not in ("MAIN_SESSION_ID", "AI_PROXY_ALLOW_DEFAULT_SESSION")
+            if key not in ("MAIN_SESSION_ID", "EXOMA_ALLOW_DEFAULT_SESSION", "AI_PROXY_ALLOW_DEFAULT_SESSION")
         }
         workflow_dir = workflow_paths(root)["workflow_dir"]
         # The runner is bash on every OS (Git Bash on Windows).

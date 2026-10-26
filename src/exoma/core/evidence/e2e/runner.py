@@ -5,7 +5,7 @@ project's pinned `e2e` section in config.json. The request's phase decides how f
 
   draft  preflight  → a draft with status `blocked` and the failing check
          stage 1    → second_agent writes `[E2E SPEC]`; a proxy failure is returned as-is
-                      so main_agent sees [PROXY GAGAL]; the spec is validated and written
+                      so main_agent sees [PROXY FAILED]; the spec is validated and written
                       to `draft.json` for the user to confirm. No browser starts.
   run    preflight  → `incomplete` with the failing check as reason
          spec       → the confirmed scenario from the request, validated again

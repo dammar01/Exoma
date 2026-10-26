@@ -15,7 +15,7 @@ troubleshooting table](../../README.md#quick-start); commands and their options 
 | Commands fail after you moved the tool checkout | Run `upgrade` from the new location |
 | Empty-looking `.lock` files in `.workflow/data` | `evidence.jsonl.lock` and the `.guard`/`.reclaim` files hold one invisible byte and stay between uses: normal. Other lock files are removed on release, so an empty one left behind is a writer that crashed and is reclaimed later. Do not delete any while something runs ([which ones and why](../runtime-contracts.md)) |
 
-## "PROXY GAGAL" / proxy failed
+## "PROXY FAILED" (before v0.2.0: "PROXY GAGAL")
 
 Claude Code stops and asks before doing anything else when the secondary agent returns no
 usable evidence (an error, empty output, or a refusal instead of findings). This is

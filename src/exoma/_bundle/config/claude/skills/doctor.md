@@ -14,7 +14,7 @@ description: Local .workflow readiness and bundle-integrity check.
 .workflow/run.*     : EXISTS | MISSING
 .gitignore          : CONTAINS .workflow/ | MISSING
 exoma               : <version> (`exoma --version`) | NOT INSTALLED
-.workflow/config.json : v0.1.0 (runtime.python set) | old | MISSING
+.workflow/config.json : v0.2.0 (runtime.python set) | old | MISSING
 graphify-out/       : EXISTS | MISSING
 bundle (~/.claude)  : READY | DRIFTED | not_checked — `exoma install --check` (skills/CLAUDE.md/AGENTS.md vs the shipped bundle; DRIFTED → `exoma install --apply`)
 second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scans the MCP config of the ACTIVE provider, not always opencode (context7=safe read-only; write/exec/fs/db/browser=risk)

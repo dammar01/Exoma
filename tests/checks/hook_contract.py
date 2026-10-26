@@ -160,14 +160,31 @@ def _case_task_events(ws: _Workspace, run) -> None:
     _silent(ws, out, "task-events")
 
     # Anchor reads: a synthesis written from a plan/analyze digest without opening any cited
-    # anchor is named once per run; a Read that overlaps a cited range clears it.
+    # anchor is named once per run; a Read in the transcript, after the runner call, that
+    # overlaps a cited range clears it.
     (ws.project / "src").mkdir(exist_ok=True)
-    (ws.project / "src" / "app.py").write_text("".join(f"line {n}\n" for n in range(1, 31)), encoding="utf-8")
+    app = ws.project / "src" / "app.py"
+    app.write_text("".join(f"line {n}\n" for n in range(1, 31)), encoding="utf-8")
     logs = ws.runtime.parent / "logs"
     first = logs / "20261025_000001_000000_analyze_aa11"
     first.mkdir(parents=True)
     (first / "output.raw.md").write_text("- claim [src/app.py:10-12] and [missing.py:3]\n", encoding="utf-8")
-    stop = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "Stop"}
+    transcript = ws.base / "transcript.jsonl"
+
+    def tool(name: str, role: str = "assistant", **tool_input) -> str:
+        block = {"type": "tool_use", "id": "t", "name": name, "input": tool_input}
+        return json.dumps({"type": role, "message": {"role": role, "content": [block]}})
+
+    def runner(command: str) -> str:
+        return tool("Bash", command=f"bash '{ws.project.as_posix()}/.workflow/run.sh' {command} 'task' 'sid'")
+
+    def calls(*lines: str) -> None:
+        transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    calls(runner("analyze"))
+    stop = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "Stop", "transcript_path": str(transcript)}
+    code, out, _ = run({**stop, "transcript_path": str(ws.base / "absent.jsonl"), "last_assistant_message": "**[ANALYSIS RESULT]**\nx"})
+    assert_true(code == 0 and not out.strip(), f"an unreadable transcript warns nothing: {out[:200]!r}")
     code, out, _ = run({**stop, "last_assistant_message": "Ringkasan biasa tanpa blok."})
     assert_true(code == 0 and not out.strip(), f"a reply without its own [PLAN]/[ANALYSIS RESULT] is not judged: {out[:200]!r}")
     code, out, _ = run({**stop, "last_assistant_message": "```\n[ANALYSIS RESULT]\n```"})
@@ -180,16 +197,37 @@ def _case_task_events(ws: _Workspace, run) -> None:
     second = logs / "20261025_000002_000000_plan_bb22"
     second.mkdir(parents=True)
     (second / "output.raw.md").write_text("[src/app.py:10-12]\n", encoding="utf-8")
-    read = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "PostToolUse", "tool_name": "Read"}
-    code, out, _ = run({**read, "tool_input": {"file_path": str(ws.project / "src" / "app.py"), "offset": 20, "limit": 5}})
-    assert_true(code == 0 and not out.strip(), f"a Read hook prints nothing: {out[:200]!r}")
-    state = json.loads((ws.runtime / "anchor-reads.json").read_text(encoding="utf-8")) if (ws.runtime / "anchor-reads.json").exists() else {}
-    assert_true(not state.get("opened") or state.get("run") != second.name, f"a Read outside the cited range opens nothing: {state}")
-    run({**read, "tool_input": {"file_path": str(ws.project / "src" / "app.py"), "offset": 5, "limit": 10}})
-    state = json.loads((ws.runtime / "anchor-reads.json").read_text(encoding="utf-8"))
-    assert_true(state.get("run") == second.name and state.get("opened") == ["src/app.py:10"], f"an overlapping Read is recorded: {state}")
-    code, out, _ = run({**stop, "last_assistant_message": "[PLAN]\ntask: ..."})
+    plan = {**stop, "last_assistant_message": "[PLAN]\ntask: ..."}
+    overlapping = tool("Read", file_path=str(app), offset=5, limit=10)
+    calls(runner("analyze"), overlapping, runner("plan"), tool("Bash", command="bash '.workflow/run.sh' plan-record 'p' 'sid'"),
+          tool("Read", file_path=str(app), offset=20, limit=5))
+    code, out, _ = run(plan)
+    assert_true(code == 0 and "ANCHOR CHECK" in out,
+                f"a Read before the newest runner call, or outside the cited range, opens nothing: {out[:200]!r}")
+    (ws.runtime / "anchor-reads.json").unlink()
+    calls(runner("plan"), overlapping)
+    code, out, _ = run(plan)
     assert_true(code == 0 and not out.strip(), f"a synthesis after opening an anchor is not named: {out[:200]!r}")
+    calls(tool("Read", file_path=str(app)))
+    code, out, _ = run(plan)
+    assert_true(code == 0 and not out.strip(), f"a transcript without the runner call warns nothing: {out[:200]!r}")
+
+    # Read backward across several chunks, CRLF endings, a Windows runner path, a malformed
+    # Read beside a valid one, and a tool_use outside an assistant message.
+    result = json.dumps({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t", "content": "x" * 200_000}]}})
+    windows_runner = tool("Bash", command=f"bash '{ws.project}\\.workflow\\run.sh' plan 'task' 'sid'")
+    malformed = tool("Read", file_path=str(app), offset="ten")
+    transcript.write_text("\r\n".join([runner("analyze"), overlapping, windows_runner, result, malformed,
+                                       result, overlapping, result]) + "\r\n", encoding="utf-8")
+    code, out, _ = run(plan)
+    assert_true(code == 0 and not out.strip(),
+                f"an overlapping Read after a Windows runner call, past large results, counts: {out[:200]!r}")
+    (ws.runtime / "anchor-reads.json").unlink(missing_ok=True)
+    calls(windows_runner, result, malformed, tool("Read", role="user", file_path=str(app), offset=5, limit=10), result)
+    code, out, _ = run(plan)
+    assert_true(code == 0 and "ANCHOR CHECK" in out,
+                f"a malformed Read or a non-assistant tool_use opens nothing: {out[:200]!r}")
 
 
 def _case_statusline(ws: _Workspace, run) -> None:

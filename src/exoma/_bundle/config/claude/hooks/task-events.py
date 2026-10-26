@@ -8,14 +8,17 @@
 # and moves the snapshot. Only appends; task state is derived at report time
 # (core/audit/task_telemetry.py). Never blocks, exit 0.
 #
-# Anchor reads (PostToolUse Read, Stop). The runtime proves a cited `file:line` exists; it
-# cannot prove the primary agent looked at it. So a Read whose file and line range overlap
-# an anchor cited by the session's newest delegated run is recorded in
-# runtime/anchor-reads.json, and at Stop, when the reply carries its own [PLAN] or
-# [ANALYSIS RESULT] block (a header opening a line, outside code fences — never prose)
-# while that run is a plan or analyze with no anchor opened, a systemMessage says so, once
-# per run. Warning only: a Read through the shell is not seen, and a Read proves a look, not
-# a verified claim. `policies.enforcement: off` turns the warning off.
+# Anchor reads (Stop only). The runtime proves a cited `file:line` exists; it cannot prove
+# the primary agent looked at it. So at Stop, when the reply carries its own [PLAN] or
+# [ANALYSIS RESULT] block (a header opening a line, outside code fences — never prose) and
+# the session's newest delegated run is a plan or analyze, the hook reads `transcript_path`
+# backward from its end, only as far as the newest `.workflow/run.sh plan|analyze` call: a
+# Read tool call after it whose file and line range overlap an anchor that run cites counts
+# as opened. None opened → a systemMessage says so, once per run (runtime/anchor-reads.json).
+# No hook runs per Read, and no other Stop reads the transcript. Warning only: a Read through
+# the shell is not seen, a Read proves a look, not a verified claim, and an unreadable
+# transcript, or one with no runner call within TRANSCRIPT_SCAN_BYTES of its end, warns nothing.
+# `policies.enforcement: off` turns the warning off.
 import datetime, json, os, re, subprocess
 
 LOCAL_SKILLS = {
@@ -135,6 +138,11 @@ ANCHOR_SCAN_LIMIT = 200
 RUN_DIR = re.compile(r"_(explore|plan|analyze|verify|verify-browser)_[0-9a-f]+$")
 SYNTHESIS_HEADER = re.compile(r"^[ \t#*_-]*\[(PLAN|ANALYSIS RESULT)\]", re.MULTILINE)
 FENCE = re.compile(r"^[ \t]*(```|~~~).*?(?:^[ \t]*\1[^\n]*$|\Z)", re.DOTALL | re.MULTILINE)
+# The delegated call in a Bash tool input; `plan-record` and the like are not a run.
+RUNNER_CALL = re.compile(r"\.workflow[/\\]run\.sh['\"]?\s+['\"]?(plan|analyze)(?=['\"]?\s)")
+# How far back from the transcript's end one Stop looks for that call, and the read size.
+TRANSCRIPT_SCAN_BYTES = 32 * 1024 * 1024
+TRANSCRIPT_CHUNK = 64 * 1024
 
 
 def session_dir(root, main_id):
@@ -187,31 +195,72 @@ def write_state(path, state):
         json.dump(state, fh)
 
 
-def note_anchor_read(payload, root):
-    """Record the anchors of the newest delegated run that this Read overlapped."""
-    ti = payload.get("tool_input") or {}
-    rel = inside(root, ti.get("file_path"))
-    sdir = session_dir(root, main_session(payload.get("session_id")))
-    if not rel or not sdir:
-        return
-    run, _command = latest_run(sdir)
-    if not run:
-        return
-    spans = run_anchors(root, sdir, run).get(rel)
-    if not spans:
-        return
-    first = int(ti.get("offset") or 1)
-    limit = ti.get("limit")
-    last = first + int(limit) - 1 if limit else float("inf")
-    hits = [f"{rel}:{a}" for a, b in spans if a <= last and b >= first]
-    if not hits:
-        return
-    path = os.path.join(sdir, "runtime", "anchor-reads.json")
-    state = read_state(path)
-    if state.get("run") != run:
-        state = {"run": run, "opened": [], "warned": False}
-    state["opened"] = sorted(set(state["opened"]) | set(hits))
-    write_state(path, state)
+def lines_from_end(path, budget):
+    """The file's complete lines, newest first, from at most `budget` bytes of its tail. A
+    line cut by the budget is dropped; splitting on b"\\n" never cuts a UTF-8 character."""
+    with open(path, "rb") as fh:
+        pos = fh.seek(0, os.SEEK_END)
+        tail = b""
+        while pos > 0 and budget > 0:
+            step = min(TRANSCRIPT_CHUNK, pos, budget)
+            pos -= step
+            budget -= step
+            fh.seek(pos)
+            parts = (fh.read(step) + tail).split(b"\n")
+            tail = parts.pop(0)
+            yield from reversed(parts)
+        # the budget may end exactly at a line start; that line is whole
+        if pos > 0:
+            fh.seek(pos - 1)
+        if pos == 0 or fh.read(1) == b"\n":
+            yield tail
+
+
+def read_span(root, ti):
+    """(relative path, first line, last line) of one Read tool input, or None."""
+    try:
+        rel = inside(root, ti.get("file_path"))
+        if not rel:
+            return None
+        first = int(ti.get("offset") or 1)
+        limit = ti.get("limit")
+        return rel, first, first + int(limit) - 1 if limit else float("inf")
+    except (TypeError, ValueError):
+        return None
+
+
+def transcript_reads(path, root):
+    """[(relative path, first line, last line)] of the Read calls made after the newest
+    plan/analyze runner call, found by reading the transcript backward from its end; None
+    when it cannot be read or no runner call lies within TRANSCRIPT_SCAN_BYTES of the end
+    (unknown, not "nothing opened")."""
+    reads = []
+    try:
+        for line in lines_from_end(path, TRANSCRIPT_SCAN_BYTES):
+            # tool results and prose are most of the bytes; never parse them
+            if b'"tool_use"' not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            message = entry.get("message") if isinstance(entry, dict) and not entry.get("isSidechain") else None
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            content = message.get("content")
+            for block in reversed(content if isinstance(content, list) else []):
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                ti = block.get("input") if isinstance(block.get("input"), dict) else {}
+                if block.get("name") == "Bash" and RUNNER_CALL.search(str(ti.get("command") or "")):
+                    return reads
+                if block.get("name") == "Read":
+                    span = read_span(root, ti)
+                    if span:
+                        reads.append(span)
+    except OSError:
+        return None
+    return None
 
 
 def anchor_warning(payload, root):
@@ -226,16 +275,19 @@ def anchor_warning(payload, root):
     if not sdir:
         return None
     run, command = latest_run(sdir)
-    if not run or command not in ANCHOR_COMMANDS or not run_anchors(root, sdir, run):
+    anchors = run_anchors(root, sdir, run) if run and command in ANCHOR_COMMANDS else {}
+    if not anchors:
         return None
     path = os.path.join(sdir, "runtime", "anchor-reads.json")
     state = read_state(path)
-    if state.get("run") != run:
-        state = {"run": run, "opened": [], "warned": False}
-    if state["opened"] or state.get("warned"):
+    if state.get("run") == run and state.get("warned"):
         return None
-    state["warned"] = True
-    write_state(path, state)
+    reads = transcript_reads(payload.get("transcript_path"), root) if payload.get("transcript_path") else None
+    if reads is None:
+        return None
+    if any(a <= last and b >= first for rel, first, last in reads for a, b in anchors.get(rel, ())):
+        return None
+    write_state(path, {"run": run, "warned": True})
     return (
         "[ANCHOR CHECK] this %s was written from the %s digest without opening any anchor it "
         "cites. The runtime proved those lines exist, not that the claims about them hold; "
@@ -270,11 +322,6 @@ def events_for(payload, root):
 try:
     payload = json.loads(globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", ""))
     root = project_root(payload.get("cwd"))
-    if root and payload.get("hook_event_name") == "PostToolUse" and payload.get("tool_name") == "Read":
-        try:
-            note_anchor_read(payload, root)
-        except Exception:
-            pass
     if root and payload.get("hook_event_name") == "Stop":
         try:
             message = anchor_warning(payload, root)

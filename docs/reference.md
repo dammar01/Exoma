@@ -1,4 +1,4 @@
-# Exoma v0.1.0
+# Exoma v0.2.0
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -113,7 +113,7 @@ git --version
 
 ---
 
-## Install (v0.1.0)
+## Install (v0.2.0)
 
 ### New team member — full sequence from scratch
 
@@ -351,7 +351,7 @@ measures **prompt** length, not how much was read. Fallback rows turn on `~`.
 | `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit` | `intent-gate-check` | blocks gather tools while the gate marker exists; Bash and PowerShell go through one tokenizer and one rule: only a single plain call `[bash] <root>/.workflow/{run,check,inspect}.sh` passes (each word plain or `'...'`; `$`, backtick, `;`, `|`, `&`, redirect, newline only inside single quotes; double quotes, `bash -c`, another interpreter in front, `run.ps1`, paths outside the root, `..`, and look-alike names are rejected); Write/Edit pass except to that runner script; a marker with intent `verify` lets the test-selection path through (see "Intent mode") |
 | `PostToolUse` | `Skill\|Edit\|Write\|MultiEdit\|NotebookEdit` | `task-events` | skill via the `Skill` tool, edited files |
 | `Stop` | — | `graph-refresh` | regenerates the graph after a turn that implemented something (detached) |
-| `Stop` | — | `task-events` | commits since the HEAD snapshot |
+| `Stop` | — | `task-events` | commits since the HEAD snapshot; the anchor check, reading `transcript_path` backward to the newest plan/analyze runner call |
 
 Hooks are recognized by their script name. On install, the workflow's hooks are refreshed per event,
 user hooks are left alone, and workflow script commands that this release no longer registers on
@@ -696,7 +696,7 @@ section "Contracts the runtime cannot enforce".
 | New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` |
 | `/.execute -y` | Without `-y` it only shows `[EXECUTION SCOPE]` and then stops. With `-y` it edits only files in scope; a need outside scope = stop and ask for instructions. Approval is only `/.execute -y` from the user after a `proceed` plan; an execute sentence without `-y` shows the scope and asks for `-y`; an AskUserQuestion answer to `open_questions` is not approval | main_agent; since agent-workflow 3.9.0 also runtime + hooks: `execute-begin` needs the recorded plan and the `-y` token, `execution-gate` blocks Edit/Write outside the scope | `skills/execute.md`, `skills/plan.md` STEP 3; [Plan and execution state](#plan-and-execution-state) |
 | Verification after execute | `commands.auto_verify_after_execute` is reread on every `/.execute`. `false` (default): status `implemented`, `verification: not_run`, the word "done" and similar are forbidden. `true`: `/.verify` is part of `/.execute` | main_agent; the `status-guard` Stop hook warns when the `[EXECUTION RESULT]` fields claim more than `verification: not_run` allows | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
-| Proxy failure | `ok:false`, an invalid-evidence `error_type`, or content that is not evidence → stop, print `[PROXY GAGAL] …`, ask whether to continue with `/.local` (yes/no), then wait. Automatic local fallback is forbidden | main_agent | `CLAUDE.md`, "Proxy failure" |
+| Proxy failure | `ok:false`, an invalid-evidence `error_type`, or content that is not evidence → stop, print `[PROXY FAILED] …`, ask whether to continue with `/.local` (yes/no), then wait. Automatic local fallback is forbidden | main_agent | `CLAUDE.md`, "Proxy failure" |
 | Destructive actions | Commit, delete, or writing outside the project must not run from a guessed intent; confirmation is required. Writing to another project (Edit/Write or Bash/script) needs explicit approval for that path. Since agent-workflow 3.9.0 the `execution-gate` hook blocks Edit/Write outside the root unless the path is in `policies.write_allowed_outside_root`; Bash/script writes are not checked (see [limitations](limitations.md)) | main_agent | `CLAUDE.md`, "Intent detection" and "Global Forbidden" |
 | `/.commit` staging | An existing staged set is used as is. With nothing staged, main_agent stages changed tracked files and untracked files Git does not ignore, one quoted path per argument (never `-A` or `.`), and skips a path whose lowercased, `/`-separated form matches the canonical secret-file list of `core/policy/secret_patterns.py` (`SECRET_READ_PATTERNS`, minus `SECRET_READ_ALLOWLIST`), the same list the providers' read boundary uses; a test keeps the skill's copy identical. It shows staged, newly tracked, and skipped paths with the message, and commits only on `yes`; `no` unstages only what it staged (`git reset -q --`, which also works before the first commit). The skip list is a prompt rule over file names, not a content scanner | main_agent | `skills/commit.md` |
 
@@ -942,7 +942,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v0.1.0):
+Reliability keys (v0.2.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1025,7 +1025,7 @@ source file (same extensions and skip directories as above). A content change, a
 `--command report` → `tasks` reads `.workflow/data/tasks.jsonl`. One task = a series of events within one MAIN_SESSION_ID, from its first event until a verify whose runtime-**derived** verdict is `pass` after that task edited files. A commit is the recommended next step, not the closer. Events are written by two parties, with no additional instructions in the prompt:
 
 - runtime: one event per delegated command (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). A verify event carries `verdict` (the one **declared** by the reply; `DONE` with a blocking finding counts as `NEEDS FIX`) and `derived` (the runtime-derived verdict: `pass`, `incomplete`, or `fail`). Only `derived: pass` closes a task; a `DONE` that the runtime considers `incomplete`, including because of `not_verified`, leaves the task `open`;
-- the `task-events` hook (`.sh` launcher + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): local skills invoked from the prompt (`/.<name>`) or via the `Skill` tool, files inside the project that were edited (not `.workflow/`/`.git/`), and commits as HEAD **moving between turns**. The session's first event stores a HEAD snapshot in `.workflow/data/task-hook/<claude_session_id>.head`; each `Stop` (or the next prompt, for commits made in a terminal between turns) records the commits since the snapshot — first-parent, oldest first, each with `paths` — then advances the snapshot. Events are v2 (`v: 2`). Before 3.8.0 this hook ran on every `Read` and `Bash` (twice for `Bash`); one PowerShell spawn is ~450 ms on Windows, while skills and commits only need to be read once per turn. Consequence: a skill loaded via `Read` without a prefix (natural-language auto-intent) is not recorded, and a commit is recorded at the end of the turn that made it, after the verify in that turn.
+- the `task-events` hook (`.sh` launcher + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): local skills invoked from the prompt (`/.<name>`) or via the `Skill` tool, files inside the project that were edited (not `.workflow/`/`.git/`), and commits as HEAD **moving between turns**. The session's first event stores a HEAD snapshot in `.workflow/data/task-hook/<claude_session_id>.head`; each `Stop` (or the next prompt, for commits made in a terminal between turns) records the commits since the snapshot — first-parent, oldest first, each with `paths` — then advances the snapshot. Events are v2 (`v: 2`). Before 3.8.0 this hook ran on every `Read` and `Bash` (twice for `Bash`); one PowerShell spawn is ~450 ms on Windows, while skills and commits only need to be read once per turn. Consequence: a skill loaded via `Read` without a prefix (natural-language auto-intent) is not recorded, and a commit is recorded at the end of the turn that made it, after the verify in that turn. The anchor check keeps it that way: at a `Stop` whose reply carries its own `[PLAN]` or `[ANALYSIS RESULT]` block after a plan/analyze run, the hook reads `transcript_path` backward from its end, only as far as the newest `.workflow/run.sh plan|analyze` call (at most 32 MiB), and counts an assistant `Read` tool call made after it whose range overlaps an anchor that run cites; with none, it prints an `[ANCHOR CHECK]` systemMessage, once per run (`runtime/anchor-reads.json`). No other `Stop` reads the transcript, and lines without a `tool_use` are never parsed. A read through the shell is not seen, and an unreadable transcript, or one with no runner call within that limit, warns nothing. `policies.enforcement: off` turns it off.
 
 States: `completed` (verify `derived: pass` with no edit afterwards, committed or not), `open` (has edits, not yet `pass` — committed or not), `read_only` (no edits), `unknown` (events without a session identity). An edit after `pass` opens a new task. A commit containing files of a task that just became `completed` goes into that task's `sequence`; a commit in an `open` task goes into its `sequence` without changing its state. Older events do not carry `derived`, so their task stays `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (distinct commits none of whose copies is claimed by a task; a commit is marked as used only when claimed, so a copy recorded earlier by another session does not hide it from the session that made it), and `recent` (the last 10 tasks with `sequence`). This stream is separate from `usage.jsonl`: local skills and edits are not delegated calls and must not enter budget governance.
 
@@ -1353,7 +1353,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v0.1.0)
+### Liveness worker (v0.2.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 
