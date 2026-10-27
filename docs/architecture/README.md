@@ -16,7 +16,7 @@ gathers repository evidence.
           objective + constraints │  ▲ plan · verdict · questions
                                   ▼  │
 ┌──────────────────────────────────────────────────────────────┐
-│ PRIMARY AGENT                                   Claude Code  │
+│ PRIMARY AGENT                          Claude Code · Agy     │
 │ reasoning · decisions · writes code · final review           │
 └────────────┬──────────────────────────────────────▲──────────┘
              │ .workflow/run <cmd> <task> <session> │ digest
@@ -38,6 +38,13 @@ gathers repository evidence.
 │ enforcement varies by provider    │  │ + hashes              │
 └───────────────────────────────────┘  └───────────────────────┘
 ```
+
+The primary agent runs in a host CLI whose hooks enforce the runtime's rules at the tool
+boundary: Claude Code, or Agy. Both hosts' hooks take their decisions from one module,
+`workflow_policy.py`; what each host can enforce is in the reference, "Hosts". Agy can also be
+the secondary agent: the runtime marks that process with `WORKFLOW_AGENT_ROLE=second_agent`,
+and the host hooks let it through. The prompt's `[WORKFLOW_AGENT]` header is only a cue for
+the model; a hook never trusts text a user could type.
 
 "Read-only" is the secondary agent's role in the contract. How much of it is enforced
 depends on the provider: see [Security](../security.md) and
@@ -90,7 +97,7 @@ validation result are added by the runtime after the adapter returns.
 
 | Step | Component | Source |
 | --- | --- | --- |
-| 2 | intent-gate hooks (Claude hook layer, not the Python runtime) | `src/exoma/_bundle/config/claude/hooks/intent-gate-{set,check}.*` |
+| 2 | intent-gate hooks (host hook layer, not the Python runtime): Claude Code, or the Agy wrapper at `PreInvocation`/`PreToolUse` | `src/exoma/_bundle/config/claude/hooks/intent-gate-{set,check}.*`, `agy-host.py`, `workflow_policy.py` |
 | 4 | generated runner | `core/runtime/scripts.py` |
 | 5 | job submit, detached worker, await | `core/jobs/job_lifecycle.py`, `core/jobs/job_manager.py` |
 | 6 | session and runtime lock | `core/workspace/session_manager.py`, `core/workspace/runtime_lock.py` |

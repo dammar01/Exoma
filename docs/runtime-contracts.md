@@ -24,7 +24,7 @@ nothing in Python. The list is kept explicit so that "configured" is never mista
 - `commands.verify_test_commands`, `commands.verify_test_timeout_seconds` (`core/evidence/verify_tests.py`)
 - `policies.fact_relevant_limit`, `policies.fact_relevant_limits`, `policies.fact_min_relevance`
 - `policies.fact_recurrence_threshold`, `policies.fact_max_claim_chars`, `policies.fact_max_facts`
-- `policies.enforcement`, `policies.write_allowed_outside_root` (read by the `execution-gate` and `status-guard` hooks, not by Python)
+- `policies.enforcement`, `policies.write_allowed_outside_root` (read by the `execution-gate` and `status-guard` hooks and the Agy host wrapper `agy-host.py`, not by Python)
 - `policies.prompt_sources` (read by the `intent-gate-set` hook, not by Python)
 - `policies.graph_leads_enabled`
 - `policies.subagent_fanout_enabled`
@@ -76,13 +76,16 @@ names an existing `.md` whose real path lies inside `~/.claude/skills` (the skil
 how to dispatch; `~` and `/c/...` spellings resolved first), a background task's
 `<temp>/claude.../tasks/<id>.output`, or is a precision read: a project file outside `.workflow/`, at
 most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
-`runtime/delegated.reads` keyed to the marker's `set_at`. That enforcement lives in the agent host, not in this runtime,
-and it fails open. The hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
+`runtime/delegated.reads` keyed to the marker's `set_at`. Under Agy the wrapper `agy-host.py`
+enforces the same marker with a narrower allowance (the runner call and skill reads, no
+precision reads; [reference, "Hosts"](reference.md#hosts)). That enforcement lives in the agent host, not in this runtime,
+and it fails open. The Claude Code hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
 on Windows, named by absolute path in `settings.json`, which also sets
 `env.CLAUDE_CODE_GIT_BASH_PATH`) that runs the Python pinned in `~/.claude/hooks/python.path`
 (else resolves a Python 3.10+ by running it) and execs `workflow_hooks.py <hook>`, which reads
 the payload from stdin as UTF-8 and runs `<hook>.py` with it in memory — never through the
-environment, which Windows caps at 32767 characters per variable; no `.ps1` ships. The full prompt-layer list, with what each contract requires, is in
+environment, which Windows caps at 32767 characters per variable; no `.ps1` ships. Agy runs no launcher: its hooks.json names the interpreter and `agy-host.py`
+directly ([reference, "Hosts"](reference.md#hosts)). The full prompt-layer list, with what each contract requires, is in
 [reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
 What *is* checkable is the second agent's output, because it comes back through the

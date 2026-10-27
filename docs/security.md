@@ -15,12 +15,14 @@ and what remains open, so a reader can tell a decision from a limitation.
 | The working tree | The second agent edits, creates or reverts files during a read-only call | A delegated call is meant to gather evidence, not change code; an unattributed change ends up in a later commit |
 | The primary agent's decisions | Evidence that cites files or lines that do not exist | A plan built on a fabricated anchor looks grounded and is not |
 
-The primary agent (Claude Code) is in scope only as a consumer of evidence. Its own file
-access is governed by Claude Code's permissions, not by Exoma.
+The primary agent (Claude Code or Agy) is in scope only as a consumer of evidence. Its own file
+access is governed by its host's permissions, not by Exoma; Exoma's hooks add the workflow's
+own rules (execution scope, project root, commit approval) on top, as far as each host lets them
+([reference, Hosts](reference.md#hosts)).
 
 ### Trust boundaries
 
-- **Your machine and your Claude Code session** are trusted.
+- **Your machine and your primary agent's session** (Claude Code or Agy) are trusted.
 - **The provider CLI and its vendor** (`opencode`, `codex`, `agy`) are outside the boundary.
   What each one can reach depends on what that CLI lets Exoma restrict (table below).
 - **Delegated output** is untrusted until checked: the runtime verifies every cited

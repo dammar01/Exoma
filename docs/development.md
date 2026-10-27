@@ -24,7 +24,8 @@ python -m pip install --upgrade exoma
 exoma install --apply
 ```
 
-A development checkout never installs onto that `~/.claude`. The hooks and skills it would
+A development checkout never installs onto that `~/.claude`, nor onto `~/.gemini`, where the
+installer also writes the Agy host block and hook when that directory exists. The hooks and skills it would
 write replace the released ones under the same names, so an unfinished change would run in
 every session on the machine, including the one you are using to fix it. If it happens
 anyway, `exoma install --rollback` previews and `exoma install --rollback --apply` restores
@@ -42,7 +43,7 @@ uv run python tools/e2e/e2e.py               # local end-to-end, no provider quo
 ```
 
 To try the installer or a workspace from the checkout, point every home at a temporary
-directory so nothing reaches the real `~/.claude` or user data directory:
+directory so nothing reaches the real `~/.claude`, `~/.gemini` or user data directory:
 
 ```bash
 export AGENT_HOME="$(mktemp -d)"

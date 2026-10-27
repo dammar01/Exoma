@@ -171,6 +171,10 @@ from tests.checks.hook_contract import (
     _test_hook_launchers_resolve_python,
     _test_hooks_run_through_their_launchers,
 )
+from tests.checks.agy_host import (
+    _test_agy_host_contract,
+    _test_agy_host_install_merges,
+)
 from tests.checks.os_resolvers import (
     _test_entry_points_refuse_an_old_python,
     _test_find_bash_and_os_locations,
@@ -221,6 +225,8 @@ def run_tests() -> None:
     _test_intent_gate_non_ascii_root()
     _test_hooks_run_through_their_launchers()
     _test_hook_launchers_resolve_python()
+    _test_agy_host_contract()
+    _test_agy_host_install_merges()
     _test_gate_k5_fixtures()
     _test_entry_points_refuse_an_old_python()
     _test_find_python_runs_each_candidate()

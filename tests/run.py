@@ -139,6 +139,10 @@ from tests.checks.hook_contract import (  # noqa: E402
     _test_hook_launchers_resolve_python,
     _test_hooks_run_through_their_launchers,
 )
+from tests.checks.agy_host import (  # noqa: E402
+    _test_agy_host_contract,
+    _test_agy_host_install_merges,
+)
 from tests.checks.os_resolvers import (  # noqa: E402
     _test_entry_points_refuse_an_old_python,
     _test_find_bash_and_os_locations,
@@ -285,6 +289,8 @@ SUITES: dict[str, tuple] = {
     "gate-runner-tamper": (_test_intent_gate_runner_tamper, "while armed, a write to the runner scripts is refused; other writes pass"),
     "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the hooks read the session registry as UTF-8 and the gate takes a non-ASCII project root in a runner path"),
     "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout; the DEC-068 failures replay clean"),
+    "agy-host": (_test_agy_host_contract, "the Agy host wrapper answers every PreToolUse with a decision, fails open, passes [WORKFLOW_AGENT] turns, and gates as the Claude hooks do"),
+    "agy-host-install": (_test_agy_host_install_merges, "the installer merges only the `exoma` hook name into hooks.json and only the EXOMA-HOST block into GEMINI.md"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
     "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),

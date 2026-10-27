@@ -6,7 +6,9 @@ your machine. This page covers the one decision it asks of you.
 
 ## Choose a mode: always on, or only when called
 
-This is the decision that changes how Claude Code feels day to day.
+This is the decision that changes how Claude Code feels day to day. It is a Claude Code
+install option; Agy reads the same workflow instructions through its own block, and what its
+hooks enforce is in the [reference, Hosts](../reference.md#hosts).
 
 | | Auto-intent (default) | Command-only |
 | --- | --- | --- |

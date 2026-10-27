@@ -1,0 +1,18 @@
+{
+  "exoma": {
+    "PreInvocation": [
+      { "type": "command", "command": "{{PYTHON}} {{HOME}}/.claude/hooks/agy-host.py PreInvocation", "timeout": 30 }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "{{PYTHON}} {{HOME}}/.claude/hooks/agy-host.py PreToolUse", "timeout": 30 }
+        ]
+      }
+    ],
+    "Stop": [
+      { "type": "command", "command": "{{PYTHON}} {{HOME}}/.claude/hooks/agy-host.py Stop", "timeout": 30 }
+    ]
+  }
+}

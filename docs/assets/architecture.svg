@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="712" viewBox="0 0 1200 712" role="img" aria-labelledby="t d">
   <title id="t">Exoma architecture</title>
-  <desc id="d">The developer briefs the primary agent (Claude Code) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, and shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth; the primary agent retains the final decision.</desc>
+  <desc id="d">The developer briefs the primary agent (Claude Code or Agy) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth.</desc>
   <defs>
     <style>
       .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
@@ -36,7 +36,7 @@
   <!-- primary agent -->
   <rect x="431" y="180" width="381" height="112" rx="8" fill="#E7EFEE" stroke="#4F6F73" stroke-width="2"/>
   <text x="452" y="206" class="mono" font-size="12" font-weight="700" fill="#3F6F73">PRIMARY AGENT</text>
-  <text x="452" y="240" class="sans" font-size="27" font-weight="800" fill="#1F3A44">Claude Code</text>
+  <text x="452" y="240" class="sans" font-size="27" font-weight="800" fill="#1F3A44">Claude Code · Agy</text>
   <text x="452" y="266" class="sans" font-size="13.5" fill="#4F6266">Reasons · writes code · makes final decision</text>
 
   <path class="flow" d="M343 221 H427" marker-end="url(#a)"/>

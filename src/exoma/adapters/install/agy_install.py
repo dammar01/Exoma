@@ -20,8 +20,11 @@ What was probed against the shipped binary, in `--output-format stream-json` whe
   that mode refuses every tool. A write test left no file behind, which sounds like the
   answer until the same run refuses a plain READ of a source file and returns an empty
   response. A second_agent that cannot read is not a second_agent.
-* There is no config directory to write a policy into. agy keeps `bin/` under the user's
-  home and nothing else; no JSON, no TOML, no per-project layer.
+* There is no config this installer can write a second-agent policy into. Releases up to
+  1.1.13 kept only `bin/` under the home; 1.4.7 reads ~/.gemini (permissions, hooks), but
+  that config is global — it binds the user's own agy sessions as much as the second
+  agent's — and the Exoma host hooks there let a process the adapter marked with
+  WORKFLOW_AGENT_ROLE=second_agent through.
 
 So `permissions_enforced` is 0 and `permissions_declared` is 0 as well — unlike codex,
 there is not even a flag being sent hopefully. What stands in for a boundary is
@@ -89,9 +92,10 @@ def install_project_config(project_root: Path) -> dict:
         "removing `--dangerously-skip-permissions` is not the fix: that yields "
         "`request-review`, which refuses every tool including reads, leaving a provider "
         "that cannot gather evidence at all. The choice is all tools or none",
-        "agy keeps no config directory (only `bin/` under the user's home), so there is no "
-        "file for this installer to write a policy into and none for a future release to "
-        "read one from",
+        "agy's own config (~/.gemini: settings permissions, config/hooks.json) is global: a "
+        "deny written there for the second agent would bind the user's own agy sessions too, "
+        "and the Exoma host hooks installed there let the second agent's process "
+        "(WORKFLOW_AGENT_ROLE=second_agent) through untouched. Neither bounds the second agent",
         "`core/agy_guard.py` diffs the working tree around each call and reports what "
         "changed. That is DETECTION: the write has already happened when it is seen, it "
         "cannot see files matched by .gitignore, and outside a git repository it reports "

@@ -7,6 +7,8 @@ change?" is to ask the same code that performs the change.
 from pathlib import Path
 
 from exoma.installer.base import (
+    AGY_HOST_HOOKS,
+    AGY_HOST_INSTRUCTIONS,
     DIST_CONFIG,
     HOME,
     MARKERS,
@@ -142,6 +144,10 @@ def _bundle_stale(manifest: dict) -> list[str]:
     by_path = _entries_by_path(manifest)
     stale: list[str] = []
     sources = [(source, key) for source, _dest, key in _targets()]
+    # The Agy host ships whether or not this machine has Agy: stamped either way.
+    for key in (AGY_HOST_INSTRUCTIONS, AGY_HOST_HOOKS):
+        if (DIST_CONFIG / key).exists() and all(k != key for _s, k in sources):
+            sources.append((DIST_CONFIG / key, key))
     settings_src = DIST_CONFIG / "claude" / "settings.template.json"
     if settings_src.exists():
         sources.append((settings_src, "claude/settings.template.json"))
@@ -172,7 +178,11 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     installed_drift: list[str] = []
     installed_missing: list[str] = []
 
-    checks = list(_targets())
+    # hooks.json is a merge of one hook name, like settings.json: bundle-check only.
+    checks = [(s, None if k == AGY_HOST_HOOKS else d, k) for s, d, k in _targets()]
+    for key in (AGY_HOST_INSTRUCTIONS, AGY_HOST_HOOKS):
+        if (DIST_CONFIG / key).exists() and all(k != key for _s, _d, k in checks):
+            checks.append((DIST_CONFIG / key, None, key))
     settings_src = DIST_CONFIG / "claude" / "settings.template.json"
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.

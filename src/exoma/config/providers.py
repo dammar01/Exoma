@@ -188,11 +188,17 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "boundary": {"reads": "unbounded", "writes": "sandboxed"},
     },
     "agy": {
-        # agy keeps nothing under the user's home but `bin/` — no config directory, no
-        # policy file, nothing to merge. The keys below are declared anyway because
-        # `install.py` and `installer/check.py` index every bundle positionally and guard
-        # the FILE with .exists(); dropping them turns "this provider ships none" into a
-        # KeyError. The paths point at files that are deliberately absent.
+        # As a second agent, nothing to merge: no policy file bounds it (see the read-boundary
+        # note below). The keys below are declared anyway because `install.py` and
+        # `installer/check.py` index every bundle positionally and guard the FILE with
+        # .exists(); dropping them turns "this provider ships none" into a KeyError. The paths
+        # point at files that are deliberately absent.
+        #
+        # Agy itself does keep config under ~/.gemini (GEMINI.md, skills, config/hooks.json),
+        # measured on agy 1.4.7 (CASE-029, a draft in agent-workflow). That surface belongs to
+        # Agy as a HOST, installed from agy-host/ by installer/base.py, not to this bundle.
+        # It reaches a second-agent call too: Agy loads it on every run, which is why the
+        # adapter marks its process with WORKFLOW_AGENT_ROLE.
         "home_dir": ".agy",
         "instructions": ("AGENTS.md", "AGENTS.md"),
         # No subagent roster: `agy agents` on a stock install prints an empty list, so
@@ -209,7 +215,9 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # The provider CLI release this workflow version was tested against (`<cli> --version`).
         # Advisory: a different release still runs, and doctor and every call's meta mark it
         # `untested` (core/provider/versions.py). Provider releases have broken the workflow
-        # before (CASE-015); this is the release to pin back to when one does.
+        # before (CASE-015); this is the release to pin back to when one does. The host hooks
+        # were calibrated on 1.4.7; the second-agent path has not been re-run there, so this
+        # stays at the release it was tested on.
         "stable_version": "1.1.13",
         # `--agent` exists and lists nothing; selecting a persona that does not exist
         # would fail the call for no gain.

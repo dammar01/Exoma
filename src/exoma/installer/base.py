@@ -31,8 +31,19 @@ _SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:E
 
 # The marker strings are the workflow's, the file they sit in is the provider's — so the
 # key is derived from the bundle while the pair stays literal.
+# The Agy host: its instruction block in ~/.gemini/GEMINI.md and its hook registration in
+# ~/.gemini/config/hooks.json (docs/reference.md, "Hosts"). Installed only where Agy keeps a
+# ~/.gemini directory, so a machine without Agy gets no new directory.
+AGY_HOST_INSTRUCTIONS = "agy-host/GEMINI.md"
+AGY_HOST_HOOKS = "agy-host/hooks.template.json"
+# The hook name Exoma owns inside hooks.json; every other name in that file is the user's.
+AGY_HOST_HOOK_NAME = "exoma"
+
 MARKERS = {
     "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
+    # Not WORKFLOW-MAIN-AGENT: a GEMINI.md may already hold another workflow's block, and a
+    # shared marker pair would splice over it.
+    AGY_HOST_INSTRUCTIONS: ("EXOMA-HOST:START", "EXOMA-HOST:END"),
     **{
         f"{name}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
         for name, bundle in PROVIDER_BUNDLES.items()
@@ -380,6 +391,82 @@ def _read_text_lenient(path: Path) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def agy_host_present() -> bool:
+    return (HOME / ".gemini").is_dir()
+
+
+def _agy_hook_value(value, python: str, home: str):
+    """The template with {{PYTHON}} and {{HOME}} filled in, string by string.
+
+    Filled after parsing, not as text: a Windows home holds backslashes, which a text
+    substitution would leave as invalid JSON escapes.
+    """
+    if isinstance(value, dict):
+        return {k: _agy_hook_value(v, python, home) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_agy_hook_value(v, python, home) for v in value]
+    if isinstance(value, str):
+        return value.replace("{{PYTHON}}", python).replace("{{HOME}}", home)
+    return value
+
+
+def agy_hook_entry(src: Path) -> dict:
+    """The `exoma` hook definition this install writes into ~/.gemini/config/hooks.json."""
+    template = json.loads(src.read_text(encoding="utf-8"))
+    return _agy_hook_value(
+        template[AGY_HOST_HOOK_NAME], Path(sys.executable).as_posix(), HOME.as_posix()
+    )
+
+
+# A space splits the unquoted command; the rest are cmd.exe operators or expansions.
+_AGY_UNSAFE_PATH_CHARS = ' &%^|<>()"'
+
+
+def _install_agy_hooks(
+    src: Path, dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path
+) -> None:
+    """Merge Exoma's hook definition into Agy's hooks.json, leaving every other name alone.
+
+    Agy runs hook commands through cmd.exe on Windows and passes quotes through literally,
+    so a command cannot quote its paths: an interpreter or home path holding a space or a
+    cmd.exe metacharacter is refused here rather than installed as a hook that fails every
+    tool call. A hooks.json that is not a JSON object is refused too: it is the user's
+    file, and replacing it with one holding only `exoma` would discard what was there.
+    """
+    entry = agy_hook_entry(src)
+    paths = (Path(sys.executable).as_posix(), HOME.as_posix())
+    if any(ch in path for path in paths for ch in _AGY_UNSAFE_PATH_CHARS):
+        plan.add("refused", dest, "a path an Agy hook command cannot carry unquoted")
+        plan.warn(
+            f"{dest}: the Agy host hooks were not installed — the interpreter ({paths[0]}) or "
+            f"the home ({paths[1]}) holds a space or one of {_AGY_UNSAFE_PATH_CHARS.strip()}, "
+            "and Agy runs hook commands unquoted. Install from an interpreter on a plain path."
+        )
+        return
+    exists = dest.exists()
+    try:
+        current = json.loads(_read_text_lenient(dest)) if exists else {}
+    except ValueError:
+        plan.add("refused", dest, "not valid JSON")
+        plan.warn(f"{dest}: refused — not valid JSON; fix or remove it, then install again")
+        return
+    if not isinstance(current, dict):
+        plan.add("refused", dest, "not a JSON object")
+        plan.warn(f"{dest}: refused — its root is not a JSON object; fix or remove it, then install again")
+        return
+    if current.get(AGY_HOST_HOOK_NAME) == entry:
+        plan.add("unchanged", dest)
+        return
+    merged = {**current, AGY_HOST_HOOK_NAME: entry}
+    pre_sha256 = _file_sha256(dest)
+    saved = _backup(dest, backup_root, plan, apply, key) if exists else None
+    plan.add("merge" if exists else "create", dest, f"hook `{AGY_HOST_HOOK_NAME}`")
+    if apply:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        _record("merge" if exists else "create", dest, key, saved, pre_sha256)
+
+
 def _install_text(
     src: Path,
     dest: Path,
@@ -390,6 +477,9 @@ def _install_text(
     project_root: Path | None,
     only_command: bool = False,
 ) -> None:
+    if key == AGY_HOST_HOOKS:
+        _install_agy_hooks(src, dest, key, plan, apply, backup_root)
+        return
     incoming = _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
     if key == "claude/CLAUDE.md":
         incoming = _apply_intent_mode(incoming, only_command)
@@ -479,6 +569,12 @@ def _targets() -> list[tuple[Path, Path, str]]:
             dir_families.append(
                 (name, bundle["agents_dir"], provider_home / bundle["agents_dir"])
             )
+    # The Agy host, where Agy is installed: its hooks run from ~/.claude/hooks (agy-host.py
+    # beside workflow_policy.py), so only the instruction block and the registration land
+    # under ~/.gemini.
+    if agy_host_present():
+        mapping.append((DIST_CONFIG / AGY_HOST_INSTRUCTIONS, HOME / ".gemini" / "GEMINI.md", AGY_HOST_INSTRUCTIONS))
+        mapping.append((DIST_CONFIG / AGY_HOST_HOOKS, HOME / ".gemini" / "config" / "hooks.json", AGY_HOST_HOOKS))
     # One set of files for every OS: hooks are bash launchers (Git Bash on Windows) beside
     # the .py they run.
     for family, sub, dest_dir in dir_families:

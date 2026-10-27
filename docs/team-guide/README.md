@@ -1,6 +1,7 @@
 # Team guide
 
-Practical guidance for developers using Exoma with Claude Code. It explains how
+Practical guidance for developers using Exoma with Claude Code or Agy as the primary agent
+(the "host"; what each one enforces: [reference, Hosts](../reference.md#hosts)). It explains how
 and when to use it, not how it works inside; for exact behavior, follow the links into the
 [reference](../reference.md).
 

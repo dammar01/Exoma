@@ -32,7 +32,8 @@ flag names suggest.
    `run_command` present throughout. Dropping `--dangerously-skip-permissions` yields
    `permission_mode: request-review`, which refuses every tool — a write test left no
    file behind, and a plain READ of a source file failed the same way, returning an empty
-   response. agy keeps no config directory to install a policy into.
+   response. The config agy 1.4.7 reads (~/.gemini) is global, so a policy there would
+   bind the user's own agy sessions as well (adapters/install/agy_install.py).
 
    The choice is therefore binary: every tool including writes, or no tools at all and a
    provider that cannot gather evidence. This adapter takes the first and pairs it with
@@ -612,6 +613,12 @@ class AgyAdapter:
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
+        # Agy loads the same ~/.gemini hooks and GEMINI.md as a second agent as it does as the
+        # user's host. This variable, inherited by Agy's hooks, is what tells the host hooks
+        # this is the runtime's call (claude/hooks/workflow_policy.py is_second_agent_turn).
+        # The prompt's [WORKFLOW_AGENT] header only cues the model: a user can type it, so
+        # no hook trusts it.
+        env["WORKFLOW_AGENT_ROLE"] = "second_agent"
 
         self.last_call_meta = _sanitize_meta(
             {"phase": phase, **_argv_meta(args), "cwd": cwd, "timeout_seconds": timeout}

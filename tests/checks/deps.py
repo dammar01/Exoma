@@ -43,6 +43,13 @@ _OPTIONAL_EXTRAS = {
 }
 _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 
+# Shipped modules imported by their bare name from the directory they are installed into:
+# the hooks run standalone from ~/.claude/hooks and reach workflow_policy.py beside them.
+# First-party, but only from that directory, and only while the sibling exists.
+_HOOK_SIBLINGS = {
+    "workflow_policy": "src/exoma/_bundle/config/claude/hooks/",
+}
+
 
 def _python_files() -> list[Path]:
     found: list[Path] = []
@@ -129,6 +136,10 @@ def _test_runtime_is_stdlib_only() -> None:
     for path in files:
         for root in sorted(_imported_roots(path)):
             if root in stdlib or root in _INTERNAL:
+                continue
+            sibling_dir = _HOOK_SIBLINGS.get(root)
+            if (sibling_dir and path.relative_to(REPO_ROOT).as_posix().startswith(sibling_dir)
+                    and (REPO_ROOT / sibling_dir / f"{root}.py").is_file()):
                 continue
             offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {root}")
 

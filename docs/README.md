@@ -13,7 +13,7 @@ per-project setup, updating, uninstalling; it carries the exact commands so a ne
 them in one place) and [security.md](security.md) (what each provider can read and change).
 
 Working on Exoma itself: [development.md](development.md) (the checkout, tests, keeping a
-development build away from your daily `~/.claude`, and staging a release in
+development build away from your daily `~/.claude` and `~/.gemini`, and staging a release in
 agent-workflow).
 
 Supporting documents: [limitations.md](limitations.md),

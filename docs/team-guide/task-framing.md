@@ -70,5 +70,5 @@ A few examples; the shipped Claude Code configuration holds the full map.
 | plan | "I want to add …", "how should we build …", "design …" |
 | verify | "check what was just done", "is it correct now" |
 
-A mismatch is harmless: Claude Code prints `[INTENT] …` before it starts, so you can stop it
+A mismatch is harmless: the primary agent prints `[INTENT] …` before it starts, so you can stop it
 and rephrase, or use the explicit `/.plan`, `/.explore`, and so on.

@@ -73,7 +73,8 @@ Exoma organizes the processes and resources that support that work. The aim is n
 replace the model or to make the whole process fully automatic; it is to let the AI complete
 a task more effectively without a person directing every step or conclusion.
 
-The current implementation targets **coding agents**, with Claude Code as the primary agent.
+The current implementation targets **coding agents**, with Claude Code or Agy as the primary
+agent ([hosts](docs/reference.md#hosts)).
 It is installed as a Python package (`pip install exoma`) with a CLI (`exoma`), and separates
 work that needs **broad repository inspection** from work that needs the **primary agent's
 reasoning and implementation context**. A coding agent on a mature repository spends much of
@@ -83,7 +84,7 @@ structured evidence: a digest, `file:line` anchors, and a reference to the full 
 disk.
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/architecture.svg" alt="Exoma architecture. The developer briefs the primary agent (Claude Code) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
+<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/architecture.svg" alt="Exoma architecture. The developer briefs the primary agent (Claude Code or Agy) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
 </p>
 
 <sub>The primary agent reasons and writes the code; the developer answers open questions and
@@ -106,7 +107,7 @@ agent can be incomplete or wrong even when its output looks plausible.
 
 | Role | Who | Responsibility |
 | --- | --- | --- |
-| **Primary agent** | Claude Code (the integration target) | Reasoning, decisions, code changes, and final review |
+| **Primary agent** | Claude Code, or Agy ([hosts](docs/reference.md#hosts)) | Reasoning, decisions, code changes, and final review |
 | **Workflow runtime** | The `exoma` package, Python standard library only | Routing, sessions and locks, policy, prompt building, redaction, evidence contracts, digests, persistence, recovery |
 | **Secondary agent** | `opencode`, `codex`, or `agy` | Repository exploration, analysis, planning, and verification evidence |
 
@@ -197,11 +198,11 @@ exoma install                    # dry run: read what it will change in ~/.claud
 exoma install --apply
 ```
 
-Then, in a project, run `/.init` in Claude Code (or `exoma init --work-dir .`), and `/.doctor`.
+Then, in a project, run `/.init` in the primary agent (or `exoma init --work-dir .`), and `/.doctor`.
 A project that already has a `.workflow/` from agent-workflow is taken over by `/.upgrade`.
 Details, modes and undo: [installation guide](docs/installation.md).
 
-Ask in natural language; the primary agent routes it:
+Ask in natural language; the primary agent routes it (shown in Claude Code):
 
 ```text
 you:          where is the authentication logic in this project?
@@ -231,9 +232,9 @@ concurrent sessions would share an identifier and overwrite each other's state.
 | `verify-browser` | delegated | Verify a running app in a real browser: the secondary agent drafts the scenario and reviews the evidence; a runtime player drives Playwright |
 | `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
 
-Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a delegated
+Implementation itself (`/.execute`) is a primary-agent skill, not a delegated
 command; it opens and closes a runtime execution (`plan-record`, `execute-begin`,
-`execute-end`) whose scope a hook enforces for Edit/Write. Asynchronous job commands and the remaining local commands are in the
+`execute-end`) whose scope the host's hooks enforce for file writes. Asynchronous job commands and the remaining local commands are in the
 [full reference](docs/reference.md#command).
 
 Setup problems and their fixes: [installation guide](docs/installation.md#when-something-is-wrong).

@@ -251,9 +251,16 @@
       "component": "prompt_bundle"
     },
     {
+      "path": "claude/hooks/agy-host.py",
+      "sha256": "f6297d080bc3fef614bafdc21d2cbb6ffd425d4047e8c7b9099babdaec3379c2",
+      "bytes": 14543,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
       "path": "claude/hooks/execution-gate.py",
-      "sha256": "51421900352182b6997215dd3b85952b2c9ecbf1ad6a40fb50b35218520a44ba",
-      "bytes": 9859,
+      "sha256": "e0af882b570409b9983be81cd3412978f4dffb2f9f592a63abe6aad707a06dd5",
+      "bytes": 4459,
       "merge": "replace",
       "component": "runtime"
     },
@@ -294,8 +301,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-set.py",
-      "sha256": "b315ed424337a8fbb6a228b10db853b4af78d2525f159c38cf0aa165bf53bd84",
-      "bytes": 13682,
+      "sha256": "cc47f5926de4a178f502a3e4edfb8bbf7048071bea06d42d2331739379bac9bf",
+      "bytes": 7788,
       "merge": "replace",
       "component": "runtime"
     },
@@ -329,8 +336,8 @@
     },
     {
       "path": "claude/hooks/status-guard.py",
-      "sha256": "7d147ea465789e548e7cffa7bc95fe3c130d034e5ccbc865f4b1bcf98603c343",
-      "bytes": 6060,
+      "sha256": "0424bb9fefb72aa6301e124947ac308b7f3e24e63f15a556dd19fa3c30e0d915",
+      "bytes": 3743,
       "merge": "replace",
       "component": "runtime"
     },
@@ -373,6 +380,13 @@
       "path": "claude/hooks/workflow_hooks.py",
       "sha256": "98c865e43940c3416e1a1183e5ff9c19580265a9c804faee30c369de84f7f1cd",
       "bytes": 4497,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "claude/hooks/workflow_policy.py",
+      "sha256": "6fb90437a0dc00edfff7a937ec9e1b85baeb974d845c8a90f4094f272de45431",
+      "bytes": 18057,
       "merge": "replace",
       "component": "runtime"
     },
@@ -440,6 +454,20 @@
       "component": "runtime"
     },
     {
+      "path": "agy-host/GEMINI.md",
+      "sha256": "ec01ced3898f41c3f0362ee4ff6bda31873e98518c8365c4142119c99ebbc6be",
+      "bytes": 2474,
+      "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "agy-host/hooks.template.json",
+      "sha256": "19d9fe3bde2391aea8c908c166b14a8371ae5d277577771173edc01b7bfb73a1",
+      "bytes": 510,
+      "merge": "merge",
+      "component": "runtime"
+    },
+    {
       "path": "opencode/opencode.template.json",
       "sha256": "7ea8a6e301fdeb2ecd024851c315a9e74927be158faa283c8775557b48b5d023",
       "bytes": 2085,
@@ -460,6 +488,8 @@
     "claude/commands": "{{HOME}}/.claude/commands",
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
+    "agy-host/GEMINI.md": "{{HOME}}/.gemini/GEMINI.md",
+    "agy-host/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
     "opencode/agents": "{{HOME}}/.config/opencode/agents",
     "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",

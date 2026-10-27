@@ -57,6 +57,9 @@ TARGETS = {
     "claude/commands": "{{HOME}}/.claude/commands",
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
+    # The Agy host (installer/base.py AGY_HOST_*), installed only where ~/.gemini exists.
+    "agy-host/GEMINI.md": "{{HOME}}/.gemini/GEMINI.md",
+    "agy-host/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
     **_provider_targets(),
 }
 
@@ -96,6 +99,9 @@ def _dist_files() -> list[str]:
             ]
     if (DIST_CONFIG / "claude" / "settings.template.json").is_file():
         paths.append("claude/settings.template.json")
+    for rel in ("agy-host/GEMINI.md", "agy-host/hooks.template.json"):
+        if (DIST_CONFIG / rel).is_file():
+            paths.append(rel)
     for name, bundle in PROVIDER_BUNDLES.items():
         for key in ("global_config", "project_config"):
             entry = bundle.get(key)
@@ -132,7 +138,7 @@ def _component(rel: str) -> str:
         "/skills/" in rel
         or "/commands/" in rel
         or "/agents/" in rel
-        or rel == "claude/CLAUDE.md"
+        or rel in ("claude/CLAUDE.md", "agy-host/GEMINI.md")
         or rel in instructions
     ):
         return "prompt_bundle"

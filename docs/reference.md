@@ -558,6 +558,82 @@ The installer is tested against a **temporary HOME**, not the machine that produ
 
 ---
 
+## Hosts
+
+The host is the CLI the developer talks to: it runs the main agent, and its hooks enforce the
+runtime's rules at the tool boundary. Claude Code is the reference host. Agy (Antigravity CLI)
+is the second. The decisions both hosts enforce live once, in
+`~/.claude/hooks/workflow_policy.py` (write root and scope, commit approval, the user's
+approvals, intent classification, the pre-flight marker, the `[EXECUTION RESULT]` claim); each
+host keeps only its payload parsing and its answer format.
+
+| Capability | Claude Code | Agy (as calibrated, CASE-029) |
+|---|---|---|
+| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, which points at the `CLAUDE.md` block and skills with a tool-name table |
+| Commands | skills + slash commands | prompt only: the skill file is read when `/.<name>` is typed |
+| Prompt routing | `UserPromptSubmit` | `PreInvocation` with `invocationNum` 0, prompt from `lastUserInput` |
+| Context injection | `additionalContext` | `injectSteps` `ephemeralMessage` from `PreInvocation` (not `SessionStart`: ignored) |
+| Tool gate | `PreToolUse`, exit 2 blocks | `PreToolUse`, `decision: deny`; `{}` also denies, so every answer names a decision |
+| Session identity | `SessionStart` + `session_registry.json` | `conversationId` + `~/.gemini/exoma_session_registry.json`; a known id is a resume |
+| Questions | `AskUserQuestion` | `ask_question` (not calibrated) |
+| Background jobs | `run_in_background` | asynchronous `run_command`, `/tasks` (not calibrated) |
+| End of turn | `Stop`: status guard warns | `Stop`: status guard sends the reply back once (`decision: continue`) |
+| Graph refresh, task telemetry, statusline | `Stop` / `PostToolUse` / `statusLine` | not registered |
+
+**Agy's hook contract, as measured** (CASE-029, a draft in agent-workflow). Hooks load from
+`~/.gemini/config/hooks.json` and the workspace's `.agents/hooks.json`. Every payload carries
+`conversationId`, `workspacePaths`, `transcriptPath`, `modelName` and `lastUserInput` (the
+user's prompt, undocumented). A resume with `--conversation <id>` keeps the id and does not fire
+`SessionStart`. A hook that crashes or exits non-zero fails the tool call; exit 2 means
+nothing. On Windows the command runs through `cmd.exe`, which receives quotes literally, so a
+command cannot quote a path.
+
+**The wrapper**, `~/.claude/hooks/agy-host.py <Event>`, registered under the hook name `exoma`
+for `PreInvocation`, `PreToolUse` (matcher `*`) and `Stop`:
+
+- `PreInvocation`, turn start: binds the conversation to a `MAIN_SESSION_ID` (the first
+  workspace path holding `.workflow/` is the project root), writes `execute.token` and
+  `commit.marker` as `intent-gate-set` does, arms or clears `delegated.marker`, and injects
+  `[SESSION BINDING]` plus any `[INTENT HINT]`.
+- `PreToolUse`: while `delegated.marker` exists, only one plain runner call
+  (`[bash] <root>/.workflow/{run,check,inspect}.sh`, shell metacharacters only inside single
+  quotes) and reads of `~/.claude/skills/*.md` pass; there is no precision-read exception. The
+  execution gate applies to the write tools (`write_to_file`, `replace_file_content`,
+  `multi_replace_file_content`, `sed_file`, `notebook_edit`, and any tool named with
+  `write`/`replace`/`edit`/`create`) and `git commit` through `run_command`, with
+  `~/.gemini` and `~/.claude` writable from any project. `policies.enforcement` applies as it
+  does for Claude Code; `warn` answers `allow` with the message as the reason.
+- `Stop`: an `[EXECUTION RESULT]` in the last model response (`source: MODEL`,
+  `PLANNER_RESPONSE` in `transcriptPath`) that claims more than `verification: not_run` gets
+  `decision: continue` once per turn.
+- Fail-open, against Agy's default: any error is appended to `~/.gemini/exoma-hook-errors.log`
+  and answered with `allow` (`{}` for the other events).
+
+**Role.** Agy loads `~/.gemini` on every run, so a second-agent call sees the host block and
+the host hooks too. The hooks decide the role from the environment alone: a process with
+`WORKFLOW_AGENT_ROLE=second_agent` (set by the agy adapter, inherited by Agy's hooks) is the
+runtime's call, and the wrapper allows it untouched; `intent-gate-set` skips it the same way.
+The prompt's `[WORKFLOW_AGENT]` header (the runtime's, every provider) is not trusted by any
+hook, because a user can type or paste it: a user prompt that opens with it is gated like any
+other. The header stays a prompt-level cue: the `GEMINI.md` block tells the model to ignore
+itself on such a call. None of this bounds the second agent: agy's boundary stays `unbounded`
+("Choosing a provider").
+
+**Install.** Where `~/.gemini` exists, the installer splices the `EXOMA-HOST` block into
+`~/.gemini/GEMINI.md` (another workflow's block is left beside it) and merges the `exoma` name
+into `~/.gemini/config/hooks.json` (other names are the user's). The hook command is
+`<install interpreter> <home>/.claude/hooks/agy-host.py <Event>`, unquoted; when either path
+holds a space or a `cmd.exe` metacharacter (`& % ^ | < > ( ) "`) the hooks are refused with a
+warning instead, as is a `hooks.json` that is not valid JSON or whose root is not an object
+(the file is left as it is). `--check` stamps both files in the
+bundle on every machine and compares the installed block, not `hooks.json`.
+
+**Limits.** Calibrated on one release, on Windows, in print mode. `lastUserInput` is
+undocumented: without it routing and the role header are lost, and the role then rests on
+`WORKFLOW_AGENT_ROLE`. `ask_question` and background tasks were not exercised.
+
+---
+
 ## Bootstrap
 
 The runtime is the installed `exoma` package, **not** something in the target project. Any

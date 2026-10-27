@@ -7,7 +7,7 @@ uninstalling, and [installation.md](installation.md) helps you choose a mode. In
 
 1. Clone the repository to a permanent location.
 2. Run the global install once per machine. Do not skip it: it installs the Claude Code
-   skills and hooks **and** the permission block for the secondary agent. How much that
+   skills and hooks (and, where Agy is installed, its host block and hook) **and** the permission block for the secondary agent. How much that
    block actually enforces depends on the provider: with `opencode` writes are prevented;
    with `codex` the boundary is unproven; with `agy` changes are only detected afterwards.
 3. Run `/.init` once per project, on your own machine (`/.upgrade` when the project already
@@ -19,20 +19,20 @@ Which secondary agent to choose, and what each one enforces: [security](../secur
 
 ## Day to day
 
-You do not type runtime commands. You talk to Claude Code normally, and it recognizes what
-kind of request you are making:
+You do not type runtime commands. You talk to the primary agent (Claude Code or Agy) normally,
+and it recognizes what kind of request you are making:
 
-| You ask… | Claude Code runs | What comes back |
+| You ask… | The primary agent runs | What comes back |
 | --- | --- | --- |
 | "Where is …", "which files handle …" | `explore` | A map: entry points, files, ownership |
 | "Why does …", "is it safe to …" | `analyze` | A causal explanation, no code changes |
 | "I want to add …", "plan how to …" | `plan` | Steps, risks, open questions, options |
-| "Implement it", "go ahead" | `/.execute`, with your explicit approval | Code changes, made by Claude Code itself |
+| "Implement it", "go ahead" | `/.execute`, with your explicit approval | Code changes, made by the primary agent itself |
 | "Is it correct now?", "check what was just done" | `verify` | A verdict with evidence |
 | "Test it in the browser", "click through the login flow" | `verify-browser` | A verdict from a real browser run, reviewed by the secondary agent; or, when the drafted test is blocked or invalid, the reason it could not run ([reference](../runtime-contracts.md)) |
 
-Before running a delegated command, Claude Code prints one line such as
-`[INTENT] explore — location question`. If it guessed wrong, press Esc and rephrase, or use
+Before running a delegated command, the primary agent prints one line such as
+`[INTENT] explore — location question`. If it guessed wrong, stop it (Esc in Claude Code) and rephrase, or use
 the explicit form (`/.explore`, `/.analyze`, `/.plan`, `/.verify`, `/.verify-browser`). The full list of trigger
 phrases lives in the shipped Claude Code configuration (`src/exoma/_bundle/config/claude/CLAUDE.md`,
 "Command registry").

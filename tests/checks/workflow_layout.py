@@ -74,7 +74,9 @@ def _check_unmigrated_workspace_stays_where_its_data_is() -> None:
 
 def _check_hooks_share_the_rule() -> None:
     hooks = _REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
-    for name in ("intent-gate-set", "intent-gate-check", "workflow-statusline"):
+    # intent-gate-set, execution-gate, status-guard and agy-host take the rule from
+    # workflow_policy.py; the other two still carry their own copy.
+    for name in ("workflow_policy", "intent-gate-check", "workflow-statusline"):
         for suffix in ("py",):
             text = (hooks / f"{name}.{suffix}").read_text(encoding="utf-8")
             listed = re.findall(r"['\"]([\w.-]+(?:\.jsonl)?)['\"]", text[text.find("data") :])

@@ -7,20 +7,16 @@
 # (consumed by `exoma --command execute-begin`) and commit.marker for a turn that asks
 # to commit (read by execution-gate.py).
 # MAIN_SESSION_ID resolved from $HOME/.claude/session_registry.json. Never blocks (exit 0).
-import os, sys, json, re, datetime
+import os, sys, json, datetime
 
-
-def workflow_data_dir(root):
-    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
-    # the .workflow root while a v3.5.x-layout workspace still keeps its data there, data/ otherwise.
-    wf = os.path.join(root, ".workflow")
-    data = os.path.join(wf, "data")
-    if os.path.isdir(data):
-        return data
-    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
-        if os.path.exists(os.path.join(wf, name)):
-            return wf
-    return data
+# Approvals, intent classification and the marker live in workflow_policy.py beside this
+# file, shared with the Agy host wrapper; this hook keeps what is Claude Code's own: the
+# prompt `source` labels, host-generated turns, and additionalContext.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from workflow_policy import (  # noqa: E402
+    explicit_command, intent_hint, is_second_agent_turn, load_intent_map, nl_command, record_approvals,
+    runtime_dir as _runtime_dir, set_delegated_marker, user_text, without_reminders,
+)
 
 
 # Prompt `source` values Claude Code uses for turns the user did not type. `user` and `sdk`
@@ -34,24 +30,6 @@ _USER_SOURCES = ("user", "sdk")
 # How a host-generated turn opens once any leading <system-reminder> blocks are removed: a
 # background task's completion, and a native subagent's hand-back to the main agent.
 _HOST_OPENINGS = ("<task-notification>", "<agent-message", "Another Claude session sent a message")
-# Both tags may carry attributes (`<system-reminder id="...">`, and the same on the close).
-_REMINDER = re.compile(r"\A\s*<system-reminder\b[^>]*>.*?</system-reminder\b[^>]*>", re.DOTALL)
-
-
-# Pasted text arrives inside the prompt. It is material the user brought, not their words:
-# a pasted log that says "commit" or "analisa" asks for nothing.
-_PASTED = re.compile(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", re.DOTALL)
-
-
-def without_reminders(prompt):
-    """The prompt with its leading <system-reminder> blocks removed, left-stripped."""
-    text = prompt
-    while True:
-        stripped = _REMINDER.sub("", text, count=1)
-        if stripped == text:
-            break
-        text = stripped
-    return text.lstrip()
 
 
 def prompt_sources(root):
@@ -111,72 +89,6 @@ def not_user_prompt(payload, prompt, host_sources=_HOST_SOURCES):
     return text.startswith(_HOST_OPENINGS)
 
 
-# `/.execute -y` typed as text, or as the expanded slash command Claude Code submits.
-_EXECUTE_YES = re.compile(
-    r"(?:^|\s)/\.execute\s+-y\b|<command-name>/?\.execute</command-name>\s*<command-args>\s*-y\b",
-    re.IGNORECASE,
-)
-_COMMIT = re.compile(r"(?:^|\s)/\.commit\b|\bcommit\w*\b", re.IGNORECASE)
-# "jangan commit", "don't commit", "tanpa commit": naming the act is not asking for it.
-_COMMIT_NEGATED = re.compile(
-    r"\b(?:jangan|tanpa|belum|tidak|bukan|don'?t|do\s+not|no|never|without)\b[^.\n]{0,20}\bcommit",
-    re.IGNORECASE,
-)
-
-
-# The skill asks "Jalankan? (yes/no)" after proposing the message, so the commit itself
-# happens a turn after the request. A bare yes keeps the approval that turn already holds;
-# it never creates one.
-_AFFIRM = re.compile(
-    r"^\s*(?:yes|ya|y|iya|ok|oke|okay|gas|lanjut|boleh|setuju|jalankan|commit)\b[\s.!]*$",
-    re.IGNORECASE,
-)
-
-
-# The same two approvals, held to the start of the prompt: what a turn from an unknown
-# `source` must look like to approve anything. The slash-command payload counts wherever it
-# sits, since Claude Code, not the text, puts the tag there.
-_EXECUTE_AT_START = re.compile(r"/\.execute\s+-y\b", re.IGNORECASE)
-_COMMIT_AT_START = re.compile(r"(?:/\.commit\b|commit\w*\b)", re.IGNORECASE)
-_EXECUTE_TAG = re.compile(r"<command-name>/?\.execute</command-name>\s*<command-args>\s*-y\b", re.IGNORECASE)
-_COMMIT_TAG = re.compile(r"<command-name>/?\.commit</command-name>", re.IGNORECASE)
-
-# A delegated command the user named: typed with its prefix, or the slash-command payload.
-# Only these arm the gate. A sentence that merely matches the NL map gets a hint.
-_DELEGATED = "explore|plan|analyze|verify-browser|verify"
-_COMMAND_TAG = re.compile(r"<command-name>/?\.(%s)</command-name>" % _DELEGATED, re.IGNORECASE)
-
-
-def execute_approved(prompt, anchored=False):
-    if anchored:
-        return bool(_EXECUTE_AT_START.match(prompt or "") or _EXECUTE_TAG.search(prompt or ""))
-    return bool(_EXECUTE_YES.search(prompt or ""))
-
-
-def commit_requested(prompt, anchored=False):
-    text = prompt or ""
-    asked = (_COMMIT_AT_START.match(text) or _COMMIT_TAG.search(text)) if anchored else _COMMIT.search(text)
-    return bool(asked) and not _COMMIT_NEGATED.search(text)
-
-
-def explicit_command(text, prefix_regex):
-    """The delegated command the user named explicitly, or None."""
-    m = re.search(prefix_regex, text) if prefix_regex else None
-    if m:
-        return m.group(1)
-    m = _COMMAND_TAG.search(text)
-    return m.group(1).lower() if m else None
-
-
-def nl_command(text, mp):
-    """The delegated command a sentence resembles under the NL map, or None."""
-    for cmd in mp.get("delegated", []):
-        for pat in mp.get("patterns", {}).get(cmd, []):
-            if re.search(pat, text, re.IGNORECASE):
-                return cmd
-    return None
-
-
 try:
     raw = globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
@@ -210,49 +122,21 @@ try:
     user_sources, host_sources = prompt_sources(root)
     if not_user_prompt(payload, prompt, host_sources):
         sys.exit(0)
+    # Claude Code running as some host's second agent: the runtime's call, not the user's turn.
+    if is_second_agent_turn():
+        sys.exit(0)
     source = str(payload.get("source") or "")
     unknown_source = bool(source) and source not in user_sources
     if unknown_source:
         note_unknown_source(home, source)
-    # What the user wrote: pasted material out, leading reminders out.
-    text = without_reminders(_PASTED.sub(" ", prompt))
+    text = user_text(prompt)
+    runtime_dir = _runtime_dir(root, main_id)
+    record_approvals(text, runtime_dir, unknown_source,
+                     {"claude_sid": claude_sid, "prompt_id": payload.get("prompt_id")})
 
-    runtime_dir = os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
-    marker = os.path.join(runtime_dir, "delegated.marker")
-
-    # The user's own approvals, as files the runtime and execution-gate can check
-    # (core/runtime/execution.py). Written before the NL map is read: approval does not
-    # depend on intent classification, and a missing map must not drop a `-y`.
-    approvals = (
-        ("execute.token", execute_approved(text, anchored=unknown_source)),
-        ("commit.marker", commit_requested(text, anchored=unknown_source)),
-    )
-    for name, given in approvals:
-        path = os.path.join(runtime_dir, name)
-        if name == "commit.marker" and not given and os.path.isfile(path) and _AFFIRM.match(text):
-            continue  # the yes to a commit this session just proposed
-        if given:
-            os.makedirs(runtime_dir, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "set_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "claude_sid": claude_sid,
-                    "prompt_id": payload.get("prompt_id"),
-                }))
-        elif name == "commit.marker" and os.path.isfile(path):
-            # A commit is approved for the turn the user asked for it, not for the rest of
-            # the session. The execute token is consumed by execute-begin instead, and
-            # expires on its own.
-            try:
-                os.remove(path)
-            except Exception:
-                pass
-
-    map_path = os.path.join(globals().get("HOOK_DIR") or os.environ.get("HOOK_DIR", ""), "intent-map.json")
-    if not os.path.isfile(map_path):
+    mp = load_intent_map(globals().get("HOOK_DIR") or os.environ.get("HOOK_DIR", ""))
+    if mp is None:
         sys.exit(0)
-    with open(map_path, "r", encoding="utf-8") as f:
-        mp = json.load(f)
 
     # Only a command the user named arms the gate. A sentence that resembles one under the NL
     # map ("saat saya analisa...", a question that mentions playwright) is not a request to
@@ -264,36 +148,18 @@ try:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": (
-                    "[INTENT HINT] This prompt resembles /.%s under the workflow NL map. If it "
-                    "is that request, delegate first: bash '%s/.workflow/run.sh' %s '<task>' '%s'. "
-                    "If it is a question or a remark, answer it. Nothing is blocked: the gate "
-                    "arms only on an explicit /.%s."
-                ) % (hinted, root.replace("\\", "/"), hinted, main_id, hinted),
+                "additionalContext": intent_hint(hinted, root, main_id),
             }
         }))
-
-    if resolved:
-        os.makedirs(runtime_dir, exist_ok=True)
-        obj = {
-            "command": resolved,
-            "set_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "claude_sid": claude_sid,
-            "prompt_excerpt": prompt[:160],
-            # Provenance, so the next false arming names its source instead of leaving
-            # only an excerpt.
-            "source": payload.get("source"),
-            "has_agent_id": bool(payload.get("agent_id")),
-            "prompt_id": payload.get("prompt_id"),
-        }
-        with open(marker, "w", encoding="utf-8") as f:
-            f.write(json.dumps(obj))
-    else:
-        if os.path.isfile(marker):
-            try:
-                os.remove(marker)
-            except Exception:
-                pass
+    set_delegated_marker(resolved, runtime_dir, {
+        "claude_sid": claude_sid,
+        "prompt_excerpt": prompt[:160],
+        # Provenance, so the next false arming names its source instead of leaving
+        # only an excerpt.
+        "source": payload.get("source"),
+        "has_agent_id": bool(payload.get("agent_id")),
+        "prompt_id": payload.get("prompt_id"),
+    })
     sys.exit(0)
 except SystemExit:
     raise

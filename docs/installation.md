@@ -17,6 +17,10 @@ it again. Every installer flag, target file and hook is listed in the
 > - **`~/.claude/skills`, `commands`, `hooks`** receive the workflow's files.
 > - **The secondary agent's own configuration** gains a marked block in its `AGENTS.md`
 >   (opencode, codex, agy) and, for opencode, a merged permission policy in `opencode.json`.
+> - **Agy, where it is installed** (a `~/.gemini` directory exists): `~/.gemini/GEMINI.md`
+>   gains the `EXOMA-HOST` block and `~/.gemini/config/hooks.json` the `exoma` hook, so Agy
+>   can be the primary agent too. Agy loads both on every run, its own sessions included
+>   ([reference, "Hosts"](reference.md#hosts)).
 > - **The secondary agent reads your source code**, and how strictly it is confined depends
 >   on the provider ([Security](security.md)).
 >
@@ -33,7 +37,7 @@ it again. Every installer flag, target file and hook is listed in the
 | **A secondary-agent CLI** | Yes | `opencode` (recommended), `codex`, or `agy`, on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
 | **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
 | **bash** | Yes | Hooks and the `.workflow/` runner are bash scripts on every OS. On Windows that is Git Bash, from Git for Windows; the installer finds it next to `git.exe` and refuses `--apply` without it |
-| **Claude Code** | Recommended | The primary integration target |
+| **Claude Code** or **Agy** | Recommended | The primary agent's host. Claude Code is the reference host; Agy is installed for when `~/.gemini` exists ([hosts](reference.md#hosts)) |
 
 ## Install on a machine (once)
 
@@ -75,7 +79,7 @@ apply only to calls the workflow makes; using codex or opencode directly is unaf
 
 ## Enable it in a project (once per project, per person)
 
-Open Claude Code in the project and run:
+Open the primary agent (Claude Code or Agy) in the project and run:
 
 ```text
 /.init
@@ -102,7 +106,7 @@ header in your CLAUDE.md) do not block it, but each tells you what to change.
 > **Do not commit `.workflow/`.** The generated scripts hold absolute paths from your
 > machine. Each team member runs `/.init` themselves.
 
-Without Claude Code, or from a script, the skills run the same command:
+Without a primary agent, or from a script, the skills run the same command:
 `exoma init --work-dir <project>` (and `exoma upgrade`).
 
 ## Update
@@ -124,7 +128,7 @@ Without Claude Code, or from a script, the skills run the same command:
    It refreshes the workflow's block, files and hooks, and removes files an older release
    installed that are no longer shipped, unless you edited them.
 
-3. In every other project, open Claude Code and run `/.upgrade`. It refuses while a delegated
+3. In every other project, open the primary agent and run `/.upgrade`. It refuses while a delegated
    command is running in that project; wait for it to finish.
 
 4. Run `/.doctor` in each project. `NEEDS_UPGRADE` or `run_script_drift` means step 3 was
@@ -144,7 +148,8 @@ behavior you rely on, and the notes say what to set afterwards.
 - **Remove the workflow:** `exoma install --uninstall` (dry run), then
   `--uninstall --apply`. It removes the workflow's block from each instruction file and keeps
   your text, removes only the files it installed and you did not edit, and takes its hooks
-  and status line out of `settings.json`. An uninstall can itself be rolled back. Project
+  and status line out of `settings.json`. The Agy host's two files are receipted like any
+  other install write, so `--rollback` restores them. An uninstall can itself be rolled back. Project
   `.workflow/` folders and the per-user data directory (job records and the secondary-agent
   seed, see [workspace layout](reference.md#workspace-layout)) are left for you to remove,
   then `uv tool uninstall exoma` (or `pip uninstall exoma`).

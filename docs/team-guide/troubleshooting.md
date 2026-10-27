@@ -17,14 +17,15 @@ troubleshooting table](../../README.md#quick-start); commands and their options 
 
 ## "PROXY FAILED" (before v0.2.0: "PROXY GAGAL")
 
-Claude Code stops and asks before doing anything else when the secondary agent returns no
+The primary agent stops and asks before doing anything else when the secondary agent returns no
 usable evidence (an error, empty output, or a refusal instead of findings). This is
 deliberate: it will not quietly fall back to reading the code itself. Answer `yes` to
 continue locally without the secondary agent, or `no` to stop and fix the provider first.
 
 ## "EXECUTION GATE" / an edit or commit was blocked
 
-Since 3.9.0 the approval rules are checked by hooks, not only asked of the agent. A block
+Since 3.9.0 the approval rules are checked by hooks (Claude Code's, or Agy's wrapper), not
+only asked of the agent. A block
 means one of three things: the agent tried to edit a file its approved plan does not list,
 to write into another project, or to commit in a turn where you did not ask for a commit.
 The message says which. The usual fix is a revised plan and a new `/.execute -y`, or asking
@@ -49,12 +50,12 @@ the per-call files live: [reference, command table](../reference.md#command) and
 - **Skip the workflow for small tasks.** See [when-to-use.md](when-to-use.md). This is the
   biggest saving.
 - **Keep verify's tests targeted.** Verify no longer lets the secondary agent run your test
-  suite: Claude Code picks the tests that cover the change and the runtime runs only those.
+  suite: the primary agent picks the tests that cover the change and the runtime runs only those.
   Tell the project which test commands may run (an allowlist in the project's workflow
   config, see the [reference](../reference.md), "Mode verify"); without it no test runs and
   verify reports the tests as not run.
 - **Do something else while it runs.** A delegated call runs as a background job, and
-  Claude Code hands control back to you while it works. You cannot continue *that* line of
+  the primary agent hands control back to you while it works. You cannot continue *that* line of
   reasoning until the result arrives, but you can review, write, or start another task.
 - **Use the local commands.** `sweep` and `doctor` never call the secondary agent.
 - **Scope the request.** "How does checkout validate addresses" finishes sooner than "explain
