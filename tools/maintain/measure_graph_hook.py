@@ -29,7 +29,7 @@ measurement on a real project.
   python tools/maintain/measure_graph_hook.py --project <root>
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale
-  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh --hook src/exoma/_bundle/config/claude/hooks/graph-refresh.sh
+  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh --hook src/exoma/_bundle/config/hosts/claude/hooks/graph-refresh.sh
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ import sys
 import time
 from pathlib import Path
 
-# The same lists as src/exoma/_bundle/config/claude/hooks/graph-refresh.py (a test parses both).
+# The same lists as src/exoma/_bundle/config/hosts/claude/hooks/graph-refresh.py (a test parses both).
 SOURCE_EXTENSIONS = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".php", ".go", ".rs", ".java", ".rb")
 SKIP_DIRS = frozenset({
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",

@@ -23,8 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from exoma.installer.base import (
+    AGY_HOOKS_PREFIX,
+    CLAUDE_HOOKS_PREFIX,
+    CLAUDE_HOST,
+    CLAUDE_INSTRUCTIONS,
     AGY_HOST_HOOK_NAME,
     AGY_HOST_HOOKS,
+    AGY_HOST_INSTRUCTIONS,
     HOME,
     MARKERS,
     _RECEIPT,
@@ -34,6 +39,7 @@ from exoma.installer.base import (
     _discard_empty_receipt,
     _file_sha256,
     _flush_receipt,
+    _install_agy_permissions,
     _managed_block,
     _marker_problem,
     _read_text_lenient,
@@ -46,6 +52,7 @@ from exoma.installer.stale import (
     LEDGER,
     managed_prefixes,
     previously_installed,
+    remove_empty_skill_dir,
     retired_hook_stems,
     shipped_hook_stems,
 )
@@ -78,6 +85,7 @@ def _remove_receipted(path: Path, key: str, plan: Plan, apply: bool, backup_root
     plan.add("remove", path, why)
     if apply:
         path.unlink()
+        remove_empty_skill_dir(path, key)
         _RECEIPT.append(
             {
                 "action": "remove",
@@ -91,10 +99,12 @@ def _remove_receipted(path: Path, key: str, plan: Plan, apply: bool, backup_root
         _flush_receipt()
 
 
-def _uninstall_text(dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path) -> None:
+def _uninstall_text(
+    dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path, markers: tuple[str, str] | None = None
+) -> None:
     if not dest.is_file():
         return
-    start, end = MARKERS[key]
+    start, end = markers or MARKERS[key]
     text = _read_text_lenient(dest)
     problem = _marker_problem(text, start, end)
     if problem:
@@ -115,7 +125,7 @@ def _uninstall_text(dest: Path, key: str, plan: Plan, apply: bool, backup_root: 
         _record("merge", dest, f"uninstall/{key}", saved, pre_sha256)
 
 
-HOOKS_PREFIX = "claude/hooks/"
+HOOKS_PREFIX = CLAUDE_HOOKS_PREFIX
 
 
 def _uninstall_files(plan: Plan, apply: bool, backup_root: Path, keep_hooks: bool = False) -> None:
@@ -131,7 +141,7 @@ def _uninstall_files(plan: Plan, apply: bool, backup_root: Path, keep_hooks: boo
         path = Path(dest)
         if not path.is_file():
             continue
-        if keep_hooks and key.startswith(HOOKS_PREFIX):
+        if keep_hooks and key.startswith((HOOKS_PREFIX, AGY_HOOKS_PREFIX)):
             kept_hooks += 1
             continue
         hashes = (known.get(dest) or {}).get("hashes") or set()
@@ -244,6 +254,35 @@ def _uninstall_agy_hooks(plan: Plan, apply: bool, backup_root: Path) -> bool:
     return True
 
 
+LEGACY_AGY_INSTRUCTIONS = "providers/agy/AGENTS.md"
+
+
+def retire_agy_dot_dir(plan: Plan, apply: bool, backup_root: Path) -> None:
+    """Before v0.3.0 the Agy second agent's block went into ~/.agy/AGENTS.md, which Agy never
+    reads (its config is ~/.gemini; the block is now a custom agent there). Take that block
+    out — backed up and receipted — and leave any text of the user's in the file."""
+    _uninstall_text(HOME / ".agy" / "AGENTS.md", LEGACY_AGY_INSTRUCTIONS, plan, apply, backup_root,
+                    markers=("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END"))
+
+
+def withdraw_host(
+    host: str, agy_rules: list[str], plan: Plan, apply: bool, backup_root: Path
+) -> tuple[bool, list[str]]:
+    """What an install takes back from a host the user no longer chose: the merged parts —
+    its instruction block, its hook registration, Agy's permission rules. Its own files go
+    through the stale prune that follows, which removes only what an install wrote.
+
+    Returns (hooks unregistered, Agy rules still owned). False while a registration could not
+    be read: its hook scripts must then survive the prune, as --uninstall keeps them, or every
+    event the host still sends them fails."""
+    if host == "claude":
+        _uninstall_text(HOME / ".claude" / "CLAUDE.md", CLAUDE_INSTRUCTIONS, plan, apply, backup_root)
+        return _uninstall_settings(plan, apply, backup_root), agy_rules
+    _uninstall_text(HOME / ".gemini" / "GEMINI.md", AGY_HOST_INSTRUCTIONS, plan, apply, backup_root)
+    clean = _uninstall_agy_hooks(plan, apply, backup_root)
+    return clean, _install_agy_permissions(False, agy_rules, plan, apply, backup_root)
+
+
 def run_uninstall(apply: bool) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     backup_root = HOME / ".claude" / "backups" / f"install_{stamp}"
@@ -260,16 +299,26 @@ def run_uninstall(apply: bool) -> int:
     for _src, dest, key in _targets():
         if key in MARKERS:
             _uninstall_text(dest, key, plan, apply, backup_root)
+    retire_agy_dot_dir(plan, apply, backup_root)
     # Settings first: a hook script deleted while settings.json still registers it fails on
     # every event it is wired to, so the scripts go only once nothing runs them.
     # Agy's hooks.json runs agy-host.py from the same directory, so it is cleaned first too.
     settings_clean = _uninstall_settings(plan, apply, backup_root)
     agy_clean = _uninstall_agy_hooks(plan, apply, backup_root)
+    # Read before the mode file goes below: it names the rules Exoma added.
+    from exoma.installer.rollback import _stored_agy_permissions
+
+    rules_left = _install_agy_permissions(False, _stored_agy_permissions()[1], plan, apply, backup_root)
     _uninstall_files(plan, apply, backup_root, keep_hooks=not (settings_clean and agy_clean))
     # Receipted like everything else: a rollback that restored the files but not the mode
     # would reinstall the other intent mode, and one without the ledger could no longer tell
     # the workflow's files from the user's.
-    for path, key in ((LEDGER, "claude/.workflow-installed.json"), (MODE_FILE, "claude/.workflow-install-mode.json")):
+    for path, key in ((LEDGER, f"{CLAUDE_HOST}/.workflow-installed.json"), (MODE_FILE, f"{CLAUDE_HOST}/.workflow-install-mode.json")):
+        if path == MODE_FILE and rules_left:
+            # It is the only record of which Agy rules are Exoma's: kept until they are out.
+            plan.warn(f"kept {path}: it names the Agy permission rules still in place; fix Agy's "
+                      "settings.json, then run --uninstall again")
+            continue
         if path.is_file():
             _remove_receipted(path, key, plan, apply, backup_root, "installer bookkeeping")
     plan.warn(

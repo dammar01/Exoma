@@ -280,7 +280,7 @@ def _hook_literal(source: str, name: str):
 
 def _graph_hook_scan(graph_hook) -> None:
     # The tool times the hook's scan, so its lists are the hook's lists.
-    hook = (graph_hook.REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "graph-refresh.py").read_text(encoding="utf-8")
+    hook = (graph_hook.REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks" / "graph-refresh.py").read_text(encoding="utf-8")
     assert_true(set(_hook_literal(hook, "SKIP_DIRS")) == set(graph_hook.SKIP_DIRS)
                 and tuple(_hook_literal(hook, "SOURCE_EXT")) == graph_hook.SOURCE_EXTENSIONS,
                 "measure_graph_hook skips and matches exactly what graph-refresh.py does")

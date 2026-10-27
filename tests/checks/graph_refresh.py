@@ -27,7 +27,7 @@ from exoma.utils.osutil import find_bash, hidden_run_kwargs
 from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
 _FAKE_SLEEP_S = 3
 
 # FAKE_GRAPHIFY_MODE: "ok" sleeps then writes a graph; "corrupt" sleeps then writes half a

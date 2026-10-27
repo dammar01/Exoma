@@ -1538,7 +1538,7 @@ class Executor:
         # instructions was rejected while nothing stopped a run that never mentioned it.
         # The boundary now sits where it can be enforced: opencode `permission.read`/`grep`
         # deny rules, shipped in the project's opencode.json, which act on the actual tool
-        # call. See _bundle/config/opencode/opencode.project.json.
+        # call. See _bundle/config/providers/opencode/opencode.project.json.
         mode = verify_mode(project_root) if normalized_command == "verify" else None
         if mode == "syntax":
             result = quick_verify.run(project_root, session_id)

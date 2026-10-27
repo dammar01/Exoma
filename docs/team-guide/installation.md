@@ -2,7 +2,21 @@
 
 The steps (requirements, install, per-project setup, updating, uninstalling) are in the
 [installation guide](../installation.md), which also lists what the installer changes on
-your machine. This page covers the one decision it asks of you.
+your machine. This page covers the decisions it asks of you.
+
+## Choose the host: Claude Code, Agy, or both
+
+The host is the CLI you talk to. The first `exoma install --apply` from a terminal asks which
+one Exoma should set up; it touches only the one you pick, and later upgrades keep that choice.
+Pick the one you actually work in. Choosing both is fine when you switch between them; dropping
+one later takes Exoma's files back out of it. The flag is `--host`, listed in the
+[reference, Host choice](../reference.md#detail-host-choice).
+
+With Agy, the installer also asks whether to add two permission rules so the workflow's
+runner does not stop for approval on every call. They apply to all your Agy sessions, are
+narrow (one script, one data directory), and only those two are ever removed again. Without
+them Agy asks each time, which works but is slow. After installing for Agy, open it in a
+project and run `/.agy-check`: it says in one block whether everything is wired.
 
 ## Choose a mode: always on, or only when called
 

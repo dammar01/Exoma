@@ -177,6 +177,8 @@ from tests.checks.agy_host import (
     _test_agy_host_contract,
     _test_agy_host_install_all_or_nothing,
     _test_agy_host_install_merges,
+    _test_agy_host_selection,
+    _test_bundle_layout_and_agy_agent,
     _test_agy_host_uninstall,
 )
 from tests.checks.os_resolvers import (
@@ -232,6 +234,8 @@ def run_tests() -> None:
     _test_agy_host_contract()
     _test_agy_host_install_merges()
     _test_agy_host_install_all_or_nothing()
+    _test_agy_host_selection()
+    _test_bundle_layout_and_agy_agent()
     _test_agy_host_uninstall()
     _test_gate_k5_fixtures()
     _test_entry_points_refuse_an_old_python()
@@ -305,6 +309,7 @@ def run_tests() -> None:
             / "exoma"
             / "_bundle"
             / "config"
+            / "hosts"
             / "claude"
             / "CLAUDE.md"
         ).read_text(encoding="utf-8")
@@ -843,6 +848,7 @@ confidence: high — all requested checks ran
                 / "exoma"
                 / "_bundle"
                 / "config"
+                / "providers"
                 / "opencode"
                 / "opencode.project.json"
             ).read_text(encoding="utf-8")
@@ -866,7 +872,7 @@ confidence: high — all requested checks ran
             "project policy must deny out-of-root access for every agent, not just plan",
         )
         plan_permission = json.loads(
-            (REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "opencode" / "opencode.template.json").read_text(
+            (REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "providers" / "opencode" / "opencode.template.json").read_text(
                 encoding="utf-8"
             )
         )["agent"]["plan"]["permission"]

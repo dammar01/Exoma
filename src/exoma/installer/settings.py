@@ -18,6 +18,7 @@ from exoma.config.providers import (
     provider_install_module,
 )
 from exoma.installer.base import (
+    CLAUDE_HOST,
     HOME,
     SETTINGS_REQUIRED,
     Plan,
@@ -417,7 +418,7 @@ def _install_settings(
         if apply:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(json.dumps(template, indent=2) + "\n", encoding="utf-8")
-            _record("create", dest, "claude/settings.json", None, None)
+            _record("create", dest, f"{CLAUDE_HOST}/settings.json", None, None)
         return
 
     try:
@@ -523,7 +524,7 @@ def _install_settings(
         return
 
     pre_sha256 = _file_sha256(dest)
-    saved = _backup(dest, backup_root, plan, apply, "claude/settings.json")
+    saved = _backup(dest, backup_root, plan, apply, f"{CLAUDE_HOST}/settings.json")
     detail = ", ".join([*added, *hook_changes])
     plan.add("merge", dest, f"update {detail}")
     if apply:
@@ -535,7 +536,7 @@ def _install_settings(
         if merged_env is not None:
             current["env"] = merged_env
         dest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
-        _record("merge", dest, "claude/settings.json", saved, pre_sha256)
+        _record("merge", dest, f"{CLAUDE_HOST}/settings.json", saved, pre_sha256)
 
 
 def _provider_config_path(provider: str) -> Path:

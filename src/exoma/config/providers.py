@@ -14,7 +14,7 @@ will need its own equivalent rather than a shared abstraction over both. `instal
 is how the installer reaches that equivalent: a name to dispatch through, not an attempt
 to describe what it does.
 
-Adding a provider means: a `_bundle/config/<name>/` folder, an entry here, an install module
+Adding a provider means: a `_bundle/config/providers/<name>/` folder, an entry here, an install module
 answering `load_config`/`merge_policy`/`install_project_config`, and an adapter registered
 in `adapters/contract/registry.py`. No build-tool edits, no installer edits.
 
@@ -106,7 +106,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "install_module": "exoma.adapters.install.opencode_install",
         # What this provider's second_agent can touch, as enforced — not as intended. See
         # `provider_boundary` below. opencode's permission map denies write/edit/bash and the
-        # secret-file reads (_bundle/config/opencode/opencode.template.json).
+        # secret-file reads (_bundle/config/providers/opencode/opencode.template.json).
         "boundary": {"reads": "secrets_denied", "writes": "denied"},
     },
     "codex": {
@@ -116,7 +116,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # a directory; codex's subagent configuration has not been verified, so nothing is
         # shipped rather than a guessed roster that would never load.
         "agents_dir": None,
-        # Declared, but deliberately NOT shipped in _bundle/config/codex/. Codex's config is
+        # Declared, but deliberately NOT shipped in _bundle/config/providers/codex/. Codex's config is
         # TOML and every value in it is overridable per invocation (`-c key=value`, `-s`),
         # so the adapter asserts the read-only boundary on every call instead of merging a
         # file once — see adapters/install/codex_install.py. The keys stay because install.py and
@@ -194,15 +194,17 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # .exists(); dropping them turns "this provider ships none" into a KeyError. The paths
         # point at files that are deliberately absent.
         #
-        # Agy itself does keep config under ~/.gemini (GEMINI.md, skills, config/hooks.json),
-        # measured on agy 1.4.7 (CASE-029, a draft in agent-workflow). That surface belongs to
-        # Agy as a HOST, installed from agy-host/ by installer/base.py, not to this bundle.
-        # It reaches a second-agent call too: Agy loads it on every run, which is why the
-        # adapter marks its process with WORKFLOW_AGENT_ROLE.
-        "home_dir": ".agy",
-        "instructions": ("AGENTS.md", "AGENTS.md"),
-        # No subagent roster: `agy agents` on a stock install prints an empty list, so
-        # there is no persona to ship and none to select.
+        # Agy keeps all its config under ~/.gemini (GEMINI.md, skills, config/hooks.json),
+        # measured on agy 1.4.7 (CASE-029, a draft in agent-workflow). GEMINI.md belongs to
+        # Agy as a HOST (hosts/agy/, installed by installer/base.py) and reaches every run,
+        # a second-agent call included — which is why the adapter marks its process with
+        # WORKFLOW_AGENT_ROLE. The second agent's own contract is a custom agent instead,
+        # selected per call with `--agent`, so a host session never reads it.
+        "home_dir": ".gemini",
+        "instructions": ("agent.md", "config/agents/exoma-second-agent/agent.md"),
+        # Copied whole, not spliced as a marker block: Agy reads the agent's YAML frontmatter
+        # only at the top of the file.
+        "instructions_whole": True,
         "agents_dir": None,
         "global_config": ("agy.template.json", "agy.json"),
         # A placeholder, knowingly. agy has no project-root config layer to install a
@@ -219,10 +221,11 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # were calibrated on 1.4.7; the second-agent path has not been re-run there, so this
         # stays at the release it was tested on.
         "stable_version": "1.1.13",
-        # `--agent` exists and lists nothing; selecting a persona that does not exist
-        # would fail the call for no gain.
-        "default_agent": None,
-        "agent_env": None,
+        # The custom agent the install ships (`instructions` above). The adapter passes
+        # `--agent` only while its file is installed: a stock `agy agents` lists none, and
+        # selecting one that does not exist would fail the call.
+        "default_agent": "exoma-second-agent",
+        "agent_env": "EXOMA_AGY_AGENT",
         # `--effort low|medium|high`, straight from `agy --help`.
         "effort_arg": ("--effort", "{value}"),
         # THE READ-ONLY BOUNDARY DOES NOT EXIST FOR THIS PROVIDER, and the flag names

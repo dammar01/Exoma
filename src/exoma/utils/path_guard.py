@@ -42,5 +42,5 @@ def safe_path_component(value: str) -> str:
 # the name out reached exactly the same data. Its own docstring admitted the real boundary
 # was elsewhere ("opencode enforces the hard boundary") — that boundary now exists and is
 # enforced on the tool call itself: `permission.read` / `permission.grep` deny rules in
-# _bundle/config/opencode/opencode.project.json, plus `external_directory: deny` for
+# _bundle/config/providers/opencode/opencode.project.json, plus `external_directory: deny` for
 # out-of-root access. Enforcement belongs where the file is opened, not where it is typed.

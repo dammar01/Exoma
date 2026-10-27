@@ -25,7 +25,7 @@ from exoma.utils import osutil
 from tests.checks.support import no_console
 
 REPO = Path(__file__).resolve().parents[2]
-HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
 K5 = REPO / "tests" / "fixtures" / "hooks" / "gate_k5.json"
 # settings.template.json: graph-refresh 60s, task-events 10s, gate set/check 15s; session-bind
 # and the statusline carry none, so the shortest one stands in for them.

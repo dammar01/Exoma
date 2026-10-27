@@ -3,7 +3,7 @@
 BOOTSTRAP-ONLY. dist/ is the canonical, Git-reviewed bundle; this tool only *seeds* it
 from a maintainer's live ~/.claude the first time (or when deliberately re-importing home
 edits). Routine changes are made in dist/ directly. Skill bodies live only in
-`src/exoma/_bundle/config/claude/skills/*.md`; CLAUDE.md contains the command registry and
+`src/exoma/_bundle/config/hosts/claude/skills/*.md`; CLAUDE.md contains the command registry and
 orchestrator contract.
 `tools/maintain/sync_skills.py --check` verifies those files still match CLAUDE.md's command
 registry, and `tools/maintain/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
@@ -49,17 +49,17 @@ MANIFEST = REPO_ROOT / "src" / "exoma" / "_bundle" / "manifest.json"
 # costs a missing feature, whereas a stray glob costs a leaked credential.
 ALLOWLIST = [
     # (source relative to home, dest relative to src/exoma/_bundle/config, kind)
-    (".claude/CLAUDE.md", "claude/CLAUDE.md", "file"),
-    (".claude/skills", "claude/skills", "dir:*.md"),
-    (".claude/commands", "claude/commands", "dir:*.md"),
-    (".claude/hooks", "claude/hooks", "dir:*.sh,*.py,intent-map.json"),
+    (".claude/CLAUDE.md", "hosts/claude/CLAUDE.md", "file"),
+    (".claude/skills", "hosts/claude/skills", "dir:*.md"),
+    (".claude/commands", "hosts/claude/commands", "dir:*.md"),
+    (".claude/hooks", "hosts/claude/hooks", "dir:*.sh,*.py,intent-map.json"),
     *(
         # One entry per declared provider bundle (config/providers.py) rather than a
         # literal per vendor. Still an explicit allowlist: a provider only appears here
         # once someone declares its bundle, so no glob can widen this by accident.
         (
             f"{bundle['home_dir']}/{bundle['instructions'][1]}",
-            f"{name}/{bundle['instructions'][0]}",
+            f"providers/{name}/{bundle['instructions'][0]}",
             "file",
         )
         for name, bundle in PROVIDER_BUNDLES.items()
@@ -69,7 +69,7 @@ ALLOWLIST = [
 # settings.json is filtered key-wise rather than copied: the file mixes shareable
 # workflow wiring with machine-local state.
 SETTINGS_SOURCE = ".claude/settings.json"
-SETTINGS_DEST = "claude/settings.template.json"
+SETTINGS_DEST = "hosts/claude/settings.template.json"
 SETTINGS_KEEP_KEYS = (
     "hooks",
     "statusLine",

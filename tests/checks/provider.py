@@ -1378,7 +1378,7 @@ def _test_agy_provider() -> None:
         assert_true(
             written.get("provider") == "agy"
             and written.get("provider_command") == "agy"
-            and written.get("provider_agent") is None,
+            and written.get("provider_agent") == "exoma-second-agent",
             f"selecting agy must write agy's own command and persona: {written}",
         )
         assert_true(
@@ -2029,6 +2029,7 @@ def _assert_codex_provider() -> None:
         / "exoma"
         / "_bundle"
         / "config"
+        / "providers"
         / "opencode"
         / "opencode.project.json"
     )
@@ -2058,7 +2059,7 @@ def _assert_codex_provider() -> None:
 
     # /.commit skips the same names when it stages on its own (DEC-061): the skill carries the
     # list as prose for main_agent, so the list is checked here, in order, and so is what it means.
-    skill = (Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "skills" / "commit.md").read_text(encoding="utf-8")
+    skill = (Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "skills" / "commit.md").read_text(encoding="utf-8")
     block = re.search(r"<!-- secret-patterns:.*?-->(.*?)<!-- /secret-patterns -->", skill, re.S)
     assert_true(block is not None, "commit.md marks its secret-pattern block")
     lists = {key: re.findall(r"`([^`]+)`", body) for key, body in re.findall(r"(skip|keep):(.*?)(?=\n\s*(?:skip|keep):|\Z)", block.group(1), re.S)}

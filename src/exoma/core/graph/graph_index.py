@@ -24,7 +24,7 @@ MAX_COMMUNITIES = 4
 
 # Skipped when dating the sources: vendored trees can hold thousands of .py files that
 # say nothing about whether THIS project's graph is out of date.
-# The extensions _bundle/config/claude/hooks/graph-refresh.py scans before it refreshes.
+# The extensions _bundle/config/hosts/claude/hooks/graph-refresh.py scans before it refreshes.
 # Restated rather than imported — the hook runs from ~/.claude without this package —
 # and kept equal by tests/checks/graph_refresh.py, which parses both.
 SOURCE_EXTENSIONS = (
@@ -63,7 +63,7 @@ def graph_path(project_root) -> Path:
 
 REFRESH_LOCK_FILENAME = ".refresh.lock"
 # Equal to BEAT_STALE_S and LEGACY_MAX_AGE_S in the graph-refresh hook
-# (_bundle/config/claude/hooks/graph-refresh.py; a test parses both). graphify runs without a time limit (DEC-042),
+# (_bundle/config/hosts/claude/hooks/graph-refresh.py; a test parses both). graphify runs without a time limit (DEC-042),
 # so a lock is held while its worker keeps rewriting `beat`, every BEAT_INTERVAL_S there, not
 # while it is young: a refresh of any length never reads as stale.
 _REFRESH_BEAT_STALE_SECONDS = 120

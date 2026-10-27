@@ -144,6 +144,8 @@ from tests.checks.agy_host import (  # noqa: E402
     _test_agy_host_contract,
     _test_agy_host_install_all_or_nothing,
     _test_agy_host_install_merges,
+    _test_agy_host_selection,
+    _test_bundle_layout_and_agy_agent,
     _test_agy_host_uninstall,
 )
 from tests.checks.os_resolvers import (  # noqa: E402
@@ -299,6 +301,8 @@ SUITES: dict[str, tuple] = {
     "agy-host-install-whole": (_test_agy_host_install_all_or_nothing, "the Agy instructions and hook install together or not at all; a refused hook takes out an earlier instructions block"),
     "agy-host-uninstall": (_test_agy_host_uninstall, "uninstall takes only the `exoma` hook out of hooks.json, keeps the user's hooks, and receipts the change for --rollback"),
     "agy-host-install": (_test_agy_host_install_merges, "the installer merges only the `exoma` hook name into hooks.json and only the EXOMA-HOST block into GEMINI.md"),
+    "bundle-layout": (_test_bundle_layout_and_agy_agent, "hosts/ and providers/ keys, old keys read as current, the Agy second agent as a custom agent, ~/.agy retired"),
+    "agy-host-select": (_test_agy_host_selection, "--host picks the targets; Agy files stay under ~/.gemini; permission rules are opt-in and only Exoma's are removed"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
     "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),

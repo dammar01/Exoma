@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "command(regex:^{{RUNNER_RE}} '[^']*/\\.workflow/(run|check|inspect)\\.sh'( ('[^']*'|[A-Za-z0-9._=:/-]+))*$)",
+      "write_file({{DATA_DIR}})"
+    ]
+  }
+}

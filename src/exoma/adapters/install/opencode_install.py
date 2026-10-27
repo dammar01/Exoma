@@ -84,7 +84,7 @@ def install_project_config(project_root: Path) -> dict:
 
     bundle = bundle_for("opencode")
     src_name, dest_name = bundle["project_config"]
-    src = BUNDLE_CONFIG_DIR / "opencode" / src_name
+    src = BUNDLE_CONFIG_DIR / "providers" / "opencode" / src_name
     dest = project_root / dest_name
     result: dict = {
         "path": str(dest),

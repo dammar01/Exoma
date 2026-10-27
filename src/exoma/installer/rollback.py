@@ -10,7 +10,12 @@ import shutil
 from pathlib import Path
 
 from exoma.installer.base import (
+    AGY_HOST_HOOK_NAME,
+    CLAUDE_HOST,
     HOME,
+    HOSTS,
+    agy_hooks_dest,
+    agy_hooks_state,
     Plan,
     _RECEIPT_SCHEMA_VERSION,
     _backup,
@@ -21,21 +26,84 @@ from exoma.installer.base import (
 _MODE_FILE = HOME / ".claude" / ".workflow-install-mode.json"
 
 
+def _stored_mode() -> dict:
+    """The install mode file as written by the last install, `{}` when there is none."""
+    try:
+        loaded = json.loads(_MODE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def _stored_only_command() -> bool:
     """The persisted intent mode used when an upgrade supplies no mode flag."""
-    try:
-        return bool(
-            json.loads(_MODE_FILE.read_text(encoding="utf-8")).get("only_command")
-        )
-    except (OSError, ValueError):
-        return False
+    return bool(_stored_mode().get("only_command"))
 
 
-def _store_only_command(
-    value: bool, plan: Plan, apply: bool, backup_root: Path
+def _stored_hosts() -> tuple[str, ...] | None:
+    """The main-agent hosts the last install chose, or None when it recorded none (no
+    install yet, or one from before the choice existed — see install._migrated_hosts)."""
+    hosts = _stored_mode().get("hosts")
+    if not isinstance(hosts, list):
+        return None
+    chosen = tuple(h for h in HOSTS if h in hosts)
+    return chosen or None
+
+
+def _migrated_hosts() -> tuple[str, ...] | None:
+    """The hosts an install from before the choice existed left, read from what it wrote:
+    Claude always (every earlier install took it), Agy when its hooks.json still carries
+    Exoma's hook. None on a machine with no earlier install."""
+    from exoma.installer.stale import LEDGER
+
+    if not (_MODE_FILE.exists() or LEDGER.exists()):
+        return None
+    current, _refusal = agy_hooks_state(agy_hooks_dest())
+    return HOSTS if current and AGY_HOST_HOOK_NAME in current else ("claude",)
+
+
+def _installed_hosts() -> tuple[str, ...]:
+    """The hosts the installed state belongs to, for --check: the recorded choice, else the
+    migration, else Claude."""
+    return _stored_hosts() or _migrated_hosts() or ("claude",)
+
+
+def _stored_agy_permissions() -> tuple[bool | None, list[str]]:
+    """(the opt-in as last chosen — None when never asked, the rules Exoma added)."""
+    mode = _stored_mode()
+    enabled = mode.get("agy_permissions")
+    rules = mode.get("agy_permission_rules")
+    return (
+        enabled if isinstance(enabled, bool) else None,
+        [r for r in rules if isinstance(r, str)] if isinstance(rules, list) else [],
+    )
+
+
+def _store_install_mode(
+    only_command: bool,
+    hosts: tuple[str, ...],
+    agy_permissions: bool,
+    agy_rules: list[str],
+    plan: Plan,
+    apply: bool,
+    backup_root: Path,
 ) -> None:
-    content = json.dumps({"only_command": bool(value)}, indent=2) + "\n"
-    detail = "command-only (prefix /. required)" if value else "auto-intent"
+    """Persist every choice an upgrade without flags must keep: the intent mode, the hosts,
+    and the Agy permission opt-in with the rules it added (what --uninstall may remove)."""
+    content = json.dumps(
+        {
+            "only_command": bool(only_command),
+            "hosts": list(hosts),
+            "agy_permissions": bool(agy_permissions),
+            "agy_permission_rules": list(agy_rules),
+        },
+        indent=2,
+    ) + "\n"
+    detail = (
+        f"{'command-only (prefix /. required)' if only_command else 'auto-intent'}; "
+        f"hosts: {', '.join(hosts)}"
+        + (f"; agy permissions: {'on' if agy_permissions else 'off'}" if "agy" in hosts else "")
+    )
     if _MODE_FILE.is_file() and _MODE_FILE.read_bytes() == content.encode("utf-8"):
         plan.add("unchanged", _MODE_FILE, detail)
         return
@@ -47,7 +115,7 @@ def _store_only_command(
             backup_root,
             plan,
             apply,
-            "claude/workflow-install-mode.json",
+            f"{CLAUDE_HOST}/workflow-install-mode.json",
         )
         if _MODE_FILE.exists()
         else None
@@ -56,7 +124,7 @@ def _store_only_command(
     if apply:
         _MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _MODE_FILE.write_text(content, encoding="utf-8")
-        _record("mode", _MODE_FILE, "claude/workflow-install-mode.json", saved, pre_sha256)
+        _record("mode", _MODE_FILE, f"{CLAUDE_HOST}/workflow-install-mode.json", saved, pre_sha256)
 
 
 def _backup_dirs() -> list[Path]:

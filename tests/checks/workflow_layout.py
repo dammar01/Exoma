@@ -73,7 +73,7 @@ def _check_unmigrated_workspace_stays_where_its_data_is() -> None:
 
 
 def _check_hooks_share_the_rule() -> None:
-    hooks = _REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+    hooks = _REPO / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
     # intent-gate-set, execution-gate, status-guard and agy-host take the rule from
     # workflow_policy.py; the other two still carry their own copy.
     for name in ("workflow_policy", "intent-gate-check", "workflow-statusline"):

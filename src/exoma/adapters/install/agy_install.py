@@ -162,15 +162,12 @@ def inert_config_keys() -> tuple[str, ...]:
     needs them intact. They are reported so a user who tunes one and sees no effect learns
     why from doctor instead of from a long afternoon.
 
-    * `provider_agent` — `agy agents` lists none on a stock install, so `--agent` has
-      nothing to name.
     * `bootstrap_timeout_seconds` — there is no bootstrap call to time out. The
       conversation id arrives in the first line of the run itself.
     * `job_poll_interval_seconds` / `job_poll_timeout_seconds` — nothing is polled; the
       adapter drains the stream as it arrives.
     """
     return (
-        "provider_agent",
         "bootstrap_timeout_seconds",
         "job_poll_interval_seconds",
         "job_poll_timeout_seconds",

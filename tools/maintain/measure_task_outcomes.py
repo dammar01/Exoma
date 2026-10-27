@@ -25,7 +25,7 @@ Per task, from the transcript, the project's Git history, and the runtime's usag
                session spent before its first edit is its ramp-up (`continuation_cost`)
   prompts      follow-up prompts classified as plan, execute, fix, question, verify,
                explore_analyze, change_request, or other, from the slash command or the
-               intent map shipped in src/exoma/_bundle/config/claude/hooks/intent-map.json
+               intent map shipped in src/exoma/_bundle/config/hosts/claude/hooks/intent-map.json
   delegation   delegated calls: distinct prompt ids of the session's usage rows that a provider
                answered (a skill runs `.workflow/run` in a subagent, so the transcript's main
                thread does not show it); verify-browser's spec and review stages are each a call
@@ -78,7 +78,7 @@ FIX_WINDOW = timedelta(hours=24)
 SEARCH_WINDOW = timedelta(days=30)
 AUTHOR_BEFORE, AUTHOR_AFTER = timedelta(minutes=5), timedelta(minutes=1)
 IDLE_SECONDS = 900
-INTENT_MAP = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "intent-map.json"
+INTENT_MAP = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks" / "intent-map.json"
 TESTFILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.[jt]sx?$|Test\.php$", re.I)
 
 

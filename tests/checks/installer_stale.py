@@ -104,7 +104,7 @@ def _check_only_our_unedited_leftovers_go() -> None:
         assert_true(removed_stems == ["old-gate"], f"a removed hook names its script stem: {removed_stems}")
         assert_true(any("edited.md" in w and "kept" in w for w in plan.warnings), f"the kept leftover is named: {plan.warnings}")
         assert_true(
-            (install_dir / "stale" / "claude" / "skills" / "retired.md").read_text(encoding="utf-8") == "an old skill\n",
+            (install_dir / "stale" / "hosts" / "claude" / "skills" / "retired.md").read_text(encoding="utf-8") == "an old skill\n",
             "every removal is backed up first",
         )
 
@@ -126,7 +126,7 @@ def _check_ledger_is_evidence_too() -> None:
     with _sandbox() as (home, _backups):
         skill = home / "skills" / "from-ledger.md"
         skill.write_text("recorded by the ledger\n", encoding="utf-8")
-        stale.write_ledger([(skill, skill, "claude/skills/from-ledger.md")], True)
+        stale.write_ledger([(skill, skill, "hosts/claude/skills/from-ledger.md")], True)
         assert_true(str(skill) in stale.previously_installed(), "the ledger alone identifies an installed file")
         removable, _ = stale.stale_files(set())
         assert_true([p for p, _ in removable] == [skill], "and makes it removable once no longer shipped")
@@ -159,7 +159,7 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
         ])
         assert_true(stale.retired_hook_stems() == {"old-gate"}, f"a recorded, unshipped hook is retired: {stale.retired_hook_stems()}")
 
-        src = DIST_CONFIG / "claude" / "settings.template.json"
+        src = DIST_CONFIG / "hosts" / "claude" / "settings.template.json"
         template = json.loads(src.read_text(encoding="utf-8"))
         dest = home / "settings.json"
         current = json.loads(json.dumps(template))
@@ -205,13 +205,13 @@ def _check_unstamped_dist_is_refused() -> None:
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert_true(_bundle_stale(manifest) == [], "fixture assumption: the shipped bundle is stamped")
-    tampered = {**manifest, "files": [f for f in manifest["files"] if f["path"] != "claude/skills/plan.md"]}
-    assert_true(_bundle_stale(tampered) == ["claude/skills/plan.md"],
+    tampered = {**manifest, "files": [f for f in manifest["files"] if f["path"] != "hosts/claude/skills/plan.md"]}
+    assert_true(_bundle_stale(tampered) == ["hosts/claude/skills/plan.md"],
                 "a dist file the manifest does not describe is stale, and --apply refuses on it")
     # The other direction: the manifest still vouches for a file dist/ no longer ships.
     # The stale walk only visits sources that exist, so this passed both checks before.
-    ghost = {**manifest, "files": [*manifest["files"], {"path": "claude/skills/deleted.md", "sha256": "0" * 64}]}
-    assert_true(_bundle_stale(ghost) == ["claude/skills/deleted.md"],
+    ghost = {**manifest, "files": [*manifest["files"], {"path": "hosts/claude/skills/deleted.md", "sha256": "0" * 64}]}
+    assert_true(_bundle_stale(ghost) == ["hosts/claude/skills/deleted.md"],
                 "a manifest entry whose dist source was deleted is stale too")
 
 

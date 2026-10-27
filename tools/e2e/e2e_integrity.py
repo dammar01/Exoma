@@ -392,6 +392,7 @@ def integrity_checks(report: Report) -> None:
         / "exoma"
         / "_bundle"
         / "config"
+        / "providers"
         / "opencode"
         / bundle_for("opencode")["instructions"][0]
     ).read_text(encoding="utf-8")
@@ -425,14 +426,14 @@ def integrity_checks(report: Report) -> None:
             and {
                 path.stem
                 for path in (
-                    REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "opencode" / "agents"
+                    REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "providers" / "opencode" / "agents"
                 ).glob("*.md")
             }
             <= {name for name, action in policy.items() if action == "allow"}
         )(
             json.loads(
                 (
-                    REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "opencode" / "opencode.template.json"
+                    REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "providers" / "opencode" / "opencode.template.json"
                 ).read_text(encoding="utf-8")
             )["agent"]["plan"]["permission"].get("task", {})
         ),

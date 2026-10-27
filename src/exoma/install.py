@@ -87,14 +87,25 @@ from exoma.installer.check import (  # noqa: E402,F401
 )
 from exoma.installer.rollback import (  # noqa: E402,F401
     _backup_dirs,
+    _migrated_hosts,
     _run_rollback,
-    _store_only_command,
+    _store_install_mode,
+    _stored_agy_permissions,
+    _stored_hosts,
     _stored_only_command,
+)
+from exoma.config.bundle_keys import provider_dir  # noqa: E402
+from exoma.installer.base import (  # noqa: E402
+    CLAUDE_SETTINGS,
+    HOSTS,
+    _install_agy_permissions,
+    agy_host_present,
 )
 from exoma.installer.settings import (  # noqa: E402,F401
     _drop_intent_hook,
     _hook_script_ids,
     _install_deps,
+    _pin_python,
     _install_provider_config,
     _install_settings,
     _merge_hook_entries,
@@ -343,6 +354,58 @@ def _seed_second_agent_config(
         dest.write_text(payload, encoding="utf-8")
 
 
+_HOST_CHOICES = {"claude": ("claude",), "agy": ("agy",), "both": HOSTS}
+
+
+def _prompt_hosts() -> tuple[str, ...]:
+    """Ask which main-agent host to install. Only reached on --apply from a terminal."""
+    print()
+    print("  Which main agent should Exoma install for?")
+    print("    1) claude   (Claude Code: ~/.claude)")
+    print(f"    2) agy      (Antigravity CLI: ~/.gemini{'' if agy_host_present() else ', not found on this machine'})")
+    print("    3) both")
+    choice = _ask("  host [1-3, blank = claude]: ")
+    return {"2": ("agy",), "3": HOSTS}.get(choice, ("claude",))
+
+
+def _prompt_agy_permissions() -> bool:
+    print()
+    print("  Agy asks before every runner call unless a rule allows it. Exoma can add two rules")
+    print("  to ~/.gemini/antigravity-cli/settings.json: the .workflow runner through this")
+    print("  machine's bash, and writes to Exoma's data directory. They apply to every Agy")
+    print("  session; --uninstall removes them, and your own rules are never touched.")
+    return _ask("  add them? [y/N]: ").lower() in ("y", "yes")
+
+
+def _resolve_hosts(flag: str | None, apply: bool, plan: Plan) -> tuple[str, ...]:
+    """--host, else the last install's choice, else the 0.3.0 migration, else asked on
+    --apply from a terminal, else Claude — what every install did before the choice."""
+    if flag:
+        return _HOST_CHOICES[flag]
+    hosts = _stored_hosts() or _migrated_hosts()
+    if hosts:
+        return hosts
+    if apply and sys.stdin.isatty():
+        return _prompt_hosts()
+    plan.warn("no host chosen yet: installing for claude; --apply from a terminal asks, or pass --host")
+    return ("claude",)
+
+
+def _resolve_agy_permissions(flag: bool | None, hosts: tuple[str, ...], apply: bool) -> bool:
+    """--agy-permissions / --no-agy-permissions, else the last choice, else asked on --apply
+    from a terminal, else off. Opt-in: the rules reach every Agy session."""
+    if "agy" not in hosts:
+        return False
+    if flag is not None:
+        return flag
+    stored, _rules = _stored_agy_permissions()
+    if stored is not None:
+        return stored
+    if apply and sys.stdin.isatty():
+        return _prompt_agy_permissions()
+    return False
+
+
 def _update_providers(plan: Plan, apply: bool, backup_root: Path) -> None:
     """--update-providers: each provider CLI to its `stable_version`, npm-global installs
     only (installer/provider_update.py, DEC-057). After every file write, and outside the
@@ -420,6 +483,23 @@ def main() -> int:
         "--apply from a terminal asks and a non-interactive run copies the example",
     )
     parser.add_argument(
+        "--host",
+        choices=sorted(_HOST_CHOICES),
+        help="which main-agent host to install for: claude (~/.claude), agy (~/.gemini), or "
+        "both. Without it the last install's choice is kept; with none, --apply from a "
+        "terminal asks and a non-interactive run installs claude. A host dropped from the "
+        "choice has Exoma's files taken out of it",
+    )
+    parser.add_argument(
+        "--agy-permissions",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="with the agy host: add (or, --no-agy-permissions, remove) the allow rules for "
+        "the .workflow runner and Exoma's data directory in "
+        "~/.gemini/antigravity-cli/settings.json. Without it the last choice is kept; with "
+        "none, --apply from a terminal asks and a non-interactive run leaves them out",
+    )
+    parser.add_argument(
         "--model",
         metavar="ID",
         help="pin this model in config/second_agent.seed.json. Requires --provider. "
@@ -489,6 +569,11 @@ def main() -> int:
     )
     print(f"  home:   {HOME}")
     print(f"  backup: {backup_root}")
+    # Asked before anything is written, like the provider: an answer cut short by Ctrl+C
+    # leaves nothing half installed.
+    hosts = _resolve_hosts(args.host, apply, plan)
+    agy_permissions = _resolve_agy_permissions(args.agy_permissions, hosts, apply)
+    print(f"  hosts:  {', '.join(hosts)}")
     print()
 
     # Env-secret preflight: every {{ENV:NAME}} a shipped file references must resolve
@@ -536,24 +621,44 @@ def main() -> int:
                 "installed_at": datetime.now(timezone.utc).isoformat(),
                 "version": manifest.get("version"),
                 "only_command": bool(args.only_command),
+                "hosts": list(hosts),
                 "project_root": str(project_root) if project_root else None,
             },
         )
 
     _install_deps(plan, apply, args.with_e2e)
 
-    targets = _targets()
+    targets = _targets(hosts)
     for source, dest, key in targets:
         _install_text(
             source, dest, key, plan, apply, backup_root, project_root, args.only_command
         )
+    _stored_enabled, owned_rules = _stored_agy_permissions()
+    if "agy" in hosts:
+        owned_rules = _install_agy_permissions(agy_permissions, owned_rules, plan, apply, backup_root)
+    # A host no longer chosen: its merged entries come out first, so no registration is
+    # left pointing at a script the prune below removes.
+    from exoma.installer.base import AGY_HOOKS_PREFIX, CLAUDE_HOOKS_PREFIX
+    from exoma.installer.uninstall import retire_agy_dot_dir, withdraw_host
+
+    retire_agy_dot_dir(plan, apply, backup_root)
+
+    keep_prefixes: list[str] = []
+    for host in HOSTS:
+        if host not in hosts:
+            clean, owned_rules = withdraw_host(host, owned_rules, plan, apply, backup_root)
+            if not clean:
+                keep_prefixes.append(CLAUDE_HOOKS_PREFIX if host == "claude" else AGY_HOOKS_PREFIX)
     # Before settings: the hook commands for scripts removed here are dropped there.
     from exoma.installer.stale import prune as _prune_stale, write_ledger as _write_ledger
 
-    _prune_stale({str(dest) for _src, dest, _key in targets}, plan, apply, backup_root)
+    _prune_stale({str(dest) for _src, dest, _key in targets}, plan, apply, backup_root, tuple(keep_prefixes))
 
-    settings_src = DIST_CONFIG / "claude" / "settings.template.json"
-    if settings_src.exists():
+    settings_src = DIST_CONFIG / CLAUDE_SETTINGS
+    if "claude" not in hosts:
+        # The generated .workflow scripts still run the pinned interpreter.
+        _pin_python(HOME / ".claude" / "settings.json", plan, apply)
+    elif settings_src.exists():
         _install_settings(
             settings_src,
             HOME / ".claude" / "settings.json",
@@ -563,7 +668,7 @@ def main() -> int:
             args.only_command,
         )
     for provider, bundle in PROVIDER_BUNDLES.items():
-        provider_src = DIST_CONFIG / provider / bundle["global_config"][0]
+        provider_src = DIST_CONFIG / provider_dir(provider) / bundle["global_config"][0]
         if provider_src.exists():
             _install_provider_config(
                 provider,
@@ -601,7 +706,9 @@ def main() -> int:
                 # would leave the user unsure which half of the run took effect.
                 plan.warn(f"workspace not upgraded: {exc}")
 
-    _store_only_command(args.only_command, plan, apply, backup_root)
+    _store_install_mode(
+        args.only_command, hosts, agy_permissions, owned_rules, plan, apply, backup_root
+    )
     _write_ledger(targets, apply)
 
     # The last write marks the receipt complete; every earlier one left it `complete:
@@ -633,6 +740,12 @@ def main() -> int:
     else:
         print("  warnings: none")
 
+
+    if "agy" in hosts:
+        # --check compares files; only Agy itself can say whether it loads them.
+        print()
+        print("  agy: open Agy in a project that has a .workflow/ and run /.agy-check — it")
+        print("       reports skills, hooks, the runner permission and the sandbox in one block.")
 
     if not apply:
         print()

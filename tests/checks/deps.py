@@ -47,7 +47,7 @@ _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 # the hooks run standalone from ~/.claude/hooks and reach workflow_policy.py beside them.
 # First-party, but only from that directory, and only while the sibling exists.
 _HOOK_SIBLINGS = {
-    "workflow_policy": "src/exoma/_bundle/config/claude/hooks/",
+    "workflow_policy": "src/exoma/_bundle/config/hosts/claude/hooks/",
 }
 
 

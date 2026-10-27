@@ -24,7 +24,7 @@ from pathlib import Path
 from tests.checks.support import assert_true, no_console
 
 REPO = Path(__file__).resolve().parents[2]
-HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
 WRAPPER = HOOKS / "agy-host.py"
 
 
@@ -107,14 +107,28 @@ def _test_agy_host_contract() -> None:
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "grep_search", Query="foo"))
         assert_true(out.get("decision") == "deny" and "run.sh" in out.get("reason", ""),
                     f"a gather tool is denied with the runner named: {out}")
-        runner = "bash '%s/.workflow/run.sh' analyze 'why; slow | x' 'main_x'" % root.as_posix()
+        from exoma.installer.base import runner_prefix
+
+        script = "'%s/.workflow/run.sh' analyze 'why; slow | x' 'main_x'" % root.as_posix()
+        runner = "%s %s" % (runner_prefix(), script)
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=runner))
-        assert_true(out == {"decision": "allow"}, f"the runner call passes the armed gate: {out}")
+        assert_true(out == {"decision": "allow"}, f"the runner call through the host's bash passes the armed gate: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=runner + " ; cat .env"))
         assert_true(out.get("decision") == "deny", f"a runner call with a chained command does not: {out}")
-        skill = home / ".claude" / "skills" / "analyze.md"
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine="bash " + script))
+        if os.name == "nt":
+            assert_true(out.get("decision") == "deny" and runner_prefix() in out.get("reason", ""),
+                        f"a bare bash on Windows (WSL's) is refused, the right one named: {out}")
+        else:
+            assert_true(out == {"decision": "allow"}, f"a bare bash passes off Windows: {out}")
+        skill = home / ".gemini" / "antigravity-cli" / "skills" / ".analyze" / "SKILL.md"
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(skill)))
-        assert_true(out == {"decision": "allow"}, f"a skill definition read passes: {out}")
+        assert_true(out == {"decision": "allow"}, f"an Agy skill definition read passes: {out}")
+        contract = home / ".gemini" / "antigravity-cli" / "exoma" / "CONTRACT.md"
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(contract)))
+        assert_true(out == {"decision": "allow"}, f"the contract read passes: {out}")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(home / ".claude" / "skills" / "analyze.md")))
+        assert_true(out.get("decision") == "deny", f"an Agy session has no reason to read ~/.claude: {out}")
         # A turn without a command clears the marker.
         _run(home, "PreInvocation", _payload(root, cid, "terima kasih", invocationNum=0))
         assert_true(not (rt / "delegated.marker").exists(), "a plain turn clears the marker")
@@ -379,16 +393,114 @@ def _test_agy_host_install_all_or_nothing() -> None:
                     and not (home / ".gemini" / "config" / "hooks.json").exists(),
                     "a home with a space installs neither Agy file")
 
-    # Without ~/.gemini a Claude-only install has no Agy target at all.
-    with tempfile.TemporaryDirectory(prefix="exoma-agy-whole-") as tmp:
-        saved = base.HOME
-        base.HOME = Path(tmp)
+
+def _test_agy_host_selection() -> None:
+    """The host choice decides the targets; Agy's files live under ~/.gemini and read nothing
+    under ~/.claude; the permission rules are opt-in and only Exoma's are ever removed."""
+    from exoma.install import _resolve_hosts
+    from exoma.installer import base, rollback, stale, uninstall
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-select-") as tmp:
+        home = Path(tmp)
+        # Every path the installer reads its history from goes to the temp home: the stale
+        # prune below runs with apply=True, and it also reads every install receipt under
+        # rollback._backup_dirs() — left on the real home, it deletes the real ~/.claude.
+        saved = (base.HOME, uninstall.HOME, rollback.HOME, rollback._MODE_FILE, stale.LEDGER,
+                 rollback._backup_dirs)
+        base.HOME = uninstall.HOME = rollback.HOME = home
+        rollback._MODE_FILE = home / ".claude" / ".workflow-install-mode.json"
+        stale.LEDGER = home / ".claude" / ".workflow-installed.json"
+        backups = home / ".claude" / "backups"
+        rollback._backup_dirs = lambda: sorted((p for p in backups.iterdir() if p.is_dir()), reverse=True) \
+            if backups.is_dir() else []
         try:
-            keys = {key for _s, _d, key in base._targets()}
+            claude = {key for _s, _d, key in base._targets(("claude",))}
+            agy = base._targets(("agy",))
+            assert_true(not any(k.startswith("hosts/agy/") for k in claude), f"claude alone has no Agy target: {claude}")
+            assert_true(not any(k.startswith("hosts/claude/") for _s, _d, k in agy), "agy alone has no Claude target")
+            agy_dests = [d for _s, d, k in agy if k.startswith("hosts/agy/")]
+            assert_true(all(base.HOME / ".gemini" in d.parents for d in agy_dests),
+                        f"every Agy file lands under ~/.gemini: {agy_dests}")
+            keys = {k for _s, _d, k in agy}
+            assert_true({"hosts/agy/skills/plan/SKILL.md", "hosts/agy/skills/agy-check/SKILL.md",
+                         base.AGY_CONTRACT, base.AGY_HOOKS_PREFIX + "workflow_policy.py",
+                         base.AGY_HOOKS_PREFIX + "intent-map.json"} <= keys,
+                        f"skills, the contract and the hook's siblings ship for Agy: {sorted(keys)}")
+            for src, _d, key in agy:
+                # hooks.json is merged from agy_hook_entry, checked below, not rendered as text.
+                if key.startswith("hosts/agy/") and not key.startswith(base.AGY_HOOKS_PREFIX) and key != base.AGY_HOST_HOOKS:
+                    text = base._render_text(src, key, None)
+                    assert_true("{{" not in text.replace("{{ENV:", ""), f"{key}: every placeholder is filled")
+            gemini = base._render_text(base.DIST_CONFIG / base.AGY_HOST_INSTRUCTIONS, base.AGY_HOST_INSTRUCTIONS, None)
+            hook = json.dumps(base.agy_hook_entry(base.DIST_CONFIG / base.AGY_HOST_HOOKS))
+            assert_true(".claude" not in gemini and ".claude" not in hook,
+                        "the instructions and the hook registration never point at ~/.claude")
+            skill = base._render_text(base.DIST_CONFIG / "hosts" / "claude" / "skills" / "plan.md", "hosts/agy/skills/plan/SKILL.md", None)
+            assert_true(skill.startswith("---\nname: .plan\n") and "bash '" not in skill
+                        and base.runner_prefix() in skill,
+                        f"a skill gets Agy's frontmatter and the host's runner: {skill[:200]}")
+
+            # Host resolution: the flag, then the stored choice, then claude without a terminal.
+            plan = base.Plan()
+            assert_true(_resolve_hosts("both", False, plan) == base.HOSTS, "--host both names both")
+            assert_true(_resolve_hosts(None, False, plan) == ("claude",) and plan.warnings,
+                        "no choice and no terminal installs claude, and says so")
+            rollback._MODE_FILE.parent.mkdir(parents=True)
+            rollback._MODE_FILE.write_text(json.dumps({"only_command": False}), encoding="utf-8")
+            assert_true(rollback._migrated_hosts() == ("claude",), "a 0.3.0 install without an Agy hook was claude")
+            hooks = base.agy_hooks_dest()
+            hooks.parent.mkdir(parents=True)
+            hooks.write_text(json.dumps({"exoma": {}}), encoding="utf-8")
+            if not any(ch in p for p in (Path(sys.executable).as_posix(), home.as_posix())
+                       for ch in base._AGY_UNSAFE_PATH_CHARS):
+                assert_true(rollback._migrated_hosts() == base.HOSTS, "one with the Agy hook was both")
+            rollback._MODE_FILE.write_text(json.dumps({"hosts": ["agy"]}), encoding="utf-8")
+            assert_true(_resolve_hosts(None, True, base.Plan()) == ("agy",), "an upgrade keeps the stored choice")
+
+            # Permission rules: added beside the user's, claimed only when added, removed alone.
+            settings = base.agy_settings_dest()
+            settings.parent.mkdir(parents=True)
+            rules = base.agy_permission_rules()
+            user = {"model": "m", "permissions": {"allow": ["command(git)", rules[1]]}}
+            settings.write_text(json.dumps(user), encoding="utf-8")
+            owned = base._install_agy_permissions(True, [], base.Plan(), True, home / "backup")
+            allow = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+            assert_true(allow == ["command(git)", rules[1], rules[0]] and owned == [rules[0]],
+                        f"ours added after the user's; a rule the user already had is not claimed: {allow} {owned}")
+            assert_true(base._install_agy_permissions(True, owned, base.Plan(), True, home / "backup") == owned,
+                        "a second install changes nothing")
+            base._reset_receipt()
+            plan = base.Plan()
+            uninstall.withdraw_host("agy", owned, plan, True, home / "backup2")
+            base._reset_receipt()
+            after = json.loads(settings.read_text(encoding="utf-8"))
+            assert_true(after == user, f"dropping Agy removes only Exoma's rule: {after}")
+            assert_true("exoma" not in json.loads(hooks.read_text(encoding="utf-8")) if hooks.exists() else True,
+                        "and the `exoma` hook")
+
+            # A registration that cannot be read keeps its hook scripts: Agy still runs them.
+            script = base.agy_exoma_dir() / "hooks" / "agy-host.py"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("# installed\n", encoding="utf-8")
+            stale.LEDGER.write_text(json.dumps({"schema": 1, "files": {str(script): {
+                "key": base.AGY_HOOKS_PREFIX + "agy-host.py", "sha256": base._file_sha256(script)}}}), encoding="utf-8")
+            hooks.write_text("{not json", encoding="utf-8")
+            known = stale.previously_installed()
+            assert_true(known and all(home in Path(dest).parents for dest in known),
+                        f"guard: the prune below may only see files under the temp home: {sorted(known)}")
+            clean, _rules = uninstall.withdraw_host("agy", [], base.Plan(), True, home / "backup3")
+            assert_true(not clean, "an unreadable hooks.json is reported as not withdrawn")
+            plan = base.Plan()
+            stale.prune(set(), plan, True, home / "backup3", (base.AGY_HOOKS_PREFIX,))
+            assert_true(script.is_file() and any("kept 1 hook script" in w for w in plan.warnings),
+                        f"so the prune keeps the script it still runs, and says so: {plan.warnings}")
+            stale.prune(set(), base.Plan(), True, home / "backup4")
+            assert_true(not script.exists(), "without that, the same file is pruned")
+            base._reset_receipt()
         finally:
-            base.HOME = saved
-        assert_true(not keys & {base.AGY_HOST_INSTRUCTIONS, base.AGY_HOST_HOOKS},
-                    "no ~/.gemini, no Agy target")
+            (base.HOME, uninstall.HOME, rollback.HOME, rollback._MODE_FILE, stale.LEDGER,
+             rollback._backup_dirs) = saved
+            base._reset_receipt()
 
 
 def _test_agy_host_uninstall() -> None:
@@ -448,11 +560,104 @@ def _test_agy_host_uninstall() -> None:
             base._reset_receipt()
 
 
+def _test_bundle_layout_and_agy_agent() -> None:
+    """hosts/ and providers/ keys; an older install's keys still read as ours; the Agy second
+    agent ships as a custom agent and is selected only once installed; ~/.agy is retired."""
+    from exoma.adapters.providers.agy_adapter import AgyAdapter
+    from exoma.config.bundle_keys import canonical_key
+    from exoma.installer import base, uninstall
+
+    for old, new in (("claude/skills/plan.md", "hosts/claude/skills/plan.md"),
+                     ("agy-host/GEMINI.md", "hosts/agy/GEMINI.md"),
+                     ("opencode/agents/wf-map.md", "providers/opencode/agents/wf-map.md"),
+                     ("stale/claude/hooks/x.sh", "stale/hosts/claude/hooks/x.sh"),
+                     ("uninstall/agy/AGENTS.md", "uninstall/providers/agy/AGENTS.md"),
+                     ("hosts/claude/CLAUDE.md", "hosts/claude/CLAUDE.md"),
+                     ("unrelated/key", "unrelated/key")):
+        assert_true(canonical_key(old) == new, f"{old} reads as {new}: {canonical_key(old)}")
+    for _s, _d, key in base._targets():
+        assert_true(key.startswith(("hosts/", "providers/")), f"every key is written in the current layout: {key}")
+
+    agent = [(s, d, k) for s, d, k in base._targets() if k == "providers/agy/agent.md"]
+    assert_true(agent and agent[0][1].parts[-4:] == ("config", "agents", "exoma-second-agent", "agent.md")
+                and ".gemini" in agent[0][1].parts and "providers/agy/agent.md" not in base.MARKERS,
+                f"the Agy second agent is a whole-file custom agent under ~/.gemini: {agent}")
+    text = agent[0][0].read_text(encoding="utf-8")
+    assert_true(text.startswith("---\nname: exoma-second-agent\n"), "its frontmatter opens the file")
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-agent-") as tmp:
+        home = Path(tmp)
+        saved = os.environ.get("AGENT_HOME")
+        os.environ["AGENT_HOME"] = str(home)
+        try:
+            adapter = AgyAdapter("agy")
+            args = adapter._build_args("p", None, None, None)
+            assert_true("--agent" not in args, f"no installed agent, no --agent (a stock agy would fail): {args}")
+            definition = home / ".gemini" / "config" / "agents" / "exoma-second-agent" / "agent.md"
+            definition.parent.mkdir(parents=True)
+            definition.write_text(text, encoding="utf-8")
+            args = adapter._build_args("p", None, None, None)
+            assert_true(args[args.index("--agent") + 1] == "exoma-second-agent",
+                        f"installed, the call runs as it: {args}")
+        finally:
+            if saved is None:
+                os.environ.pop("AGENT_HOME", None)
+            else:
+                os.environ["AGENT_HOME"] = saved
+
+        # ~/.agy/AGENTS.md from an older install: Exoma's block out, the user's text kept.
+        legacy = home / ".agy" / "AGENTS.md"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("my notes\n\n<!-- WORKFLOW-SECOND-AGENT:START -->\nold\n"
+                          "<!-- WORKFLOW-SECOND-AGENT:END -->\n", encoding="utf-8")
+        saved_home = uninstall.HOME
+        uninstall.HOME = home
+        try:
+            uninstall.retire_agy_dot_dir(base.Plan(), True, home / "backup")
+        finally:
+            uninstall.HOME = saved_home
+            base._reset_receipt()
+        assert_true(legacy.read_text(encoding="utf-8") == "my notes\n",
+                    f"the old block is retired, the user's text kept: {legacy.read_text(encoding='utf-8')!r}")
+
+        # The agent file has no block to cut: it is a managed file, recorded by the ledger and
+        # removed by --uninstall while it is still what the install wrote. Every path the
+        # uninstall reads its history from points at this temp home (it deletes with apply).
+        from exoma.installer import rollback, stale
+
+        saved = (base.HOME, uninstall.HOME, stale.LEDGER, rollback._backup_dirs)
+        base.HOME = uninstall.HOME = home
+        stale.LEDGER = home / ".claude" / ".workflow-installed.json"
+        rollback._backup_dirs = lambda: []
+        try:
+            targets = [(s, d, k) for s, d, k in base._targets() if k == "providers/agy/agent.md"]
+            installed = targets[0][1]
+            installed.parent.mkdir(parents=True, exist_ok=True)
+            installed.write_text(text, encoding="utf-8")
+            stale.write_ledger(targets, True)
+            known = stale.previously_installed()
+            assert_true(str(installed) in known and all(home in Path(d).parents for d in known),
+                        f"the ledger records the agent file, and only temp-home files: {sorted(known)}")
+            installed.write_text(text + "\nmine\n", encoding="utf-8")
+            plan = base.Plan()
+            uninstall._uninstall_files(plan, True, home / "backup-agent")
+            assert_true(installed.is_file() and any(str(installed) in w for w in plan.warnings),
+                        f"an edited agent file is kept and named: {plan.warnings}")
+            installed.write_text(text, encoding="utf-8")
+            uninstall._uninstall_files(base.Plan(), True, home / "backup-agent2")
+            assert_true(not installed.exists(), "--uninstall removes the agent file it wrote")
+        finally:
+            base.HOME, uninstall.HOME, stale.LEDGER, rollback._backup_dirs = saved
+            base._reset_receipt()
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(REPO))
     sys.path.insert(0, str(REPO / "src"))
     _test_agy_host_contract()
     _test_agy_host_install_merges()
     _test_agy_host_install_all_or_nothing()
+    _test_agy_host_selection()
+    _test_bundle_layout_and_agy_agent()
     _test_agy_host_uninstall()
     print("agy_host: OK")

@@ -1,7 +1,7 @@
 # Exoma — repository development contract
 
 Applies only when developing this repository. It is not shipped: the global bundle
-installed into user projects is `src/exoma/_bundle/config/claude/CLAUDE.md`, and nothing
+installed into user projects is `src/exoma/_bundle/config/hosts/claude/CLAUDE.md`, and nothing
 here belongs in it.
 
 ## Scope

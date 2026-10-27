@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate that the skill files, the command wrappers, and CLAUDE.md's registry agree.
 
-`src/exoma/_bundle/config/claude/skills/<name>.md` is the single source of truth for every skill body.
+`src/exoma/_bundle/config/hosts/claude/skills/<name>.md` is the single source of truth for every skill body.
 CLAUDE.md carries only the orchestrator contract plus a command registry, so there is
 nothing to generate. What can still drift is the set of skills: a new skills/<name>.md
 added without registering `/.name` in CLAUDE.md, or a registry entry with no file.
@@ -30,9 +30,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLAUDE_MD = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "CLAUDE.md"
-SKILLS_DIR = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "skills"
-COMMANDS_DIR = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "commands"
+CLAUDE_MD = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "CLAUDE.md"
+SKILLS_DIR = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "skills"
+COMMANDS_DIR = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "commands"
 
 # Registry lines list every command as `/.name` (with an optional trailing flag like -y).
 _REGISTRY_RE = re.compile(r"^(?:LOCAL|DELEGATED):", re.MULTILINE)

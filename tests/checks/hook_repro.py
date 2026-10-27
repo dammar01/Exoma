@@ -25,7 +25,7 @@ from tests.checks.support import assert_true
 from exoma.utils import osutil
 from tests.checks.support import no_console
 
-HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
 BIG = 40_000  # past the 32767-character limit Windows puts on one environment variable
 
 
@@ -405,6 +405,6 @@ def check_repro_matrix() -> None:
         _runner_symlink(r)
         _pin_beside_settings(r)
         left = {p.name for p in HOOKS.iterdir() if p.name != "__pycache__"} - shipped
-        assert_true(not left, f"running the hooks wrote into src/exoma/_bundle/config/claude/hooks: {sorted(left)}")
+        assert_true(not left, f"running the hooks wrote into src/exoma/_bundle/config/hosts/claude/hooks: {sorted(left)}")
     finally:
         r.close()

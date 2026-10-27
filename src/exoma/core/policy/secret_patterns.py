@@ -1,6 +1,6 @@
 """The one list of secret-file patterns, and each provider's dialect of it.
 
-The deny-list used to exist once, as JSON, inside `_bundle/config/opencode/opencode.project.json`.
+The deny-list used to exist once, as JSON, inside `_bundle/config/providers/opencode/opencode.project.json`.
 That was fine while opencode was the only provider that could express a read boundary. It
 stops being fine the moment a second provider needs the SAME list in a different syntax:
 two copies of a security list drift, and the copy that drifts is the one nobody reads.

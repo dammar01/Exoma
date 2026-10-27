@@ -1,3 +1,8 @@
+---
+name: exoma-second-agent
+description: "Exoma's read-only second agent: gathers evidence for a [WORKFLOW_AGENT] call from the Exoma runtime. Selected per call with --agent; not for interactive use."
+---
+
 <!-- WORKFLOW-SECOND-AGENT:START — v0.3.0, do not edit manually -->
 # Agy Second Agent — v0.3.0
 

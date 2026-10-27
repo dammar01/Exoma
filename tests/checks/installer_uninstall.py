@@ -55,7 +55,7 @@ def _test_installer_uninstall() -> None:
         dest = root / "home" / "CLAUDE.md"
         _reset_receipt()
         plan = Plan()
-        _install_text(src, dest, "claude/CLAUDE.md", plan, True, root / "backup", None)
+        _install_text(src, dest, "hosts/claude/CLAUDE.md", plan, True, root / "backup", None)
         written = dest.read_text(encoding="utf-8")
         assert_true(
             "Shipped header" not in written and _START in written and _END in written,
@@ -192,7 +192,7 @@ def _check_unpaired_markers(root: Path) -> None:
         dest.write_text(text, encoding="utf-8")
         _reset_receipt()
         plan = Plan()
-        _install_text(src, dest, "claude/CLAUDE.md", plan, True, root / "backup-markers", None)
+        _install_text(src, dest, "hosts/claude/CLAUDE.md", plan, True, root / "backup-markers", None)
         assert_true(
             dest.read_text(encoding="utf-8") == text,
             f"[{name}] a file with unpaired markers is left untouched: {dest.read_text(encoding='utf-8')!r}",
@@ -211,7 +211,7 @@ def _check_unpaired_markers(root: Path) -> None:
             raise AssertionError(f"[{name}] _merge_managed must raise on unpaired markers")
         # Uninstall does not guess where a broken block ends either.
         plan = Plan()
-        _uninstall_text(dest, "claude/CLAUDE.md", plan, True, root / "backup-markers")
+        _uninstall_text(dest, "hosts/claude/CLAUDE.md", plan, True, root / "backup-markers")
         assert_true(
             dest.read_text(encoding="utf-8") == text and plan.warnings,
             f"[{name}] uninstall leaves a file with unpaired markers as is: {plan.warnings}",
@@ -241,9 +241,9 @@ def _check_settings_before_hooks(root: Path) -> None:
     uninstall_mod.HOME = home
     agy_hooks = home / ".gemini" / "config" / "hooks.json"
     uninstall_mod.agy_hooks_dest = lambda: agy_hooks
-    uninstall_mod._targets = lambda: [(hook, hook, "claude/hooks/session-bind.ps1")]
+    uninstall_mod._targets = lambda: [(hook, hook, "hosts/claude/hooks/session-bind.ps1")]
     uninstall_mod.previously_installed = lambda: {
-        str(hook): {"key": "claude/hooks/session-bind.ps1", "hashes": {_file_sha256(hook)}}
+        str(hook): {"key": "hosts/claude/hooks/session-bind.ps1", "hashes": {_file_sha256(hook)}}
     }
     uninstall_mod.retired_hook_stems = lambda: set()
     try:

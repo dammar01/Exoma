@@ -8,7 +8,7 @@ back in v3.7.3 through a new module that called `git` with a bare `subprocess.ru
 fix was never the problem — nothing said a new spawn site had to use it. This does.
 
 Scope is the code the worker runs: `core/`, `adapters/`, `utils/`, and the shipped hooks
-under `src/exoma/_bundle/config/claude/hooks/`, which Claude Code starts without a console too (v3.8.3:
+under `src/exoma/_bundle/config/hosts/claude/hooks/`, which Claude Code starts without a console too (v3.8.3:
 the Bash hook port brought the flash back through task-events' bare `git`). `tools/` and
 `installer/` run in the user's own terminal, where a child shares that console and
 nothing flashes.
@@ -33,7 +33,7 @@ from tests.checks.support import assert_true
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_SCOPE = ("src/exoma/core", "src/exoma/adapters", "src/exoma/utils", "src/exoma/_bundle/config/claude/hooks", "tests")
+_SCOPE = ("src/exoma/core", "src/exoma/adapters", "src/exoma/utils", "src/exoma/_bundle/config/hosts/claude/hooks", "tests")
 _SKIP_PARTS = {"__pycache__"}
 _SPAWNERS = {"run", "Popen", "call", "check_call", "check_output"}
 _HIDING_HELPERS = {"hidden_run_kwargs", "detached_popen_kwargs", "no_console"}
@@ -156,7 +156,7 @@ def _check_detached_workers_keep_a_hidden_console() -> None:
             f"detached_popen_kwargs must hide a console, not drop it: {flags:#x}",
         )
         assert_true(subprocess.DETACHED_PROCESS == _DETACHED_PROCESS, "flag constant drifted")
-    hook = (REPO_ROOT / "src/exoma/_bundle/config/claude/hooks/graph-refresh.py").read_text(encoding="utf-8")
+    hook = (REPO_ROOT / "src/exoma/_bundle/config/hosts/claude/hooks/graph-refresh.py").read_text(encoding="utf-8")
     assigned = re.findall(r'flags\["creationflags"\] = ([0-9xa-fA-F| ]+)', hook)
     values = [sum(int(part, 0) for part in expr.split("|")) for expr in assigned]
     assert_true(

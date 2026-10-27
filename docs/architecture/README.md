@@ -97,7 +97,7 @@ validation result are added by the runtime after the adapter returns.
 
 | Step | Component | Source |
 | --- | --- | --- |
-| 2 | intent-gate hooks (host hook layer, not the Python runtime): Claude Code, or the Agy wrapper at `PreInvocation`/`PreToolUse` | `src/exoma/_bundle/config/claude/hooks/intent-gate-{set,check}.*`, `agy-host.py`, `workflow_policy.py` |
+| 2 | intent-gate hooks (host hook layer, not the Python runtime): Claude Code, or the Agy wrapper at `PreInvocation`/`PreToolUse` | `src/exoma/_bundle/config/hosts/claude/hooks/intent-gate-{set,check}.*`, `agy-host.py`, `workflow_policy.py` |
 | 4 | generated runner | `core/runtime/scripts.py` |
 | 5 | job submit, detached worker, await | `core/jobs/job_lifecycle.py`, `core/jobs/job_manager.py` |
 | 6 | session and runtime lock | `core/workspace/session_manager.py`, `core/workspace/runtime_lock.py` |

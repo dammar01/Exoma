@@ -2,7 +2,9 @@
 
     <python> agy-host.py <Event>     (stdin: Agy's hook JSON; stdout: Agy's hook JSON)
 
-Registered by the installer in ~/.gemini/config/hooks.json under the hook name `exoma`. It
+Registered by the installer in ~/.gemini/config/hooks.json under the hook name `exoma`, and
+installed with workflow_policy.py and intent-map.json into ~/.gemini/antigravity-cli/exoma/
+hooks, so an Agy session never reads ~/.claude. It
 gives an Agy session what the Claude Code hooks give a Claude session, through Agy's own
 contract as calibrated (CASE-029; docs/reference.md, "Hosts"):
 
@@ -183,13 +185,62 @@ def pre_invocation(payload, cid, prompt):
 
 
 _SHELL_META = set(";|&<>`$\n")
-_RUNNER = re.compile(r"^(?:bash\s+)?(?:'([^']+)'|(\S+))(?:\s|$)")
+_RUNNER = re.compile(r"^(?:'([^']+)'|(\S+))(?:\s|$)")
+_BASH_WORD = re.compile(r"^(?:'([^']+)'|(\S+))\s+")
+
+
+def find_bash():
+    """The bash the runner must start under, restated from exoma.utils.osutil.find_bash (this
+    hook runs without the package): `bash` on PATH, or on Windows Git Bash beside `git` —
+    there a bare `bash` can be WSL's, which cannot read the Windows paths the runner takes."""
+    import shutil
+    if os.name != "nt":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if not git:
+        return None
+    parent = os.path.dirname(os.path.abspath(git))
+    while True:
+        for candidate in (os.path.join(parent, "bin", "bash.exe"),
+                          os.path.join(parent, "usr", "bin", "bash.exe")):
+            if os.path.isfile(candidate):
+                return candidate
+        up = os.path.dirname(parent)
+        if up == parent:
+            return None
+        parent = up
+
+
+def runner_prefix():
+    """The runner's bash as the host instructions spell it (installer.base.runner_prefix)."""
+    found = find_bash()
+    if not found:
+        return "bash"
+    path = found.replace("\\", "/")
+    return "& '%s'" % path if os.name == "nt" else "'%s'" % path
+
+
+def _is_bash(word):
+    """A bash this runner may start under: the one find_bash names, or `bash` off Windows."""
+    import workflow_policy as wp
+    if os.name != "nt" and word == "bash":
+        return True
+    found = find_bash()
+    return bool(found) and wp.norm(word.replace("\\", "/")) == wp.norm(found.replace("\\", "/"))
 
 
 def runner_call(command, root):
-    """True for one plain call of <root>/.workflow/{run,check,inspect}.sh: every shell
-    metacharacter inside single quotes, the script path inside the root."""
+    """True for one plain call of <root>/.workflow/{run,check,inspect}.sh through the bash
+    find_bash names (PowerShell's `& '<bash>'` included): every shell metacharacter inside
+    single quotes, the script path inside the root. A bare `bash` on Windows is refused —
+    it can be WSL's, which fails on these paths."""
     text = (command or "").strip()
+    if text.startswith("& "):
+        text = text[2:].lstrip()
+    bash = _BASH_WORD.match(text)
+    if not bash or not _is_bash(bash.group(1) or bash.group(2)):
+        return False
+    text = text[bash.end():]
     quoted = False
     for ch in text:
         if ch == "'":
@@ -210,10 +261,12 @@ def runner_call(command, root):
 
 
 def skill_read(target):
-    """A skill definition: an .md under ~/.claude/skills, where the host instructions point."""
+    """A skill definition or the contract: an .md under Agy's skills or Exoma's own Agy
+    directory, where the host instructions point."""
     import workflow_policy as wp
-    skills = os.path.join(os.path.expanduser("~"), ".claude", "skills")
-    return target.lower().endswith(".md") and wp.under(target, skills)
+    cli = os.path.join(gemini_dir(), "antigravity-cli")
+    return target.lower().endswith(".md") and (
+        wp.under(target, os.path.join(cli, "skills")) or wp.under(target, os.path.join(cli, "exoma")))
 
 
 def pre_tool_use(payload, cid):
@@ -248,9 +301,10 @@ def pre_tool_use(payload, cid):
         if gather:
             refusal = ("preflight", (
                 "/.%s is a delegated command: the next step is the runner, not %s.\n"
-                "Run: bash '%s/.workflow/run.sh' %s '<task>' '%s'\n"
+                "Run: %s '%s/.workflow/run.sh' %s '<task>' '%s'\n"
                 "Escape: WORKFLOW_LOCAL_MODE=1, .workflow/local_mode.flag, or delete %s."
-            ) % (cmd, tool, root.replace("\\", "/"), cmd, main_id, os.path.join(rt, "delegated.marker")))
+            ) % (cmd, tool, runner_prefix(), root.replace("\\", "/"), cmd, main_id,
+                 os.path.join(rt, "delegated.marker")))
     if refusal is None and is_shell:
         refusal = wp.commit_refusal(command, rt)
     if refusal is None and is_write and target:

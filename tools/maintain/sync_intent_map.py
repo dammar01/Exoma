@@ -2,8 +2,8 @@
 """Validate that the runtime intent NL-map and CLAUDE.md's NL-map agree.
 
 Two hand-maintained copies of the same delegated intent logic exist:
-  - src/exoma/_bundle/config/claude/hooks/intent-map.json  (consumed by intent-gate-set.py at runtime)
-  - src/exoma/_bundle/config/claude/CLAUDE.md               (the LLM-facing NL-map + command registry)
+  - src/exoma/_bundle/config/hosts/claude/hooks/intent-map.json  (consumed by intent-gate-set.py at runtime)
+  - src/exoma/_bundle/config/hosts/claude/CLAUDE.md               (the LLM-facing NL-map + command registry)
 
 `intent-map.json` is the CANONICAL source; CLAUDE.md must cover everything it lists. When
 the two drift, the runtime gate and the prompt disagree about what counts as DELEGATED —
@@ -26,8 +26,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLAUDE_MD = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "CLAUDE.md"
-INTENT_MAP = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "intent-map.json"
+CLAUDE_MD = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "CLAUDE.md"
+INTENT_MAP = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks" / "intent-map.json"
 
 _COMMAND_RE = re.compile(r"/\.([a-z][a-z0-9_-]*)")
 _WORD_RE = re.compile(r"[a-z]{4,}")

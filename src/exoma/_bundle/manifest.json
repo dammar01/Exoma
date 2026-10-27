@@ -6,476 +6,490 @@
   },
   "files": [
     {
-      "path": "claude/CLAUDE.md",
+      "path": "hosts/claude/CLAUDE.md",
       "sha256": "8be82bbadbcc282fa4f457954f9e91664892ae07a632a203e6060a576f2e191f",
       "bytes": 36193,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/analyze.md",
+      "path": "hosts/claude/skills/analyze.md",
       "sha256": "d28c0402ec496daacef1c2486cabdfcece17ddd83a80d63dc72c88439e73e1bd",
       "bytes": 2043,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/caveman.md",
+      "path": "hosts/claude/skills/caveman.md",
       "sha256": "8a9310bce9658e8c85cb817cf22c86cac6eb7037a300aa81721c00512a5f0be8",
       "bytes": 464,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/commit.md",
+      "path": "hosts/claude/skills/commit.md",
       "sha256": "891f4001e1c180df0825e798fca1bdb50ce607048ffbb4a40da239b21882b174",
       "bytes": 2223,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/doctor.md",
+      "path": "hosts/claude/skills/doctor.md",
       "sha256": "24cb90faef261c5ad3e141e11c14ecb004429a87fdadf00ef4c0e64a1cca88be",
       "bytes": 2579,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/execute.md",
+      "path": "hosts/claude/skills/execute.md",
       "sha256": "37a979d1d42f636a4d69504f018a259bb67724c3dda6f93a6906826f5371cad1",
       "bytes": 4125,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/explore.md",
+      "path": "hosts/claude/skills/explore.md",
       "sha256": "377cfe42e5c87a3e8b6b1482177a91e4dd57af509cad0c0daab60aa554ac3a8a",
       "bytes": 1329,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/help.md",
+      "path": "hosts/claude/skills/help.md",
       "sha256": "873fd340e2f3d9f42da545df41702fb17c08c1ec77d7aee744aa43102e6ccd4d",
       "bytes": 1707,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/init.md",
+      "path": "hosts/claude/skills/init.md",
       "sha256": "b85212f3627c7f7df1353f16ff5862aa0be63a95becbec1f30279f5f00ea8714",
       "bytes": 2384,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/local.md",
+      "path": "hosts/claude/skills/local.md",
       "sha256": "0bda243b642bd711c1330a2ab0c5ce74dd0bfe1e110bac3f4e0321f0c7691c4a",
       "bytes": 1104,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/memory.md",
+      "path": "hosts/claude/skills/memory.md",
       "sha256": "2b3121b5697e7e89c6246ff24791c0c98002c068dde3d4568acafd0caaad6517",
       "bytes": 578,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/plan.md",
+      "path": "hosts/claude/skills/plan.md",
       "sha256": "f7ca5daf2100d0be52b5b8dda2e7d0cc2d3855923f7bb295cb8bf8fa3b3cae0b",
       "bytes": 7789,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/promote.md",
+      "path": "hosts/claude/skills/promote.md",
       "sha256": "8aeb034416ecb16e90e3cb589488616976bbf6025130847ac68d223961b60150",
       "bytes": 4377,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/provider.md",
+      "path": "hosts/claude/skills/provider.md",
       "sha256": "e8d23a478b7421a7a78bcf055728e6827f0dde00ff87b468437f380abf195215",
       "bytes": 8285,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/sweep.md",
+      "path": "hosts/claude/skills/sweep.md",
       "sha256": "fe178d9b15ab26f027b2743c3da48fe968374225ca214e38c08cc25ee457bfa5",
       "bytes": 808,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/upgrade.md",
+      "path": "hosts/claude/skills/upgrade.md",
       "sha256": "db8586d54e6ed2f0d960c0813f9f1141b4d87c56504827a158977cb5dd29185e",
       "bytes": 2721,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/verify-browser.md",
+      "path": "hosts/claude/skills/verify-browser.md",
       "sha256": "8b5f5b456b9990a6b963ba2ad9a341046a4e122aeb911eb288322e32269728b9",
       "bytes": 32826,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/skills/verify.md",
+      "path": "hosts/claude/skills/verify.md",
       "sha256": "3f4133667cf4d9afa5c6ab447182458b502927aba2bfd7ce05304f81df79005a",
       "bytes": 6066,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.analyze.md",
+      "path": "hosts/claude/commands/.analyze.md",
       "sha256": "77965f2a003374413b60d3e58f113ed2579d08593032fee777b8e8fca3bf8b24",
       "bytes": 221,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.caveman.md",
+      "path": "hosts/claude/commands/.caveman.md",
       "sha256": "1cc488e63d7dc7b82a66b5094f1f4c27189321529e9a90e31797deea84a8c687",
       "bytes": 221,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.commit.md",
+      "path": "hosts/claude/commands/.commit.md",
       "sha256": "fafa9d589bcf90c8ff381e58a1da2810284e85d43365c729011fe153255f6503",
       "bytes": 176,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.doctor.md",
+      "path": "hosts/claude/commands/.doctor.md",
       "sha256": "82d03b765051be8841d29e735a72e16f02b8160f570ac8d6f583f86f4f09992c",
       "bytes": 176,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.execute.md",
+      "path": "hosts/claude/commands/.execute.md",
       "sha256": "b692aa837d690122d1657adba4762b3a6fd2eab9e5e9f95eceddff54acf4e946",
       "bytes": 194,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.explore.md",
+      "path": "hosts/claude/commands/.explore.md",
       "sha256": "4d6e69f3e9108c2fe41d5934ca7511f4cb7072516c196ff3aaef40ade856df40",
       "bytes": 211,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.help.md",
+      "path": "hosts/claude/commands/.help.md",
       "sha256": "aa74a7eb92e9794ac075870ba45b505a6a929065f27593fe06b9547f6e39492f",
       "bytes": 145,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.init.md",
+      "path": "hosts/claude/commands/.init.md",
       "sha256": "0b0902e090472fa1d7cd4b9043c390d9dfa9ec80a4599cade83085b8081a5082",
       "bytes": 207,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.local.md",
+      "path": "hosts/claude/commands/.local.md",
       "sha256": "e2cf39fa9e37a0f946fd222e880a93843aa7ccdcea9121e8f1a0d58000c4ee59",
       "bytes": 270,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.memory.md",
+      "path": "hosts/claude/commands/.memory.md",
       "sha256": "bbba1f5c366f99ca026b301a06c88aee415203cb8aa86e58d33f0f02ee118b28",
       "bytes": 203,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.plan.md",
+      "path": "hosts/claude/commands/.plan.md",
       "sha256": "40c5794d78b4b5adcab744da02f2df5b45f344593bec16c33e8cc790ee0c196a",
       "bytes": 258,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.promote.md",
+      "path": "hosts/claude/commands/.promote.md",
       "sha256": "898bd0a3c7e01fd4697aac5a4bfc5247f4380d1f0506292904d2c4ec918c0577",
       "bytes": 248,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.provider.md",
+      "path": "hosts/claude/commands/.provider.md",
       "sha256": "7840dcf3a754acc3b8cd31bc4657e21d160dc199b888bb327f40236b23106663",
       "bytes": 383,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.sweep.md",
+      "path": "hosts/claude/commands/.sweep.md",
       "sha256": "3a2f77da7a58fc0f0459fa724c8108bb34aeac2949507650b61d43e714ede882",
       "bytes": 188,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.upgrade.md",
+      "path": "hosts/claude/commands/.upgrade.md",
       "sha256": "a476b9aa123753ee9bfd12427cd9d584bae267eccd0fc5abe8aa1acb44cdf1e5",
       "bytes": 195,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.verify-browser.md",
+      "path": "hosts/claude/commands/.verify-browser.md",
       "sha256": "e9c4933407e68fe9aaf82d1fa0eed7bbad10b4078044ee76f1f008246476f044",
       "bytes": 377,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/commands/.verify.md",
+      "path": "hosts/claude/commands/.verify.md",
       "sha256": "6346615c120dd449071cd3cf485c402b03ab15ee104acf2695852d65ec38d76d",
       "bytes": 210,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/hooks/agy-host.py",
-      "sha256": "f6297d080bc3fef614bafdc21d2cbb6ffd425d4047e8c7b9099babdaec3379c2",
-      "bytes": 14543,
+      "path": "hosts/claude/hooks/agy-host.py",
+      "sha256": "e61f294da6c25b02b804823031cde47de189a1e4b73a39be5f88a0ab0a8bf304",
+      "bytes": 16692,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/execution-gate.py",
+      "path": "hosts/claude/hooks/execution-gate.py",
       "sha256": "d22a9db5a485f0a7337c6921b48d6d43323ea956722ee158dbf1cc9294ee321e",
       "bytes": 4661,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/execution-gate.sh",
+      "path": "hosts/claude/hooks/execution-gate.sh",
       "sha256": "10399d66a8453dbea536777d7ff2112556dfe80ead8a7f3e1d8b5a6785cc8001",
       "bytes": 1575,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/graph-refresh.py",
+      "path": "hosts/claude/hooks/graph-refresh.py",
       "sha256": "0ffa6d5fea95511fedc4876d460a1326010d2e4cfc205408939b6d9192925114",
       "bytes": 13394,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/graph-refresh.sh",
+      "path": "hosts/claude/hooks/graph-refresh.sh",
       "sha256": "e5d3030face0f521d8288b4de52c6148155852c0d069cac4ad0c241582f28784",
       "bytes": 1570,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-gate-check.py",
+      "path": "hosts/claude/hooks/intent-gate-check.py",
       "sha256": "f29394320f4a6a85eab2352abe234855e3d8deaeafeacf9489b48f429e39a6ad",
       "bytes": 23239,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-gate-check.sh",
+      "path": "hosts/claude/hooks/intent-gate-check.sh",
       "sha256": "7092bda322429debed9941666db8feae4567d1a5064e05e5b899d657a5574dab",
       "bytes": 1590,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-gate-set.py",
+      "path": "hosts/claude/hooks/intent-gate-set.py",
       "sha256": "1af8646f434fb0bb9291441e97de9e7ef57cebb6860a7f041c54be0369db07f7",
       "bytes": 7931,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-gate-set.sh",
+      "path": "hosts/claude/hooks/intent-gate-set.sh",
       "sha256": "2106e48119c994570bcccbd05cbd12426a677ba51a5e1238646764424ddd0d30",
       "bytes": 1580,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/intent-map.json",
+      "path": "hosts/claude/hooks/intent-map.json",
       "sha256": "023975b80260a229752902e0f3b0614e73af7e6612a044b494097c264c445a84",
       "bytes": 1569,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/session-bind.py",
+      "path": "hosts/claude/hooks/session-bind.py",
       "sha256": "04dcec605f931745ab1d273a80f96933b464bdc24c53205d8a222d57c4335e95",
       "bytes": 6999,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/session-bind.sh",
+      "path": "hosts/claude/hooks/session-bind.sh",
       "sha256": "66164b01e5afb1e81e9f62827b2f203fae58331d353f833ee55cd13cb6b78f9e",
       "bytes": 1565,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/status-guard.py",
+      "path": "hosts/claude/hooks/status-guard.py",
       "sha256": "d7646f82b53a90a98f8afbf9af0d82a6d8c525cd9530feff08ed6fd5046ce8e8",
       "bytes": 3879,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/status-guard.sh",
+      "path": "hosts/claude/hooks/status-guard.sh",
       "sha256": "f170d35afbcd991535111c507a6eb00fd8b3ade37e8604e0b434f795cb8e1b21",
       "bytes": 1565,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/task-events.py",
+      "path": "hosts/claude/hooks/task-events.py",
       "sha256": "fac45f3a05b0de8121ac63b4a7b5e6701966e36cbb7f6275b0b2da68adb4b160",
       "bytes": 14041,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/task-events.sh",
+      "path": "hosts/claude/hooks/task-events.sh",
       "sha256": "d7ebb8094612dcc23fee14bfbd1a71d0ab1723992acc28cad28b59e847376971",
       "bytes": 1560,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/workflow-statusline.py",
+      "path": "hosts/claude/hooks/workflow-statusline.py",
       "sha256": "8c3a3c3840453401a72dd4cd58b2b0b1fa4a8d0694ce477d54f4e1352be4a062",
       "bytes": 9999,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/workflow-statusline.sh",
+      "path": "hosts/claude/hooks/workflow-statusline.sh",
       "sha256": "05c35a3fb7aff130c8a557625b99052ede749315c86556f561ae2174dfc3495b",
       "bytes": 1600,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/workflow_hooks.py",
+      "path": "hosts/claude/hooks/workflow_hooks.py",
       "sha256": "98c865e43940c3416e1a1183e5ff9c19580265a9c804faee30c369de84f7f1cd",
       "bytes": 4497,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/workflow_policy.py",
+      "path": "hosts/claude/hooks/workflow_policy.py",
       "sha256": "6fb90437a0dc00edfff7a937ec9e1b85baeb974d845c8a90f4094f272de45431",
       "bytes": 18057,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "opencode/AGENTS.md",
+      "path": "providers/opencode/AGENTS.md",
       "sha256": "d4b0c1b7fedbdc2e73cf5ef41634a35f0c5ab9c7eb0656c24ea6454d15cf7e68",
       "bytes": 19712,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
-      "path": "opencode/agents/wf-db.md",
+      "path": "providers/opencode/agents/wf-db.md",
       "sha256": "9b7fa9a43d6359ad5a90755ac812e91f2ad1a3c95b338d2ab39669329b51b050",
       "bytes": 1266,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "opencode/agents/wf-docs.md",
+      "path": "providers/opencode/agents/wf-docs.md",
       "sha256": "f10ca97fb61a2b190c1e34bd1468a5298f5f6ff90debbdf47ee6a5d9741bfd82",
       "bytes": 1002,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "opencode/agents/wf-map.md",
+      "path": "providers/opencode/agents/wf-map.md",
       "sha256": "fba74e6e395a5c5a985c14cc3d7a1a8396fb1cad4eb8af299aa823ea2f8b0f7f",
       "bytes": 1058,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "opencode/agents/wf-slice.md",
+      "path": "providers/opencode/agents/wf-slice.md",
       "sha256": "cae4a999cec60bdaee8d0c15d0a1a01c2d57d08c530c47f34f345ae2ad266f98",
       "bytes": 958,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "opencode/agents/wf-trace.md",
+      "path": "providers/opencode/agents/wf-trace.md",
       "sha256": "6e46182e8b093eb2886e00007df1d397168d0600aa54b0acb8d696c143d1188a",
       "bytes": 1084,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "codex/AGENTS.md",
+      "path": "providers/codex/AGENTS.md",
       "sha256": "25eb0cba60e646104b3edfa8ed003952487ea0fd60705a008c21be253a9ce1a2",
       "bytes": 16878,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
-      "path": "agy/AGENTS.md",
-      "sha256": "1680b12617054a2ad9ab143257f5c20685b539f3ec1bc96e1f3c7f2d74eb0b02",
-      "bytes": 18857,
+      "path": "providers/agy/agent.md",
+      "sha256": "4b40a5c3befe816485f9c81182c2e49f1c299581b79314e7b916204a3238d508",
+      "bytes": 19064,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
-      "path": "claude/settings.template.json",
+      "path": "hosts/claude/settings.template.json",
       "sha256": "cb5dc62ed8119420bdc13ae7ab8b60fd1a2aad49558bc53791ea3a70d6303193",
       "bytes": 2436,
       "merge": "merge",
       "component": "runtime"
     },
     {
-      "path": "agy-host/GEMINI.md",
-      "sha256": "ec01ced3898f41c3f0362ee4ff6bda31873e98518c8365c4142119c99ebbc6be",
-      "bytes": 2474,
+      "path": "hosts/agy/GEMINI.md",
+      "sha256": "6fd5ac0d6de733864a8b6d57249223940bd36e6a960781282e625ca8fa31f6a6",
+      "bytes": 2681,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
-      "path": "agy-host/hooks.template.json",
-      "sha256": "19d9fe3bde2391aea8c908c166b14a8371ae5d277577771173edc01b7bfb73a1",
-      "bytes": 510,
+      "path": "hosts/agy/hooks.template.json",
+      "sha256": "73ae5a2acc39cb53ca784698c56c8d5c0f968f2fa9fc27f890f812a452193e90",
+      "bytes": 576,
       "merge": "merge",
       "component": "runtime"
     },
     {
-      "path": "opencode/opencode.template.json",
+      "path": "hosts/agy/permissions.template.json",
+      "sha256": "816ed5427bfa84f892129d2e4867f652b8bb3ede2a567a6f606b22b4c3530211",
+      "bytes": 198,
+      "merge": "merge",
+      "component": "runtime"
+    },
+    {
+      "path": "hosts/agy/skills/agy-check/SKILL.md",
+      "sha256": "dd209c5eed68078de423fae773ae027e54c26e2375e2ea1116dfc5d8cd2e86b8",
+      "bytes": 1623,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "providers/opencode/opencode.template.json",
       "sha256": "7ea8a6e301fdeb2ecd024851c315a9e74927be158faa283c8775557b48b5d023",
       "bytes": 2085,
       "merge": "merge",
       "component": "runtime"
     },
     {
-      "path": "opencode/opencode.project.json",
+      "path": "providers/opencode/opencode.project.json",
       "sha256": "fbdae70edfb0df1cceed165b30a689562bb3b5d5d1e0855aa9f1510a63e8e3e4",
       "bytes": 1863,
       "merge": "merge",
@@ -483,22 +497,24 @@
     }
   ],
   "targets": {
-    "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
-    "claude/skills": "{{HOME}}/.claude/skills",
-    "claude/commands": "{{HOME}}/.claude/commands",
-    "claude/hooks": "{{HOME}}/.claude/hooks",
-    "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
-    "agy-host/GEMINI.md": "{{HOME}}/.gemini/GEMINI.md",
-    "agy-host/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
-    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
-    "opencode/agents": "{{HOME}}/.config/opencode/agents",
-    "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
-    "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json",
-    "codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
-    "codex/codex.template.toml": "{{HOME}}/.codex/config.toml",
-    "codex/codex.project.json": "{{PROJECT_ROOT}}/codex.project.json",
-    "agy/AGENTS.md": "{{HOME}}/.agy/AGENTS.md",
-    "agy/agy.template.json": "{{HOME}}/.agy/agy.json",
-    "agy/agy.project.json": "{{PROJECT_ROOT}}/agy.project.json"
+    "hosts/claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
+    "hosts/claude/skills": "{{HOME}}/.claude/skills",
+    "hosts/claude/commands": "{{HOME}}/.claude/commands",
+    "hosts/claude/hooks": "{{HOME}}/.claude/hooks",
+    "hosts/claude/settings.template.json": "{{HOME}}/.claude/settings.json",
+    "hosts/agy/GEMINI.md": "{{HOME}}/.gemini/GEMINI.md",
+    "hosts/agy/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
+    "hosts/agy/permissions.template.json": "{{HOME}}/.gemini/antigravity-cli/settings.json",
+    "hosts/agy/skills": "{{HOME}}/.gemini/antigravity-cli/skills",
+    "providers/opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    "providers/opencode/agents": "{{HOME}}/.config/opencode/agents",
+    "providers/opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
+    "providers/opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json",
+    "providers/codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
+    "providers/codex/codex.template.toml": "{{HOME}}/.codex/config.toml",
+    "providers/codex/codex.project.json": "{{PROJECT_ROOT}}/codex.project.json",
+    "providers/agy/agent.md": "{{HOME}}/.gemini/config/agents/exoma-second-agent/agent.md",
+    "providers/agy/agy.template.json": "{{HOME}}/.gemini/agy.json",
+    "providers/agy/agy.project.json": "{{PROJECT_ROOT}}/agy.project.json"
   }
 }

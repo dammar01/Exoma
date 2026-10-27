@@ -140,7 +140,7 @@ def installer_checks(report: Report) -> None:
         report.check(
             "manifest tracks intent-map.json",
             any(
-                entry.get("path") == "claude/hooks/intent-map.json"
+                entry.get("path") == "hosts/claude/hooks/intent-map.json"
                 for entry in manifest.get("files", [])
             ),
         )
@@ -673,7 +673,7 @@ def installer_checks(report: Report) -> None:
             "receipt v2 covers settings and install mode with post hashes",
             installed.returncode == 0
             and receipt.get("schema_version") == 2
-            and {"claude/settings.json", "claude/workflow-install-mode.json"}
+            and {"hosts/claude/settings.json", "hosts/claude/workflow-install-mode.json"}
             <= receipt_keys
             and all(entry.get("post_sha256") for entry in receipt.get("entries", [])),
             f"rc={installed.returncode}, entries={len(receipt.get('entries', []))}",

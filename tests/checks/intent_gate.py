@@ -18,7 +18,7 @@ from tests.checks.support import assert_true
 from exoma.utils.osutil import find_bash
 from tests.checks.support import no_console
 
-HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parents[2] / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
 
 
 def _hook_runners(stem: str) -> list[tuple[str, list[str]]]:

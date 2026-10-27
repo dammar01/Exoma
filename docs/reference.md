@@ -155,6 +155,7 @@ Install the package → run one command → configured.
 exoma install            # DRY RUN — show every change, write nothing
 exoma install --apply    # now writes
 exoma install --apply --only-command      # workflow active only through /.<command>
+exoma install --apply --host agy --agy-permissions   # Agy as the main agent, with its runner rules
 exoma install --apply --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
 exoma install --check                     # check bundle + install (including the project when cwd has .workflow/)
 exoma install --rollback                  # dry run of the latest rollback
@@ -171,12 +172,39 @@ All `exoma install` flags:
 | `--apply` | execute the plan; combined with the other flags below to actually write | yes |
 | `--only-command` | command-only mode (see "Intent mode"); persisted, applies to subsequent installs | with `--apply` |
 | `--auto-intent` | restore auto-intent mode | with `--apply` |
+| `--host claude\|agy\|both` | which main-agent host to install for (see "Host choice"); persisted | with `--apply` |
+| `--agy-permissions` / `--no-agy-permissions` | with the `agy` host: add or remove Exoma's allow rules in Agy's `settings.json` (see "Hosts"); persisted | with `--apply` |
 | `--provider NAME` / `--model ID` | second agent choice for the seed (`--model` requires `--provider`) | with `--apply` |
 | `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser` | with `--apply` |
 | `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | with `--apply` |
 | `--check` | drift report for the bundle, the global install, and the project when cwd has `.workflow/` | no |
 | `--rollback [ID]` | undo one install/uninstall from its receipt (default: latest) | with `--apply` |
 | `--uninstall` | remove what the workflow installed (see "Uninstall") | with `--apply` |
+
+<a id="detail-host-choice"></a>
+**Host choice.** The main agent runs in one host or both: `claude` (Claude Code, `~/.claude`)
+and `agy` (Antigravity CLI, `~/.gemini`). It is a different choice from the second agent
+(`--provider`): the provider bundles install whichever host is picked. The hosts come from, in
+order: `--host`; the choice the last install recorded; for an install from before the choice
+existed, what it wrote (Claude, plus Agy when `~/.gemini/config/hooks.json` holds the `exoma`
+hook); a prompt on `--apply` from a terminal; else `claude`, with a warning. The choice is stored
+with the intent mode in `~/.claude/.workflow-install-mode.json` (`hosts`, `agy_permissions`,
+`agy_permission_rules`), receipted like it. A host dropped from the choice is taken out: its
+instruction block, its hook registration (`settings.json` hooks, or the `exoma` hook and the
+permission rules for Agy), then its files through the stale prune — only files an install
+wrote and nobody edited. `~/.claude/` still holds the installer's own state (backups, ledger,
+mode file, `hooks/python.path`) when only `agy` is chosen; no Agy file reads it.
+
+<a id="detail-bundle-layout"></a>
+**Bundle layout.** `exoma/_bundle/config/` holds one folder per role: `hosts/<name>/` for a
+main-agent host (`hosts/claude/`, `hosts/agy/`) and `providers/<name>/` for a second-agent
+provider (`providers/{opencode,codex,agy}/`), so a host and a provider may share a name. A
+bundle key — in the manifest, the install ledger and every receipt — is a path relative to that
+folder. Keys an install before v0.3.0 recorded (`claude/...`, `agy-host/...`, `<provider>/...`)
+are read as their current form (`config/bundle_keys.canonical_key`), so stale cleanup,
+`--uninstall` and doctor still recognise what an older install left; keys are only written in
+the current form. doctor (`checks.bundle_integrity`) skips the files of a host the install did not
+choose (`skipped`, reason `host_not_chosen`).
 
 `AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
 install into a temporary HOME. The runtime reads the interpreter pin (`.claude/hooks/python.path`)
@@ -200,7 +228,8 @@ What `--apply` does:
 | `~/.claude/skills/*.md`, `~/.claude/commands/*.md` | replace (template) |
 | `~/.claude/hooks/*` | replace; one set for all OSes: `<hook>.sh` launcher, `<hook>.py` logic, `workflow_hooks.py`, `intent-map.json`. `.ps1` files from old releases are deleted as stale files (edited ones are left alone and reported) |
 | `~/.claude/settings.json` | add the workflow's hooks and `statusLine`; user hooks and keys are preserved (see "Registered hooks") |
-| `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md`, `~/.agy/AGENTS.md` | replace content between the `WORKFLOW-SECOND-AGENT` markers; file does not exist yet → only the marker block. That block applies only to runtime calls (instructions opened with `[WORKFLOW_AGENT]`); provider sessions the user runs directly ignore it |
+| `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md` | replace content between the `WORKFLOW-SECOND-AGENT` markers; file does not exist yet → only the marker block. That block applies only to runtime calls (instructions opened with `[WORKFLOW_AGENT]`); provider sessions the user runs directly ignore it |
+| `~/.gemini/config/agents/exoma-second-agent/agent.md` | replace (whole file: Agy reads the custom agent's frontmatter only at the top). The agy second agent's contract, selected per call with `--agent` (see "Choosing a provider"), so an Agy host session never reads it. A `WORKFLOW-SECOND-AGENT` block an earlier release left in `~/.agy/AGENTS.md`, which Agy does not read, is cut (backed up, receipted; the user's text stays) |
 | `~/.claude/.workflow-install-mode.json`, `~/.claude/.workflow-installed.json` | the selected intent mode and the ledger of files written by install (for cleaning up stale files) |
 | `~/.config/opencode/opencode.{json,jsonc}` | additive merge for general config; the workflow's `agent.plan` permission is enforced, other user keys are preserved |
 | `~/.config/opencode/agents/*.md` | replace — one global subagent roster, used by every project managed by the workflow |
@@ -518,7 +547,7 @@ agent itself, not evidence gathering. A 3rd Read, a span > 200 lines, a large fi
 `limit`, a file outside the root, Grep, Glob, MCP, and shell are still blocked, and the block message
 cites this rule. A marker without `set_at` (not written by `intent-gate-set`) does not open this lane.
 
-`src/exoma/_bundle/config/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
+`src/exoma/_bundle/config/hosts/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
 `AUTO-INTENT`, each wrapped in `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->` markers.
 That file is the source before trimming, not the installed result. On `--apply`, the installer
 (`_apply_intent_mode`) drops the unselected mode stanza along with both modes' markers,
@@ -573,16 +602,16 @@ The installer is tested against a **temporary HOME**, not the machine that produ
 
 The host is the CLI the developer talks to: it runs the main agent, and its hooks enforce the
 runtime's rules at the tool boundary. Claude Code is the reference host. Agy (Antigravity CLI)
-is the second. The decisions both hosts enforce live once, in
-`~/.claude/hooks/workflow_policy.py` (write root and scope, commit approval, the user's
+is the second; `--host` picks which are installed ("Host choice"). The decisions both hosts
+enforce live once, in `workflow_policy.py` (one source, installed beside each host's hooks) (write root and scope, commit approval, the user's
 approvals, intent classification, the pre-flight marker, the `[EXECUTION RESULT]` claim); each
 host keeps only its payload parsing and its answer format. A Claude hook that cannot import that
 module (a partial install) exits 0 without acting, like every other state it cannot read.
 
 | Capability | Claude Code | Agy (as calibrated, CASE-029) |
 |---|---|---|
-| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, which points at the `CLAUDE.md` block and skills with a tool-name table |
-| Commands | skills + slash commands | prompt only: the skill file is read when `/.<name>` is typed |
+| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, which points at `~/.gemini/antigravity-cli/exoma/CONTRACT.md` (the `CLAUDE.md` block, rendered for Agy) with a tool-name table |
+| Commands | skills + slash commands | Agy skills `~/.gemini/antigravity-cli/skills/.<name>/SKILL.md`, answering to `/.<name>` |
 | Prompt routing | `UserPromptSubmit` | `PreInvocation` with `invocationNum` 0, prompt from `lastUserInput` |
 | Context injection | `additionalContext` | `injectSteps` `ephemeralMessage` from `PreInvocation` (not `SessionStart`: ignored) |
 | Tool gate | `PreToolUse`, exit 2 blocks | `PreToolUse`, `decision: deny`; `{}` also denies, so every answer names a decision |
@@ -600,7 +629,8 @@ user's prompt, undocumented). A resume with `--conversation <id>` keeps the id a
 nothing. On Windows the command runs through `cmd.exe`, which receives quotes literally, so a
 command cannot quote a path.
 
-**The wrapper**, `~/.claude/hooks/agy-host.py <Event>`, registered under the hook name `exoma`
+**The wrapper**, `~/.gemini/antigravity-cli/exoma/hooks/agy-host.py <Event>` (with
+`workflow_policy.py` and `intent-map.json` beside it), registered under the hook name `exoma`
 for `PreInvocation`, `PreToolUse` (matcher `*`) and `Stop`:
 
 - `PreInvocation`, turn start: binds the conversation to a `MAIN_SESSION_ID` (the first
@@ -608,8 +638,11 @@ for `PreInvocation`, `PreToolUse` (matcher `*`) and `Stop`:
   `commit.marker` as `intent-gate-set` does, arms or clears `delegated.marker`, and injects
   `[SESSION BINDING]` plus any `[INTENT HINT]`.
 - `PreToolUse`: while `delegated.marker` exists, only one plain runner call
-  (`[bash] <root>/.workflow/{run,check,inspect}.sh`, shell metacharacters only inside single
-  quotes) and reads of `~/.claude/skills/*.md` pass; there is no precision-read exception. The
+  (`<bash> <root>/.workflow/{run,check,inspect}.sh`, shell metacharacters only inside single
+  quotes) and reads of `.md` files under `~/.gemini/antigravity-cli/{skills,exoma}` pass. `<bash>`
+  is the one the installer names in the instructions: `& '<Git Bash>'` on Windows, where Agy runs
+  commands through PowerShell and a bare `bash` can be WSL's (it cannot read `E:/` paths, and is
+  refused), the quoted `bash` path or a bare `bash` elsewhere; there is no precision-read exception. The
   execution gate applies to the write tools (`write_to_file`, `replace_file_content`,
   `multi_replace_file_content`, `sed_file`, `notebook_edit`, and any tool named with
   `write`/`replace`/`edit`/`create`) and `git commit` through `run_command`, with
@@ -631,19 +664,41 @@ other. The header stays a prompt-level cue: the `GEMINI.md` block tells the mode
 itself on such a call. None of this bounds the second agent: agy's boundary stays `unbounded`
 ("Choosing a provider").
 
-**Install.** Where `~/.gemini` exists, the installer splices the `EXOMA-HOST` block into
+**Install** (`--host agy` or `both`). The installer splices the `EXOMA-HOST` block into
 `~/.gemini/GEMINI.md` (another workflow's block is left beside it) and merges the `exoma` name
-into `~/.gemini/config/hooks.json` (other names are the user's). The hook command is
-`<install interpreter> <home>/.claude/hooks/agy-host.py <Event>`, unquoted; when either path
+into `~/.gemini/config/hooks.json` (other names are the user's). Under `~/.gemini/antigravity-cli/`
+it writes `exoma/CONTRACT.md`, `exoma/hooks/{agy-host.py,workflow_policy.py,intent-map.json}`,
+and one `skills/.<name>/SKILL.md` per Claude skill (Agy frontmatter `name`/`description` on top,
+the runner call rewritten to the host's bash, then the skill unchanged) plus `.agy-check`. The
+contract, hook scripts and skills are rendered from the `hosts/claude/` sources at install time, so
+the bundle ships them once. The hook command is
+`<install interpreter> <home>/.gemini/antigravity-cli/exoma/hooks/agy-host.py <Event>`, unquoted; when either path
 holds a space or a `cmd.exe` metacharacter (`& % ^ | < > ( ) "`) the hooks are refused with a
 warning instead, as is a `hooks.json` that cannot be read, is not valid JSON, or whose root is not an object
 (the file is left as it is). The two files install together or not at all: the refusal is
 decided before `GEMINI.md` is written, and a refused install writes neither — it also cuts an
 `EXOMA-HOST` block an earlier install left, backed up and receipted, since instructions with no
 hook enforcing them are a half install (unpaired markers are left alone and reported). `--check`
-stamps both files in the bundle on every machine, compares the installed block, reports a
-missing or drifted `exoma` entry in `hooks.json`, and prints `agy host: NOT INSTALLABLE` with the
-reason when the hook would be refused.
+stamps every Agy source in the bundle on every machine, and for an install that chose `agy`
+compares the installed block and files, reports a missing or drifted `exoma` entry in
+`hooks.json`, and prints `agy host: NOT INSTALLABLE` with the reason when the hook would be refused.
+
+**Permission rules (opt-in).** Agy asks before every command unless a rule allows it. With
+`--agy-permissions` (or a yes at the prompt) the installer adds two rules to
+`permissions.allow` in `~/.gemini/antigravity-cli/settings.json`, from
+`hosts/agy/permissions.template.json`: `command(regex:...)` for one runner call through this
+machine's bash, script inside a `.workflow/` directory, every argument a single-quoted string or
+a plain word; and `write_file(<data dir>)` for the runtime's data directory (`EXOMA_HOME`, by
+default `%LOCALAPPDATA%\exoma`), which Agy's sandbox otherwise refuses. They apply to every
+Agy session. Only rules the installer added are recorded (`agy_permission_rules`) and only those
+are ever removed — by `--no-agy-permissions`, by dropping the `agy` host, or by `--uninstall`; a
+rule the user already had is never claimed. `--check` reports a missing rule while the opt-in is on.
+
+**Probe.** `--check` compares files; it cannot tell whether Agy loads them. After an install
+that chose `agy`, the installer says to run `/.agy-check` in a project with `.workflow/`: the skill
+reports, in one `[AGY CHECK]` block, whether skills are registered, whether the hooks inject
+`[SESSION BINDING]`, whether `run.sh doctor` ran without a prompt, and the runner's failure
+(WSL bash, the sandbox refusing Git Bash, or the data directory) when it did not.
 
 **Limits.** Calibrated on one release, on Windows, in print mode. `lastUserInput` is
 undocumented: without it routing and the role header are lost, and the role then rests on
@@ -775,8 +830,8 @@ Second_agent only supplies evidence and reasoning. The runtime does not create o
 <a id="kontrak-lapisan-prompt"></a>
 ### Prompt-layer contracts
 
-The contracts below live in `src/exoma/_bundle/config/claude/CLAUDE.md` and its skills
-(`src/exoma/_bundle/config/claude/skills/*.md`), not in Python. The runtime never sees the raw user message
+The contracts below live in `src/exoma/_bundle/config/hosts/claude/CLAUDE.md` and its skills
+(`src/exoma/_bundle/config/hosts/claude/skills/*.md`), not in Python. The runtime never sees the raw user message
 or main_agent's final answer, so the one enforcing these contracts is main_agent
 itself. The partial exceptions are the pre-flight gate and, since agent-workflow 3.9.0, the execute chain
 ([Plan and execution state](#plan-and-execution-state)), both also enforced by the host agent's hooks. The per-contract reason why Python cannot enforce them: `docs/runtime-contracts.md`,
@@ -785,7 +840,7 @@ section "Contracts the runtime cannot enforce".
 | Contract | Content | Enforcer | Source |
 |---|---|---|---|
 | Intent mode | One of two, chosen by the installer. `AUTO-INTENT`: natural language is mapped to a command and announced with one `[INTENT]` line without waiting for an answer. `COMMAND-ONLY`: commands run only via the `/.` prefix; no prefix = ordinary conversation, may suggest one line and then stop | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; see [Intent mode](#intent-mode) |
-| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `src/exoma/_bundle/config/claude/hooks/intent-map.json` |
+| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `src/exoma/_bundle/config/hosts/claude/hooks/intent-map.json` |
 | Output contract | Explore and `sweep`/`doctor` = RELAY the runtime result as is. Plan/analyze = SYNTHESIS by main_agent: three-part confidence (`problem_understanding`, `root_cause`, `solution_path`), per-claim attribution, `open_questions` kept separate from `uncertainty`. Required fields are still shown even when empty, with the reason | main_agent | `CLAUDE.md`, "Output Contract" and "Plan/analysis output" |
 | `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
 | New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` |
@@ -967,6 +1022,7 @@ At `init`, its source is the user's `second_agent.seed.json` if present, or the 
 | Selection | no question | confirmed in the `/.provider` picker | confirmed in the `/.provider` picker |
 | Project-root boundary config | file, refreshed on every `init`/`upgrade` | no such layer | no such layer |
 | `boundary` (`config/providers.py`) | `reads: secrets_denied`, `writes: denied` | `reads: unbounded`, `writes: sandboxed` | `reads: unbounded`, `writes: unbounded` |
+| Second-agent instructions | `~/.config/opencode/AGENTS.md` block | `~/.codex/AGENTS.md` block | custom agent `~/.gemini/config/agents/exoma-second-agent/agent.md`, passed as `--agent` only while that file is installed (`provider_agent`, default `exoma-second-agent`, env `EXOMA_AGY_AGENT`) |
 
 `codex` and `agy` are both reported by `doctor` as `not_enforceable` with `trusted: true`: both can read every project file and receive the full process environment — their boundary is the agent's obligation, not runtime enforcement. Choosing `codex` or `agy` needs no variable or config key. The `/.provider` catalog gives each provider a `boundary_warning` (null for opencode) — `providers.provider_boundary_warning`, worded from the provider's `boundary`: codex "can read every file", agy "can read AND write every file" — and the picker quotes it in one confirmation question before applying. Every apply of such a provider, including direct mode (`/.provider <provider> ...`) and `exoma install --provider`, which ask nothing, returns the same text first in `meta.warnings` (the installer prints it as a plan warning). Nothing is refused: the acknowledgement is prompt-level, not runtime-enforced.
 
@@ -997,7 +1053,7 @@ process) is recorded in `meta.provider_version`, in the usage row (`provider_ver
 
 Codex sends the same deny list as a `-c permissions.workflow.filesystem` flag on every call, but that flag stops nothing. Tested against codex-cli 0.147.0 in `exec` mode: denying `**` and `**/*` for `:workspace_roots` and then asking for a file in that root still returned its contents, exit 0. Codex reads by running a shell, and `--sandbox read-only` (together with `approval_policy="never"`, see above) restricts **writes**, not reads.
 
-This means a codex second_agent can read every file in the project you point it at, `.env` included. `init` reports this as `status: not_enforceable` with `permissions_enforced: 0`, and `src/exoma/_bundle/config/codex/AGENTS.md` tells its agent that avoiding secret files is its own obligation — an instruction, not enforcement.
+This means a codex second_agent can read every file in the project you point it at, `.env` included. `init` reports this as `status: not_enforceable` with `permissions_enforced: 0`, and `src/exoma/_bundle/config/providers/codex/AGENTS.md` tells its agent that avoiding secret files is its own obligation — an instruction, not enforcement.
 
 Use `codex` when the project holds no secrets, or when you accept the risk. For a project whose secrets must stay unreadable to second_agent, use `opencode`.
 
@@ -1590,8 +1646,8 @@ links to `#batasan-yang-diketahui` keep working.
 ## References
 
 - Release notes: [`CHANGELOG.md`](../CHANGELOG.md)
-- Canonical main_agent contract: [`src/exoma/_bundle/config/claude/CLAUDE.md`](../src/exoma/_bundle/config/claude/CLAUDE.md)
-- Canonical second_agent contract: [`src/exoma/_bundle/config/opencode/AGENTS.md`](../src/exoma/_bundle/config/opencode/AGENTS.md)
+- Canonical main_agent contract: [`src/exoma/_bundle/config/hosts/claude/CLAUDE.md`](../src/exoma/_bundle/config/hosts/claude/CLAUDE.md)
+- Canonical second_agent contract: [`src/exoma/_bundle/config/providers/opencode/AGENTS.md`](../src/exoma/_bundle/config/providers/opencode/AGENTS.md)
 - Runtime entry point: [`src/exoma/cli.py`](../src/exoma/cli.py)
 - Architecture (verified diagrams): [`docs/architecture/`](architecture/README.md)
 - Limitations: [`docs/limitations.md`](limitations.md)

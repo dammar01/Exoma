@@ -7,28 +7,38 @@ change?" is to ask the same code that performs the change.
 import json
 from pathlib import Path
 
+from exoma.config.bundle_keys import provider_dir
 from exoma.installer.base import (
+    AGY_HOST,
     AGY_HOST_HOOK_NAME,
+    CLAUDE_HOST,
+    CLAUDE_SETTINGS,
     AGY_HOST_HOOKS,
     AGY_HOST_INSTRUCTIONS,
+    AGY_HOST_PERMISSIONS,
     DIST_CONFIG,
     HOME,
     MARKERS,
     Plan,
-    _apply_intent_mode,
     _hash,
     _managed_block,
     _marker_problem,
     _read_text_lenient,
-    _resolve_placeholders,
+    _render_text,
     _targets,
     agy_hook_entry,
     agy_hooks_dest,
     agy_hooks_state,
-    agy_host_present,
+    agy_permission_rules,
+    agy_settings_dest,
+    bundle_key,
 )
 from exoma.config.providers import PROVIDER_BUNDLES
-from exoma.installer.rollback import _stored_only_command
+from exoma.installer.rollback import (
+    _installed_hosts,
+    _stored_agy_permissions,
+    _stored_only_command,
+)
 from exoma.installer.settings import (
     _install_provider_config,
     _install_settings,
@@ -150,19 +160,19 @@ def _bundle_stale(manifest: dict) -> list[str]:
     """
     by_path = _entries_by_path(manifest)
     stale: list[str] = []
-    sources = [(source, key) for source, _dest, key in _targets()]
-    # The Agy host ships whether or not this machine has Agy: stamped either way.
-    for key in (AGY_HOST_INSTRUCTIONS, AGY_HOST_HOOKS):
-        if (DIST_CONFIG / key).exists() and all(k != key for _s, k in sources):
-            sources.append((DIST_CONFIG / key, key))
-    settings_src = DIST_CONFIG / "claude" / "settings.template.json"
+    # Every host's sources, chosen or not, by their manifest key: one source rendered for
+    # two hosts is stamped once.
+    sources = list({bundle_key(source): (source, bundle_key(source)) for source, _d, _k in _targets()}.values())
+    if (DIST_CONFIG / AGY_HOST_PERMISSIONS).exists():
+        sources.append((DIST_CONFIG / AGY_HOST_PERMISSIONS, AGY_HOST_PERMISSIONS))
+    settings_src = DIST_CONFIG / CLAUDE_SETTINGS
     if settings_src.exists():
-        sources.append((settings_src, "claude/settings.template.json"))
+        sources.append((settings_src, CLAUDE_SETTINGS))
     for provider, bundle in PROVIDER_BUNDLES.items():
         for template in (bundle["global_config"][0], bundle["project_config"][0]):
-            source = DIST_CONFIG / provider / template
+            source = DIST_CONFIG / provider_dir(provider) / template
             if source.exists():
-                sources.append((source, f"{provider}/{template}"))
+                sources.append((source, f"{provider_dir(provider)}/{template}"))
     for source, key in sources:
         entry = by_path.get(key)
         if not entry or _hash(source.read_text(encoding="utf-8")) != entry.get("sha256"):
@@ -185,47 +195,53 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     installed_drift: list[str] = []
     installed_missing: list[str] = []
 
+    # Installed state is checked for the hosts the last install chose; the bundle for all.
+    hosts = _installed_hosts()
+    only_command = _stored_only_command()
+    agy = "agy" in hosts
     # The Agy host installs both files or neither, so a refused hook makes GEMINI.md's
     # absence the expected state, not a missing file.
     # One read of hooks.json for the refusal and the entry check below (no second read to race).
-    agy_current, agy_refusal = agy_hooks_state(agy_hooks_dest()) if agy_host_present() else ({}, None)
+    agy_current, agy_refusal = agy_hooks_state(agy_hooks_dest()) if agy else ({}, None)
     # hooks.json is a merge of one hook name, like settings.json: its `exoma` entry is
     # checked below rather than the whole file here.
+    installed_targets = _targets(hosts)
     checks = [
         (s, None if k == AGY_HOST_HOOKS or (k == AGY_HOST_INSTRUCTIONS and agy_refusal) else d, k)
-        for s, d, k in _targets()
+        for s, d, k in installed_targets
     ]
-    for key in (AGY_HOST_INSTRUCTIONS, AGY_HOST_HOOKS):
-        if (DIST_CONFIG / key).exists() and all(k != key for _s, _d, k in checks):
-            checks.append((DIST_CONFIG / key, None, key))
-    settings_src = DIST_CONFIG / "claude" / "settings.template.json"
+    for source, _dest, key in _targets():
+        if all(k != key for _s, _d, k in checks):
+            checks.append((source, None, key))
+    if (DIST_CONFIG / AGY_HOST_PERMISSIONS).exists():
+        checks.append((DIST_CONFIG / AGY_HOST_PERMISSIONS, None, AGY_HOST_PERMISSIONS))
+    settings_src = DIST_CONFIG / CLAUDE_SETTINGS
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.
-        checks.append((settings_src, None, "claude/settings.template.json"))
+        checks.append((settings_src, None, CLAUDE_SETTINGS))
     # Provider configs are merged, not copied, so their installed state is checked below
     # rather than compared byte-for-byte here.
     provider_checks = []
     for provider, bundle in PROVIDER_BUNDLES.items():
-        global_src = DIST_CONFIG / provider / bundle["global_config"][0]
-        project_src = DIST_CONFIG / provider / bundle["project_config"][0]
+        global_src = DIST_CONFIG / provider_dir(provider) / bundle["global_config"][0]
+        project_src = DIST_CONFIG / provider_dir(provider) / bundle["project_config"][0]
         if global_src.exists():
-            checks.append((global_src, None, f"{provider}/{bundle['global_config'][0]}"))
+            checks.append((global_src, None, f"{provider_dir(provider)}/{bundle['global_config'][0]}"))
         if project_src.exists():
             checks.append(
-                (project_src, None, f"{provider}/{bundle['project_config'][0]}")
+                (project_src, None, f"{provider_dir(provider)}/{bundle['project_config'][0]}")
             )
         provider_checks.append((provider, bundle, global_src, project_src))
 
     for source, dest, key in checks:
         dist_text = source.read_text(encoding="utf-8")
-        entry = by_path.get(key)
-        if not entry or _hash(dist_text) != entry.get("sha256"):
-            bundle_stale.append(key)
+        stamp_key = bundle_key(source)
+        entry = by_path.get(stamp_key)
+        if (not entry or _hash(dist_text) != entry.get("sha256")) and stamp_key not in bundle_stale:
+            bundle_stale.append(stamp_key)
         if dest is None:
             continue
-        resolved = _resolve_placeholders(dist_text, project_root)
-        if key == "claude/CLAUDE.md":
-            resolved = _apply_intent_mode(resolved, _stored_only_command())
+        resolved = _render_text(source, key, project_root, only_command)
         if not dest.exists():
             installed_missing.append(key)
             continue
@@ -240,7 +256,16 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             installed_drift.append(key)
     bundle_stale.extend(key for key in _orphaned_entries(manifest) if key not in bundle_stale)
 
-    if agy_host_present():
+    agy_permissions, _owned = _stored_agy_permissions()
+    if agy and agy_permissions:
+        try:
+            agy_settings = json.loads(_read_text_lenient(agy_settings_dest()))
+            allow = agy_settings.get("permissions", {}).get("allow", [])
+        except (OSError, ValueError, AttributeError):
+            allow = []
+        if not isinstance(allow, list) or any(rule not in allow for rule in agy_permission_rules()):
+            installed_missing.append(f"{AGY_HOST}/settings.json (permission rules)")
+    if agy:
         gemini_md = HOME / ".gemini" / "GEMINI.md"
         if agy_refusal:
             # An install now would take out a block an earlier one left (a half install), or
@@ -256,13 +281,12 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             elif installed_hook != agy_hook_entry(DIST_CONFIG / AGY_HOST_HOOKS):
                 installed_drift.append(AGY_HOST_HOOKS)
 
-    only_command = _stored_only_command()
     settings_dest = HOME / ".claude" / "settings.json"
-    if settings_src.exists():
+    if settings_src.exists() and "claude" in hosts:
         if not settings_dest.exists():
-            installed_missing.append("claude/settings.json")
+            installed_missing.append(f"{CLAUDE_HOST}/settings.json")
         elif _settings_would_change(settings_src, settings_dest, only_command):
-            installed_drift.append("claude/settings.json")
+            installed_drift.append(f"{CLAUDE_HOST}/settings.json")
 
     # The project config carries the secret-file denial. Checking only the global one let
     # --check report OK while the boundary was missing or had been edited away — the exact
@@ -279,7 +303,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         project_provider = selected_provider(project_root)
     for provider, bundle, global_src, project_src in provider_checks:
         if global_src.exists():
-            installed_key = f"{provider}/{bundle['global_config'][1]}"
+            installed_key = f"{provider_dir(provider)}/{bundle['global_config'][1]}"
             global_dest = _provider_config_path(provider)
             if not global_dest.exists():
                 installed_missing.append(installed_key)
@@ -289,7 +313,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
                 installed_drift.append(installed_key)
         if not project_src.exists():
             continue
-        project_key = f"{provider}/{bundle['project_config'][0]}"
+        project_key = f"{provider_dir(provider)}/{bundle['project_config'][0]}"
         if project_root and provider != project_provider:
             project_scope_note = (
                 f"the project runs {project_provider}, so the {provider} boundary "
@@ -313,9 +337,14 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
 
     from exoma.installer.stale import stale_files
 
-    stale_removable, stale_edited = stale_files({str(dest) for _src, dest, _key in _targets()})
+    # A host dropped from the choice shows here: its files are no longer current targets.
+    stale_removable, stale_edited = stale_files({str(dest) for _src, dest, _key in installed_targets})
 
     print("[INSTALL CHECK]")
+    print(
+        f"  hosts: {', '.join(hosts)}"
+        + (f" (agy permissions: {'on' if agy_permissions else 'off'})" if agy else "")
+    )
     print(
         f"  bundle (dist vs manifest): {'OK' if not bundle_stale else f'STALE ({len(bundle_stale)})'}"
     )
@@ -323,10 +352,10 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         print(f"    - {key}")
     installed_issues = len(installed_drift) + len(installed_missing)
     if installed_issues == 0:
-        print("  installed (~/.claude vs dist): READY")
+        print("  installed (host config vs dist): READY")
     else:
         print(
-            f"  installed (~/.claude vs dist): DRIFTED "
+            f"  installed (host config vs dist): DRIFTED "
             f"(drift {len(installed_drift)}, missing {len(installed_missing)})"
         )
         for key in installed_drift:
@@ -357,13 +386,13 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     versions = manifest.get("versions") or {}
     if versions:
         changed_keys = set(bundle_stale) | set(installed_drift) | set(installed_missing)
-        if "claude/settings.json" in changed_keys:
-            changed_keys.add("claude/settings.template.json")
+        if f"{CLAUDE_HOST}/settings.json" in changed_keys:
+            changed_keys.add(CLAUDE_SETTINGS)
         # A drifted installed config means its template is what the version bump covers.
         for provider, bundle, _global_src, _project_src in provider_checks:
             template, installed = bundle["global_config"]
-            if f"{provider}/{installed}" in changed_keys:
-                changed_keys.add(f"{provider}/{template}")
+            if f"{provider_dir(provider)}/{installed}" in changed_keys:
+                changed_keys.add(f"{provider_dir(provider)}/{template}")
         print("  components:")
         for comp, ver in versions.items():
             comp_keys = [k for k, e in by_path.items() if e.get("component") == comp]

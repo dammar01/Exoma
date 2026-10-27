@@ -23,7 +23,12 @@ import re
 from pathlib import Path
 
 from exoma.config.providers import PROVIDER_BUNDLES
+from exoma.config.bundle_keys import canonical_key, provider_dir
 from exoma.installer.base import (
+    AGY_HOOKS_PREFIX,
+    AGY_SKILLS_PREFIX,
+    CLAUDE_HOOKS_PREFIX,
+    CLAUDE_HOST,
     DIST_CONFIG,
     HOME,
     _RECEIPT,
@@ -40,10 +45,16 @@ _SCRIPT_STEM = re.compile(r"([\w.-]+)\.(?:ps1|sh)\b")
 
 def managed_prefixes() -> tuple[str, ...]:
     """Manifest-key prefixes of the families installed one file at a time."""
-    prefixes = ["claude/skills/", "claude/commands/", "claude/hooks/"]
+    # The Agy host's skills and hook scripts too: a host the user stops choosing leaves its
+    # files out of the current targets, and this prune is what takes them away.
+    prefixes = [f"{CLAUDE_HOST}/skills/", f"{CLAUDE_HOST}/commands/", CLAUDE_HOOKS_PREFIX, AGY_SKILLS_PREFIX, AGY_HOOKS_PREFIX]
     for name, bundle in PROVIDER_BUNDLES.items():
         if bundle.get("agents_dir"):
-            prefixes.append(f"{name}/{bundle['agents_dir']}/")
+            prefixes.append(f"{provider_dir(name)}/{bundle['agents_dir']}/")
+        # Instructions copied whole (Agy's custom agent) have no block for --uninstall to cut:
+        # the file itself is ours, and goes like any other managed file.
+        if bundle.get("instructions_whole"):
+            prefixes.append(f"{provider_dir(name)}/{bundle['instructions'][0]}")
     return tuple(prefixes)
 
 
@@ -68,6 +79,8 @@ def previously_installed() -> dict[str, dict]:
     prefixes = managed_prefixes()
 
     def remember(dest: str, key: str, sha: object) -> None:
+        # Read in the current layout: an older install recorded `claude/...` and the like.
+        key = canonical_key(key)
         if not isinstance(sha, str) or not key.startswith(prefixes):
             return
         known.setdefault(dest, {"key": key, "hashes": set()})["hashes"].add(sha)
@@ -83,6 +96,16 @@ def previously_installed() -> dict[str, dict]:
         if item.get("action") in ("create", "replace") and item.get("dest"):
             remember(str(item["dest"]), str(item.get("key") or ""), item.get("post_sha256"))
     return known
+
+
+def remove_empty_skill_dir(path: Path, key: str) -> None:
+    """An Agy skill is a directory (`.<name>/SKILL.md`): once its file goes, the directory
+    goes too if nothing else is in it. A rollback recreates it with the file."""
+    if key.split("/", 1)[-1].startswith(AGY_SKILLS_PREFIX) or key.startswith(AGY_SKILLS_PREFIX):
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
 
 
 def stale_files(current_dests: set[str]) -> tuple[list[tuple[Path, dict]], list[Path]]:
@@ -101,21 +124,31 @@ def stale_files(current_dests: set[str]) -> tuple[list[tuple[Path, dict]], list[
     return removable, edited
 
 
-def prune(current_dests: set[str], plan: Plan, apply: bool, backup_root: Path) -> list[str]:
-    """Remove stale managed files. Returns the script stems of removed hooks."""
+def prune(
+    current_dests: set[str], plan: Plan, apply: bool, backup_root: Path, keep_prefixes: tuple[str, ...] = ()
+) -> list[str]:
+    """Remove stale managed files. Returns the script stems of removed hooks.
+
+    `keep_prefixes` keeps the files of those families: hook scripts a host still registers
+    because its registration could not be taken out."""
     removable, edited = stale_files(current_dests)
     removed_stems: list[str] = []
+    kept = 0
     for path, entry in removable:
+        if keep_prefixes and entry["key"].startswith(keep_prefixes):
+            kept += 1
+            continue
         pre_sha256 = _file_sha256(path)
         key = f"stale/{entry['key']}"
         saved = _backup(path, backup_root, plan, apply, key)
         plan.add("remove", path, "installed by an earlier release, no longer shipped")
-        if entry["key"].startswith("claude/hooks/"):
+        if entry["key"].startswith(CLAUDE_HOOKS_PREFIX):
             match = _SCRIPT_STEM.search(path.name)
             if match:
                 removed_stems.append(match.group(1).lower())
         if apply:
             path.unlink()
+            remove_empty_skill_dir(path, entry["key"])
             _RECEIPT.append(
                 {
                     "action": "remove",
@@ -127,6 +160,11 @@ def prune(current_dests: set[str], plan: Plan, apply: bool, backup_root: Path) -
                 }
             )
             _flush_receipt()
+    if kept:
+        plan.warn(
+            f"kept {kept} hook script(s) of a host no longer chosen: its hook registration could "
+            "not be read, so it still runs them; fix that file, then install again"
+        )
     for path in edited:
         plan.warn(
             f"{path} was installed by an earlier release and is no longer shipped, but it "
@@ -156,7 +194,7 @@ def shipped_hook_stems() -> set[str]:
     """Every hook stem dist/ ships: one bash launcher (`<stem>.sh`) each. A `.ps1` an earlier
     release installed under the same stem is the same hook, so its settings entry is
     refreshed, not dropped, and the file itself goes as a stale file."""
-    hooks = DIST_CONFIG / "claude" / "hooks"
+    hooks = DIST_CONFIG / CLAUDE_HOST / "hooks"
     if not hooks.is_dir():
         return set()
     return {p.stem.lower() for p in hooks.iterdir() if p.suffix in (".ps1", ".sh")}
@@ -167,7 +205,7 @@ def retired_hook_stems() -> set[str]:
     shipped = shipped_hook_stems()
     stems = set()
     for entry in previously_installed().values():
-        if entry["key"].startswith("claude/hooks/"):
+        if entry["key"].startswith(CLAUDE_HOOKS_PREFIX):
             match = _SCRIPT_STEM.search(entry["key"].rsplit("/", 1)[-1])
             if match and match.group(1).lower() not in shipped:
                 stems.add(match.group(1).lower())

@@ -9,6 +9,7 @@ import os
 import re
 from pathlib import Path
 
+from exoma.config.bundle_keys import HOSTS_DIR, host_dir, provider_dir
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.core.workspace.workspace_paths import read_json_file
 
@@ -35,7 +36,8 @@ def _installed_path_for(
 ) -> Path | None:
     """Map a manifest dist-relative path to its installed location via the targets map.
 
-    A targets key is either an exact file (claude/CLAUDE.md) or a directory (claude/skills).
+    A targets key is either an exact file (hosts/claude/CLAUDE.md) or a directory
+    (hosts/claude/skills).
     The longest matching key wins, so a file under a mapped dir resolves to
     <target_dir>/<remainder>.
     """
@@ -58,10 +60,11 @@ def _installed_path_for(
 # files here reported drift on every single run, which trained the reader to ignore it.
 _SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END")
 _MANAGED_MARKERS = {
-    "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
+    f"{host_dir('claude')}/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
     **{
-        f"{name}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
+        f"{provider_dir(name)}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
         for name, bundle in PROVIDER_BUNDLES.items()
+        if not bundle.get("instructions_whole")
     },
 }
 
@@ -78,7 +81,7 @@ def _is_agent_roster_path(rel) -> bool:
     text = str(rel)
     for name, bundle in PROVIDER_BUNDLES.items():
         agents_dir = bundle.get("agents_dir")
-        if agents_dir and text.startswith(f"{name}/{agents_dir}/"):
+        if agents_dir and text.startswith(f"{provider_dir(name)}/{agents_dir}/"):
             return True
     return False
 
@@ -102,13 +105,23 @@ def _installed_config_alias(installed: Path):
     return None
 
 
+def _install_mode() -> dict:
+    try:
+        mode = read_json_file(Path(os.path.expanduser("~")) / ".claude" / ".workflow-install-mode.json")
+    except (OSError, ValueError):
+        return {}
+    return mode if isinstance(mode, dict) else {}
+
+
 def _installed_intent_mode() -> bool:
     """True when the last install chose command-only (auto-intent stanza stripped)."""
-    try:
-        path = Path(os.path.expanduser("~")) / ".claude" / ".workflow-install-mode.json"
-        return bool(read_json_file(path).get("only_command"))
-    except (OSError, ValueError, AttributeError):
-        return False
+    return bool(_install_mode().get("only_command"))
+
+
+def _installed_hosts() -> set[str]:
+    """The hosts the last install chose; Claude alone for an install from before the choice."""
+    hosts = _install_mode().get("hosts")
+    return {h for h in hosts if isinstance(h, str)} if isinstance(hosts, list) else {"claude"}
 
 
 def _select_intent_section(text: str, only_command: bool) -> str:
@@ -199,9 +212,18 @@ def _bundle_integrity(
     home = os.path.expanduser("~")
     only_command = _installed_intent_mode()
     result["intent_mode"] = "command_only" if only_command else "auto_intent"
+    hosts = _installed_hosts()
     for entry in files:
         rel = entry.get("path")
+        # A host the install did not choose has nothing installed to compare.
+        parts = rel.split("/")
+        if parts[0] == HOSTS_DIR and len(parts) > 1 and parts[1] not in hosts:
+            result["skipped"].append({"path": rel, "reason": "host_not_chosen"})
+            continue
         installed = _installed_path_for(rel, targets, project_root)
+        # An Agy skill directory is installed dotted, so it answers to `/.<name>`.
+        if installed is not None and rel.startswith(f"{host_dir('agy')}/skills/"):
+            installed = installed.parent.parent / f".{installed.parent.name}" / installed.name
         if (
             _is_agent_roster_path(rel)
             and (installed is None or not installed.is_file())
@@ -252,7 +274,7 @@ def _bundle_integrity(
             expected = expected.replace("{{HOME}}", home)
             if project_root:
                 expected = expected.replace("{{PROJECT_ROOT}}", str(project_root))
-            if rel == "claude/CLAUDE.md":
+            if rel == f"{host_dir('claude')}/CLAUDE.md":
                 expected = _select_intent_section(expected, only_command)
             want = _marker_block(expected, start, end)
             got = _marker_block(text, start, end)
@@ -287,7 +309,7 @@ def _bundle_integrity(
         "workflow_hooks.py",
         *(f"{stem}.{ext}" for stem in ("session-bind", "intent-gate-set", "intent-gate-check") for ext in ("sh", "py")),
     ]
-    hook_target = _installed_path_for("claude/hooks", targets, project_root)
+    hook_target = _installed_path_for(f"{host_dir('claude')}/hooks", targets, project_root)
     if hook_target is not None:
         result["hooks_installed"] = all(
             (hook_target / h).is_file() for h in required_hooks

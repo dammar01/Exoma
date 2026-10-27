@@ -28,7 +28,7 @@ from exoma.utils.osutil import find_bash
 from tests.checks.support import no_console
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+HOOKS = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 _MEASURED = {"session_id": "main-1", "ok": True, "prompt_id": "p1", "token_source": "provider",

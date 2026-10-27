@@ -10,7 +10,7 @@ control that is weaker than it sounds is worse than an absent one — it gets tr
     stream knows: a call in flight has not been recorded yet, so a ceiling can be crossed
     by at most the calls running concurrently.
   * Per-command tool permission — DECLARATION, not enforcement. The hard boundary is the
-    provider's own permission config (see _bundle/config/opencode/opencode.project.json);
+    provider's own permission config (see _bundle/config/providers/opencode/opencode.project.json);
     this narrows it per command and writes down what was asked for. Named a declaration
     everywhere it appears so nobody reads it as a sandbox.
 """

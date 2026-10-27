@@ -172,8 +172,8 @@ class AgyAdapter:
         self.poll_interval = DEFAULT_POLL_INTERVAL_SECONDS
         # No bootstrap call: the id is in the first line of the stream (fact 2 above).
         self.bootstrap_timeout_seconds = None
-        # agy has personas (`--agent`), but `agy agents` on a stock install lists none, so
-        # there is nothing to select and nothing to default to.
+        # The custom agent the install ships (config/providers.py `default_agent`); the
+        # executor sets the route's `provider_agent` here. Passed only while installed.
         self.agent = None
         self.effort: str | None = None
         self.last_call_meta: dict = {}
@@ -274,8 +274,24 @@ class AgyAdapter:
             args.extend(["--conversation", str(resume_id)])
         if model:
             args.extend(["--model", model])
+        agent = self._installed_agent()
+        if agent:
+            args.extend(["--agent", agent])
         args.extend(effort_args(self.adapter, self.effort))
         return args
+
+    def _installed_agent(self) -> str | None:
+        """The custom agent to run as: the route's, else the bundle default — but only when
+        its `agent.md` is installed under ~/.gemini/config/agents. Agy fails a call naming an
+        agent it does not have, and a workspace from before the agent shipped must still run."""
+        from exoma.config.providers import provider_agent_default
+        from exoma.utils.osutil import agent_home
+
+        name = self.agent or provider_agent_default("agy", os.getenv)
+        if not name:
+            return None
+        definition = agent_home() / ".gemini" / "config" / "agents" / name / "agent.md"
+        return name if definition.is_file() else None
 
     @staticmethod
     def _resolve_work_dir(work_dir: str | None) -> str | None:
@@ -615,7 +631,7 @@ class AgyAdapter:
         env["PYTHONIOENCODING"] = "utf-8"
         # Agy loads the same ~/.gemini hooks and GEMINI.md as a second agent as it does as the
         # user's host. This variable, inherited by Agy's hooks, is what tells the host hooks
-        # this is the runtime's call (claude/hooks/workflow_policy.py is_second_agent_turn).
+        # this is the runtime's call (hosts/claude/hooks/workflow_policy.py is_second_agent_turn).
         # The prompt's [WORKFLOW_AGENT] header only cues the model: a user can type it, so
         # no hook trusts it.
         env["WORKFLOW_AGENT_ROLE"] = "second_agent"

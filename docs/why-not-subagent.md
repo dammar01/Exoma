@@ -5,7 +5,7 @@ separate CLI (the second agent) instead. This page explains why, separates what 
 from what is reported, and says where the evidence is thin.
 
 The rule itself, and its exceptions, live in the bundled instructions
-(`src/exoma/_bundle/config/claude/CLAUDE.md`, "Division of Labor"): the second agent does the
+(`src/exoma/_bundle/config/hosts/claude/CLAUDE.md`, "Division of Labor"): the second agent does the
 bulk reading, the primary agent does the reasoning, and a native subagent is used only when the
 proxy fails or for a small slice that needs high precision.
 

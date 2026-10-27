@@ -42,18 +42,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "Reliability keys (v",
         "### Liveness worker (v",
     ),
-    "src/exoma/_bundle/config/claude/CLAUDE.md": (
+    "src/exoma/_bundle/config/hosts/claude/CLAUDE.md": (
         "# Claude Code — Personal Global Config (v",
         "WORKFLOW-MAIN-AGENT:START",
         "## Workflow Main Agent —",
     ),
-    "src/exoma/_bundle/config/claude/skills/doctor.md": (".workflow/config.json : v",),
-    "src/exoma/_bundle/config/claude/skills/help.md": (
+    "src/exoma/_bundle/config/hosts/claude/skills/doctor.md": (".workflow/config.json : v",),
+    "src/exoma/_bundle/config/hosts/claude/skills/help.md": (
         "description: Command reference v",
         "[COMMAND GUIDE — v",
     ),
-    "src/exoma/_bundle/config/claude/skills/init.md": ("generated: run/inspect/check",),
-    "src/exoma/_bundle/config/claude/commands/.help.md": ('description: "Command reference v',),
+    "src/exoma/_bundle/config/hosts/claude/skills/init.md": ("generated: run/inspect/check",),
+    "src/exoma/_bundle/config/hosts/claude/commands/.help.md": ('description: "Command reference v',),
 }
 
 # Each provider's instruction file carries the same banner. Derived rather than listed so
@@ -61,7 +61,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
 # The title anchor stays loose ("Second Agent —" matches "# OpenCode Second Agent — v…")
 # because the provider's own name is in it.
 for _name, _bundle in PROVIDER_BUNDLES.items():
-    TARGETS[f"src/exoma/_bundle/config/{_name}/{_bundle['instructions'][0]}"] = (
+    TARGETS[f"src/exoma/_bundle/config/providers/{_name}/{_bundle['instructions'][0]}"] = (
         "WORKFLOW-SECOND-AGENT:START",
         "Second Agent —",
     )
@@ -110,7 +110,7 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "In 3.8.0 this was observed",
         "Before 3.8.0 this hook ran",
     ),
-    "src/exoma/_bundle/config/claude/settings.template.json": (
+    "src/exoma/_bundle/config/hosts/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.
         '"ref": "v',
     ),

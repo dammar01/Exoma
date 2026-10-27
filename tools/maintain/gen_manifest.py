@@ -39,74 +39,82 @@ def _provider_targets() -> dict:
     for name, bundle in PROVIDER_BUNDLES.items():
         home = f"{{{{HOME}}}}/{bundle['home_dir']}"
         dist_name, dest_name = bundle["instructions"]
-        targets[f"{name}/{dist_name}"] = f"{home}/{dest_name}"
+        targets[f"providers/{name}/{dist_name}"] = f"{home}/{dest_name}"
         if bundle.get("agents_dir"):
-            targets[f"{name}/{bundle['agents_dir']}"] = f"{home}/{bundle['agents_dir']}"
+            targets[f"providers/{name}/{bundle['agents_dir']}"] = f"{home}/{bundle['agents_dir']}"
         if bundle.get("global_config"):
             dist_name, dest_name = bundle["global_config"]
-            targets[f"{name}/{dist_name}"] = f"{home}/{dest_name}"
+            targets[f"providers/{name}/{dist_name}"] = f"{home}/{dest_name}"
         if bundle.get("project_config"):
             dist_name, dest_name = bundle["project_config"]
-            targets[f"{name}/{dist_name}"] = f"{{{{PROJECT_ROOT}}}}/{dest_name}"
+            targets[f"providers/{name}/{dist_name}"] = f"{{{{PROJECT_ROOT}}}}/{dest_name}"
     return targets
 
 
 TARGETS = {
-    "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
-    "claude/skills": "{{HOME}}/.claude/skills",
-    "claude/commands": "{{HOME}}/.claude/commands",
-    "claude/hooks": "{{HOME}}/.claude/hooks",
-    "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
-    # The Agy host (installer/base.py AGY_HOST_*), installed only where ~/.gemini exists.
-    "agy-host/GEMINI.md": "{{HOME}}/.gemini/GEMINI.md",
-    "agy-host/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
+    "hosts/claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
+    "hosts/claude/skills": "{{HOME}}/.claude/skills",
+    "hosts/claude/commands": "{{HOME}}/.claude/commands",
+    "hosts/claude/hooks": "{{HOME}}/.claude/hooks",
+    "hosts/claude/settings.template.json": "{{HOME}}/.claude/settings.json",
+    # The Agy host (installer/base.py AGY_HOST_*), installed when --host names it. Its
+    # contract, hook scripts and other skills are rendered from the hosts/claude/ sources above.
+    "hosts/agy/GEMINI.md": "{{HOME}}/.gemini/GEMINI.md",
+    "hosts/agy/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
+    "hosts/agy/permissions.template.json": "{{HOME}}/.gemini/antigravity-cli/settings.json",
+    # Each skill directory installs dotted (`.<name>/`); core/audit/bundle_integrity.py maps it.
+    "hosts/agy/skills": "{{HOME}}/.gemini/antigravity-cli/skills",
     **_provider_targets(),
 }
 
 
 def _dist_files() -> list[str]:
     """dist-relative paths in the same order extract_config.py emits them."""
-    paths: list[str] = ["claude/CLAUDE.md"]
-    skills = DIST_CONFIG / "claude" / "skills"
+    paths: list[str] = ["hosts/claude/CLAUDE.md"]
+    skills = DIST_CONFIG / "hosts" / "claude" / "skills"
     if skills.is_dir():
         paths += [
-            f"claude/skills/{p.name}"
+            f"hosts/claude/skills/{p.name}"
             for p in sorted(skills.glob("*.md"))
             if p.is_file()
         ]
-    commands = DIST_CONFIG / "claude" / "commands"
+    commands = DIST_CONFIG / "hosts" / "claude" / "commands"
     if commands.is_dir():
         paths += [
-            f"claude/commands/{p.name}"
+            f"hosts/claude/commands/{p.name}"
             for p in sorted(commands.glob("*.md"))
             if p.is_file()
         ]
-    hooks = DIST_CONFIG / "claude" / "hooks"
+    hooks = DIST_CONFIG / "hosts" / "claude" / "hooks"
     if hooks.is_dir():
         found = sorted(p for p in hooks.iterdir() if p.is_file())
-        paths += [f"claude/hooks/{p.name}" for p in found]
+        paths += [f"hosts/claude/hooks/{p.name}" for p in found]
     for name, bundle in PROVIDER_BUNDLES.items():
         dist_name, _ = bundle["instructions"]
-        if (DIST_CONFIG / name / dist_name).is_file():
-            paths.append(f"{name}/{dist_name}")
+        if (DIST_CONFIG / "providers" / name / dist_name).is_file():
+            paths.append(f"providers/{name}/{dist_name}")
         agents_dir = bundle.get("agents_dir")
-        agents = DIST_CONFIG / name / agents_dir if agents_dir else None
+        agents = DIST_CONFIG / "providers" / name / agents_dir if agents_dir else None
         if agents is not None and agents.is_dir():
             paths += [
-                f"{name}/{agents_dir}/{p.name}"
+                f"providers/{name}/{agents_dir}/{p.name}"
                 for p in sorted(agents.glob("*.md"))
                 if p.is_file()
             ]
-    if (DIST_CONFIG / "claude" / "settings.template.json").is_file():
-        paths.append("claude/settings.template.json")
-    for rel in ("agy-host/GEMINI.md", "agy-host/hooks.template.json"):
+    if (DIST_CONFIG / "hosts" / "claude" / "settings.template.json").is_file():
+        paths.append("hosts/claude/settings.template.json")
+    for rel in ("hosts/agy/GEMINI.md", "hosts/agy/hooks.template.json", "hosts/agy/permissions.template.json"):
         if (DIST_CONFIG / rel).is_file():
             paths.append(rel)
+    agy_skills = DIST_CONFIG / "hosts" / "agy" / "skills"
+    if agy_skills.is_dir():
+        # One directory per skill (`<name>/SKILL.md`), as Agy lays them out.
+        paths += [p.relative_to(DIST_CONFIG).as_posix() for p in sorted(agy_skills.glob("*/SKILL.md"))]
     for name, bundle in PROVIDER_BUNDLES.items():
         for key in ("global_config", "project_config"):
             entry = bundle.get(key)
-            if entry and (DIST_CONFIG / name / entry[0]).is_file():
-                paths.append(f"{name}/{entry[0]}")
+            if entry and (DIST_CONFIG / "providers" / name / entry[0]).is_file():
+                paths.append(f"providers/{name}/{entry[0]}")
     return paths
 
 
@@ -131,14 +139,14 @@ def _component(rel: str) -> str:
     # it is contract text an LLM reads. Derived from the bundles so a second provider is
     # classified correctly instead of silently landing in `runtime`.
     instructions = {
-        f"{name}/{bundle['instructions'][0]}"
+        f"providers/{name}/{bundle['instructions'][0]}"
         for name, bundle in PROVIDER_BUNDLES.items()
     }
     if (
         "/skills/" in rel
         or "/commands/" in rel
         or "/agents/" in rel
-        or rel in ("claude/CLAUDE.md", "agy-host/GEMINI.md")
+        or rel in ("hosts/claude/CLAUDE.md", "hosts/agy/GEMINI.md")
         or rel in instructions
     ):
         return "prompt_bundle"

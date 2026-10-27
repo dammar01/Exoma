@@ -64,7 +64,7 @@ def _test_every_shipped_hook_is_a_launcher_and_its_module() -> None:
     """
     import ast
 
-    hooks = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks"
+    hooks = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
     launchers = {p.stem for p in hooks.glob("*.sh")}
     # Not Claude Code hooks: workflow_policy.py is the library the hooks import, and
     # agy-host.py is Agy's entry point, registered in ~/.gemini/config/hooks.json and run
@@ -129,7 +129,7 @@ def _check_task_events_local_skills() -> None:
 
     from tools.maintain.sync_skills import CLAUDE_MD, _COMMAND_RE
 
-    hook = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "claude" / "hooks" / "task-events.py"
+    hook = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks" / "task-events.py"
     shipped: set[str] | None = None
     for node in ast.parse(hook.read_text(encoding="utf-8")).body:
         if isinstance(node, ast.Assign) and any(
