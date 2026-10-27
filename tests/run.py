@@ -69,6 +69,7 @@ from tests.checks.e2e_browser import _test_e2e_browser_session  # noqa: E402
 from tests.checks.e2e_doctor import _test_e2e_doctor_readiness  # noqa: E402
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests  # noqa: E402
 from tests.checks.e2e_metrics import _test_e2e_metrics  # noqa: E402
+from tests.checks.e2e_harness import _test_e2e_harness_names_its_model  # noqa: E402
 from tests.checks.e2e_normalize import _test_e2e_classification_and_verdicts  # noqa: E402
 from tests.checks.e2e_network import _test_e2e_network  # noqa: E402
 from tests.checks.e2e_redact import _test_e2e_redaction_variants  # noqa: E402
@@ -243,6 +244,7 @@ SUITES: dict[str, tuple] = {
     "e2e-tagging": (_test_e2e_tagging, "data-e2e is written only to a cited template line inside the project that Git carries"),
     "e2e-hardening": (_test_e2e_hardening, "retry passes are not clean, expected values stay placeholders, redirects and recovery cannot replay writes"),
     "e2e-knowledge": (_test_e2e_knowledge, "what a browser run proved is kept per origin, retired on repeated failure, and offered to the next draft"),
+    "e2e-harness": (_test_e2e_harness_names_its_model, "tools/e2e/e2e.py --full refuses without --model before any check, and selects the named provider and model through the provider command"),
     "e2e-metrics": (_test_e2e_metrics, "e2e runs as quality rows: rates per run kind, token join, reproducibility, delegated baseline"),
     "e2e-doctor": (_test_e2e_doctor_readiness, "doctor reports verify-browser readiness from package metadata and probes nothing"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),

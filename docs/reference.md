@@ -554,10 +554,14 @@ Absolute paths are redacted to `{{HOME}}` / `{{PROJECT_ROOT}}`; the installer re
 
 ```bash
 python tools/e2e/e2e.py          # local + installer: no delegated run/quota
-python tools/e2e/e2e.py --full   # plus delegated commands: minutes + real quota
+python tools/e2e/e2e.py --full --model <id> [--provider opencode|codex|agy]
+                                 # plus delegated commands: minutes + real quota
 ```
 
-`--full` is opt-in. Delegated commands use the same rate-limit budget the workflow itself needs; a suite that silently burns it is worse than no suite.
+`--full` is opt-in, and needs `--model`: the shipped seed names no model, so without one the
+run stops at argument parsing (exit 2) before any check or call. `--provider` defaults to
+`opencode`. The temporary project gets that choice through `--command provider`, the path
+`/.provider` takes, before the first delegated call. Delegated commands use the same rate-limit budget the workflow itself needs; a suite that silently burns it is worse than no suite.
 
 The installer is tested against a **temporary HOME**, not the machine that produced the bundle — installing onto the origin machine only proves idempotence, it never exercises the *create* path a new user faces.
 
@@ -1504,7 +1508,7 @@ The default suite does not call the real OpenCode; agent flows use a fake adapte
 while the subprocess path, heartbeat, timeout, kill-tree, installer, rollback, and
 persistence contracts are tested locally.
 
-Use `python tools/e2e/e2e.py --full` if you want to add a real OpenCode smoke test; that mode is opt-in because it uses quota.
+Use `python tools/e2e/e2e.py --full --model <id>` if you want to add a real provider smoke test; that mode is opt-in because it uses quota.
 
 Additional checks:
 

@@ -69,7 +69,8 @@ accident.
    uv run python tests/run.py
    WORKFLOW_E2E_SMOKE=1 uv run python tests/run.py --only e2e-smoke   # real Chromium, needs the e2e extra
    uv run python tools/e2e/e2e.py
-   uv run python tools/e2e/e2e.py --full     # spends real quota, needs a configured provider
+   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy> --model <id>
+                                             # spends real quota, needs that provider installed
    ```
 
    Then **the wheel in a clean environment**: `uv build`, install `dist/exoma-<version>-py3-none-any.whl`

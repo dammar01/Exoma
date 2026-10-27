@@ -1,7 +1,8 @@
 """Exoma end-to-end checks.
 
     python tools/e2e/e2e.py           # local + integrity + installer
-    python tools/e2e/e2e.py --full    # also the delegated calls (spends quota)
+    python tools/e2e/e2e.py --full --model <id> [--provider opencode|codex|agy]
+                                      # also the delegated calls (spends quota)
 
 Check bodies live in tools/e2e/e2e_*.py; this module owns the CLI and the order they
 run in.
@@ -45,7 +46,17 @@ def main() -> int:
     parser.add_argument(
         "--session", default="e2e-session", help="session id for delegated runs"
     )
+    parser.add_argument(
+        "--provider", default="opencode", help="second agent for the delegated runs"
+    )
+    parser.add_argument(
+        "--model", help="model id the provider CLI accepts; required with --full"
+    )
     args = parser.parse_args()
+    # The seed Exoma ships leaves the model unset, and an unset model is refused at call
+    # time (model_unset). Refuse here, before the local checks run and before any quota.
+    if args.full and not (args.model or "").strip():
+        parser.error("--full needs --model <id> (and --provider unless opencode): the shipped seed names no model")
 
     report = Report()
     local_checks(report)
@@ -53,7 +64,7 @@ def main() -> int:
     promote_checks(report)
     installer_checks(report)
     if args.full:
-        delegated_checks(report, args.session)
+        delegated_checks(report, args.session, args.provider, args.model.strip())
     else:
         report.record("delegated commands", SKIP, "opt-in via --full")
 

@@ -95,6 +95,7 @@ from tests.checks.e2e_browser import _test_e2e_browser_session
 from tests.checks.e2e_doctor import _test_e2e_doctor_readiness
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests
 from tests.checks.e2e_metrics import _test_e2e_metrics
+from tests.checks.e2e_harness import _test_e2e_harness_names_its_model
 from tests.checks.e2e_normalize import _test_e2e_classification_and_verdicts
 from tests.checks.e2e_network import _test_e2e_network
 from tests.checks.e2e_redact import _test_e2e_redaction_variants
@@ -1308,6 +1309,7 @@ confidence: high — all requested checks ran
         _test_e2e_hardening()
         _test_e2e_knowledge()
         _test_e2e_metrics()
+        _test_e2e_harness_names_its_model()
         _test_e2e_real_browser_smoke()
         _test_submit_admission()
         _test_workspace_release_guards()

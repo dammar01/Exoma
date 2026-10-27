@@ -10,6 +10,13 @@ on:
         description: 'Session id for the delegated run'
         required: false
         default: 'e2e-dispatch'
+      provider:
+        description: 'Second agent for the delegated run (opencode, codex or agy)'
+        required: false
+        default: 'opencode'
+      model:
+        description: 'Model id the provider CLI accepts (the shipped seed leaves it unset)'
+        required: true
       runner:
         description: 'Runner label. GitHub-hosted runners have no provider CLI installed — use a self-hosted runner that does.'
         required: false
@@ -35,4 +42,9 @@ jobs:
         run: python main.py --command doctor --work-dir . --pretty
 
       - name: End-to-end including delegated calls
-        run: python tools/e2e/e2e.py --full --session "${{ inputs.session }}"
+        # Inputs reach the shell as environment variables, never spliced into the command.
+        env:
+          E2E_SESSION: ${{ inputs.session }}
+          E2E_PROVIDER: ${{ inputs.provider }}
+          E2E_MODEL: ${{ inputs.model }}
+        run: python tools/e2e/e2e.py --full --session "$E2E_SESSION" --provider "$E2E_PROVIDER" --model "$E2E_MODEL"

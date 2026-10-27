@@ -40,6 +40,7 @@ uv run python tests/run.py                   # the suite; a temporary EXOMA_HOME
 uv run python tools/maintain/stamp_version.py --check
 uv run python tools/maintain/gen_manifest.py --check
 uv run python tools/e2e/e2e.py               # local end-to-end, no provider quota
+uv run python tools/e2e/e2e.py --full --provider codex --model <id>   # plus real delegated calls (quota)
 ```
 
 To try the installer or a workspace from the checkout, point every home at a temporary
