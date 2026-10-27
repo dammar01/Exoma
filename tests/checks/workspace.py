@@ -401,6 +401,38 @@ def _test_project_session_isolation() -> None:
         _shutil.rmtree(root, ignore_errors=True)
 
 
+def _test_script_drift_path_spelling() -> None:
+    """One project reached through two spellings generates one runner text (CASE-029: on
+    macOS init wrote /private/var/..., a direct upgrade call /var/..., and every upgrade
+    reported drift that was not there)."""
+    from exoma.core.runtime.scripts import _generate_run_scripts, script_drift
+    from exoma.core.workspace.workspace_paths import WORKFLOW_DIRNAME
+
+    base = Path(tempfile.mkdtemp(prefix="drift-spelling-"))
+    try:
+        real = base / "project"
+        (real / WORKFLOW_DIRNAME).mkdir(parents=True)
+        (real / "sub").mkdir()
+        _generate_run_scripts(real)
+        assert_true(not script_drift(real), f"freshly generated scripts do not drift: {script_drift(real)}")
+
+        # A spelling with `..` needs no symlink privilege and names the same directory.
+        dotted = real / "sub" / ".."
+        assert_true(not script_drift(dotted), f"a `..` spelling sees no drift: {script_drift(dotted)}")
+        assert_true(not _generate_run_scripts(dotted), "and regenerates nothing")
+
+        link = base / "link"
+        try:
+            os.symlink(real, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            print("  drift-spelling: symlinks not permitted here; symlink case skipped")
+            return
+        assert_true(not script_drift(link), f"a symlinked spelling sees no drift: {script_drift(link)}")
+        assert_true(not _generate_run_scripts(link), "and an upgrade through it regenerates nothing")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def _test_init_upgrade_and_session_guard() -> None:
     """init must not hand back a stale workspace, and the entry script must refuse
     a default session on a delegated command.

@@ -28,9 +28,20 @@ _VERSION_PROBE = "import sys; print('%d.%d' % sys.version_info[:2])"
 PINNED_PYTHON_FILE = "python.path"
 
 
+def agent_home() -> Path:
+    """The home the agent files live under: AGENT_HOME when set, else the user's home.
+
+    One answer for the installer that writes ~/.claude and the runtime that reads back
+    what it wrote — an install into AGENT_HOME pinned its interpreter there, and a lookup
+    in the real home would embed the user's own pin instead (CASE-029).
+    """
+    override = os.environ.get("AGENT_HOME")
+    return Path(override).expanduser() if override else Path.home()
+
+
 def pinned_python_path(home: Path | None = None) -> Path:
     """~/.claude/hooks/python.path, beside the launchers that read it."""
-    return Path(home or os.path.expanduser("~")) / ".claude" / "hooks" / PINNED_PYTHON_FILE
+    return Path(home or agent_home()) / ".claude" / "hooks" / PINNED_PYTHON_FILE
 
 
 def pinned_python(home: Path | None = None) -> str | None:

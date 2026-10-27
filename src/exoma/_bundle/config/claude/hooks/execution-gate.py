@@ -23,9 +23,14 @@ import json, os, sys
 # The decisions live in workflow_policy.py beside this file, shared with the Agy host
 # wrapper; this hook keeps Claude Code's payload parsing and its exit-2 contract.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_policy import (  # noqa: E402
-    commit_refusal, log_refusal as _log_refusal, read_json, runtime_dir as _runtime_dir, write_refusal,
-)
+try:
+    from workflow_policy import (  # noqa: E402
+        commit_refusal, log_refusal as _log_refusal, read_json, runtime_dir as _runtime_dir, write_refusal,
+    )
+except Exception:
+    # A partial install without the shared helper: fail open like every other state this
+    # hook cannot read, rather than crash on every tool call.
+    sys.exit(0)
 
 # Set once the session is known; refuse() reads it to log the refusal it is about to issue.
 CONTEXT = {}

@@ -2,7 +2,7 @@
 name = "exoma"
 # Stamped from TOOL_VERSION in src/exoma/config/settings.py by tools/maintain/stamp_version.py.
 # uv_build reads only a static version, so this line is a copy, never the source.
-version = "0.2.0"
+version = "0.3.0"
 description = "Evidence-driven problem solving for AI agents: context management, delegated exploration, and evidence gathering around the agent that reasons and decides."
 readme = "README.md"
 license = "Apache-2.0"

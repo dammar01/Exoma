@@ -265,6 +265,44 @@ def _pinned_python(r: _Repro) -> None:
     assert_true(osutil.pinned_python(r.home) is None, "K: a pin naming a missing interpreter is ignored")
 
 
+def _pin_follows_agent_home(r: _Repro) -> None:
+    """K: the pin is read from AGENT_HOME, where an install into AGENT_HOME wrote it (CASE-029)."""
+    saved = os.environ.get("AGENT_HOME")
+    os.environ["AGENT_HOME"] = str(r.home)
+    try:
+        assert_true(osutil.pinned_python_path() == r.home / ".claude" / "hooks" / osutil.PINNED_PYTHON_FILE,
+                    f"K: the pin lookup follows AGENT_HOME: {osutil.pinned_python_path()}")
+    finally:
+        if saved is None:
+            os.environ.pop("AGENT_HOME", None)
+        else:
+            os.environ["AGENT_HOME"] = saved
+    assert_true(osutil.agent_home() == (Path(saved).expanduser() if saved else Path.home()),
+                "K: without the override the lookup is the user's home again")
+
+
+def _policy_helper_missing(r: _Repro) -> None:
+    """A hooks directory without workflow_policy.py (a partial install) fails open, silently."""
+    m = r.bind("p1")
+    hooks = r.base / "hooks-no-policy"
+    shutil.copytree(HOOKS, hooks, ignore=shutil.ignore_patterns("__pycache__", "workflow_policy.py"))
+    r.hooks = hooks
+    log_path = r.home / ".claude" / "hook-errors.log"
+    before = log_path.read_text(encoding="utf-8").count("--- ") if log_path.exists() else 0
+    try:
+        code, _, _ = r.prompt("p1", "/.analyze why")
+        assert_true(code == 0 and not (r.runtime(m) / "delegated.marker").exists(),
+                    f"partial install: intent-gate-set arms nothing and exits 0, got {code}")
+        code = r.tool("p1", "execution-gate", "Write", {"file_path": str(r.outside / "x.txt"), "content": "x"})
+        assert_true(code == 0, f"partial install: execution-gate fails open, got {code}")
+        code, _, _ = r.run("status-guard", {"session_id": "p1", "cwd": str(r.project), "hook_event_name": "Stop"})
+        assert_true(code == 0, f"partial install: status-guard fails open, got {code}")
+        after = log_path.read_text(encoding="utf-8").count("--- ") if log_path.exists() else 0
+        assert_true(after == before, "partial install: a missing helper is not logged as a hook crash")
+    finally:
+        r.hooks = HOOKS
+
+
 def _exit_codes(r: _Repro) -> None:
     """A hook exiting anything but 0 or 2 is failed open and logged, not shown as an error."""
     hooks = r.base / "hooks-exit"
@@ -360,6 +398,8 @@ def check_repro_matrix() -> None:
         _explicit_arming(r)
         _git_bash_env()
         _pinned_python(r)
+        _pin_follows_agent_home(r)
+        _policy_helper_missing(r)
         _exit_codes(r)
         _registry_concurrency(r)
         _runner_symlink(r)

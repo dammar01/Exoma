@@ -102,7 +102,7 @@ PROVIDER_SEED_FILE = DATA_DIR / "config" / "second_agent.seed.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = getenv("EXOMA_PROVIDER", "opencode")
 
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 
 # Component stamps allow lazy upgrades and may diverge when only one surface changes.
 # v3.6.0 moves both surfaces: `/.verify-browser` ships a new skill and CLAUDE.md registry

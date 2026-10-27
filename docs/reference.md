@@ -1,4 +1,4 @@
-# Exoma v0.2.0
+# Exoma v0.3.0
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -113,7 +113,7 @@ git --version
 
 ---
 
-## Install (v0.2.0)
+## Install (v0.3.0)
 
 ### New team member — full sequence from scratch
 
@@ -179,7 +179,9 @@ All `exoma install` flags:
 | `--uninstall` | remove what the workflow installed (see "Uninstall") | with `--apply` |
 
 `AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
-install into a temporary HOME.
+install into a temporary HOME. The runtime reads the interpreter pin (`.claude/hooks/python.path`)
+from the same home, so `.workflow/*.sh` generated under `AGENT_HOME` name the interpreter that
+install pinned there, not the one in the real home. `EXOMA_HOME` moves runtime data only.
 
 Bundle drift (`--check`, and the `--apply` refusal) is computed in both directions: bundle files
 (`exoma/_bundle/config/`) whose hash does not match or that are not recorded in
@@ -401,11 +403,16 @@ Maintainer and e2e tools that run hooks or the runner also refuse (rather than g
   the user's;
 - CLAUDE.md: only the seam where the block was cut is tidied (one blank line); blank
   lines elsewhere in the file stay byte-identical;
+- `~/.gemini/config/hooks.json` loses the `exoma` hook name; every other name stays. A file
+  that held only `exoma` is deleted. The `EXOMA-HOST` block is cut from `~/.gemini/GEMINI.md`
+  like the other instruction blocks;
 - the intent mode and ledger are deleted.
 
 `settings.json` is cleaned **before** hook scripts are deleted, and is read leniently (BOM, cp1252). If
 it cannot be parsed or is not a JSON object, all `hooks/` scripts are left alone and uninstall
-warns about it, so no hook ever points at a missing file. Instruction files whose
+warns about it, so no hook ever points at a missing file. The same holds for Agy's `hooks.json`:
+it is cleaned before the scripts, and when it cannot be parsed or is not a JSON object it is left
+as is with a warning and the `hooks/` scripts (which hold `agy-host.py`) stay. Instruction files whose
 markers are unpaired (START without END, END without START, END before START, or more than
 one block) are refused at install (action `refused` + a warning with the path and both markers) and
 left alone at uninstall.
@@ -565,7 +572,8 @@ runtime's rules at the tool boundary. Claude Code is the reference host. Agy (An
 is the second. The decisions both hosts enforce live once, in
 `~/.claude/hooks/workflow_policy.py` (write root and scope, commit approval, the user's
 approvals, intent classification, the pre-flight marker, the `[EXECUTION RESULT]` claim); each
-host keeps only its payload parsing and its answer format.
+host keeps only its payload parsing and its answer format. A Claude hook that cannot import that
+module (a partial install) exits 0 without acting, like every other state it cannot read.
 
 | Capability | Claude Code | Agy (as calibrated, CASE-029) |
 |---|---|---|
@@ -624,9 +632,14 @@ itself on such a call. None of this bounds the second agent: agy's boundary stay
 into `~/.gemini/config/hooks.json` (other names are the user's). The hook command is
 `<install interpreter> <home>/.claude/hooks/agy-host.py <Event>`, unquoted; when either path
 holds a space or a `cmd.exe` metacharacter (`& % ^ | < > ( ) "`) the hooks are refused with a
-warning instead, as is a `hooks.json` that is not valid JSON or whose root is not an object
-(the file is left as it is). `--check` stamps both files in the
-bundle on every machine and compares the installed block, not `hooks.json`.
+warning instead, as is a `hooks.json` that cannot be read, is not valid JSON, or whose root is not an object
+(the file is left as it is). The two files install together or not at all: the refusal is
+decided before `GEMINI.md` is written, and a refused install writes neither — it also cuts an
+`EXOMA-HOST` block an earlier install left, backed up and receipted, since instructions with no
+hook enforcing them are a half install (unpaired markers are left alone and reported). `--check`
+stamps both files in the bundle on every machine, compares the installed block, reports a
+missing or drifted `exoma` entry in `hooks.json`, and prints `agy host: NOT INSTALLABLE` with the
+reason when the hook would be refused.
 
 **Limits.** Calibrated on one release, on Windows, in print mode. `lastUserInput` is
 undocumented: without it routing and the role header are lost, and the role then rests on
@@ -676,6 +689,8 @@ chmod +x .workflow/*.sh
 **Portability limitation.** The scripts bake in **absolute paths from the machine where `init` was run** — the package root, `--work-dir`, and the detected Python interpreter. None of them is portable across machines.
 
 Paths are written with forward slashes (`C:/...` on Windows), which both Git Bash and Windows Python read. `init`/`upgrade` **delete** `run.ps1`/`inspect.ps1`/`check.ps1` left over from old builds: no generator maintains them any more and the gate does not let calls to them through, so keeping them only makes them look usable. A `run.sh` from another machine still contains that machine's absolute paths. Every team member runs `init` (or `upgrade`) themselves in their own environment; that also applies when moving between WSL and native Windows.
+
+The project root written into `run.sh` and `inspect.sh` is resolved first (symlinks, `..`), so one project reached through two spellings — macOS `/var` and `/private/var` — generates one text and an upgrade sees no drift.
 
 `doctor` compares the script contents on disk with the generator output and reports it in `run_script_drift` — `missing`, `content_differs`, or `retired_leftover` (`.ps1` from an old build). All of them count as issues: these scripts are the only entry point, and one that has drifted will route commands the CLI no longer accepts.
 
@@ -1018,7 +1033,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v0.2.0):
+Reliability keys (v0.3.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1429,7 +1444,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v0.2.0)
+### Liveness worker (v0.3.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

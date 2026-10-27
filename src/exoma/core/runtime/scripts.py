@@ -27,7 +27,10 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
     package_root = Path(tool["package_root"]).as_posix()
     # The interpreter's separator, not bash's: Windows python splits PYTHONPATH on `;`.
     python_path = f'export PYTHONPATH="{package_root}${{PYTHONPATH:+{os.pathsep}$PYTHONPATH}}"\n'
-    root = project_root.as_posix()
+    # Resolved, like the CLI resolves --work-dir: one directory reached through two
+    # spellings (macOS /var -> /private/var) must generate one text, or every caller that
+    # passes the other spelling sees drift that is not there (CASE-029).
+    root = project_root.resolve().as_posix()
     workflow_dir = project_root / WORKFLOW_DIRNAME
     sh_markers = " ".join(_LEGACY_MARKERS)
 

@@ -13,10 +13,14 @@ import os, sys, json, datetime
 # file, shared with the Agy host wrapper; this hook keeps what is Claude Code's own: the
 # prompt `source` labels, host-generated turns, and additionalContext.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_policy import (  # noqa: E402
-    explicit_command, intent_hint, is_second_agent_turn, load_intent_map, nl_command, record_approvals,
-    runtime_dir as _runtime_dir, set_delegated_marker, user_text, without_reminders,
-)
+try:
+    from workflow_policy import (  # noqa: E402
+        explicit_command, intent_hint, is_second_agent_turn, load_intent_map, nl_command, record_approvals,
+        runtime_dir as _runtime_dir, set_delegated_marker, user_text, without_reminders,
+    )
+except Exception:
+    # A partial install without the shared helper: arm nothing, never block the prompt.
+    sys.exit(0)
 
 
 # Prompt `source` values Claude Code uses for turns the user did not type. `user` and `sdk`

@@ -236,9 +236,11 @@ def _check_settings_before_hooks(root: Path) -> None:
     }
     saved = {
         name: getattr(uninstall_mod, name)
-        for name in ("HOME", "_targets", "previously_installed", "retired_hook_stems")
+        for name in ("HOME", "_targets", "previously_installed", "retired_hook_stems", "agy_hooks_dest")
     }
     uninstall_mod.HOME = home
+    agy_hooks = home / ".gemini" / "config" / "hooks.json"
+    uninstall_mod.agy_hooks_dest = lambda: agy_hooks
     uninstall_mod._targets = lambda: [(hook, hook, "claude/hooks/session-bind.ps1")]
     uninstall_mod.previously_installed = lambda: {
         str(hook): {"key": "claude/hooks/session-bind.ps1", "hashes": {_file_sha256(hook)}}
@@ -293,6 +295,19 @@ def _check_settings_before_hooks(root: Path) -> None:
         assert_true(
             [(verb, target) for verb, target, _d in plan.actions if verb == "remove"] == [("remove", str(hook))],
             f"with settings clean the hook script is removed: {plan.actions}",
+        )
+
+        # Settings clean but Agy's hooks.json unreadable: Agy still runs agy-host.py from the
+        # same directory, so the scripts stay here too.
+        agy_hooks.parent.mkdir(parents=True)
+        agy_hooks.write_text("{not json", encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            uninstall_mod.run_uninstall(False)
+        report = out.getvalue()
+        assert_true(
+            hook.exists() and "kept 1 hook script" in report and "remove the `exoma` hook by hand" in report
+            and agy_hooks.read_text(encoding="utf-8") == "{not json",
+            f"an unreadable Agy hooks.json keeps the hook scripts and says so:\n{report}",
         )
     finally:
         for name, value in saved.items():

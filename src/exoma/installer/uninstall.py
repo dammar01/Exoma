@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from exoma.installer.base import (
+    AGY_HOST_HOOK_NAME,
+    AGY_HOST_HOOKS,
     HOME,
     MARKERS,
     _RECEIPT,
@@ -37,6 +39,7 @@ from exoma.installer.base import (
     _read_text_lenient,
     _record,
     _targets,
+    agy_hooks_dest,
 )
 from exoma.installer.settings import _hook_script_ids
 from exoma.installer.stale import (
@@ -210,6 +213,37 @@ def _uninstall_settings(plan: Plan, apply: bool, backup_root: Path) -> bool:
     return True
 
 
+def _uninstall_agy_hooks(plan: Plan, apply: bool, backup_root: Path) -> bool:
+    """Take the `exoma` hook out of Agy's hooks.json, leaving every other name. False when the
+    file could not be read, which leaves Agy still running agy-host.py: the caller then keeps
+    the hook scripts, as for settings.json."""
+    dest = agy_hooks_dest()
+    if not dest.is_file():
+        return True
+    try:
+        current = json.loads(_read_text_lenient(dest))
+    except (OSError, ValueError):
+        plan.warn(f"{dest} is not readable JSON — left as is; remove the `{AGY_HOST_HOOK_NAME}` hook by hand")
+        return False
+    if not isinstance(current, dict):
+        plan.warn(f"{dest} is not a JSON object — left as is; remove the `{AGY_HOST_HOOK_NAME}` hook by hand")
+        return False
+    if AGY_HOST_HOOK_NAME not in current:
+        plan.add("unchanged", dest, f"no `{AGY_HOST_HOOK_NAME}` hook")
+        return True
+    remaining = {name: hook for name, hook in current.items() if name != AGY_HOST_HOOK_NAME}
+    if not remaining:
+        _remove_receipted(dest, AGY_HOST_HOOKS, plan, apply, backup_root, f"held only the `{AGY_HOST_HOOK_NAME}` hook")
+        return True
+    pre_sha256 = _file_sha256(dest)
+    saved = _backup(dest, backup_root, plan, apply, f"uninstall/{AGY_HOST_HOOKS}")
+    plan.add("merge", dest, f"removed hook `{AGY_HOST_HOOK_NAME}`, kept your hooks")
+    if apply:
+        dest.write_text(json.dumps(remaining, indent=2) + "\n", encoding="utf-8")
+        _record("merge", dest, f"uninstall/{AGY_HOST_HOOKS}", saved, pre_sha256)
+    return True
+
+
 def run_uninstall(apply: bool) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     backup_root = HOME / ".claude" / "backups" / f"install_{stamp}"
@@ -228,8 +262,10 @@ def run_uninstall(apply: bool) -> int:
             _uninstall_text(dest, key, plan, apply, backup_root)
     # Settings first: a hook script deleted while settings.json still registers it fails on
     # every event it is wired to, so the scripts go only once nothing runs them.
+    # Agy's hooks.json runs agy-host.py from the same directory, so it is cleaned first too.
     settings_clean = _uninstall_settings(plan, apply, backup_root)
-    _uninstall_files(plan, apply, backup_root, keep_hooks=not settings_clean)
+    agy_clean = _uninstall_agy_hooks(plan, apply, backup_root)
+    _uninstall_files(plan, apply, backup_root, keep_hooks=not (settings_clean and agy_clean))
     # Receipted like everything else: a rollback that restored the files but not the mode
     # would reinstall the other intent mode, and one without the ledger could no longer tell
     # the workflow's files from the user's.

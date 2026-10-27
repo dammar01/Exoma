@@ -4,9 +4,11 @@ Depends on the write layers on purpose — the only honest way to answer "would 
 change?" is to ask the same code that performs the change.
 """
 
+import json
 from pathlib import Path
 
 from exoma.installer.base import (
+    AGY_HOST_HOOK_NAME,
     AGY_HOST_HOOKS,
     AGY_HOST_INSTRUCTIONS,
     DIST_CONFIG,
@@ -16,9 +18,14 @@ from exoma.installer.base import (
     _apply_intent_mode,
     _hash,
     _managed_block,
+    _marker_problem,
     _read_text_lenient,
     _resolve_placeholders,
     _targets,
+    agy_hook_entry,
+    agy_hooks_dest,
+    agy_hooks_state,
+    agy_host_present,
 )
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.installer.rollback import _stored_only_command
@@ -178,8 +185,16 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     installed_drift: list[str] = []
     installed_missing: list[str] = []
 
-    # hooks.json is a merge of one hook name, like settings.json: bundle-check only.
-    checks = [(s, None if k == AGY_HOST_HOOKS else d, k) for s, d, k in _targets()]
+    # The Agy host installs both files or neither, so a refused hook makes GEMINI.md's
+    # absence the expected state, not a missing file.
+    # One read of hooks.json for the refusal and the entry check below (no second read to race).
+    agy_current, agy_refusal = agy_hooks_state(agy_hooks_dest()) if agy_host_present() else ({}, None)
+    # hooks.json is a merge of one hook name, like settings.json: its `exoma` entry is
+    # checked below rather than the whole file here.
+    checks = [
+        (s, None if k == AGY_HOST_HOOKS or (k == AGY_HOST_INSTRUCTIONS and agy_refusal) else d, k)
+        for s, d, k in _targets()
+    ]
     for key in (AGY_HOST_INSTRUCTIONS, AGY_HOST_HOOKS):
         if (DIST_CONFIG / key).exists() and all(k != key for _s, _d, k in checks):
             checks.append((DIST_CONFIG / key, None, key))
@@ -224,6 +239,22 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         elif installed != resolved:
             installed_drift.append(key)
     bundle_stale.extend(key for key in _orphaned_entries(manifest) if key not in bundle_stale)
+
+    if agy_host_present():
+        gemini_md = HOME / ".gemini" / "GEMINI.md"
+        if agy_refusal:
+            # An install now would take out a block an earlier one left (a half install), or
+            # warn about markers that do not pair up and so cannot be taken out.
+            start, end = MARKERS[AGY_HOST_INSTRUCTIONS]
+            text = _read_text_lenient(gemini_md) if gemini_md.is_file() else ""
+            if _managed_block(text, start, end) or _marker_problem(text, start, end):
+                installed_drift.append(AGY_HOST_INSTRUCTIONS)
+        else:
+            installed_hook = agy_current.get(AGY_HOST_HOOK_NAME)
+            if installed_hook is None:
+                installed_missing.append(AGY_HOST_HOOKS)
+            elif installed_hook != agy_hook_entry(DIST_CONFIG / AGY_HOST_HOOKS):
+                installed_drift.append(AGY_HOST_HOOKS)
 
     only_command = _stored_only_command()
     settings_dest = HOME / ".claude" / "settings.json"
@@ -313,6 +344,8 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             print(f"    - STALE (edited, --apply keeps it) {path}")
     if project_scope_note:
         print(f"  project scope: SKIPPED — {project_scope_note}")
+    if agy_refusal:
+        print(f"  agy host: NOT INSTALLABLE — {agy_refusal[1]}")
 
     # Reported beside the drift list rather than inside it. This file has no shipped
     # counterpart to drift FROM, and its absence is not a fault: init falls back to

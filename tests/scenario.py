@@ -79,6 +79,7 @@ from tests.checks.verify_gaps import (
 from tests.checks.jobs import _test_submit_admission
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
+    _test_script_drift_path_spelling,
     _test_project_session_isolation,
     _test_workspace_release_guards,
 )
@@ -173,7 +174,9 @@ from tests.checks.hook_contract import (
 )
 from tests.checks.agy_host import (
     _test_agy_host_contract,
+    _test_agy_host_install_all_or_nothing,
     _test_agy_host_install_merges,
+    _test_agy_host_uninstall,
 )
 from tests.checks.os_resolvers import (
     _test_entry_points_refuse_an_old_python,
@@ -227,6 +230,8 @@ def run_tests() -> None:
     _test_hook_launchers_resolve_python()
     _test_agy_host_contract()
     _test_agy_host_install_merges()
+    _test_agy_host_install_all_or_nothing()
+    _test_agy_host_uninstall()
     _test_gate_k5_fixtures()
     _test_entry_points_refuse_an_old_python()
     _test_find_python_runs_each_candidate()
@@ -1308,6 +1313,7 @@ confidence: high — all requested checks ran
         _test_workspace_release_guards()
         _test_project_session_isolation()
         _test_init_upgrade_and_session_guard()
+        _test_script_drift_path_spelling()
         _test_contract_continuation()
         _test_continuation_prompt_is_bounded()
         _test_workflow_contracts()

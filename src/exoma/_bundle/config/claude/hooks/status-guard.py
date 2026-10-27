@@ -14,7 +14,11 @@ import json, os, sys
 # The [EXECUTION RESULT] reading lives in workflow_policy.py beside this file, shared with the
 # Agy host wrapper; this hook keeps Claude Code's transcript format and systemMessage.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from workflow_policy import claims_completion, read_json, workflow_data_dir  # noqa: E402
+try:
+    from workflow_policy import claims_completion, read_json, workflow_data_dir  # noqa: E402
+except Exception:
+    # A partial install without the shared helper: the guard only warns, so it stays silent.
+    sys.exit(0)
 
 
 def last_assistant_text(payload):

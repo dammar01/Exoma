@@ -15,17 +15,14 @@ from pathlib import Path
 
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.config.settings import BUNDLE_CONFIG_DIR, BUNDLE_DIR, BUNDLE_MANIFEST
+from exoma.utils.osutil import agent_home
 
 DIST = BUNDLE_DIR
 DIST_CONFIG = BUNDLE_CONFIG_DIR
 MANIFEST = BUNDLE_MANIFEST
 # Install target root. AGENT_HOME lets a fresh machine reproduce the environment into a
 # chosen location instead of the real profile; unset falls back to the actual home.
-HOME = (
-    Path(os.environ["AGENT_HOME"]).expanduser()
-    if os.environ.get("AGENT_HOME")
-    else Path.home()
-)
+HOME = agent_home()
 
 _SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END")
 
@@ -108,6 +105,7 @@ def _discard_empty_receipt() -> None:
 
 
 def _reset_receipt() -> None:
+    _AGY_SNAPSHOT.clear()
     _RECEIPT.clear()
     _RECEIPT_TARGET["path"] = None
     _RECEIPT_TARGET["header"] = {}
@@ -422,38 +420,73 @@ def agy_hook_entry(src: Path) -> dict:
 _AGY_UNSAFE_PATH_CHARS = ' &%^|<>()"'
 
 
-def _install_agy_hooks(
-    src: Path, dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path
-) -> None:
-    """Merge Exoma's hook definition into Agy's hooks.json, leaving every other name alone.
+def agy_hooks_dest() -> Path:
+    return HOME / ".gemini" / "config" / "hooks.json"
+
+
+def agy_hooks_state(dest: Path) -> tuple[dict | None, tuple[str, str] | None]:
+    """(the parsed hooks.json, None) when Exoma's hook can go into it — `{}` for a file not
+    there yet — else (None, (plan detail, warning)).
+
+    One read serves the decision and the merge after it: a second read could find the file
+    changed in between and raise where the first one refused cleanly.
 
     Agy runs hook commands through cmd.exe on Windows and passes quotes through literally,
     so a command cannot quote its paths: an interpreter or home path holding a space or a
-    cmd.exe metacharacter is refused here rather than installed as a hook that fails every
-    tool call. A hooks.json that is not a JSON object is refused too: it is the user's
-    file, and replacing it with one holding only `exoma` would discard what was there.
+    cmd.exe metacharacter is refused rather than installed as a hook that fails every tool
+    call. A hooks.json that is not a JSON object is refused too: it is the user's file, and
+    replacing it with one holding only `exoma` would discard what was there. Asked before
+    either Agy file is written, so GEMINI.md never lands without the hook that enforces it.
     """
-    entry = agy_hook_entry(src)
     paths = (Path(sys.executable).as_posix(), HOME.as_posix())
     if any(ch in path for path in paths for ch in _AGY_UNSAFE_PATH_CHARS):
-        plan.add("refused", dest, "a path an Agy hook command cannot carry unquoted")
-        plan.warn(
-            f"{dest}: the Agy host hooks were not installed — the interpreter ({paths[0]}) or "
+        return None, (
+            "a path an Agy hook command cannot carry unquoted",
+            f"the Agy host hooks were not installed — the interpreter ({paths[0]}) or "
             f"the home ({paths[1]}) holds a space or one of {_AGY_UNSAFE_PATH_CHARS.strip()}, "
-            "and Agy runs hook commands unquoted. Install from an interpreter on a plain path."
+            "and Agy runs hook commands unquoted. Install from an interpreter on a plain path.",
         )
-        return
-    exists = dest.exists()
+    if not dest.exists():
+        return {}, None
     try:
-        current = json.loads(_read_text_lenient(dest)) if exists else {}
+        current = json.loads(_read_text_lenient(dest))
     except ValueError:
-        plan.add("refused", dest, "not valid JSON")
-        plan.warn(f"{dest}: refused — not valid JSON; fix or remove it, then install again")
-        return
+        return None, ("not valid JSON", "refused — not valid JSON; fix or remove it, then install again")
+    except OSError as exc:
+        # Permission denied, or a directory under that name: a refusal to report, not a
+        # traceback out of --check.
+        return None, ("not readable", f"refused — it cannot be read ({exc.__class__.__name__}); fix it, then install again")
     if not isinstance(current, dict):
-        plan.add("refused", dest, "not a JSON object")
-        plan.warn(f"{dest}: refused — its root is not a JSON object; fix or remove it, then install again")
+        return None, (
+            "not a JSON object",
+            "refused — its root is not a JSON object; fix or remove it, then install again",
+        )
+    return current, None
+
+
+def agy_hooks_refusal(dest: Path) -> tuple[str, str] | None:
+    """(plan detail, warning) when Exoma's hook cannot go into Agy's hooks.json, else None."""
+    return agy_hooks_state(dest)[1]
+
+
+# The hooks.json state the GEMINI.md decision was made on, handed to the hook merge that
+# follows it in the same install (_targets() puts the instructions first). Both targets then
+# act on one read: a hooks.json changed between them can no longer leave the instructions
+# installed and the hook refused. Taken once; a hook merge with no snapshot reads afresh.
+_AGY_SNAPSHOT: dict[Path, tuple[dict | None, tuple[str, str] | None]] = {}
+
+
+def _install_agy_hooks(
+    src: Path, dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path
+) -> None:
+    """Merge Exoma's hook definition into Agy's hooks.json, leaving every other name alone."""
+    exists = dest.exists()
+    current, refusal = _AGY_SNAPSHOT.pop(dest, None) or agy_hooks_state(dest)
+    if refusal:
+        plan.add("refused", dest, refusal[0])
+        plan.warn(f"{dest}: {refusal[1]}")
         return
+    entry = agy_hook_entry(src)
     if current.get(AGY_HOST_HOOK_NAME) == entry:
         plan.add("unchanged", dest)
         return
@@ -465,6 +498,21 @@ def _install_agy_hooks(
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
         _record("merge" if exists else "create", dest, key, saved, pre_sha256)
+
+
+def _withdraw_agy_instructions(dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path) -> None:
+    """GEMINI.md when its hook is refused: install nothing, and take out the block an earlier
+    install left, since instructions with no hook enforcing them are a half install."""
+    from exoma.installer.uninstall import _uninstall_text  # uninstall imports this module
+
+    start, end = MARKERS[key]
+    text = _read_text_lenient(dest) if dest.is_file() else ""
+    if _marker_problem(text, start, end) is None and _managed_block(text, start, end) is None:
+        plan.add("refused", dest, "its Agy hook cannot be installed")
+        return
+    # A block to take out, or markers that do not pair up: _uninstall_text removes the
+    # first and warns about the second rather than leaving either unreported.
+    _uninstall_text(dest, key, plan, apply, backup_root)
 
 
 def _install_text(
@@ -480,6 +528,12 @@ def _install_text(
     if key == AGY_HOST_HOOKS:
         _install_agy_hooks(src, dest, key, plan, apply, backup_root)
         return
+    if key == AGY_HOST_INSTRUCTIONS:
+        hooks_dest = agy_hooks_dest()
+        _AGY_SNAPSHOT[hooks_dest] = agy_hooks_state(hooks_dest)
+        if _AGY_SNAPSHOT[hooks_dest][1]:
+            _withdraw_agy_instructions(dest, key, plan, apply, backup_root)
+            return
     incoming = _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
     if key == "claude/CLAUDE.md":
         incoming = _apply_intent_mode(incoming, only_command)
@@ -574,7 +628,7 @@ def _targets() -> list[tuple[Path, Path, str]]:
     # under ~/.gemini.
     if agy_host_present():
         mapping.append((DIST_CONFIG / AGY_HOST_INSTRUCTIONS, HOME / ".gemini" / "GEMINI.md", AGY_HOST_INSTRUCTIONS))
-        mapping.append((DIST_CONFIG / AGY_HOST_HOOKS, HOME / ".gemini" / "config" / "hooks.json", AGY_HOST_HOOKS))
+        mapping.append((DIST_CONFIG / AGY_HOST_HOOKS, agy_hooks_dest(), AGY_HOST_HOOKS))
     # One set of files for every OS: hooks are bash launchers (Git Bash on Windows) beside
     # the .py they run.
     for family, sub, dest_dir in dir_families:

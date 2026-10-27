@@ -141,7 +141,9 @@ from tests.checks.hook_contract import (  # noqa: E402
 )
 from tests.checks.agy_host import (  # noqa: E402
     _test_agy_host_contract,
+    _test_agy_host_install_all_or_nothing,
     _test_agy_host_install_merges,
+    _test_agy_host_uninstall,
 )
 from tests.checks.os_resolvers import (  # noqa: E402
     _test_entry_points_refuse_an_old_python,
@@ -178,6 +180,7 @@ from tests.checks.verify_gaps import (  # noqa: E402
 )
 from tests.checks.workspace import (  # noqa: E402
     _test_init_upgrade_and_session_guard,
+    _test_script_drift_path_spelling,
     _test_project_session_isolation,
     _test_workspace_release_guards,
 )
@@ -246,6 +249,7 @@ SUITES: dict[str, tuple] = {
     "workspace-release": (_test_workspace_release_guards, "lock release guards"),
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
     "init-upgrade": (_test_init_upgrade_and_session_guard, "init/upgrade and the session guard"),
+    "drift-spelling": (_test_script_drift_path_spelling, "one project reached through two path spellings (`..`, a symlink) generates one runner text, so upgrade sees no drift"),
     "continuation": (_test_contract_continuation, "bounded continuation keeps the first reply's evidence"),
     "continuation-size": (_test_continuation_prompt_is_bounded, "the recovery prompt fits the command line it travels on"),
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
@@ -290,6 +294,8 @@ SUITES: dict[str, tuple] = {
     "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the hooks read the session registry as UTF-8 and the gate takes a non-ASCII project root in a runner path"),
     "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout; the DEC-068 failures replay clean"),
     "agy-host": (_test_agy_host_contract, "the Agy host wrapper answers every PreToolUse with a decision, fails open, passes [WORKFLOW_AGENT] turns, and gates as the Claude hooks do"),
+    "agy-host-install-whole": (_test_agy_host_install_all_or_nothing, "the Agy instructions and hook install together or not at all; a refused hook takes out an earlier instructions block"),
+    "agy-host-uninstall": (_test_agy_host_uninstall, "uninstall takes only the `exoma` hook out of hooks.json, keeps the user's hooks, and receipts the change for --rollback"),
     "agy-host-install": (_test_agy_host_install_merges, "the installer merges only the `exoma` hook name into hooks.json and only the EXOMA-HOST block into GEMINI.md"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),

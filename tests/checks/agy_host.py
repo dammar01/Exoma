@@ -222,9 +222,237 @@ def _test_agy_host_install_merges() -> None:
     assert_true(again == merged and how == "replaced managed block", "a second install replaces only its block")
 
 
+def _install_agy_targets(home: Path, interpreter: str, apply: bool = True):
+    """Run the install over the two Agy targets, in _targets() order, as `interpreter` would.
+    Returns the plan and the receipt entries the run recorded."""
+    from exoma.installer import base
+
+    plan = base.Plan()
+    saved = (base.HOME, sys.executable)
+    base.HOME, sys.executable = home, interpreter
+    try:
+        for src, dest, key in base._targets():
+            if key in (base.AGY_HOST_INSTRUCTIONS, base.AGY_HOST_HOOKS):
+                base._install_text(src, dest, key, plan, apply, home / "backup", None)
+        receipt = list(base._RECEIPT)
+    finally:
+        base.HOME, sys.executable = saved
+        base._reset_receipt()
+    return plan, receipt
+
+
+def _test_agy_host_install_all_or_nothing() -> None:
+    """GEMINI.md lands only with the hook that enforces it (pipx on macOS lives under a path
+    with a space, which Agy's unquoted hook command cannot carry)."""
+    from exoma.installer import base
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-whole-") as tmp:
+        home = Path(tmp)
+        if any(ch in home.as_posix() for ch in base._AGY_UNSAFE_PATH_CHARS):
+            return
+        gemini_md = home / ".gemini" / "GEMINI.md"
+        hooks = home / ".gemini" / "config" / "hooks.json"
+        hooks.parent.mkdir(parents=True)
+        spaced = (home / "Application Support" / "venv" / "bin" / "python").as_posix()
+        plain = (home / "venv" / "bin" / "python").as_posix()
+
+        plan, _receipt = _install_agy_targets(home, spaced)
+        refused = {Path(target) for verb, target, _detail in plan.actions if verb == "refused"}
+        assert_true(not gemini_md.exists() and not hooks.exists(),
+                    "a refused hook installs neither Agy file (no half install)")
+        assert_true({gemini_md, hooks} <= refused and plan.warnings,
+                    f"both Agy files are planned as refused, with a warning: {plan.actions}")
+
+        _install_agy_targets(home, plain)
+        start, _end = base.MARKERS[base.AGY_HOST_INSTRUCTIONS]
+        assert_true(gemini_md.is_file() and start in gemini_md.read_text(encoding="utf-8"),
+                    "a plain interpreter path installs the instructions")
+        assert_true("exoma" in json.loads(hooks.read_text(encoding="utf-8")),
+                    "and the hook beside them")
+
+        # A later install the hook cannot follow takes out the block the earlier one left. A dry
+        # run only plans it; the applied run backs the file up and receipts it for --rollback.
+        with_block = "my own notes\n\n" + gemini_md.read_text(encoding="utf-8")
+        gemini_md.write_text(with_block, encoding="utf-8")
+        before_hooks = hooks.read_text(encoding="utf-8")
+        plan, _receipt = _install_agy_targets(home, spaced, apply=False)
+        assert_true(gemini_md.read_text(encoding="utf-8") == with_block
+                    and any(verb == "merge" for verb, _t, _d in plan.actions),
+                    f"a dry run plans the removal and writes nothing: {plan.actions}")
+        _plan, receipt = _install_agy_targets(home, spaced)
+        text = gemini_md.read_text(encoding="utf-8")
+        assert_true(start not in text and text.startswith("my own notes"),
+                    f"the Exoma block is removed, the user's text kept: {text!r}")
+        assert_true(hooks.read_text(encoding="utf-8") == before_hooks, "a refused install leaves hooks.json alone")
+        entry = next((e for e in receipt if e["dest"] == str(gemini_md)), None)
+        assert_true(entry is not None and entry["key"] == f"uninstall/{base.AGY_HOST_INSTRUCTIONS}"
+                    and entry["backup"] and Path(entry["backup"]).read_text(encoding="utf-8") == with_block,
+                    f"the removal is backed up and receipted, so --rollback restores it: {receipt}")
+
+        # Markers that do not pair up cannot be cut safely: left as they are, and said so.
+        half = "notes\n<!-- EXOMA-HOST:START -->\norphan half\n"
+        gemini_md.write_text(half, encoding="utf-8")
+        plan, _receipt = _install_agy_targets(home, spaced)
+        assert_true(gemini_md.read_text(encoding="utf-8") == half
+                    and any("do not pair up" in w for w in plan.warnings),
+                    f"unpaired markers are left alone and reported: {plan.warnings}")
+
+        # A Windows interpreter under Program Files cannot ride an unquoted cmd.exe command.
+        gemini_md.unlink()
+        _install_agy_targets(home, "C:/Program Files/Python312/python.exe")
+        assert_true(not gemini_md.exists(), "a Windows path with a space is refused like any other")
+
+        # A hooks.json the installer must not touch refuses the instructions too: unreadable,
+        # or valid JSON whose root is not an object.
+        for content in ("{not json", "[1, 2]"):
+            hooks.write_text(content, encoding="utf-8")
+            _install_agy_targets(home, plain)
+            assert_true(not gemini_md.exists() and hooks.read_text(encoding="utf-8") == content,
+                        f"a hooks.json the install cannot merge into blocks both files: {content}")
+
+        # One that cannot be read at all (a directory under that name stands in for permission
+        # denied on every OS) is a refusal too, never a traceback out of --check.
+        hooks.unlink()
+        hooks.mkdir()
+        saved = (base.HOME, sys.executable)
+        base.HOME, sys.executable = home, plain
+        try:
+            refusal = base.agy_hooks_refusal(hooks)
+        finally:
+            base.HOME, sys.executable = saved
+        assert_true(refusal is not None and refusal[0] == "not readable",
+                    f"an unreadable hooks.json is refused, not raised: {refusal}")
+        plan, _receipt = _install_agy_targets(home, plain)
+        assert_true(not gemini_md.exists() and hooks.is_dir()
+                    and any(verb == "refused" for verb, _t, _d in plan.actions),
+                    f"and installs neither Agy file: {plan.actions}")
+        hooks.rmdir()
+
+        # The hook merge decides and merges from one read of hooks.json: a second read could
+        # find the file changed in between and raise where the first one refused cleanly.
+        hooks.write_text(json.dumps({"mine": {"command": "echo hi"}}), encoding="utf-8")
+        reads: list[Path] = []
+        real_read = base._read_text_lenient
+
+        def counting_read(path, *args, **kwargs):
+            if Path(path) == hooks:
+                reads.append(Path(path))
+            return real_read(path, *args, **kwargs)
+
+        saved = (base.HOME, sys.executable)
+        base.HOME, sys.executable, base._read_text_lenient = home, plain, counting_read
+        try:
+            base._install_agy_hooks(base.DIST_CONFIG / base.AGY_HOST_HOOKS, hooks, base.AGY_HOST_HOOKS,
+                                    base.Plan(), False, home / "backup")
+        finally:
+            (base.HOME, sys.executable), base._read_text_lenient = saved, real_read
+        assert_true(len(reads) == 1, f"hooks.json is read once per hook install: {len(reads)} reads")
+
+        # Across the two targets too: hooks.json made unreadable after GEMINI.md was decided
+        # cannot leave the instructions installed and the hook refused (a half install).
+        saved = (base.HOME, sys.executable)
+        base.HOME, sys.executable = home, plain
+        plan = base.Plan()
+        try:
+            for src, dest, key in base._targets():
+                if key not in (base.AGY_HOST_INSTRUCTIONS, base.AGY_HOST_HOOKS):
+                    continue
+                base._install_text(src, dest, key, plan, True, home / "backup-race", None)
+                if key == base.AGY_HOST_INSTRUCTIONS:
+                    hooks.write_text("{changed underneath", encoding="utf-8")
+        finally:
+            base.HOME, sys.executable = saved
+            base._reset_receipt()
+        installed = json.loads(hooks.read_text(encoding="utf-8"))
+        assert_true(gemini_md.is_file() and "exoma" in installed and installed.get("mine"),
+                    f"both targets act on one snapshot, so both land: {plan.actions}")
+        assert_true(not base._AGY_SNAPSHOT, "the snapshot is consumed by the hook merge")
+        gemini_md.unlink()
+        hooks.unlink()
+
+    # A home holding a space refuses as the interpreter does.
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-whole-") as tmp:
+        home = Path(tmp) / "My Home"
+        (home / ".gemini" / "config").mkdir(parents=True)
+        _install_agy_targets(home, (Path(tmp) / "python").as_posix())
+        assert_true(not (home / ".gemini" / "GEMINI.md").exists()
+                    and not (home / ".gemini" / "config" / "hooks.json").exists(),
+                    "a home with a space installs neither Agy file")
+
+    # Without ~/.gemini a Claude-only install has no Agy target at all.
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-whole-") as tmp:
+        saved = base.HOME
+        base.HOME = Path(tmp)
+        try:
+            keys = {key for _s, _d, key in base._targets()}
+        finally:
+            base.HOME = saved
+        assert_true(not keys & {base.AGY_HOST_INSTRUCTIONS, base.AGY_HOST_HOOKS},
+                    "no ~/.gemini, no Agy target")
+
+
+def _test_agy_host_uninstall() -> None:
+    """Uninstall takes out only the `exoma` hook; the user's hooks stay, and --rollback brings it back."""
+    from exoma.installer import base
+    from exoma.installer import uninstall
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-uninstall-") as tmp:
+        home = Path(tmp)
+        if any(ch in home.as_posix() for ch in base._AGY_UNSAFE_PATH_CHARS):
+            return
+        hooks = home / ".gemini" / "config" / "hooks.json"
+        hooks.parent.mkdir(parents=True)
+        mine = {"mine": {"command": "echo hi"}}
+        hooks.write_text(json.dumps(mine), encoding="utf-8")
+        _install_agy_targets(home, (home / "venv" / "bin" / "python").as_posix())
+        installed = hooks.read_text(encoding="utf-8")
+        assert_true("exoma" in json.loads(installed), "the install merged the `exoma` hook")
+
+        saved = (base.HOME, uninstall.HOME)
+        base.HOME = uninstall.HOME = home
+        try:
+            plan = base.Plan()
+            assert_true(uninstall._uninstall_agy_hooks(plan, False, home / "backup"), "a dry run reads the file")
+            assert_true(hooks.read_text(encoding="utf-8") == installed, "a dry run writes nothing")
+
+            base._begin_receipt(home / "backup" / "install_receipt.json", {"uninstall": True})
+            plan = base.Plan()
+            assert_true(uninstall._uninstall_agy_hooks(plan, True, home / "backup"), "the applied run cleans")
+            receipt = list(base._RECEIPT)
+            assert_true(json.loads(hooks.read_text(encoding="utf-8")) == mine,
+                        f"only `exoma` is removed, the user's hook kept: {hooks.read_text(encoding='utf-8')}")
+            entry = next((e for e in receipt if e["dest"] == str(hooks)), None)
+            assert_true(entry is not None and entry["backup"]
+                        and Path(entry["backup"]).read_text(encoding="utf-8") == installed,
+                        f"the removal is backed up and receipted for --rollback: {receipt}")
+            base._reset_receipt()
+
+            # A file that held only `exoma` goes with it.
+            hooks.write_text(json.dumps({"exoma": {"command": "x"}}), encoding="utf-8")
+            base._begin_receipt(home / "backup2" / "install_receipt.json", {"uninstall": True})
+            uninstall._uninstall_agy_hooks(base.Plan(), True, home / "backup2")
+            base._reset_receipt()
+            assert_true(not hooks.exists(), "a hooks.json holding only `exoma` is removed")
+
+            # A file the uninstall cannot read is left alone, and the hook scripts are kept.
+            hooks.write_text("{not json", encoding="utf-8")
+            plan = base.Plan()
+            assert_true(not uninstall._uninstall_agy_hooks(plan, True, home / "backup3")
+                        and hooks.read_text(encoding="utf-8") == "{not json" and plan.warnings,
+                        f"unreadable hooks.json is left as is and reported: {plan.warnings}")
+            hooks.unlink()
+            assert_true(uninstall._uninstall_agy_hooks(base.Plan(), True, home / "backup4"),
+                        "no hooks.json, nothing to do")
+        finally:
+            base.HOME, uninstall.HOME = saved
+            base._reset_receipt()
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(REPO))
     sys.path.insert(0, str(REPO / "src"))
     _test_agy_host_contract()
     _test_agy_host_install_merges()
+    _test_agy_host_install_all_or_nothing()
+    _test_agy_host_uninstall()
     print("agy_host: OK")
