@@ -36,7 +36,7 @@ The anchor of every `codeSource` comes from the runtime, not computed by you:
 ## STEP 4 — Reconciliation
 Write the candidate document to a file, then:
 
-Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' promote-verify '<candidate.json path>'
+Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' promote-verify --session '<MAIN_SESSION_ID>' --task '<candidate.json path>'
 
 The runtime returns `meta.verification` (freshness status per claim) and `meta.reconciliation`
 (NEW | UNCHANGED | UPDATE | CONFLICT | UNVERIFIED per claim, plus `untouched_existing`).
@@ -67,7 +67,7 @@ verify again BEFORE writing. Never write a verification result that has gone sta
 ## STEP 7 — Write
 Only after approval:
 
-Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' promote-write '<final.json path>'
+Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' promote-write --session '<MAIN_SESSION_ID>' --task '<final.json path>'
 
 The runtime validates, refuses git-ignored sources, prunes exclusions whose branch is already
 dead, then writes. Refused → report `meta.errors` as they are; do not bend the document to get through.

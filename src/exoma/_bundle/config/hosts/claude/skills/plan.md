@@ -7,7 +7,7 @@ argument-hint: <task>
 
 ## STEP 1 — Evidence
 Reuse LAST_EXPLORE_RESULT when it is in context. Otherwise 1-call:
-  Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' plan '<task>' '<MAIN_SESSION_ID>'
+  Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' plan --session '<MAIN_SESSION_ID>' --task '<task>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as the 3rd argument (concurrent isolation).
 - FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:
   STOP → "[PROXY FAILED] <reason>. Continue the plan via /.local or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.
@@ -80,7 +80,7 @@ Record the plan in the runtime — every time a [PLAN] is issued or changes (inc
   write `<work_dir>/.workflow/data/sessions/<MAIN_SESSION_ID>/runtime/plan.input.json`:
   {"task", "decision", "confidence": {problem_understanding, root_cause, solution_path},
    "open_questions": [...], "options": [{"name", "plus", "minus", "recommended"}], "files": [<execution scope>]}
-  then: bash '<work_dir>/.workflow/run.sh' plan-record '<that path>' '<MAIN_SESSION_ID>'
+  then: bash '<work_dir>/.workflow/run.sh' plan-record --session '<MAIN_SESSION_ID>' --task '<that path>'
 The runtime REFUSES a `proceed` that still has open_questions, solution_path < high, empty
 `files`, an option without `minus`, or a recommendation count ≠ one (`plan_invalid`). Refused → it is not
 proceed: fix the plan or write decision clarify. /.execute -y only opens a recorded plan.

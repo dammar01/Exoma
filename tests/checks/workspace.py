@@ -433,6 +433,32 @@ def _test_script_drift_path_spelling() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _check_mcp_scan_names_an_unreadable_config(root: Path) -> None:
+    """A provider config the process may not even stat (a sandboxed host denies ~/.codex on
+    Windows, CASE-033) is reported by doctor, not raised out of it."""
+    from exoma.core.audit import mcp_scan
+
+    class Denied:
+        def __str__(self):
+            return "C:/Users/x/.codex/config.toml"
+
+        def exists(self):
+            raise PermissionError(13, "Access is denied")
+
+    not_utf8 = root / "not-utf8.json"
+    not_utf8.write_bytes(b'{"mcp": {"x": "\xff\xfe"}}')
+    saved = mcp_scan._mcp_config_candidates
+    mcp_scan._mcp_config_candidates = lambda project_root, provider=None: [Denied(), not_utf8]
+    try:
+        scanned = mcp_scan._scan_mcp(root)
+    finally:
+        mcp_scan._mcp_config_candidates = saved
+    errors = [entry["error"] for entry in scanned["unreadable"]]
+    assert_true(len(errors) == 2 and "Access is denied" in errors[0] and "UnicodeDecodeError" in errors[1]
+                and scanned["verdict"] == "none",
+                f"a denied and a non-UTF-8 provider config are named, not raised: {scanned}")
+
+
 def _test_init_upgrade_and_session_guard() -> None:
     """init must not hand back a stale workspace, and the entry script must refuse
     a default session on a delegated command.
@@ -562,5 +588,41 @@ def _test_init_upgrade_and_session_guard() -> None:
             allowed.returncode != 2,
             f"a local command must keep working without a session: rc={allowed.returncode} {allowed.stderr!r}",
         )
+
+        def run(*args):
+            return subprocess.run(argv + list(args), env=env, capture_output=True, text=True, **no_console())
+
+        # A local command that reads or writes session state is refused without one too: a
+        # dropped argument must not land a plan or an execution in a session nobody bound.
+        for args in (["sweep"], ["execute-begin", "", "default"], ["plan-record", "--task", "p.json"]):
+            done = run(*args)
+            assert_true(done.returncode == 2 and "--session" in done.stderr,
+                        f"{args} with no session is refused and names --session: rc={done.returncode} {done.stderr!r}")
+        # The named form: no position to shift, and what a dropped '' leaves is refused.
+        done = run("inspect", "--session", "probe-session")
+        assert_true(done.returncode == 0 and json.loads(done.stdout).get("ok") is not None,
+                    f"inspect --session runs: rc={done.returncode} {done.stderr[-300:]!r}")
+        for args, why in ((["inspect", "--task", "--session", "x"], "a dropped empty --task value"),
+                          (["inspect", "--session"], "an option without its value"),
+                          (["inspect", "--bogus", "x"], "an unknown option"),
+                          (["analyze", "--session", "s", "--task", "x", "--task-file", "f"], "--task with --task-file")):
+            done = run(*args)
+            assert_true(done.returncode == 2 and "usage: run.sh" in done.stderr,
+                        f"{why} is refused with the usage line: rc={done.returncode} {done.stderr!r}")
+        # A task that opens with a dash reaches the CLI as task text, not as an option.
+        for task in ("--help", "-x why"):
+            done = run("doctor", "--session", "probe-session", "--task", task)
+            assert_true(done.returncode != 2 and "expected one argument" not in done.stderr,
+                        f"--task {task!r} is passed as text: rc={done.returncode} {done.stderr[-300:]!r}")
+        # --task-file hands the CLI a path, so the task never passes through a shell's quoting.
+        task_file = root / "task.txt"
+        task_file.write_text('why "quoted" and $x', encoding="utf-8")
+        done = run("doctor", "--session", "probe-session", "--task-file", str(task_file))
+        assert_true(done.returncode != 2 and "prompt file" not in done.stderr,
+                    f"--task-file reaches the CLI as --prompt-file: rc={done.returncode} {done.stderr[-300:]!r}")
+        done = run("doctor", "--session", "probe-session", "--task-file", str(root / "missing.txt"))
+        assert_true("prompt file not found" in done.stderr,
+                    f"and the CLI reads it, so a missing file is named: {done.stderr[-300:]!r}")
+        _check_mcp_scan_names_an_unreadable_config(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)

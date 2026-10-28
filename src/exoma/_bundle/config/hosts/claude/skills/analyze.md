@@ -7,7 +7,7 @@ argument-hint: [--local] <topic>
 /.analyze --local <topic>  → Claude directly (skips the proxy)
 
 ## Run (1-call)
-Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' analyze '<topic>' '<MAIN_SESSION_ID>'
+Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' analyze --session '<MAIN_SESSION_ID>' --task '<topic>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as the 3rd argument (concurrent isolation). Reuse LAST_EXPLORE_RESULT when relevant.
 The task touches an external library → name the library; the proxy reads the context7 docs first → findings in external (not a guessed API).
 FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:

@@ -11,8 +11,12 @@ session can see whether Agy loads them. One observation each; do not fix anythin
      (`checks.hosts.agy.permissions` says whether the rules are on; `--no-agy-permissions` turns them off);
    - it printed doctor's JSON → `runner: ok`;
    - `No such file or directory` on the script path → `runner: wrong bash (WSL)`;
-   - `NtCreateDirectoryObject` → `runner: sandbox refused Git Bash`;
-   - `PermissionError` / `Access is denied` on `exoma\storage` → `runner: sandbox refused the data directory`.
+   - `NtCreateDirectoryObject`, or exit 1 with no output at all → `runner: sandbox refused Git Bash`
+     (Git Bash dies before the script starts, so the runner cannot print anything; run the call
+     with the sandbox bypassed — the permission rules approve it, they do not lift the sandbox);
+   - `PermissionError` / `Access is denied` on `exoma\storage` or `.workflow\data` → `runner: sandbox refused the data directory`;
+   - `provider config unreadable` among doctor's issues (e.g. `~/.codex/config.toml`) → the runner ran inside the
+     sandbox: delegated calls will fail the same way until it runs with the sandbox bypassed.
 
 Add to the report:
 ```

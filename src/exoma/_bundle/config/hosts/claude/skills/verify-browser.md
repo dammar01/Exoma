@@ -63,7 +63,7 @@ Valid settings keys in a request: base_url browser headless slow_mo_ms nav_timeo
 Writing credential values into the request, the task, or a scenario is FORBIDDEN — only `${E2E_USER}`/`${E2E_PASS}`. The runtime matches the secrets.json values against the task, the draft, and request.json: a match is replaced by the placeholder (request.json rewritten), the run still goes ahead, and `meta.e2e.secret_literals` + `config_warnings` name the KEY. It appears → report it to the user as a leak that was patched, not a silent success. A `fill` into a password field without a placeholder → `spec_invalid`.
 
 ## STEP 3 — Draft (background)
-Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' verify-browser '<task>' '<MAIN_SESSION_ID>'
+Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' verify-browser --session '<MAIN_SESSION_ID>' --task '<task>'
 `run_in_background: true`, collect the result of the same task ID. <task> ≤3000 chars, holding: the flow + expected claims, base_url, the credential key names (`${E2E_USER}`...), side effects allowed or not, the changed files when known. Do NOT paste code.
 Result `meta.phase=draft`, `content` = [E2E DRAFT], details in `meta.e2e.draft` + the file `draft.json` in the same folder.
 - ok:false (stage 1 failed) → HARD GATE [PROXY FAILED] as for any delegated command. Do NOT quietly invent a scenario yourself.

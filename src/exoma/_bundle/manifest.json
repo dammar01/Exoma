@@ -7,15 +7,15 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "8be82bbadbcc282fa4f457954f9e91664892ae07a632a203e6060a576f2e191f",
-      "bytes": 36193,
+      "sha256": "4bba2894ebafda8abfd48df5aabbc19bdafa7af60486e373c1fe07ebf86fe681",
+      "bytes": 36808,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/analyze.md",
-      "sha256": "d28c0402ec496daacef1c2486cabdfcece17ddd83a80d63dc72c88439e73e1bd",
-      "bytes": 2043,
+      "sha256": "c1080a93f0d9610ae8cde21d63027ee6c5505d3585df6ed39018befca4fd69d3",
+      "bytes": 2060,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -35,22 +35,22 @@
     },
     {
       "path": "hosts/claude/skills/doctor.md",
-      "sha256": "db4e4e3d215c6190cc2e52daf0dfa191f18eecf5fdb4b91300ddd680a822f2e9",
-      "bytes": 2738,
+      "sha256": "eaec0a9789b4688d44915b015244e6475619c604795ec8635973daeaec6edd5c",
+      "bytes": 2740,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/execute.md",
-      "sha256": "37a979d1d42f636a4d69504f018a259bb67724c3dda6f93a6906826f5371cad1",
-      "bytes": 4125,
+      "sha256": "a72118a6e298640f81ee2132acb63bcc0e69aa5ece43350b59adbc0f8c0e821a",
+      "bytes": 4139,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/explore.md",
-      "sha256": "377cfe42e5c87a3e8b6b1482177a91e4dd57af509cad0c0daab60aa554ac3a8a",
-      "bytes": 1329,
+      "sha256": "63e9bf6aebd85250268e25afdb3ec68dd907477ea58a5bd938498940c60104b8",
+      "bytes": 1346,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -84,29 +84,29 @@
     },
     {
       "path": "hosts/claude/skills/plan.md",
-      "sha256": "f7ca5daf2100d0be52b5b8dda2e7d0cc2d3855923f7bb295cb8bf8fa3b3cae0b",
-      "bytes": 7789,
+      "sha256": "885d4ff35fada3bca6d8e8f5ac272310732835fe649d61b82a8301223e3812f5",
+      "bytes": 7823,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/promote.md",
-      "sha256": "8aeb034416ecb16e90e3cb589488616976bbf6025130847ac68d223961b60150",
-      "bytes": 4377,
+      "sha256": "60e68e31eda76f489c61f9f9da303bcec762a463829b9a0dd153a5578996146e",
+      "bytes": 4451,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/provider.md",
-      "sha256": "e8d23a478b7421a7a78bcf055728e6827f0dde00ff87b468437f380abf195215",
-      "bytes": 8285,
+      "sha256": "e82555437cac4b54b2458d1de8848511ebba8f1ab031ecc9fd985c91078334ca",
+      "bytes": 8326,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/sweep.md",
-      "sha256": "fe178d9b15ab26f027b2743c3da48fe968374225ca214e38c08cc25ee457bfa5",
-      "bytes": 808,
+      "sha256": "ed931c24dd9c6ff5ad3bc1ba5a6968fd715184405bf6923802c2fcb00733630d",
+      "bytes": 785,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -119,8 +119,8 @@
     },
     {
       "path": "hosts/claude/skills/verify-browser.md",
-      "sha256": "8b5f5b456b9990a6b963ba2ad9a341046a4e122aeb911eb288322e32269728b9",
-      "bytes": 32826,
+      "sha256": "0e0392189e93f7d2858b12414a5177828841075e33a981dc8b539b863462bdb2",
+      "bytes": 32843,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -252,8 +252,8 @@
     },
     {
       "path": "hosts/claude/hooks/agy-host.py",
-      "sha256": "e61f294da6c25b02b804823031cde47de189a1e4b73a39be5f88a0ab0a8bf304",
-      "bytes": 16692,
+      "sha256": "12a9c53d15bca6375d43b4b0cca5f813daea506ea906ca10236d3d0be76b44f7",
+      "bytes": 17165,
       "merge": "replace",
       "component": "runtime"
     },
@@ -287,8 +287,8 @@
     },
     {
       "path": "hosts/claude/hooks/intent-gate-check.py",
-      "sha256": "f29394320f4a6a85eab2352abe234855e3d8deaeafeacf9489b48f429e39a6ad",
-      "bytes": 23239,
+      "sha256": "687db2e737f58ea33346c01c6355ee96e61ba804fae88fcd339e6c2e198676a3",
+      "bytes": 10443,
       "merge": "replace",
       "component": "runtime"
     },
@@ -385,8 +385,8 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "6fb90437a0dc00edfff7a937ec9e1b85baeb974d845c8a90f4094f272de45431",
-      "bytes": 18057,
+      "sha256": "4da436e5975386b68aa5d2b3ffe04e4a9a72a8b9ba8add7dccf7029398708cae",
+      "bytes": 33697,
       "merge": "replace",
       "component": "runtime"
     },
@@ -455,8 +455,8 @@
     },
     {
       "path": "hosts/agy/GEMINI.md",
-      "sha256": "01dc86564a0c19ca2fbc000a15087fe7485601f7565492a0ef0848745e44862f",
-      "bytes": 2701,
+      "sha256": "29a9bc70a95eb89d3c8d664c762cbeb2652ae9ed2caf5166973162193cb1d5e0",
+      "bytes": 3983,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -476,8 +476,8 @@
     },
     {
       "path": "hosts/agy/doctor.agy.md",
-      "sha256": "68f493b2148f908efb58899d56a4ad47e6e13070f5dc73d9e5a21cf0b91be43e",
-      "bytes": 1461,
+      "sha256": "7712796e22f7ef7c61cd8e51229c5235c5785a562c0d4141c18d8d8303467f87",
+      "bytes": 1918,
       "merge": "merge",
       "component": "runtime"
     },

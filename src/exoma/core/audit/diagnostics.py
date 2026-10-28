@@ -635,6 +635,16 @@ def run_doctor(
     # the read-only evidence role (write/exec/fs/db/browser/etc).
     mcp = _scan_mcp(project_root)
     checks["mcp_second_agent"] = mcp
+    for entry in mcp.get("unreadable") or []:
+        issues.append(
+            f"provider config unreadable: {entry['path']} — {entry['error']}; the MCP list "
+            "above is built without it (a sandboxed host denies files outside the workspace, "
+            "or the file is not UTF-8)"
+        )
+        recommended_fixes.append(
+            f"Run doctor where {entry['path']} can be read (outside the host's sandbox), "
+            "grant read access to it, or save it as UTF-8"
+        )
     active_risky = [
         s["name"]
         for s in mcp["servers"]

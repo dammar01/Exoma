@@ -546,7 +546,11 @@ def _test_intent_gate_runner_tamper() -> None:
             for tool, tool_input in allowed:
                 gate.expect(tool, tool_input, 0, "a write that is not a runner script must pass")
             gate.disarm()
-            gate.expect("Write", {"file_path": str(wf / "run.sh"), "content": "x"}, 0, "with no marker the runner is writable")
+            # The runner is never written by hand: a runner rewritten between delegations
+            # would pass the next armed gate as an arbitrary command.
+            gate.expect("Write", {"file_path": str(wf / "run.sh"), "content": "x"}, 2, "with no marker the runner is still refused")
+            gate.expect("Write", {"file_path": str(gate.project / "src" / "app.py"), "content": "x"}, 0,
+                        "with no marker other writes pass")
         finally:
             gate.close()
 

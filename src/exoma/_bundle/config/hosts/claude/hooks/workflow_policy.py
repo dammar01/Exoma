@@ -1,8 +1,9 @@
 """workflow_policy.py - host-neutral decisions shared by every host's hooks.
 
-The Claude Code hooks (execution-gate.py, intent-gate-set.py) and the Agy host wrapper
-(agy-host.py) decide the same things: may this write land here, may this command commit,
-did the user approve an execution, which delegated command did they name. What differs per
+The Claude Code hooks (execution-gate.py, intent-gate-set.py, intent-gate-check.py) and the
+Agy host wrapper (agy-host.py) decide the same things: may this call pass while a delegated
+command waits for the runner, may this write land here, may this command commit, did the
+user approve an execution, which delegated command did they name. What differs per
 host is how the question arrives (payload field names) and how the answer leaves (exit 2
 and additionalContext for Claude Code, a JSON `decision` and injectSteps for Agy). This
 module holds only the decisions; each host wrapper keeps its own parsing and output.
@@ -191,6 +192,338 @@ def write_refusal(tool, target, cwd, root, pol, rt_dir, host_dirs=()):
     ) % (tool, relative, execution.get("plan_id"), ", ".join(scope) or "(empty)")
 
 
+# --- pre-flight gate ----------------------------------------------------------------------
+#
+# While a delegated marker is armed, the next step is the runner, not gathering. Each host
+# names its tools differently; the adapter reduces a call to one `kind` and the decision is
+# made here, once, for every host:
+#   write  passes, except a write that lands on a runner script (runner_file);
+#   shell  passes only as one plain runner call; under verify, also a file-name `git diff`;
+#          a `cat <file>` of something the host may always read passes like that Read;
+#   read   passes for what the host may always read (its skills, its task output), under
+#          verify for .workflow/config.json and this session's verify/tests.json, and as a
+#          precision read: a project file outside .workflow, small, two per marker;
+#   other  (search, listing, MCP) never passes.
+# Writes are not gathering: they are judged by the execution gate (write_refusal), as for a
+# turn with no marker at all.
+
+RUNNERS = ("run.sh", "check.sh", "inspect.sh")
+
+
+def same_path(candidate, expected, base):
+    # True when candidate names expected. A relative path resolves against the project root.
+    # realpath as well as abspath: the root comes from session-bind's realpath(cwd), so an
+    # 8.3 short name in the command (`C:\Users\RUNNER~1\...`) only matches once expanded.
+    if not candidate.strip():
+        return False
+    try:
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(base, candidate)
+        a = os.path.normcase(os.path.abspath(candidate))
+        b = os.path.normcase(os.path.abspath(expected))
+        if a == b:
+            return True
+        return os.path.normcase(os.path.realpath(candidate)) == os.path.normcase(os.path.realpath(expected))
+    except Exception:
+        return False
+
+
+def runner_target(candidate, root):
+    # True when candidate names exactly <root>/.workflow/{run,check,inspect}.sh AND the file
+    # it reaches, every link followed, is still inside this project's .workflow: a run.sh
+    # that is a symlink to a script elsewhere is not the runner. A runner that does
+    # not exist yet passes like before: running it fails, and runner_file refuses writes to
+    # it, so nothing can be put there between this check and the call.
+    # Unresolvable -> False. The .ps1 runners an earlier release generated are retired: a call to one is
+    # not a runner call.
+    if not any(same_path(candidate, os.path.join(root, ".workflow", name), root) for name in RUNNERS):
+        return False
+    try:
+        full = candidate if os.path.isabs(candidate) else os.path.join(root, candidate)
+        real = os.path.normcase(os.path.realpath(full))
+        wf = os.path.normcase(os.path.realpath(os.path.join(root, ".workflow"))).rstrip("\\/")
+        return os.path.dirname(real) == wf
+    except Exception:
+        return False
+
+
+def runner_file(candidate, root):
+    # True when a file write lands on a runner script: <root>/.workflow/{run,check,inspect}
+    # with any extension. On Windows an NTFS stream suffix (`run.ps1::$DATA` writes run.ps1)
+    # is cut off first, and a path carrying an 8.3 short name (`WORKFL~1`) counts when the
+    # filesystem cannot resolve it. Unsure -> True.
+    if not candidate.strip():
+        return False
+    try:
+        if os.name == "nt" and len(candidate) > 2 and ":" in candidate[2:]:
+            candidate = candidate[: candidate.index(":", 2)]
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(root, candidate)
+        full = os.path.realpath(candidate).rstrip("\\/")
+        if not re.fullmatch(r"(?i)(run|check|inspect)(\..*)?", os.path.basename(full)):
+            return False
+        parent = os.path.dirname(full)
+        wf = os.path.realpath(os.path.join(root, ".workflow"))
+        if os.path.normcase(parent) == os.path.normcase(wf) or same_path(parent, wf, root):
+            return True
+        leaf = os.path.basename(parent)
+        return "~" in parent and (leaf == ".workflow" or "~" in leaf)
+    except Exception:
+        return True
+
+
+def msys_path(path):
+    # Git Bash spells E:\x as /e/x (or /cygdrive/e/x); read it the way that shell does.
+    m = re.fullmatch(r"/(?:cygdrive/)?([A-Za-z])(/.*)?", path) if os.name == "nt" else None
+    return (m.group(1) + ":" + (m.group(2) or "/")) if m else path
+
+
+def local_path(path, home):
+    # A path the way the shell that wrote it reads it: `~` is the home directory in bash and
+    # PowerShell alike, and Git Bash spells E:\x as /e/x. Anything else is returned as is.
+    if path == "~" or path.startswith(("~/", "~\\")):
+        path = os.path.join(home, path[2:])
+    return msys_path(path)
+
+
+def inside_root(path, root, home):
+    # True when path (as the shell reads it) is the project root or lies inside it.
+    try:
+        full = os.path.normcase(os.path.realpath(local_path(path, home))).rstrip("\\/")
+        base = os.path.normcase(os.path.realpath(root)).rstrip("\\/")
+        return full == base or full.startswith(base + os.sep)
+    except Exception:
+        return False
+
+
+def skill_read(candidate, home, roots):
+    # True when a Read names a skill definition: an existing .md file whose real path (every
+    # link followed) lies inside one of the host's real skill directories (`roots`). A skill
+    # is the instruction the agent must read to know how to dispatch, not evidence, so
+    # blocking it before the run locked the two together. `~` and /c/... spellings are read
+    # as the shell reads them; after that an absolute path only, no `..` in it; a link may
+    # point anywhere inside a skills folder, never out of it.
+    candidate = local_path(candidate, home)
+    if not candidate.strip() or not os.path.isabs(candidate):
+        return False
+    if ".." in re.split(r"[\\/]", candidate) or not candidate.lower().endswith(".md"):
+        return False
+    try:
+        full = os.path.realpath(candidate)
+        if not full.lower().endswith(".md") or not os.path.isfile(full):
+            return False
+        for root in roots:
+            base = os.path.realpath(root).rstrip("\\/")
+            if os.path.normcase(full).startswith(os.path.normcase(base) + os.sep):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# A precision read: the small slice the main agent may read itself to attribute a
+# claim to file:line, as CLAUDE.md allows. Bounded by span and by count so it cannot become
+# the bulk gather the gate exists to route to second_agent.
+PRECISION_READ_LINES = 200
+PRECISION_READS_PER_MARKER = 2
+PRECISION_FILE_BYTES = 1_000_000
+
+
+def precision_span_ok(full, limit):
+    # A `limit` of 1..PRECISION_READ_LINES, or no limit on a file that short. A file too
+    # large to count cheaply is not small.
+    if limit is not None:
+        return isinstance(limit, int) and not isinstance(limit, bool) and 0 < limit <= PRECISION_READ_LINES
+    if os.path.getsize(full) > PRECISION_FILE_BYTES:
+        return False
+    with open(full, "rb") as fh:
+        data = fh.read()
+    lines = data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
+    return lines <= PRECISION_READ_LINES
+
+
+def precision_read(target, limit, root, rt_dir, marker_key):
+    # (allowed, quota_used). Allowed when the Read names an existing file inside the project
+    # (never .workflow), its span is small, and fewer than PRECISION_READS_PER_MARKER such
+    # reads went through under this marker. The count lives beside the marker, keyed to its
+    # set_at, so a new marker starts from zero without anyone deleting the count.
+    if not target.strip():
+        return False, False
+    try:
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        base = os.path.normcase(os.path.realpath(root)).rstrip("\\/")
+        full = os.path.realpath(target)
+        norm_full = os.path.normcase(full)
+        if not norm_full.startswith(base + os.sep) or not os.path.isfile(full):
+            return False, False
+        if norm_full == os.path.join(base, ".workflow") or norm_full.startswith(os.path.join(base, ".workflow") + os.sep):
+            return False, False
+        if not precision_span_ok(full, limit):
+            return False, False
+        counter = os.path.join(rt_dir, "delegated.reads")
+        count = 0
+        try:
+            with open(counter, encoding="utf-8") as fh:
+                state = json.load(fh)
+            if state.get("marker") == marker_key:
+                count = int(state.get("count") or 0)
+        except Exception:
+            count = 0
+        if count >= PRECISION_READS_PER_MARKER:
+            return False, True
+        with open(counter, "w", encoding="utf-8") as fh:
+            json.dump({"marker": marker_key, "count": count + 1}, fh)
+        return True, False
+    except Exception:
+        return False, False
+
+
+# `cat <one file>` (Get-Content/type in PowerShell): the shell spelling of a Read, allowed
+# only where a Read is allowed without a quota — what the host may always read. One path,
+# bare or single-quoted, nothing else on the line.
+_READ_ONE = re.compile(r"\s*(?:cat|type|Get-Content|gc)\s+(?:'([^'\r\n]*)'|([^\s'\"$`;|&<>(){}*?\[\]]+))\s*")
+
+
+def shell_read_one(command):
+    m = _READ_ONE.fullmatch(command)
+    return (m.group(1) if m.group(1) is not None else m.group(2)) if m else None
+
+
+# `cd <dir> && <rest>`: a shell tool may reset the working directory between calls, so a
+# model names the project before the command. The directory is checked against the root;
+# the rest goes through plain_words like any other command.
+_CD_THEN = re.compile(r"\s*cd\s+(?:'([^'\r\n]*)'|([^\s'\"$`;|&<>(){}*?\[\]]+))\s*&&\s*(.+)", re.DOTALL)
+
+
+# A bare word: nothing either shell treats as special. Letters of any script (a project root
+# may be `proyék`), digits and _ . / : = + % - ~ ^. No quote, no $ ` ; | & < > ( ) { } (bash),
+# no @ , # (PowerShell splatting, arrays, comments), no * ? [ ] (globs). `~` passes inside a
+# word (HEAD~1) but not at its start, where bash expands it to the home directory.
+_BARE_WORD = re.compile(r"(?:[^\W]|[./:=+%^-])(?:[^\W]|[./:=+%^~-])*")
+
+
+def plain_words(command):
+    # The words of a command written so bash and PowerShell read it the same way, or None.
+    # A word is bare (see _BARE_WORD) or '...': single quotes are literal in both shells, so
+    # whatever sits inside — $(...), ; | & < >, brackets — is text, not code. Words are
+    # separated by spaces or tabs; a quote glued to anything (a'b', 'a'b) refuses, as does a
+    # quote inside a quote, a newline outside a quoted word (it ends a command in both
+    # shells), and a dash word carrying `:` (a PowerShell switch with an argument). A newline
+    # inside '...' is text, like everything else there: a multi-line delegated task. Double
+    # quotes refuse outright: inside them both shells expand `$`. It refuses some quoting a
+    # shell accepts, never the other way round.
+    words = []
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if c in " \t":
+            i += 1
+            continue
+        if c == "'":
+            j = command.find("'", i + 1)
+            if j < 0:
+                return None
+            words.append(command[i + 1 : j])
+            i = j + 1
+        else:
+            m = _BARE_WORD.match(command, i)
+            if not m:
+                return None
+            word = m.group(0)
+            if word.startswith("-") and ":" in word:
+                return None
+            words.append(word)
+            i = m.end()
+        if i < n and command[i] not in " \t":
+            return None
+    return words or None
+
+
+def runner_call(words, root, home, is_bash):
+    # The runner is the command itself — the first word, or the word after a bash the host
+    # accepts (`is_bash`) — anchored to this project's .workflow. `bash -c ...`, `bash -x ...`,
+    # an interpreter in front, or the runner as a later word (`python x .workflow/run.sh`) is
+    # not a runner call.
+    i = 1 if words and is_bash(words[0]) else 0
+    return i < len(words) and runner_target(local_path(words[i], home), root)
+
+
+DIFF_SUMMARY = {"--name-only", "--name-status"}
+DIFF_ALLOWED = {"--cached", "--staged", "--relative", "--no-renames", "--no-color", "--"}
+
+
+def diff_words(tokens, root=None, home=None):
+    # `git diff` that names files only: --name-only, --name-status or --stat, every other
+    # option from a short list that can neither print a patch nor write a file; refs and
+    # paths are free. `git -C <dir> diff` counts when <dir> lies inside the project root.
+    # plain_words has already rejected shell metacharacters.
+    if len(tokens) >= 3 and tokens[:2] == ["git", "-C"] and root and inside_root(tokens[2], root, home):
+        tokens = ["git"] + tokens[3:]
+    if len(tokens) < 3 or tokens[0] != "git" or tokens[1] != "diff":
+        return False
+    summary = False
+    for tok in tokens[2:]:
+        if tok in DIFF_SUMMARY or re.fullmatch(r"--stat(=\d+(,\d+)*)?", tok):
+            summary = True
+        elif tok in DIFF_ALLOWED:
+            continue
+        elif tok.startswith("-"):
+            return False
+    return summary
+
+
+def preflight_refusal(kind, target, command, marker, ctx):
+    """None when a call may pass while `marker` is armed, else the rule that refuses it.
+
+    `kind` is write | shell | read | other, as the host adapter classified the tool;
+    `target` is the path a write or read names, `command` the shell command line. `ctx`:
+      root, home, rt_dir   the session's project root, home directory, runtime directory;
+      is_bash(word)        a bash the host's runner call may start with;
+      host_read(path)      what the host may always read (skills, contract, task output);
+      limit                a read's line limit, None when the host gives none.
+    Rules: "runner_write", "preflight", "preflight_quota" (the precision reads are used).
+    """
+    root, home, rt_dir = ctx["root"], ctx["home"], ctx["rt_dir"]
+    cmd = str((marker or {}).get("command") or "?")
+    if kind == "write":
+        return "runner_write" if runner_file(target or "", root) else None
+    if kind == "shell":
+        command = command or ""
+        cd = _CD_THEN.fullmatch(command)
+        if cd and inside_root(cd.group(1) if cd.group(1) is not None else cd.group(2), root, home):
+            command = cd.group(3)
+        words = plain_words(command)
+        if words is not None:
+            if runner_call(words, root, home, ctx["is_bash"]):
+                return None
+            if cmd == "verify" and diff_words(words, root, home):
+                return None
+        one = shell_read_one(command)
+        if one is not None and ctx["host_read"](one):
+            return None
+        return "preflight"
+    if kind == "read":
+        target = target or ""
+        if ctx["host_read"](target):
+            return None
+        if cmd == "verify":
+            tests_json = os.path.join(os.path.dirname(rt_dir), "verify", "tests.json")
+            if same_path(target, tests_json, root):
+                return None
+            if same_path(target, os.path.join(root, ".workflow", "config.json"), root):
+                return None
+        marker_key = (marker or {}).get("set_at")
+        if marker_key:
+            allowed, quota_used = precision_read(target, ctx.get("limit"), root, rt_dir, str(marker_key))
+            if allowed:
+                return None
+            if quota_used:
+                return "preflight_quota"
+        return "preflight"
+    return "preflight"
+
+
 def log_refusal(rt_dir, hook, rule, tool, mode, blocked, plan_id):
     """One line per refusal in runtime/gate-blocks.jsonl; never the path or command."""
     if not rt_dir:
@@ -356,7 +689,7 @@ def set_delegated_marker(resolved, rt_dir, provenance):
 def intent_hint(hinted, root, main_id):
     return (
         "[INTENT HINT] This prompt resembles /.%s under the workflow NL map. If it "
-        "is that request, delegate first: bash '%s/.workflow/run.sh' %s '<task>' '%s'. "
+        "is that request, delegate first: bash '%s/.workflow/run.sh' %s --session '%s' --task '<task>'. "
         "If it is a question or a remark, answer it. Nothing is blocked: the gate "
         "arms only on an explicit /.%s."
     ) % (hinted, root.replace("\\", "/"), hinted, main_id, hinted)

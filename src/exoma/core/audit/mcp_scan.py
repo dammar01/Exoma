@@ -145,15 +145,28 @@ def _scan_mcp(project_root: Path) -> dict:
     """Enumerate MCP servers the provider exposes to second_agent + a safety verdict."""
     servers: list[dict] = []
     sources: list[str] = []
+    unreadable: list[dict] = []
     seen: set[str] = set()
     for path in _mcp_config_candidates(project_root):
-        if not path.exists():
+        # exists() is inside the try: on Windows a path the process may not stat raises
+        # PermissionError from it (a sandboxed host denies ~/.codex, CASE-033), and that
+        # took doctor down with it. A file that cannot be read is reported, not skipped:
+        # an MCP list built without it is not known to be complete.
+        try:
+            if not path.exists():
+                continue
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            unreadable.append({"path": str(path), "error": f"{type(exc).__name__}: {exc.strerror or exc}"})
+            continue
+        except UnicodeDecodeError as exc:
+            # Not UTF-8: as unreadable to the scan as a denied file, and reported the same way.
+            unreadable.append({"path": str(path), "error": f"UnicodeDecodeError: {exc.reason}"})
             continue
         try:
-            raw = path.read_text(encoding="utf-8")
             cleaned = re.sub(r"(?m)^\s*//.*$", "", raw)  # tolerate // comments (jsonc)
             data = json.loads(cleaned)
-        except (OSError, ValueError):
+        except ValueError:
             continue
         mcp = data.get("mcp") if isinstance(data, dict) else None
         if not isinstance(mcp, dict) or not mcp:
@@ -184,4 +197,4 @@ def _scan_mcp(project_root: Path) -> dict:
         verdict = "review"
     else:
         verdict = "safe"
-    return {"sources": sources, "servers": servers, "verdict": verdict}
+    return {"sources": sources, "servers": servers, "verdict": verdict, "unreadable": unreadable}

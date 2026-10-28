@@ -122,13 +122,49 @@ def _test_agy_host_contract() -> None:
         else:
             assert_true(out == {"decision": "allow"}, f"a bare bash passes off Windows: {out}")
         skill = home / ".gemini" / "antigravity-cli" / "skills" / ".analyze" / "SKILL.md"
+        contract = home / ".gemini" / "antigravity-cli" / "exoma" / "CONTRACT.md"
+        claude_skill = home / ".claude" / "skills" / "analyze.md"
+        for path in (skill, contract, claude_skill):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x\n", encoding="utf-8")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(skill)))
         assert_true(out == {"decision": "allow"}, f"an Agy skill definition read passes: {out}")
-        contract = home / ".gemini" / "antigravity-cli" / "exoma" / "CONTRACT.md"
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(contract)))
         assert_true(out == {"decision": "allow"}, f"the contract read passes: {out}")
-        out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(home / ".claude" / "skills" / "analyze.md")))
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(claude_skill)))
         assert_true(out.get("decision") == "deny", f"an Agy session has no reason to read ~/.claude: {out}")
+
+        # The same decisions as the Claude gate (workflow_policy.preflight_refusal): a write is
+        # not gathering, a precision read passes twice, the runner itself is never written.
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "write_to_file", TargetFile=str(root / "notes.md")))
+        assert_true(out == {"decision": "allow"}, f"a write passes the armed pre-flight gate, as under Claude: {out}")
+        small = root / "src" / "small.py"
+        small.parent.mkdir(parents=True, exist_ok=True)
+        small.write_text("x = 1\n", encoding="utf-8")
+        for n in (1, 2):
+            out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(small)))
+            assert_true(out == {"decision": "allow"}, f"precision read {n} passes: {out}")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(small)))
+        assert_true(out.get("decision") == "deny" and "precision reads" in out.get("reason", ""),
+                    f"the third precision read is refused and says why: {out}")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "write_to_file", TargetFile=str(root / ".workflow" / "run.sh")))
+        assert_true(out.get("decision") == "deny" and "runner script" in out.get("reason", ""),
+                    f"a write of the runner is refused: {out}")
+
+        # Under verify: the test request, the config and a file-name diff, as skills/verify.md asks.
+        _run(home, "PreInvocation", _payload(root, cid, "/.verify hasil tadi", invocationNum=0))
+        tests_json = rt.parent / "verify" / "tests.json"
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "write_to_file", TargetFile=str(tests_json)))
+        assert_true(out == {"decision": "allow"}, f"verify: writing this session's tests.json passes: {out}")
+        tests_json.parent.mkdir(parents=True, exist_ok=True)
+        tests_json.write_text("{}", encoding="utf-8")
+        for path in (tests_json, root / ".workflow" / "config.json"):
+            out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(path)))
+            assert_true(out == {"decision": "allow"}, f"verify: reading {path.name} passes: {out}")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine="git diff --name-only"))
+        assert_true(out == {"decision": "allow"}, f"verify: a file-name diff passes: {out}")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine="git diff"))
+        assert_true(out.get("decision") == "deny", f"verify: a patch diff does not: {out}")
         # A turn without a command clears the marker.
         _run(home, "PreInvocation", _payload(root, cid, "terima kasih", invocationNum=0))
         assert_true(not (rt / "delegated.marker").exists(), "a plain turn clears the marker")

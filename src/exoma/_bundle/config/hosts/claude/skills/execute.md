@@ -17,7 +17,7 @@ updating the plan.
 ## Pre-Execution
 [EXECUTION SCOPE] allowed: <files> | forbidden: <files> | reason: <limits>
 With `-y`: BEFORE the first edit, open the execution in the runtime:
-  bash '<work_dir>/.workflow/run.sh' execute-begin '' '<MAIN_SESSION_ID>'
+  bash '<work_dir>/.workflow/run.sh' execute-begin --session '<MAIN_SESSION_ID>'
 The runtime checks for a recorded plan (`plan-record`, decision=proceed) AND the `-y` token from
 the user's own prompt (written by the `intent-gate-set` hook, valid for 15 minutes, single use).
 Refused (`execute_no_plan` | `execute_plan_not_proceed` | `execute_not_approved`) → relay
@@ -33,7 +33,7 @@ explicit approval for that path. The rule is the same for every write path; what
 - Bash/script patches → NOT checked by a hook. Nothing blocks them; only you enforce the rule.
 
 ## Post (read .workflow/config.json → commands.auto_verify_after_execute)
-Close the execution first: bash '<work_dir>/.workflow/run.sh' execute-end '' '<MAIN_SESSION_ID>'
+Close the execution first: bash '<work_dir>/.workflow/run.sh' execute-end --session '<MAIN_SESSION_ID>'
 (status `implemented`, verification `not_run`; a finished /.verify writes its verdict here).
 [EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status
 true  → auto-trigger /.verify. status: done|partial|blocked. Do NOT declare done before verify finishes.

@@ -6,7 +6,7 @@ description: Local .workflow readiness and bundle-integrity check.
 
 ## STEP 1 — Bootstrap check
 - .workflow/run.sh EXISTS → local runtime call:
-    Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' doctor 'check .workflow readiness'
+    Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' doctor --session '<MAIN_SESSION_ID>'
 - No .workflow yet → STEP 2 (local check). Do NOT fail, do NOT conclude the package is missing.
 
 ## STEP 2 — Local check (fallback, checked directly)

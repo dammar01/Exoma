@@ -76,9 +76,11 @@ names an existing `.md` whose real path lies inside `~/.claude/skills` (the skil
 how to dispatch; `~` and `/c/...` spellings resolved first), a background task's
 `<temp>/claude.../tasks/<id>.output`, or is a precision read: a project file outside `.workflow/`, at
 most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
-`runtime/delegated.reads` keyed to the marker's `set_at`. Under Agy the wrapper `agy-host.py`
-enforces the same marker with a narrower allowance (the runner call and skill reads, no
-precision reads; [reference, "Hosts"](reference.md#hosts)). That enforcement lives in the agent host, not in this runtime,
+`runtime/delegated.reads` keyed to the marker's `set_at`. Writes pass (the execution gate
+judges them), except a write of the runner scripts, which is refused marker or not. The decision
+is one function, `workflow_policy.preflight_refusal`; under Agy the wrapper `agy-host.py` calls the
+same function with Agy's tools mapped onto its kinds and Agy's skill directories as what it may
+always read ([reference, "Hosts"](reference.md#hosts)). That enforcement lives in the agent host, not in this runtime,
 and it fails open. The Claude Code hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
 on Windows, named by absolute path in `settings.json`, which also sets
 `env.CLAUDE_CODE_GIT_BASH_PATH`) that runs the Python pinned in `~/.claude/hooks/python.path`

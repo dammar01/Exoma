@@ -2,7 +2,7 @@
 
 ## Setup and runtime errors
 
-Start with `doctor` (`bash .workflow/run.sh doctor`, the same on every OS) and
+Start with `doctor` (`bash .workflow/run.sh doctor --session '<MAIN_SESSION_ID>'`, the same on every OS) and
 read its `recommended_fixes`. The common cases are in the [README
 troubleshooting table](../../README.md#quick-start); commands and their options are in the
 [reference](../reference.md#command).
@@ -14,6 +14,8 @@ troubleshooting table](../../README.md#quick-start); commands and their options 
 | codex on Windows fails with `sandbox_unavailable` | Codex's own Windows sandbox would not start. Start a new session (`/clear`) and repeat the request; if new sessions fail too, update codex and run `codex` once by itself to approve its sandbox setup; meanwhile switch the secondary agent with `/.provider`. The error's next action lists these steps, and `doctor` shows the codex version to quote in a bug report ([reference](../reference.md)) |
 | Commands fail after you moved the tool checkout | Run `upgrade` from the new location |
 | In Agy, `/.<command>` does nothing, the runner asks for approval every time, or it fails with `No such file or directory`, `NtCreateDirectoryObject` or `Access is denied` | Run `/.doctor` in Agy: its `checks.hosts` names a missing file and its `agy_session` block the part Agy did not load. A missing skill or hook means the install did not choose Agy (`exoma install --apply --host agy` or `both`); a prompt every time means the permission rules are off (an earlier `--no-agy-permissions`; `--agy-permissions` turns them back on). Hook errors are in `~/.gemini/exoma-hook-errors.log` ([reference, Hosts](../reference.md#hosts)) |
+| In Agy on Windows, a runner call exits 1 with no output at all, or doctor reports `provider config unreadable` | The runner ran inside Agy's sandbox, which stops Git Bash before the script starts and denies the home directory. Run the runner call with the sandbox bypassed (`BypassSandbox`); the permission rules approve the call but do not lift the sandbox ([reference, Hosts](../reference.md#hosts)) |
+| The runner answers `no session for '<command>'` or `usage: run.sh ...` | The call did not name its session, or a shell dropped an empty argument. Pass `--session '<MAIN_SESSION_ID>'` and leave `--task` out when there is no task ([reference, Daily usage](../reference.md#daily-usage)) |
 | Empty-looking `.lock` files in `.workflow/data` | `evidence.jsonl.lock` and the `.guard`/`.reclaim` files hold one invisible byte and stay between uses: normal. Other lock files are removed on release, so an empty one left behind is a writer that crashed and is reclaimed later. Do not delete any while something runs ([which ones and why](../runtime-contracts.md)) |
 
 ## "PROXY FAILED" (before v0.2.0: "PROXY GAGAL")

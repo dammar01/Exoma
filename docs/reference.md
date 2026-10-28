@@ -527,10 +527,12 @@ with `--name-only`, `--name-status`, or `--stat[=N]`, plus optional `--cached`, 
 `--relative`, `--no-renames`, `--no-color`, `--`, refs, and paths (other options such as `-p` or
 `--output` are still blocked); Read of `<root>/.workflow/config.json`; Read/Write of
 that session's `sessions/<id>/verify/tests.json`. Dependents can only be inferred from the file
-names in the diff. The `PreToolUse` matcher includes `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, but
-the hook only rejects writes to the `.workflow/{run,check,inspect}` runner scripts (any extension)
-while the marker exists (rewriting the runner and then running it would turn the runner allowlist into a free command);
-writes to other files, including `tests.json`, pass.
+names in the diff. The `PreToolUse` matcher includes `Write`/`Edit`/`MultiEdit`/`NotebookEdit`:
+writes are not gathering, so they pass the pre-flight gate (the execution gate still judges
+them). The one exception is a write to the `.workflow/{run,check,inspect}` runner scripts (any
+extension), refused **whether or not a marker is pending**: the runner is the one command the
+gate lets through, so a runner rewritten between delegations would pass the next armed gate as a
+free command. `/.upgrade` regenerates the runner; nothing else writes it.
 The hook is tested through the `.sh` launcher that is actually installed, on Windows through Git Bash and on Linux.
 
 For every `command` in the marker, Read of a skill definition also passes: an absolute path with no
@@ -613,9 +615,12 @@ The installer is tested against a **temporary HOME**, not the machine that produ
 The host is the CLI the developer talks to: it runs the main agent, and its hooks enforce the
 runtime's rules at the tool boundary. Claude Code is the reference host. Agy (Antigravity CLI)
 is the second; `--host` picks which are installed ("Host choice"). The decisions both hosts
-enforce live once, in `workflow_policy.py` (one source, installed beside each host's hooks) (write root and scope, commit approval, the user's
-approvals, intent classification, the pre-flight marker, the `[EXECUTION RESULT]` claim); each
-host keeps only its payload parsing and its answer format. A Claude hook that cannot import that
+enforce live once, in `workflow_policy.py` (one source, installed beside each host's hooks): the
+pre-flight decision (`preflight_refusal`), write root and scope, commit approval, the user's
+approvals, intent classification, the pre-flight marker, the `[EXECUTION RESULT]` claim. Each
+host keeps only its payload parsing — which of its tools is a `write`, `shell`, `read` or
+`other` call, and what it may always read (its skills, its task output) — and its answer
+format. A Claude hook that cannot import that
 module (a partial install) exits 0 without acting, like every other state it cannot read.
 
 | Capability | Claude Code | Agy (as calibrated, CASE-029) |
@@ -647,12 +652,16 @@ for `PreInvocation`, `PreToolUse` (matcher `*`) and `Stop`:
   workspace path holding `.workflow/` is the project root), writes `execute.token` and
   `commit.marker` as `intent-gate-set` does, arms or clears `delegated.marker`, and injects
   `[SESSION BINDING]` plus any `[INTENT HINT]`.
-- `PreToolUse`: while `delegated.marker` exists, only one plain runner call
-  (`<bash> <root>/.workflow/{run,check,inspect}.sh`, shell metacharacters only inside single
-  quotes) and reads of `.md` files under `~/.gemini/antigravity-cli/{skills,exoma}` pass. `<bash>`
-  is the one the installer names in the instructions: `& '<Git Bash>'` on Windows, where Agy runs
-  commands through PowerShell and a bare `bash` can be WSL's (it cannot read `E:/` paths, and is
-  refused), the quoted `bash` path or a bare `bash` elsewhere; there is no precision-read exception. The
+- `PreToolUse`: while `delegated.marker` exists, the pre-flight decision is the Claude gate's
+  (`preflight_refusal`, "Pre-flight gate" above): `run_command` is `shell`, the write tools are
+  `write`, `read_file`/`view_file`/`view_file_outline`/`view_code_item` are `read` (a precision
+  read passes; Agy gives no `limit`, so the file itself must be ≤ 200 lines), and the listing,
+  search and `mcp_*` tools are `other`. What Agy may always read is an existing `.md` under
+  `~/.gemini/antigravity-cli/{skills,exoma}`. `& ` in front of the command (PowerShell's call
+  operator) is dropped before the words are read. `<bash>` is the one the installer names in
+  the instructions: `& '<Git Bash>'` on Windows, where Agy runs commands through PowerShell and a
+  bare `bash` can be WSL's (it cannot read `E:/` paths, and is refused), the quoted `bash` path
+  or a bare `bash` elsewhere. A write of the runner scripts is refused marker or not. The
   execution gate applies to the write tools (`write_to_file`, `replace_file_content`,
   `multi_replace_file_content`, `sed_file`, `notebook_edit`, and any tool named with
   `write`/`replace`/`edit`/`create`) and `git commit` through `run_command`, with
@@ -703,7 +712,13 @@ a plain word; and `write_file(<data dir>)` for the runtime's data directory (`EX
 default `%LOCALAPPDATA%\exoma`). They apply to every Agy session. `--no-agy-permissions` removes
 them and is stored (`agy_permissions_opt_out`), so later upgrades keep them off;
 `--agy-permissions` clears it. A stored `agy_permissions: false` without that opt-out is read as
-no choice, and the rules go in. Only rules the installer added are recorded
+no choice, and the rules go in. The rules approve the runner call; they do **not** lift the
+sandbox. Agy on Windows (CASE-033) starts Git Bash inside the sandbox and it dies before the script
+runs (exit 1, no output), and an `unsandboxed(...)` rule is rejected as invalid and
+grants nothing. The runner therefore runs with the sandbox bypassed per call (`BypassSandbox`),
+which the `GEMINI.md` block tells the model to set on runner calls only. Python started inside
+the sandbox does not help: the runtime then cannot read the provider's config in the home
+directory nor write `.workflow/data`. Only rules the installer added are recorded
 (`agy_permission_rules`) and only those are ever removed — by the opt-out, by dropping the `agy`
 host, or by `--uninstall`; a rule the user already had is never claimed. `--check` reports a
 missing rule while they are on.
@@ -712,8 +727,8 @@ missing rule while they are on.
 them. The Agy `/.doctor` skill (the Claude skill plus `hosts/agy/doctor.agy.md`) adds a STEP 3
 only an Agy session can perform, reported as `agy_session`: whether skills are registered, whether
 the hooks inject `[SESSION BINDING]`, whether the `run.sh doctor` call ran without a prompt, and
-the runner's failure (WSL bash, the sandbox refusing Git Bash, or the data directory) when it did
-not. The Claude `/.doctor` never carries it. After an install that chose `agy`, the installer says
+the runner's failure (WSL bash, the sandbox refusing Git Bash — `NtCreateDirectoryObject`, or
+exit 1 with no output — or the data directory) when it did not. The Claude `/.doctor` never carries it. After an install that chose `agy`, the installer says
 to run `/.doctor` in Agy.
 
 **Limits.** Calibrated on one release, on Windows, in print mode. `lastUserInput` is
@@ -808,13 +823,39 @@ main_agent calls **one** runner script — it does not assemble a Python command
 Bash tool, on all OSes:
 
 ```bash
-bash '/path/to/target-app/.workflow/run.sh' explore 'find the auth entry point' '<MAIN_SESSION_ID>'
+bash '/path/to/target-app/.workflow/run.sh' explore --session '<MAIN_SESSION_ID>' --task 'find the auth entry point'
 ```
 
-Each argument is wrapped in single quotes: that is the form the pre-flight gate lets through, and its content is literal
+`run.sh <command> [--session <id>] [--task <text> | --task-file <path>]`. Each value is wrapped
+in single quotes: that is the form the pre-flight gate lets through, and its content is literal
 (`$`, `;`, `|`, parentheses are allowed; apostrophes are not). On Windows the path is `C:/...`.
 
-The third argument is the session id. It **must** be passed: without it the runner uses the `"default"` fallback, which is resolved through the tool's global cache, so several main_agents can share an effective ID, overwrite each other's state, and block each other's jobs. The script prints a warning to stderr when this happens.
+- **Named, not positional.** Windows PowerShell 5.1 passes an empty `''` argument to a native
+  program as nothing at all, so in the positional form `run.sh execute-begin '' '<id>'` the
+  session id arrived as the task and the call ran on `default` (CASE-033). With options a
+  missing value cannot move another one. No task: leave `--task` out (never `--task ''`).
+- **`--task-file <path>`** is passed to the CLI as `--prompt-file`: the task is read from the
+  file as UTF-8 and never goes through a shell's quoting, so apostrophes and double quotes
+  survive (PowerShell 5.1 mangles quotes it passes to a program). `--task` and `--task-file`
+  together are refused. A conventional place is
+  `.workflow/data/sessions/<id>/runtime/task.txt`, overwritten by the next call.
+- **Refused shapes** (exit 2, with the usage line): an unknown option, an option without its
+  value, and an option whose value is another option name — what `--task '' --session x`
+  leaves once the empty value is dropped.
+- **Positional form.** `run.sh <command> [<task>] [<session>]`, the form up to 0.3.x, still
+  works when the second word does not start with `--`. A task that itself opens with `--`
+  needs the named form.
+
+**The session.** `--session` falls back to `$MAIN_SESSION_ID`, then to `"default"`, which the
+CLI resolves through the tool's global cache — so several main_agents can share an effective
+ID, overwrite each other's state, and block each other's jobs. The runner therefore **refuses**
+`default` (exit 2, naming `--session`) for every command that writes one session's state:
+`explore`, `plan`, `analyze`, `verify`, `verify-browser`, `sweep`, `plan-record`,
+`execute-begin`, `execute-end` (`core/runtime/scripts.SESSION_REQUIRED`). The CLI refuses it
+too for the local ones of that list (`exoma sweep` with no `--session` exits with the same
+advice); a delegated command typed by hand at a terminal keeps the cache. `doctor`, `init`,
+`upgrade`, `clean`, `inspect` and `provider` work on the project and need no session.
+`EXOMA_ALLOW_DEFAULT_SESSION=1` lifts the refusal deliberately.
 
 The script is blocking and returns the same JSON as the CLI.
 
@@ -877,7 +918,7 @@ table differ, fix one of them in the same change.
 |---|---|---|---|
 | `init` | local | — | scaffold `.workflow/`; regenerate runner scripts |
 | `upgrade` | local | — | migrate the `.workflow/data/` layout, refresh the workspace, override-only config, preserve sessions |
-| `doctor` | local | — | readiness check, writes `reports/doctor.json` |
+| `doctor` | local | — | readiness check, writes `reports/doctor.json`; a provider config it may not read (a sandboxed host denies the home directory) is an issue, `provider config unreadable: <path>`, listed in `checks.mcp_second_agent.unreadable`, never a crash |
 | `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays), old sessions |
 | `inspect` | local | — | list jobs for the current session |
 | `provider` | local | — | read/change the second_agent provider and reasoning effort; picker with no arguments, direct with `<provider> <model> [effort] [routes]` |

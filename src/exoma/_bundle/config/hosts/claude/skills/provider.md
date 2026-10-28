@@ -9,7 +9,7 @@ argument-hint: [provider model [effort] [routes]]
 ## Direct mode (arguments given)
 Example: `/.provider codex gpt-6-luna low`. SKIP STEP 1-2 — no catalog, no questions.
 Pass the arguments on as they are (space-separated) as the STEP 3 payload:
-    Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' provider 'codex gpt-6-luna low' '<MAIN_SESSION_ID>'
+    Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' provider --session '<MAIN_SESSION_ID>' --task 'codex gpt-6-luna low'
 The runtime splits and validates (known provider, the model's own effort, agy variants built
 from the effort). `<routes>` is optional: `same` or `explore=A,plan=B`.
 `ok:false` → relay `content` + `meta.next_action`, status REFUSED; do NOT silently fall back to
@@ -22,7 +22,7 @@ LOCAL. No second_agent, no job, no lock. The runtime writes the config — you N
 `.workflow/second_agent.json` yourself. You only render the choices and pass one string on.
 
 ## STEP 1 — Read the catalog
-    Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' provider '' '<MAIN_SESSION_ID>'
+    Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' provider --session '<MAIN_SESSION_ID>'
 
 The reply carries `meta.providers[]` (`name`, `installed`, `detail`, `models[] {id, efforts, effort_in_id?}`,
 `newest`, `models_source`, `boundary_warning` (null when the provider keeps a read boundary)) plus
@@ -87,7 +87,7 @@ This question is the whole acknowledgement: there is no variable or config key b
 opencode, or any provider whose `boundary_warning` is null → skip this step.
 
 ## STEP 3 — Apply
-    bash '<work_dir>/.workflow/run.sh' provider '<provider>|<model>|<effort>|<routes>' '<MAIN_SESSION_ID>'
+    bash '<work_dir>/.workflow/run.sh' provider --session '<MAIN_SESSION_ID>' --task '<provider>|<model>|<effort>|<routes>'
 
 Separator `|` — not `/`, because opencode model ids contain `/`.
 An empty model or effort → that field is cleared. For opencode, an empty model is REFUSED at

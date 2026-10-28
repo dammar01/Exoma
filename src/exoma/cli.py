@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 import sys
 
@@ -781,6 +782,23 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("--prompt or --prompt-file is required for this command")
     if args.command in {"status", "result", "worker"} and not args.job_id:
         raise SystemExit("--job-id is required for this command")
+    # The local commands that read or write one session's state need that session named:
+    # resolved from `default`, a plan or an execution lands in whichever session the cache
+    # holds, not the one the host bound. A delegated command run by hand keeps the cache —
+    # a person at a terminal has one session — and run.sh refuses `default` for those.
+    from exoma.core.runtime.scripts import SESSION_REQUIRED
+
+    if (
+        args.command in SESSION_REQUIRED
+        and args.command not in {"explore", "plan", "analyze", "verify", "verify-browser"}
+        and args.session == "default"
+        and not (os.environ.get("EXOMA_ALLOW_DEFAULT_SESSION") or os.environ.get("AI_PROXY_ALLOW_DEFAULT_SESSION"))
+    ):
+        raise SystemExit(
+            f"--session is required for {args.command}: it reads or writes session state. "
+            "Pass MAIN_SESSION_ID (the value from the [SESSION BINDING] block); "
+            "to use the cached session deliberately, set EXOMA_ALLOW_DEFAULT_SESSION=1."
+        )
 
     effective_session = resolve_session_id(
         args.session, fresh=args.fresh_session, project_root=work_dir

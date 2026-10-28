@@ -6,6 +6,17 @@ import os
 from exoma.utils import osutil
 from pathlib import Path
 
+# Commands that write one session's state: delegated calls (lock, logs, evidence), the sweep
+# report, and the plan -> execute chain. Without an explicit session they would land in a
+# session nobody bound, so run.sh and the CLI refuse `default` for them. doctor, init,
+# upgrade, clean and provider work on the project; inspect only reads (inspect.sh runs it
+# with no session at all).
+SESSION_REQUIRED = (
+    "explore", "plan", "analyze", "verify", "verify-browser",
+    "sweep", "plan-record", "execute-begin", "execute-end",
+)
+
+
 def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
     """Compose run/inspect/check scripts so main_agent calls one script.
 
@@ -34,23 +45,53 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
     workflow_dir = project_root / WORKFLOW_DIRNAME
     sh_markers = " ".join(_LEGACY_MARKERS)
 
+    session_required = " ".join(SESSION_REQUIRED)
+    usage = "usage: run.sh <command> --session <id> [--task <text> | --task-file <path>]"
     # Background (job) commands go through await+job-command; the rest run directly.
     run_sh = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'COMMAND="${1:?command required}"\n'
-        'TASK="${2:-}"\n'
-        'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
-        # session=default on a DELEGATED command is not a warning-shaped problem: two main
-        # agents on one project silently share a lock, state and logs, and each overwrites
-        # the other's evidence. Printing to stderr and proceeding was invisible exactly when
-        # it fired — the caller runs this as a background task and never reads that stream —
-        # so the script refuses. Local commands are unaffected: a shared default session
-        # costs them nothing.
+        "shift\n"
+        'TASK=""; TASK_FILE=""; SESSION="${MAIN_SESSION_ID:-}"\n'
+        # Named options. Positions shift when a shell drops an empty argument — Windows
+        # PowerShell 5.1 passes '' to a native program as nothing at all, so the session id
+        # of `run.sh execute-begin '' '<id>'` arrived as the task and the call ran on
+        # `default` (CASE-033). A missing option cannot move another one.
+        'case "${1:-}" in\n'
+        "  --*)\n"
+        "    while [ $# -gt 0 ]; do\n"
+        '      case "$1" in\n'
+        "        --session|--task|--task-file)\n"
+        # A value that is itself an option name is the shape a dropped empty value leaves
+        # (`--task '' --session x` arriving as `--task --session x`): refused, not taken.
+        f'          case "${{2-}}" in --session|--task|--task-file) set -- "$1" ;; esac\n'
+        f'          if [ $# -lt 2 ]; then echo "[workflow] ERROR: $1 needs a value; {usage}" >&2; exit 2; fi\n'
+        '          case "$1" in --session) SESSION="$2" ;; --task) TASK="$2" ;; --task-file) TASK_FILE="$2" ;; esac\n'
+        "          shift 2 ;;\n"
+        f'        *) echo "[workflow] ERROR: unknown option \'$1\'; {usage}" >&2; exit 2 ;;\n'
+        "      esac\n"
+        "    done ;;\n"
+        # The positional form every release up to 0.3.x documented: run.sh <command>
+        # [<task>] [<session>]. Kept so a caller written for it still works; a task that
+        # itself opens with `--` needs the named form.
+        "  *)\n"
+        '    TASK="${1:-}"; SESSION="${2:-$SESSION}" ;;\n'
+        "esac\n"
+        'if [ -n "$TASK" ] && [ -n "$TASK_FILE" ]; then\n'
+        f'  echo "[workflow] ERROR: pass --task or --task-file, not both; {usage}" >&2; exit 2\n'
+        "fi\n"
+        'SESSION="${SESSION:-default}"\n'
+        # session=default on a command that reads or writes session state is not a
+        # warning-shaped problem: two main agents on one project silently share a lock,
+        # state and logs, and a plan or an execution lands in a session nobody bound.
+        # Printing to stderr and proceeding was invisible exactly when it fired — the caller
+        # runs this as a background task and never reads that stream — so the script
+        # refuses. The CLI refuses the local ones of the same list itself (cli.main).
         'if [ "$SESSION" = "default" ] && [ -z "${EXOMA_ALLOW_DEFAULT_SESSION:-${AI_PROXY_ALLOW_DEFAULT_SESSION:-}}" ]; then\n'
-        '  case " explore plan analyze verify verify-browser " in\n'
+        f'  case " {session_required} " in\n'
         '    *" $COMMAND "*)\n'
-        '      echo "[workflow] ERROR: session=default on delegated command \'$COMMAND\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set EXOMA_ALLOW_DEFAULT_SESSION=1." >&2\n'
+        '      echo "[workflow] ERROR: no session for \'$COMMAND\'. It reads or writes session state, and without --session it would land in a session nobody bound; concurrent main agents would share one lock, state and log directory. Pass --session with MAIN_SESSION_ID (the value from the [SESSION BINDING] block). To override deliberately: set EXOMA_ALLOW_DEFAULT_SESSION=1." >&2\n'
         "      exit 2 ;;\n"
         "  esac\n"
         "fi\n"
@@ -69,8 +110,12 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
         '    ARGS=(-m exoma --command "$COMMAND") ;;\n'
         "esac\n"
         # No task, no --prompt: local commands do not take one, and an empty value reaches
-        # argparse as a bare flag.
-        'if [ -n "$TASK" ]; then ARGS+=(--prompt "$TASK"); fi\n'
+        # argparse as a bare flag. A task file keeps the task out of every shell's quoting:
+        # the CLI reads it as UTF-8 (--prompt-file). One `--opt=value` word each: a separate
+        # value that opens with `-` (a task like `--help` or `-x`) is read by argparse as an
+        # option, and the call failed with `expected one argument`.
+        'if [ -n "$TASK" ]; then ARGS+=("--prompt=$TASK"); fi\n'
+        'if [ -n "$TASK_FILE" ]; then ARGS+=("--prompt-file=$TASK_FILE"); fi\n'
         f'ARGS+=(--session "$SESSION" --work-dir "{root}" --pretty)\n'
         + python_path
         + f'exec "{sh_py}" "${{ARGS[@]}}"\n'

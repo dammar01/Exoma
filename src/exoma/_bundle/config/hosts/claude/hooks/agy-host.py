@@ -184,11 +184,6 @@ def pre_invocation(payload, cid, prompt):
     return {"injectSteps": [{"ephemeralMessage": "\n\n".join(lines)}]}
 
 
-_SHELL_META = set(";|&<>`$\n")
-_RUNNER = re.compile(r"^(?:'([^']+)'|(\S+))(?:\s|$)")
-_BASH_WORD = re.compile(r"^(?:'([^']+)'|(\S+))\s+")
-
-
 def find_bash():
     """The bash the runner must start under, restated from exoma.utils.osutil.find_bash (this
     hook runs without the package): `bash` on PATH, or on Windows Git Bash beside `git` —
@@ -229,44 +224,39 @@ def _is_bash(word):
     return bool(found) and wp.norm(word.replace("\\", "/")) == wp.norm(found.replace("\\", "/"))
 
 
-def runner_call(command, root):
-    """True for one plain call of <root>/.workflow/{run,check,inspect}.sh through the bash
-    find_bash names (PowerShell's `& '<bash>'` included): every shell metacharacter inside
-    single quotes, the script path inside the root. A bare `bash` on Windows is refused —
-    it can be WSL's, which fails on these paths."""
+def shell_command(command):
+    """The command line as the shared tokeniser reads it: PowerShell's call operator in front
+    of a quoted executable (`& '<bash>' ...`) is how Agy on Windows starts the runner, and it
+    is dropped before the words are judged; everything else is unchanged."""
     text = (command or "").strip()
-    if text.startswith("& "):
-        text = text[2:].lstrip()
-    bash = _BASH_WORD.match(text)
-    if not bash or not _is_bash(bash.group(1) or bash.group(2)):
-        return False
-    text = text[bash.end():]
-    quoted = False
-    for ch in text:
-        if ch == "'":
-            quoted = not quoted
-        elif not quoted and (ch in _SHELL_META or ch == '"'):
-            return False
-    if quoted:
-        return False
-    m = _RUNNER.match(text)
-    if not m:
-        return False
-    script = (m.group(1) or m.group(2)).replace("\\", "/")
-    import workflow_policy as wp
-    for name in ("run.sh", "check.sh", "inspect.sh"):
-        if wp.norm(script) == wp.norm(os.path.join(root, ".workflow", name)):
-            return True
-    return False
+    return text[2:].lstrip() if text.startswith("& ") else text
 
 
-def skill_read(target):
-    """A skill definition or the contract: an .md under Agy's skills or Exoma's own Agy
-    directory, where the host instructions point."""
+def host_read(target):
+    """What an Agy session may always read: a skill definition or the contract, an .md under
+    Agy's skills or Exoma's own Agy directory, where the host instructions point."""
     import workflow_policy as wp
     cli = os.path.join(gemini_dir(), "antigravity-cli")
-    return target.lower().endswith(".md") and (
-        wp.under(target, os.path.join(cli, "skills")) or wp.under(target, os.path.join(cli, "exoma")))
+    return wp.skill_read(target, os.path.expanduser("~"),
+                         [os.path.join(cli, "skills"), os.path.join(cli, "exoma")])
+
+
+# The file-reading tools are reads (a precision read may pass); listing and searching are
+# not, like Grep and Glob under Claude Code.
+READ_TOOLS = ("read_file", "view_file", "view_file_outline", "view_code_item")
+
+
+def kind_of(tool):
+    """The shared policy's kind for an Agy tool, or None for a tool the gate never sees."""
+    if tool in SHELL_TOOLS:
+        return "shell"
+    if tool in WRITE_TOOLS or _WRITE_SHAPE.search(tool):
+        return "write"
+    if tool in READ_TOOLS:
+        return "read"
+    if tool in GATHER_TOOLS or tool.startswith("mcp_"):
+        return "other"
+    return None
 
 
 def pre_tool_use(payload, cid):
@@ -283,28 +273,44 @@ def pre_tool_use(payload, cid):
     call = payload.get("toolCall") or {}
     tool = str(call.get("name") or "")
     args = call.get("args") if isinstance(call.get("args"), dict) else {}
-    is_shell = tool in SHELL_TOOLS
-    is_write = tool in WRITE_TOOLS or bool(_WRITE_SHAPE.search(tool))
+    kind = kind_of(tool)
+    is_shell = kind == "shell"
+    is_write = kind == "write"
     target = first_arg(args, PATH_KEYS)
     command = first_arg(args, COMMAND_KEYS)
+    marker_path = os.path.join(rt, "delegated.marker")
+    runner = "%s '%s/.workflow/run.sh'" % (runner_prefix(), root.replace("\\", "/"))
 
     refusal = None
-    marker = wp.read_json(os.path.join(rt, "delegated.marker"))
-    if marker and os.environ.get("WORKFLOW_LOCAL_MODE") != "1" and not os.path.isfile(
+    # The runner scripts are never written by hand, marker or not (workflow_policy,
+    # "pre-flight gate"): the runner is the one command the gate lets through.
+    if is_write and wp.runner_file(target, root):
+        refusal = ("runner_write", (
+            "%s targets a runner script: %s. The runner is never rewritten by hand; "
+            "/.upgrade regenerates it." % (tool, target)))
+    marker = wp.read_json(marker_path)
+    if refusal is None and kind and marker and os.environ.get("WORKFLOW_LOCAL_MODE") != "1" and not os.path.isfile(
             os.path.join(root, ".workflow", "local_mode.flag")):
         cmd = marker.get("command") or "?"
-        gather = tool in GATHER_TOOLS or tool.startswith("mcp_") or is_write or is_shell
-        if is_shell and runner_call(command, root):
-            gather = False
-        if tool in GATHER_TOOLS and target and skill_read(target):
-            gather = False
-        if gather:
-            refusal = ("preflight", (
+        ctx = {
+            "root": root,
+            "home": os.path.expanduser("~"),
+            "rt_dir": rt,
+            "is_bash": _is_bash,
+            "host_read": host_read,
+            "limit": None,
+        }
+        rule = wp.preflight_refusal(kind, target, shell_command(command), marker, ctx)
+        if rule:
+            refusal = (rule, (
                 "/.%s is a delegated command: the next step is the runner, not %s.\n"
-                "Run: %s '%s/.workflow/run.sh' %s '<task>' '%s'\n"
+                "%s"
+                "Run: %s %s --session '%s' --task '<task>'  (sandbox bypassed: on Windows the sandbox stops Git Bash)\n"
                 "Escape: WORKFLOW_LOCAL_MODE=1, .workflow/local_mode.flag, or delete %s."
-            ) % (cmd, tool, runner_prefix(), root.replace("\\", "/"), cmd, main_id,
-                 os.path.join(rt, "delegated.marker")))
+            ) % (cmd, tool,
+                 ("The %d precision reads this delegation allows are used.\n" % wp.PRECISION_READS_PER_MARKER)
+                 if rule == "preflight_quota" else "",
+                 runner, cmd, main_id, marker_path))
     if refusal is None and is_shell:
         refusal = wp.commit_refusal(command, rt)
     if refusal is None and is_write and target:
