@@ -59,6 +59,8 @@ def _installed_path_for(
 # {{HOME}}/{{PROJECT_ROOT}} inside the block are resolved at install time. Comparing whole
 # files here reported drift on every single run, which trained the reader to ignore it.
 _SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END")
+# The Agy /.doctor fragment: appended to the Agy doctor skill at install (installer/base.py).
+_RENDERED_INTO_ANOTHER_FILE = {f"{host_dir('agy')}/doctor.agy.md"}
 _MANAGED_MARKERS = {
     f"{host_dir('claude')}/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
     **{
@@ -220,6 +222,10 @@ def _bundle_integrity(
         if parts[0] == HOSTS_DIR and len(parts) > 1 and parts[1] not in hosts:
             result["skipped"].append({"path": rel, "reason": "host_not_chosen"})
             continue
+        # A fragment rendered into another installed file has no copy of its own.
+        if rel in _RENDERED_INTO_ANOTHER_FILE:
+            result["skipped"].append({"path": rel, "reason": "rendered_into_another_file"})
+            continue
         installed = _installed_path_for(rel, targets, project_root)
         # An Agy skill directory is installed dotted, so it answers to `/.<name>`.
         if installed is not None and rel.startswith(f"{host_dir('agy')}/skills/"):
@@ -314,4 +320,88 @@ def _bundle_integrity(
         result["hooks_installed"] = all(
             (hook_target / h).is_file() for h in required_hooks
         )
+    return result
+
+
+# What each host's install leaves, by host. File presence only: whether the host CLI LOADS
+# them is something only a session in that host can observe (the Agy `/.doctor` skill asks
+# the model to look).
+_AGY_HOOK_FILES = ("agy-host.py", "workflow_policy.py", "intent-map.json")
+
+
+def _has_block(path: Path, start: str) -> bool:
+    try:
+        return f"<!-- {start}" in path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def _host_status(home: Path | None = None) -> dict:
+    """`{chosen, hosts: {<host>: {missing: [...], ...}}}` for the hosts the last install chose.
+
+    Read from the install mode file, so `both` reports both and a host not chosen is not
+    reported missing. An install from before the choice recorded none: Claude, plus Agy when
+    its hooks.json carries Exoma's hook (installer/rollback._migrated_hosts, restated here).
+    """
+    from exoma.utils.osutil import agent_home
+
+    home = Path(home or agent_home())
+    try:
+        mode = read_json_file(home / ".claude" / ".workflow-install-mode.json")
+    except (OSError, ValueError):
+        mode = {}
+    mode = mode if isinstance(mode, dict) else {}
+    chosen = mode.get("hosts")
+    if isinstance(chosen, list):
+        chosen = [h for h in chosen if isinstance(h, str)]
+    else:
+        try:
+            legacy_hooks = read_json_file(home / ".gemini" / "config" / "hooks.json")
+        except (OSError, ValueError):
+            legacy_hooks = {}
+        chosen = ["claude", "agy"] if isinstance(legacy_hooks, dict) and "exoma" in legacy_hooks else ["claude"]
+    result: dict = {"chosen": chosen, "hosts": {}}
+    if "claude" in chosen:
+        claude = home / ".claude"
+        missing = []
+        if not _has_block(claude / "CLAUDE.md", "WORKFLOW-MAIN-AGENT:START"):
+            missing.append("~/.claude/CLAUDE.md (WORKFLOW-MAIN-AGENT block)")
+        if not (claude / "skills" / "doctor.md").is_file():
+            missing.append("~/.claude/skills")
+        if not (claude / "hooks" / "session-bind.sh").is_file():
+            missing.append("~/.claude/hooks")
+        result["hosts"]["claude"] = {"missing": missing}
+    if "agy" in chosen:
+        gemini = home / ".gemini"
+        cli = gemini / "antigravity-cli"
+        missing = []
+        if not _has_block(gemini / "GEMINI.md", "EXOMA-HOST:START"):
+            missing.append("~/.gemini/GEMINI.md (EXOMA-HOST block)")
+        try:
+            hooks = read_json_file(gemini / "config" / "hooks.json")
+        except (OSError, ValueError):
+            hooks = {}
+        if not (isinstance(hooks, dict) and "exoma" in hooks):
+            missing.append("~/.gemini/config/hooks.json (exoma hook)")
+        if not (cli / "exoma" / "CONTRACT.md").is_file():
+            missing.append("~/.gemini/antigravity-cli/exoma/CONTRACT.md")
+        for name in _AGY_HOOK_FILES:
+            if not (cli / "exoma" / "hooks" / name).is_file():
+                missing.append(f"~/.gemini/antigravity-cli/exoma/hooks/{name}")
+        if not (cli / "skills" / ".doctor" / "SKILL.md").is_file():
+            missing.append("~/.gemini/antigravity-cli/skills")
+        permissions = mode.get("agy_permissions") is True
+        if permissions:
+            try:
+                settings = read_json_file(cli / "settings.json")
+                allow = settings.get("permissions", {}).get("allow", [])
+            except (OSError, ValueError, AttributeError):
+                allow = []
+            # Every rule this machine needs, not only the ones Exoma recorded adding: a rule
+            # the user already had is not Exoma's to remove, but the runner still needs it.
+            from exoma.installer.base import agy_permission_rules
+
+            if not isinstance(allow, list) or any(rule not in allow for rule in agy_permission_rules()):
+                missing.append("~/.gemini/antigravity-cli/settings.json (permission rules)")
+        result["hosts"]["agy"] = {"missing": missing, "permissions": "on" if permissions else "off"}
     return result

@@ -35,8 +35,8 @@
     },
     {
       "path": "hosts/claude/skills/doctor.md",
-      "sha256": "24cb90faef261c5ad3e141e11c14ecb004429a87fdadf00ef4c0e64a1cca88be",
-      "bytes": 2579,
+      "sha256": "db4e4e3d215c6190cc2e52daf0dfa191f18eecf5fdb4b91300ddd680a822f2e9",
+      "bytes": 2738,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -455,8 +455,8 @@
     },
     {
       "path": "hosts/agy/GEMINI.md",
-      "sha256": "6fd5ac0d6de733864a8b6d57249223940bd36e6a960781282e625ca8fa31f6a6",
-      "bytes": 2681,
+      "sha256": "01dc86564a0c19ca2fbc000a15087fe7485601f7565492a0ef0848745e44862f",
+      "bytes": 2701,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -475,11 +475,11 @@
       "component": "runtime"
     },
     {
-      "path": "hosts/agy/skills/agy-check/SKILL.md",
-      "sha256": "dd209c5eed68078de423fae773ae027e54c26e2375e2ea1116dfc5d8cd2e86b8",
-      "bytes": 1623,
-      "merge": "replace",
-      "component": "prompt_bundle"
+      "path": "hosts/agy/doctor.agy.md",
+      "sha256": "68f493b2148f908efb58899d56a4ad47e6e13070f5dc73d9e5a21cf0b91be43e",
+      "bytes": 1461,
+      "merge": "merge",
+      "component": "runtime"
     },
     {
       "path": "providers/opencode/opencode.template.json",

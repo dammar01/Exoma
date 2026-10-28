@@ -90,6 +90,7 @@ from exoma.installer.rollback import (  # noqa: E402,F401
     _migrated_hosts,
     _run_rollback,
     _store_install_mode,
+    _stored_agy_opt_out,
     _stored_agy_permissions,
     _stored_hosts,
     _stored_only_command,
@@ -368,15 +369,6 @@ def _prompt_hosts() -> tuple[str, ...]:
     return {"2": ("agy",), "3": HOSTS}.get(choice, ("claude",))
 
 
-def _prompt_agy_permissions() -> bool:
-    print()
-    print("  Agy asks before every runner call unless a rule allows it. Exoma can add two rules")
-    print("  to ~/.gemini/antigravity-cli/settings.json: the .workflow runner through this")
-    print("  machine's bash, and writes to Exoma's data directory. They apply to every Agy")
-    print("  session; --uninstall removes them, and your own rules are never touched.")
-    return _ask("  add them? [y/N]: ").lower() in ("y", "yes")
-
-
 def _resolve_hosts(flag: str | None, apply: bool, plan: Plan) -> tuple[str, ...]:
     """--host, else the last install's choice, else the 0.3.0 migration, else asked on
     --apply from a terminal, else Claude — what every install did before the choice."""
@@ -391,19 +383,12 @@ def _resolve_hosts(flag: str | None, apply: bool, plan: Plan) -> tuple[str, ...]
     return ("claude",)
 
 
-def _resolve_agy_permissions(flag: bool | None, hosts: tuple[str, ...], apply: bool) -> bool:
-    """--agy-permissions / --no-agy-permissions, else the last choice, else asked on --apply
-    from a terminal, else off. Opt-in: the rules reach every Agy session."""
-    if "agy" not in hosts:
-        return False
-    if flag is not None:
-        return flag
-    stored, _rules = _stored_agy_permissions()
-    if stored is not None:
-        return stored
-    if apply and sys.stdin.isatty():
-        return _prompt_agy_permissions()
-    return False
+def _resolve_agy_permissions(flag: bool | None, hosts: tuple[str, ...]) -> tuple[bool, bool]:
+    """(rules on, opt-out to store). On whenever Agy is a chosen host: without them Agy asks
+    before every runner call and its sandbox refuses the runtime's data directory.
+    --no-agy-permissions turns them off and is kept; --agy-permissions clears that."""
+    opt_out = (flag is False) or (flag is None and _stored_agy_opt_out())
+    return ("agy" in hosts and not opt_out), opt_out
 
 
 def _update_providers(plan: Plan, apply: bool, backup_root: Path) -> None:
@@ -494,10 +479,10 @@ def main() -> int:
         "--agy-permissions",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="with the agy host: add (or, --no-agy-permissions, remove) the allow rules for "
-        "the .workflow runner and Exoma's data directory in "
-        "~/.gemini/antigravity-cli/settings.json. Without it the last choice is kept; with "
-        "none, --apply from a terminal asks and a non-interactive run leaves them out",
+        help="the allow rules for the .workflow runner and Exoma's data directory in "
+        "~/.gemini/antigravity-cli/settings.json are added whenever the agy host is chosen. "
+        "--no-agy-permissions removes them and is kept across upgrades; --agy-permissions "
+        "undoes that",
     )
     parser.add_argument(
         "--model",
@@ -572,7 +557,7 @@ def main() -> int:
     # Asked before anything is written, like the provider: an answer cut short by Ctrl+C
     # leaves nothing half installed.
     hosts = _resolve_hosts(args.host, apply, plan)
-    agy_permissions = _resolve_agy_permissions(args.agy_permissions, hosts, apply)
+    agy_permissions, agy_opt_out = _resolve_agy_permissions(args.agy_permissions, hosts)
     print(f"  hosts:  {', '.join(hosts)}")
     print()
 
@@ -707,7 +692,7 @@ def main() -> int:
                 plan.warn(f"workspace not upgraded: {exc}")
 
     _store_install_mode(
-        args.only_command, hosts, agy_permissions, owned_rules, plan, apply, backup_root
+        args.only_command, hosts, agy_permissions, owned_rules, agy_opt_out, plan, apply, backup_root
     )
     _write_ledger(targets, apply)
 
@@ -744,8 +729,8 @@ def main() -> int:
     if "agy" in hosts:
         # --check compares files; only Agy itself can say whether it loads them.
         print()
-        print("  agy: open Agy in a project that has a .workflow/ and run /.agy-check — it")
-        print("       reports skills, hooks, the runner permission and the sandbox in one block.")
+        print("  agy: open Agy in a project that has a .workflow/ and run /.doctor — in Agy it")
+        print("       also reports skills, hooks, the runner permission and the sandbox.")
 
     if not apply:
         print()

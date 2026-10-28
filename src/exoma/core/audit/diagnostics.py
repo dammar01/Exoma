@@ -20,6 +20,7 @@ from exoma.utils.osutil import provider_callable
 # Split out of this module; re-exported for callers that still import them from here.
 from exoma.core.audit.bundle_integrity import (  # noqa: E402,F401
     _bundle_integrity,
+    _host_status,
     _expand_home,
     _installed_intent_mode,
     _installed_path_for,
@@ -790,6 +791,15 @@ def run_doctor(
                 "(session-bind/intent-gate-set/intent-gate-check)"
             )
             recommended_fixes.append("Re-run install to place the hook scripts")
+
+    # Each chosen host's own files (`both` reports both). Loading them is the host's to
+    # prove: the Agy /.doctor skill asks the model in that session to look.
+    hosts = _host_status()
+    checks["hosts"] = hosts
+    for host, state in hosts["hosts"].items():
+        if state["missing"]:
+            issues.append(f"host {host}: missing {', '.join(state['missing'][:5])}")
+            recommended_fixes.append(f"Re-run `exoma install --apply` to restore the {host} host's files")
 
     if issues:
         status = "NOT_READY"

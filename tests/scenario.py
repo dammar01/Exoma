@@ -179,6 +179,7 @@ from tests.checks.agy_host import (
     _test_agy_host_install_merges,
     _test_agy_host_selection,
     _test_bundle_layout_and_agy_agent,
+    _test_agy_permissions_and_doctor,
     _test_agy_host_uninstall,
 )
 from tests.checks.os_resolvers import (
@@ -236,6 +237,7 @@ def run_tests() -> None:
     _test_agy_host_install_all_or_nothing()
     _test_agy_host_selection()
     _test_bundle_layout_and_agy_agent()
+    _test_agy_permissions_and_doctor()
     _test_agy_host_uninstall()
     _test_gate_k5_fixtures()
     _test_entry_points_refuse_an_old_python()

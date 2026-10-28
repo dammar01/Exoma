@@ -36,5 +36,5 @@ read these paths.
 - At the end of a turn, an `[EXECUTION RESULT]` that claims more than `verification: not_run`
   is sent back once for correction.
 
-`/.agy-check` checks this setup end to end; run it after an install.
+`/.doctor` checks this setup end to end, this session included; run it after an install.
 <!-- EXOMA-HOST:END -->

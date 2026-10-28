@@ -103,7 +103,8 @@ def _dist_files() -> list[str]:
             ]
     if (DIST_CONFIG / "hosts" / "claude" / "settings.template.json").is_file():
         paths.append("hosts/claude/settings.template.json")
-    for rel in ("hosts/agy/GEMINI.md", "hosts/agy/hooks.template.json", "hosts/agy/permissions.template.json"):
+    for rel in ("hosts/agy/GEMINI.md", "hosts/agy/hooks.template.json", "hosts/agy/permissions.template.json",
+                "hosts/agy/doctor.agy.md"):
         if (DIST_CONFIG / rel).is_file():
             paths.append(rel)
     agy_skills = DIST_CONFIG / "hosts" / "agy" / "skills"

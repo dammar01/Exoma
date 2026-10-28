@@ -15,6 +15,7 @@ from exoma.installer.base import (
     CLAUDE_SETTINGS,
     AGY_HOST_HOOKS,
     AGY_HOST_INSTRUCTIONS,
+    AGY_DOCTOR_FRAGMENT,
     AGY_HOST_PERMISSIONS,
     DIST_CONFIG,
     HOME,
@@ -163,8 +164,9 @@ def _bundle_stale(manifest: dict) -> list[str]:
     # Every host's sources, chosen or not, by their manifest key: one source rendered for
     # two hosts is stamped once.
     sources = list({bundle_key(source): (source, bundle_key(source)) for source, _d, _k in _targets()}.values())
-    if (DIST_CONFIG / AGY_HOST_PERMISSIONS).exists():
-        sources.append((DIST_CONFIG / AGY_HOST_PERMISSIONS, AGY_HOST_PERMISSIONS))
+    for key in (AGY_HOST_PERMISSIONS, AGY_DOCTOR_FRAGMENT):
+        if (DIST_CONFIG / key).exists():
+            sources.append((DIST_CONFIG / key, key))
     settings_src = DIST_CONFIG / CLAUDE_SETTINGS
     if settings_src.exists():
         sources.append((settings_src, CLAUDE_SETTINGS))
@@ -213,8 +215,9 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     for source, _dest, key in _targets():
         if all(k != key for _s, _d, k in checks):
             checks.append((source, None, key))
-    if (DIST_CONFIG / AGY_HOST_PERMISSIONS).exists():
-        checks.append((DIST_CONFIG / AGY_HOST_PERMISSIONS, None, AGY_HOST_PERMISSIONS))
+    for key in (AGY_HOST_PERMISSIONS, AGY_DOCTOR_FRAGMENT):
+        if (DIST_CONFIG / key).exists():
+            checks.append((DIST_CONFIG / key, None, key))
     settings_src = DIST_CONFIG / CLAUDE_SETTINGS
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.

@@ -20,6 +20,7 @@ bundle (~/.claude)  : READY | DRIFTED | not_checked — `exoma install --check` 
 second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scans the MCP config of the ACTIVE provider, not always opencode (context7=safe read-only; write/exec/fs/db/browser=risk)
 read boundary       : ENFORCED (opencode) | NOT_ENFORCEABLE (codex|agy) — codex and agy do not enforce a read boundary (runtime: `checks.second_agent_read_boundary` status `not_enforceable`, `trusted: true`, `secret_files` = the project files matching the secret patterns); their second_agent can read every project file, `.env` included, and receives the full process environment. This is a WARNING about the user's choice, not NOT_READY
 legacy env          : NONE | <AI_PROXY_* names> — still read; recommend renaming to EXOMA_*
+hosts               : <host>: OK | MISSING <files> per host the install chose (runtime `checks.hosts`; `both` lists both). MISSING → `exoma install --apply`
 
 ## Output
 [DOCTOR REPORT]

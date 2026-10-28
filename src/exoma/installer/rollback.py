@@ -79,22 +79,32 @@ def _stored_agy_permissions() -> tuple[bool | None, list[str]]:
     )
 
 
+def _stored_agy_opt_out() -> bool:
+    """Whether the user turned the Agy permission rules off (--no-agy-permissions). Only an
+    explicit opt-out is kept: an `agy_permissions: false` without it was a default, from a
+    build where the rules were opt-in, and does not stop them now."""
+    return _stored_mode().get("agy_permissions_opt_out") is True
+
+
 def _store_install_mode(
     only_command: bool,
     hosts: tuple[str, ...],
     agy_permissions: bool,
     agy_rules: list[str],
+    agy_opt_out: bool,
     plan: Plan,
     apply: bool,
     backup_root: Path,
 ) -> None:
     """Persist every choice an upgrade without flags must keep: the intent mode, the hosts,
-    and the Agy permission opt-in with the rules it added (what --uninstall may remove)."""
+    the Agy permission rules' state, an explicit opt-out of them, and the rules Exoma added
+    (what --uninstall may remove)."""
     content = json.dumps(
         {
             "only_command": bool(only_command),
             "hosts": list(hosts),
             "agy_permissions": bool(agy_permissions),
+            "agy_permissions_opt_out": bool(agy_opt_out),
             "agy_permission_rules": list(agy_rules),
         },
         indent=2,

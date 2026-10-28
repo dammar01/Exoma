@@ -146,6 +146,7 @@ from tests.checks.agy_host import (  # noqa: E402
     _test_agy_host_install_merges,
     _test_agy_host_selection,
     _test_bundle_layout_and_agy_agent,
+    _test_agy_permissions_and_doctor,
     _test_agy_host_uninstall,
 )
 from tests.checks.os_resolvers import (  # noqa: E402
@@ -301,6 +302,7 @@ SUITES: dict[str, tuple] = {
     "agy-host-install-whole": (_test_agy_host_install_all_or_nothing, "the Agy instructions and hook install together or not at all; a refused hook takes out an earlier instructions block"),
     "agy-host-uninstall": (_test_agy_host_uninstall, "uninstall takes only the `exoma` hook out of hooks.json, keeps the user's hooks, and receipts the change for --rollback"),
     "agy-host-install": (_test_agy_host_install_merges, "the installer merges only the `exoma` hook name into hooks.json and only the EXOMA-HOST block into GEMINI.md"),
+    "agy-doctor": (_test_agy_permissions_and_doctor, "Agy permission rules on with the agy host unless opted out; both installs both; /.doctor reports each chosen host and observes the Agy session only in Agy"),
     "bundle-layout": (_test_bundle_layout_and_agy_agent, "hosts/ and providers/ keys, old keys read as current, the Agy second agent as a custom agent, ~/.agy retired"),
     "agy-host-select": (_test_agy_host_selection, "--host picks the targets; Agy files stay under ~/.gemini; permission rules are opt-in and only Exoma's are removed"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),

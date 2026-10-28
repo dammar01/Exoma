@@ -57,6 +57,8 @@ AGY_HOST_HOOK_NAME = "exoma"
 AGY_CONTRACT = "hosts/agy/exoma/CONTRACT.md"
 AGY_HOOKS_PREFIX = "hosts/agy/exoma/hooks/"
 AGY_SKILLS_PREFIX = "hosts/agy/skills/"
+AGY_DOCTOR_SKILL = f"{AGY_SKILLS_PREFIX}doctor/SKILL.md"
+AGY_DOCTOR_FRAGMENT = "hosts/agy/doctor.agy.md"
 # What agy-host.py needs beside it: the policy it imports and the intent map it loads.
 AGY_HOOK_FILES = ("agy-host.py", "workflow_policy.py", "intent-map.json")
 
@@ -480,6 +482,11 @@ def _agy_text(text: str, key: str) -> str:
         text = _BARE_RUNNER.sub(prefix + " ", text)
         # Where a skill is read: Agy's own skill, not the Claude copy.
         text = text.replace("~/.claude/skills/<name>.md", "~/.gemini/antigravity-cli/skills/.<name>/SKILL.md")
+    if key == AGY_DOCTOR_SKILL:
+        # The Agy /.doctor adds what only an Agy session can observe (skills, hooks, the
+        # runner's permission and sandbox), so the Claude /.doctor never carries it.
+        fragment = (DIST_CONFIG / AGY_DOCTOR_FRAGMENT).read_text(encoding="utf-8")
+        text = text.rstrip("\n") + "\n" + fragment.replace("{{RUNNER}}", prefix)
     if key.startswith(AGY_SKILLS_PREFIX) and not text.startswith("---"):
         text = _skill_md(text, key[len(AGY_SKILLS_PREFIX):].split("/", 1)[0])
     return text

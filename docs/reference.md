@@ -155,7 +155,7 @@ Install the package → run one command → configured.
 exoma install            # DRY RUN — show every change, write nothing
 exoma install --apply    # now writes
 exoma install --apply --only-command      # workflow active only through /.<command>
-exoma install --apply --host agy --agy-permissions   # Agy as the main agent, with its runner rules
+exoma install --apply --host both           # Claude Code and Agy, each with its own files
 exoma install --apply --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
 exoma install --check                     # check bundle + install (including the project when cwd has .workflow/)
 exoma install --rollback                  # dry run of the latest rollback
@@ -173,7 +173,7 @@ All `exoma install` flags:
 | `--only-command` | command-only mode (see "Intent mode"); persisted, applies to subsequent installs | with `--apply` |
 | `--auto-intent` | restore auto-intent mode | with `--apply` |
 | `--host claude\|agy\|both` | which main-agent host to install for (see "Host choice"); persisted | with `--apply` |
-| `--agy-permissions` / `--no-agy-permissions` | with the `agy` host: add or remove Exoma's allow rules in Agy's `settings.json` (see "Hosts"); persisted | with `--apply` |
+| `--no-agy-permissions` / `--agy-permissions` | the Agy allow rules are added whenever the `agy` host is chosen; `--no-agy-permissions` removes them and is persisted, `--agy-permissions` undoes that (see "Hosts") | with `--apply` |
 | `--provider NAME` / `--model ID` | second agent choice for the seed (`--model` requires `--provider`) | with `--apply` |
 | `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser` | with `--apply` |
 | `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | with `--apply` |
@@ -189,6 +189,7 @@ order: `--host`; the choice the last install recorded; for an install from befor
 existed, what it wrote (Claude, plus Agy when `~/.gemini/config/hooks.json` holds the `exoma`
 hook); a prompt on `--apply` from a terminal; else `claude`, with a warning. The choice is stored
 with the intent mode in `~/.claude/.workflow-install-mode.json` (`hosts`, `agy_permissions`,
+`agy_permissions_opt_out`,
 `agy_permission_rules`), receipted like it. A host dropped from the choice is taken out: its
 instruction block, its hook registration (`settings.json` hooks, or the `exoma` hook and the
 permission rules for Agy), then its files through the stale prune — only files an install
@@ -205,6 +206,15 @@ are read as their current form (`config/bundle_keys.canonical_key`), so stale cl
 `--uninstall` and doctor still recognise what an older install left; keys are only written in
 the current form. doctor (`checks.bundle_integrity`) skips the files of a host the install did not
 choose (`skipped`, reason `host_not_chosen`).
+
+doctor also writes `checks.hosts`: `{chosen, hosts: {<host>: {missing: [...]}}}` for every host the
+install chose (`both` lists both; an install from before the choice is Claude, plus Agy when
+`~/.gemini/config/hooks.json` holds the `exoma` hook). Claude: the `WORKFLOW-MAIN-AGENT` block, the
+skills, the hooks. Agy: the `EXOMA-HOST` block, the `exoma` hook in `hooks.json`, `CONTRACT.md`, the
+hook scripts, the skills, and — with `permissions: on` — every permission rule this machine needs,
+whether Exoma added it or the user already had it. A host with something missing
+is an issue, fixed by `exoma install --apply`. These are file checks; what only a session in the
+host can see is the Agy `/.doctor` STEP 3 ("Hosts", "Probe").
 
 `AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
 install into a temporary HOME. The runtime reads the interpreter pin (`.claude/hooks/python.path`)
@@ -669,7 +679,8 @@ itself on such a call. None of this bounds the second agent: agy's boundary stay
 into `~/.gemini/config/hooks.json` (other names are the user's). Under `~/.gemini/antigravity-cli/`
 it writes `exoma/CONTRACT.md`, `exoma/hooks/{agy-host.py,workflow_policy.py,intent-map.json}`,
 and one `skills/.<name>/SKILL.md` per Claude skill (Agy frontmatter `name`/`description` on top,
-the runner call rewritten to the host's bash, then the skill unchanged) plus `.agy-check`. The
+the runner call rewritten to the host's bash, then the skill unchanged; `.doctor` also gets
+`hosts/agy/doctor.agy.md`, see "Probe"). The
 contract, hook scripts and skills are rendered from the `hosts/claude/` sources at install time, so
 the bundle ships them once. The hook command is
 `<install interpreter> <home>/.gemini/antigravity-cli/exoma/hooks/agy-host.py <Event>`, unquoted; when either path
@@ -683,22 +694,27 @@ stamps every Agy source in the bundle on every machine, and for an install that 
 compares the installed block and files, reports a missing or drifted `exoma` entry in
 `hooks.json`, and prints `agy host: NOT INSTALLABLE` with the reason when the hook would be refused.
 
-**Permission rules (opt-in).** Agy asks before every command unless a rule allows it. With
-`--agy-permissions` (or a yes at the prompt) the installer adds two rules to
-`permissions.allow` in `~/.gemini/antigravity-cli/settings.json`, from
+**Permission rules.** Agy asks before every command unless a rule allows it, and its sandbox
+refuses writes outside the workspace. Whenever the `agy` host is chosen (`agy` or `both`), the
+installer adds two rules to `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`, from
 `hosts/agy/permissions.template.json`: `command(regex:...)` for one runner call through this
 machine's bash, script inside a `.workflow/` directory, every argument a single-quoted string or
 a plain word; and `write_file(<data dir>)` for the runtime's data directory (`EXOMA_HOME`, by
-default `%LOCALAPPDATA%\exoma`), which Agy's sandbox otherwise refuses. They apply to every
-Agy session. Only rules the installer added are recorded (`agy_permission_rules`) and only those
-are ever removed — by `--no-agy-permissions`, by dropping the `agy` host, or by `--uninstall`; a
-rule the user already had is never claimed. `--check` reports a missing rule while the opt-in is on.
+default `%LOCALAPPDATA%\exoma`). They apply to every Agy session. `--no-agy-permissions` removes
+them and is stored (`agy_permissions_opt_out`), so later upgrades keep them off;
+`--agy-permissions` clears it. A stored `agy_permissions: false` without that opt-out is read as
+no choice, and the rules go in. Only rules the installer added are recorded
+(`agy_permission_rules`) and only those are ever removed — by the opt-out, by dropping the `agy`
+host, or by `--uninstall`; a rule the user already had is never claimed. `--check` reports a
+missing rule while they are on.
 
-**Probe.** `--check` compares files; it cannot tell whether Agy loads them. After an install
-that chose `agy`, the installer says to run `/.agy-check` in a project with `.workflow/`: the skill
-reports, in one `[AGY CHECK]` block, whether skills are registered, whether the hooks inject
-`[SESSION BINDING]`, whether `run.sh doctor` ran without a prompt, and the runner's failure
-(WSL bash, the sandbox refusing Git Bash, or the data directory) when it did not.
+**Probe.** `--check` and doctor's `checks.hosts` compare files; they cannot tell whether Agy loads
+them. The Agy `/.doctor` skill (the Claude skill plus `hosts/agy/doctor.agy.md`) adds a STEP 3
+only an Agy session can perform, reported as `agy_session`: whether skills are registered, whether
+the hooks inject `[SESSION BINDING]`, whether the `run.sh doctor` call ran without a prompt, and
+the runner's failure (WSL bash, the sandbox refusing Git Bash, or the data directory) when it did
+not. The Claude `/.doctor` never carries it. After an install that chose `agy`, the installer says
+to run `/.doctor` in Agy.
 
 **Limits.** Calibrated on one release, on Windows, in print mode. `lastUserInput` is
 undocumented: without it routing and the role header are lost, and the role then rests on

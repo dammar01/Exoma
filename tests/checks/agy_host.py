@@ -422,7 +422,7 @@ def _test_agy_host_selection() -> None:
             assert_true(all(base.HOME / ".gemini" in d.parents for d in agy_dests),
                         f"every Agy file lands under ~/.gemini: {agy_dests}")
             keys = {k for _s, _d, k in agy}
-            assert_true({"hosts/agy/skills/plan/SKILL.md", "hosts/agy/skills/agy-check/SKILL.md",
+            assert_true({"hosts/agy/skills/plan/SKILL.md", base.AGY_DOCTOR_SKILL,
                          base.AGY_CONTRACT, base.AGY_HOOKS_PREFIX + "workflow_policy.py",
                          base.AGY_HOOKS_PREFIX + "intent-map.json"} <= keys,
                         f"skills, the contract and the hook's siblings ship for Agy: {sorted(keys)}")
@@ -651,6 +651,82 @@ def _test_bundle_layout_and_agy_agent() -> None:
             base._reset_receipt()
 
 
+def _test_agy_permissions_and_doctor() -> None:
+    """The Agy permission rules come with the agy host unless opted out; `both` installs and
+    checks both hosts; /.doctor reports each chosen host, and only the Agy one observes the
+    Agy session."""
+    from exoma.core.audit.bundle_integrity import _host_status
+    from exoma.install import _resolve_agy_permissions
+    from exoma.installer import base, rollback
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-doctor-") as tmp:
+        home = Path(tmp)
+        saved = (base.HOME, rollback._MODE_FILE)
+        base.HOME = home
+        rollback._MODE_FILE = home / ".claude" / ".workflow-install-mode.json"
+        try:
+            agy, both, claude = ("agy",), base.HOSTS, ("claude",)
+            assert_true(_resolve_agy_permissions(None, agy) == (True, False), "agy alone: rules on")
+            assert_true(_resolve_agy_permissions(None, both) == (True, False), "both: rules on")
+            assert_true(_resolve_agy_permissions(None, claude)[0] is False, "claude alone: never")
+            assert_true(_resolve_agy_permissions(False, agy) == (False, True), "--no-agy-permissions: off, kept")
+            rollback._MODE_FILE.parent.mkdir(parents=True)
+            rollback._MODE_FILE.write_text(json.dumps({"agy_permissions": False}), encoding="utf-8")
+            assert_true(_resolve_agy_permissions(None, agy) == (True, False),
+                        "a stored false without an opt-out was the old opt-in default: on now")
+            rollback._MODE_FILE.write_text(json.dumps({"agy_permissions": False, "agy_permissions_opt_out": True}),
+                                           encoding="utf-8")
+            assert_true(_resolve_agy_permissions(None, agy) == (False, True), "a stored opt-out is kept")
+            assert_true(_resolve_agy_permissions(True, agy) == (True, False), "--agy-permissions clears it")
+
+            keys = {k for _s, _d, k in base._targets(both)}
+            assert_true(base.CLAUDE_INSTRUCTIONS in keys and base.AGY_HOST_INSTRUCTIONS in keys
+                        and base.AGY_DOCTOR_SKILL in keys and "hosts/claude/skills/doctor.md" in keys,
+                        "both installs every file of both hosts")
+        finally:
+            base.HOME, rollback._MODE_FILE = saved
+
+        doctor = base.DIST_CONFIG / "hosts" / "claude" / "skills" / "doctor.md"
+        agy_doctor = base._render_text(doctor, base.AGY_DOCTOR_SKILL, None)
+        claude_doctor = base._render_text(doctor, "hosts/claude/skills/doctor.md", None)
+        assert_true("agy_session:" in agy_doctor and "{{" not in agy_doctor and "agy_session:" not in claude_doctor,
+                    "only the Agy /.doctor observes the Agy session")
+
+        # Doctor's host report: each chosen host, nothing for one not chosen.
+        mode = home / ".claude" / ".workflow-install-mode.json"
+        # No rule recorded as Exoma's (the user already had them): doctor still needs them all.
+        mode.write_text(json.dumps({"hosts": ["claude", "agy"], "agy_permissions": True,
+                                    "agy_permission_rules": []}), encoding="utf-8")
+        state = _host_status(home)
+        assert_true(set(state["hosts"]) == {"claude", "agy"}, f"both reports both: {state}")
+        assert_true(any("GEMINI.md" in m for m in state["hosts"]["agy"]["missing"])
+                    and any("permission rules" in m for m in state["hosts"]["agy"]["missing"]),
+                    f"a missing Agy block and rule are named: {state['hosts']['agy']}")
+        gemini = home / ".gemini"
+        cli = gemini / "antigravity-cli"
+        (gemini / "config").mkdir(parents=True)
+        (gemini / "GEMINI.md").write_text("<!-- EXOMA-HOST:START -->\nx\n<!-- EXOMA-HOST:END -->\n", encoding="utf-8")
+        (gemini / "config" / "hooks.json").write_text(json.dumps({"exoma": {}}), encoding="utf-8")
+        for rel in ("exoma/CONTRACT.md", "skills/.doctor/SKILL.md", *(f"exoma/hooks/{n}" for n in base.AGY_HOOK_FILES)):
+            (cli / rel).parent.mkdir(parents=True, exist_ok=True)
+            (cli / rel).write_text("x", encoding="utf-8")
+        (cli / "settings.json").write_text(json.dumps({"permissions": {"allow": base.agy_permission_rules()[:1]}}),
+                                           encoding="utf-8")
+        state = _host_status(home)
+        assert_true(any("permission rules" in m for m in state["hosts"]["agy"]["missing"]),
+                    f"a rule the runner needs is missing, whoever added the others: {state['hosts']['agy']}")
+        (cli / "settings.json").write_text(json.dumps({"permissions": {"allow": base.agy_permission_rules()}}),
+                                           encoding="utf-8")
+        state = _host_status(home)
+        assert_true(state["hosts"]["agy"] == {"missing": [], "permissions": "on"}, f"a complete Agy host: {state}")
+        # An install from before the choice recorded no hosts: its Agy hook makes it both.
+        mode.write_text(json.dumps({"only_command": False}), encoding="utf-8")
+        assert_true(set(_host_status(home)["hosts"]) == {"claude", "agy"},
+                    "a pre-choice install with the Agy hook is reported as both")
+        mode.write_text(json.dumps({"hosts": ["agy"]}), encoding="utf-8")
+        assert_true(set(_host_status(home)["hosts"]) == {"agy"}, "a host not chosen is not reported")
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(REPO))
     sys.path.insert(0, str(REPO / "src"))
@@ -659,5 +735,6 @@ if __name__ == "__main__":
     _test_agy_host_install_all_or_nothing()
     _test_agy_host_selection()
     _test_bundle_layout_and_agy_agent()
+    _test_agy_permissions_and_doctor()
     _test_agy_host_uninstall()
     print("agy_host: OK")
