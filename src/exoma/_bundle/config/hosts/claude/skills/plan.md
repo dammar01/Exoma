@@ -8,7 +8,7 @@ argument-hint: <task>
 ## STEP 1 — Evidence
 Reuse LAST_EXPLORE_RESULT when it is in context. Otherwise 1-call:
   Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' plan --session '<MAIN_SESSION_ID>' --task '<task>'
-<MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as the 3rd argument (concurrent isolation).
+<MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation).
 - FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:
   STOP → "[PROXY FAILED] <reason>. Continue the plan via /.local or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.
 - [LOCAL_MODE]=true → skip the run, use the /.local flow as evidence.

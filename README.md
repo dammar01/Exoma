@@ -207,17 +207,19 @@ Ask in natural language; the primary agent routes it (shown in Claude Code):
 ```text
 you:          where is the authentication logic in this project?
 Claude Code:  [INTENT] explore — location question
-              (runs bash .workflow/run.sh explore '...')
+              (runs bash .workflow/run.sh explore --session ... --task '...')
 ```
 
 Or call the runtime directly:
 
 ```bash
-bash .workflow/run.sh explore 'find the authentication entry point' '<SESSION_ID>'
+bash .workflow/run.sh explore --session '<SESSION_ID>' --task 'find the authentication entry point'
 ```
 
-The generated runner refuses a delegated call without a session id: without one,
-concurrent sessions would share an identifier and overwrite each other's state.
+The generated runner refuses a call that writes session state (a delegated command, `sweep`,
+`plan-record`, `execute-begin`/`execute-end`) without a session id: without one, concurrent
+sessions would share an identifier and overwrite each other's state. Options are named, so a
+shell that drops an empty argument (Windows PowerShell 5.1) cannot shift the session into the task.
 
 | Command | Type | Purpose |
 | --- | --- | --- |

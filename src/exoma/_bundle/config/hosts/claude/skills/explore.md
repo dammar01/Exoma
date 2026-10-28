@@ -7,7 +7,7 @@ argument-hint: <hint>
 
 ## Run (1-call)
 Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' explore --session '<MAIN_SESSION_ID>' --task '<hint>'
-- <MAIN_SESSION_ID> = the value from the [SESSION BINDING] block. REQUIRED (3rd argument) — concurrent sessions on the same project need per-session isolation. Absent → the run script's fallback (fine for a single agent).
+- <MAIN_SESSION_ID> = the value from the [SESSION BINDING] block. REQUIRED (`--session`) — concurrent sessions on the same project need per-session isolation. Absent → the run script's fallback (fine for a single agent).
 - Blocks until done. Returns JSON {ok, content, meta, digest}.
 - Do not invent commands, do not use check.sh, do not call `exoma` directly.
 - No .workflow yet / run script missing → /.init first.

@@ -14,11 +14,12 @@ back out of it. The flag is `--host`, listed in the
 [reference, Host choice](../reference.md#detail-host-choice).
 
 With Agy, the installer also adds two narrow permission rules (one script, one data directory)
-so the workflow's runner does not stop for approval on every call or get refused by Agy's
-sandbox. They apply to all your Agy sessions, and only those two are ever removed again. If you
-would rather approve each call, install with `--no-agy-permissions`; the choice is kept. After
-installing for Agy, open it in a project and run `/.doctor`: in Agy it also checks that the
-session itself is wired.
+so the workflow's runner does not stop for approval on every call. They apply to all your Agy
+sessions, and only those two are ever removed again. If you would rather approve each call,
+install with `--no-agy-permissions`; the choice is kept. The rules do not lift Agy's sandbox:
+on Windows the runner only works with the sandbox bypassed, and the workflow's instructions tell
+Agy to do that for the runner call alone. After installing for Agy, open it in a project and run
+`/.doctor`: in Agy it also checks that the session itself is wired.
 
 ## Choose a mode: always on, or only when called
 

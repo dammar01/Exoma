@@ -129,7 +129,9 @@ Without a primary agent, or from a script, the skills run the same command:
    installed that are no longer shipped, unless you edited them.
 
 3. In every other project, open the primary agent and run `/.upgrade`. It refuses while a delegated
-   command is running in that project; wait for it to finish.
+   command is running in that project; wait for it to finish. Do not skip it: the skills of a new
+   release can call the runner in a form an older `.workflow/run.sh` does not read (0.3.0 moved
+   it to named options), and every workflow command fails in that project until it is upgraded.
 
 4. Run `/.doctor` in each project. `NEEDS_UPGRADE` or `run_script_drift` means step 3 was
    missed there; a provider warning names the CLI release this workflow version was tested
@@ -158,7 +160,7 @@ behavior you rely on, and the notes say what to set afterwards.
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
-| `/.doctor` reports `NOT_READY` / `run_script_drift` | Tool updated, workspace scripts not | `/.upgrade` in that project |
+| `/.doctor` reports `NOT_READY` / `run_script_drift`, or a command fails with `argument --prompt/-p: expected one argument` | Tool updated, workspace scripts not | `/.upgrade` in that project |
 | `/.doctor` reports bundle drift | The package was updated, the global install was not | `exoma install --apply` |
 | Provider not found | The agent CLI is not on `PATH` | Install it, then check `<cli> --version` |
 | Delegated calls fail after a provider update | The provider release broke something | Pin it back to the release `/.doctor` names ([provider releases](reference.md#provider-releases)) |
