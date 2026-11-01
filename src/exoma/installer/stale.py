@@ -27,6 +27,8 @@ from exoma.config.bundle_keys import canonical_key, provider_dir
 from exoma.installer.base import (
     AGY_HOOKS_PREFIX,
     AGY_SKILLS_PREFIX,
+    CODEX_SKILLS_PREFIX,
+    OPENCODE_SKILLS_PREFIX,
     CLAUDE_HOOKS_PREFIX,
     CLAUDE_HOST,
     DIST_CONFIG,
@@ -47,7 +49,13 @@ def managed_prefixes() -> tuple[str, ...]:
     """Manifest-key prefixes of the families installed one file at a time."""
     # The Agy host's skills and hook scripts too: a host the user stops choosing leaves its
     # files out of the current targets, and this prune is what takes them away.
-    prefixes = [f"{CLAUDE_HOST}/skills/", f"{CLAUDE_HOST}/commands/", CLAUDE_HOOKS_PREFIX, AGY_SKILLS_PREFIX, AGY_HOOKS_PREFIX]
+    from exoma.installer.base import (
+        CODEX_CONTRACT, CODEX_HOOKS_PREFIX, OPENCODE_CONTRACT, OPENCODE_HOOKS_PREFIX, OPENCODE_PLUGIN,
+    )
+    prefixes = [f"{CLAUDE_HOST}/skills/", f"{CLAUDE_HOST}/commands/", CLAUDE_HOOKS_PREFIX,
+                AGY_SKILLS_PREFIX, AGY_HOOKS_PREFIX, CODEX_CONTRACT, CODEX_HOOKS_PREFIX,
+                CODEX_SKILLS_PREFIX, OPENCODE_CONTRACT, OPENCODE_HOOKS_PREFIX, OPENCODE_SKILLS_PREFIX,
+                OPENCODE_PLUGIN]
     for name, bundle in PROVIDER_BUNDLES.items():
         if bundle.get("agents_dir"):
             prefixes.append(f"{provider_dir(name)}/{bundle['agents_dir']}/")
@@ -99,9 +107,9 @@ def previously_installed() -> dict[str, dict]:
 
 
 def remove_empty_skill_dir(path: Path, key: str) -> None:
-    """An Agy skill is a directory (`.<name>/SKILL.md`): once its file goes, the directory
-    goes too if nothing else is in it. A rollback recreates it with the file."""
-    if key.split("/", 1)[-1].startswith(AGY_SKILLS_PREFIX) or key.startswith(AGY_SKILLS_PREFIX):
+    """Remove an empty Agy, Codex or OpenCode skill directory after its managed file goes."""
+    managed_key = key.split("/", 1)[-1] if key.startswith(("stale/", "uninstall/")) else key
+    if managed_key.startswith((AGY_SKILLS_PREFIX, CODEX_SKILLS_PREFIX, OPENCODE_SKILLS_PREFIX)) and path.name == "SKILL.md":
         try:
             path.parent.rmdir()
         except OSError:

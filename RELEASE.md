@@ -69,12 +69,13 @@ accident.
    uv run python tests/run.py
    WORKFLOW_E2E_SMOKE=1 uv run python tests/run.py --only e2e-smoke   # real Chromium, needs the e2e extra
    uv run python tools/e2e/e2e.py
-   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy> --model <id>
-                                             # spends real quota, needs that provider installed
+   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy|claude> --model <id>
+                                             # spends real quota, needs that provider installed;
+                                             # agy takes the variant id (e.g. gemini-3.8-flash-low)
    ```
 
    Then **the wheel in a clean environment**: `uv build`, install `dist/exoma-<version>-py3-none-any.whl`
-   into a fresh venv, and run `exoma --version`, `exoma install` (dry run, with `HOME`,
+   into a fresh venv, and run `exoma --version`, `exoma install --dry-run` (with `HOME`,
    `USERPROFILE`, `AGENT_HOME` and `EXOMA_HOME` pointed at a temp directory), `exoma init` in a
    temp project, and its `.workflow/inspect.sh`.
 

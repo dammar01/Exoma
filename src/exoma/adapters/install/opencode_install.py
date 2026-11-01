@@ -43,23 +43,31 @@ def merge_policy(current: dict, incoming: dict, warn) -> tuple[dict, int, int]:
 
 
 def _copy_provider_config(
-    project_root: Path, seed_dir: Path | None = None, example_dir: Path | None = None
+    project_root: Path,
+    seed_dir: Path | None = None,
+    example_dir: Path | None = None,
+    host: str | None = None,
 ) -> str | None:
     """Copy the provider seed into .workflow so the project has its own, overridable config.
 
-    The source is the user's `second_agent.seed.json` (`PROVIDER_SEED_FILE`), which
-    `exoma install` rebuilds from the shipped example on every --apply, else the shipped
-    example itself. A seed written once and never refreshed was what copied
-    `opencode/mimo-v2.5-free` into every project initialised after it.
+    The source, first that exists: the seed of the host that ran init
+    (`second_agent.seed.<host>.json`), the shared `second_agent.seed.json`
+    (`PROVIDER_SEED_FILE`), then the shipped example. `exoma install` rebuilds the seeds
+    from the example on every install. A seed written once and never refreshed was what
+    copied `opencode/mimo-v2.5-free` into every project initialised after it.
     """
     from exoma.config.settings import PROVIDER_EXAMPLE_FILE, PROVIDER_SEED_FILE
 
     dest = project_root / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME
     if dest.exists():
         return str(dest)  # already project-local; never overwrite user edits
-    src = Path(seed_dir or PROVIDER_SEED_FILE.parent) / PROVIDER_SEED_NAME
-    if not src.exists():
-        src = Path(example_dir or PROVIDER_EXAMPLE_FILE.parent) / PROVIDER_EXAMPLE_FILE.name
+    folder = Path(seed_dir or PROVIDER_SEED_FILE.parent)
+    candidates = []
+    if host:
+        candidates.append(folder / PROVIDER_SEED_NAME.replace(".json", f".{host}.json"))
+    candidates += [folder / PROVIDER_SEED_NAME,
+                   Path(example_dir or PROVIDER_EXAMPLE_FILE.parent) / PROVIDER_EXAMPLE_FILE.name]
+    src = next((c for c in candidates if c.exists()), candidates[-1])
     if src.exists():
         shutil.copyfile(src, dest)
         return str(dest)

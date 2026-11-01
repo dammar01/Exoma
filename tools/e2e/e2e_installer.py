@@ -53,7 +53,7 @@ def installer_checks(report: Report) -> None:
     }
     try:
         dry = subprocess.run(
-            [sys.executable, str(REPO_ROOT / "install.py")],
+            [sys.executable, str(REPO_ROOT / "install.py"), "--dry-run"],
             capture_output=True,
             stdin=subprocess.DEVNULL,
             text=True,
@@ -474,7 +474,7 @@ def installer_checks(report: Report) -> None:
         global_agents = opencode_home / opencode_bundle["agents_dir"]
         report.check(
             "plain install places custom agents in the global fallback",
-            len(list(global_agents.glob("wf-*.md"))) >= 5,
+            len(list(global_agents.glob("exm-*.md"))) >= 5,
         )
         project = Path(tempfile.mkdtemp(prefix="e2e-install-project-"))
         try:
@@ -561,7 +561,7 @@ def installer_checks(report: Report) -> None:
             report.check(
                 "install inside a project keeps custom agents global",
                 project_install.returncode == 0
-                and len(list(global_agents.glob("wf-*.md"))) >= 5
+                and len(list(global_agents.glob("exm-*.md"))) >= 5
                 and not (project / ".opencode" / "agents").exists(),
                 f"rc={project_install.returncode}",
             )

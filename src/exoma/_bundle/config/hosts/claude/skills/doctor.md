@@ -14,13 +14,13 @@ description: Local .workflow readiness and bundle-integrity check.
 .workflow/run.*     : EXISTS | MISSING
 .gitignore          : CONTAINS .workflow/ | MISSING
 exoma               : <version> (`exoma --version`) | NOT INSTALLED
-.workflow/config.json : v0.3.0 (runtime.python set) | old | MISSING
+.workflow/config.json : v1.0.0 (runtime.python set) | old | MISSING
 graphify-out/       : EXISTS | MISSING
-bundle (~/.claude)  : READY | DRIFTED | not_checked — `exoma install --check` (skills/CLAUDE.md/AGENTS.md vs the shipped bundle; DRIFTED → `exoma install --apply`)
+bundle (~/.claude)  : READY | DRIFTED | not_checked — `exoma install --check` (skills/CLAUDE.md/AGENTS.md vs the shipped bundle; DRIFTED → `exoma install`)
 second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scans the MCP config of the ACTIVE provider, not always opencode (context7=safe read-only; write/exec/fs/db/browser=risk)
 read boundary       : ENFORCED (opencode) | NOT_ENFORCEABLE (codex|agy) — codex and agy do not enforce a read boundary (runtime: `checks.second_agent_read_boundary` status `not_enforceable`, `trusted: true`, `secret_files` = the project files matching the secret patterns); their second_agent can read every project file, `.env` included, and receives the full process environment. This is a WARNING about the user's choice, not NOT_READY
 legacy env          : NONE | <AI_PROXY_* names> — still read; recommend renaming to EXOMA_*
-hosts               : <host>: OK | MISSING <files> per host the install chose (runtime `checks.hosts`; `both` lists both). MISSING → `exoma install --apply`
+hosts               : <host>: OK | MISSING <files> per host the install chose (runtime `checks.hosts`; each selected host is listed). MISSING → `exoma install <host>`
 
 ## Output
 [DOCTOR REPORT]

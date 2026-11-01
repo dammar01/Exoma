@@ -781,6 +781,9 @@ class CodexAdapter:
         """
         started = time.monotonic()
         env = os.environ.copy()
+        # The same Codex CLI may be the user's host; its global host hooks must not
+        # gate a delegated, read-only second-agent process.
+        env["WORKFLOW_AGENT_ROLE"] = "second_agent"
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
 

@@ -247,36 +247,58 @@ def hidden_run_kwargs() -> dict:
     return {"start_new_session": True}
 
 
-def process_tree(pid: int | None) -> list[dict]:
-    """Descendants of `pid` as [{'pid': int, 'name': str}]. Diagnostics only.
+def _windows_process_rows() -> list[dict]:
+    """List processes through Toolhelp, which does not need CIM or taskkill access."""
+    import ctypes
+    from ctypes import wintypes
 
-    Windows: CIM query. POSIX: `ps`. Returns [] when the platform tool is missing
-    or errors — callers treat an empty list as "unknown", never as "no children".
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+    kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.CreateToolhelp32Snapshot(0x2, 0)
+    if not handle or handle == ctypes.c_void_p(-1).value:
+        return []
+    rows = []
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(ProcessEntry)
+        if kernel32.Process32FirstW(handle, ctypes.byref(entry)):
+            while True:
+                rows.append({"ProcessId": entry.th32ProcessID,
+                             "ParentProcessId": entry.th32ParentProcessID,
+                             "Name": entry.szExeFile})
+                if not kernel32.Process32NextW(handle, ctypes.byref(entry)):
+                    break
+    finally:
+        kernel32.CloseHandle(handle)
+    return rows
+
+
+def process_tree(pid: int | None) -> list[dict]:
+    """Descendants of `pid` as [{'pid': int, 'name': str}].
+
+    Windows: Toolhelp snapshot. POSIX: `ps`. Returns [] when the platform tool is missing
+    or errors — callers treat an empty list as "unknown", never as "no children". Windows
+    termination also uses this snapshot to reach descendants when taskkill is denied.
     """
     if not pid or pid <= 0:
         return []
     try:
         if IS_WINDOWS:
-            script = (
-                "$ErrorActionPreference='SilentlyContinue';"
-                "Get-CimInstance Win32_Process |"
-                " Select-Object ProcessId,ParentProcessId,Name |"
-                " ConvertTo-Json -Compress"
-            )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=20,
-                **hidden_run_kwargs(),
-            ).stdout
-            import json as _json
-
-            rows = _json.loads(out or "[]")
-            if isinstance(rows, dict):
-                rows = [rows]
+            rows = _windows_process_rows()
             children: dict[int, list[int]] = {}
             names: dict[int, str] = {}
             for row in rows:
@@ -318,12 +340,116 @@ def process_tree(pid: int | None) -> list[dict]:
     return found
 
 
-def terminate_tree(proc: "subprocess.Popen | None", pid: int | None = None) -> dict:
+_WIN_KERNEL32 = None
+
+
+def _windows_kernel32():
+    """A private kernel32 with declared signatures and its own last-error slot, so the
+    declarations do not leak into other callers of `ctypes.windll.kernel32`."""
+    global _WIN_KERNEL32
+    if _WIN_KERNEL32 is None:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        filetime = ctypes.POINTER(wintypes.FILETIME)
+        kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE, filetime, filetime, filetime, filetime)
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        _WIN_KERNEL32 = kernel32
+    return _WIN_KERNEL32
+
+
+def _windows_open(pid: int) -> tuple[int | None, bool]:
+    """(handle, gone) for `pid` with terminate and query access.
+
+    An open handle pins the PID: Windows does not reuse it until the handle is closed.
+    `gone` is True only when Windows reports no such process (ERROR_INVALID_PARAMETER);
+    any other failure, such as access denied, leaves the process's state unknown.
+    """
+    import ctypes
+
+    # PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+    handle = _windows_kernel32().OpenProcess(0x0001 | 0x1000 | 0x00100000, False, pid)
+    if handle:
+        return handle, False
+    return None, ctypes.get_last_error() == 87
+
+
+def _windows_kill_handle(handle: int) -> bool:
+    """Terminate the process behind `handle`; one that already exited counts as killed
+    (TerminateProcess refuses an exited process)."""
+    kernel32 = _windows_kernel32()
+    if kernel32.TerminateProcess(handle, 1):
+        return True
+    return kernel32.WaitForSingleObject(handle, 0) == 0  # WAIT_OBJECT_0: it has exited
+
+
+def _windows_handle_create_time(handle: int) -> int | None:
+    """The creation FILETIME of the process behind `handle`, as `pid_create_time` returns it."""
+    import ctypes
+    from ctypes import wintypes
+
+    times = [wintypes.FILETIME() for _ in range(4)]
+    if not _windows_kernel32().GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+        return None
+    return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+
+
+def _windows_gone(pid: int) -> bool:
+    """True only when Windows confirms `pid` hosts no process; unknown is not gone."""
+    handle, gone = _windows_open(pid)
+    if handle:
+        _windows_kernel32().CloseHandle(handle)
+    return gone
+
+
+def _windows_terminate_pid(pid: int, created: int | None = None) -> bool:
+    """Terminate by process handle when taskkill is denied by the host sandbox.
+
+    True when the process meant is gone afterwards. `created` is the creation time
+    `pid_create_time` recorded for the PID. It is compared on the same handle that
+    terminates, so a PID recycled since then is left running; that counts as success,
+    because the recorded process is already gone.
+    """
+    handle, gone = _windows_open(pid)
+    if not handle:
+        return gone
+    kernel32 = _windows_kernel32()
+    try:
+        if created is not None:
+            current = _windows_handle_create_time(handle)
+            if current is None:
+                return False
+            if current != created:
+                return True
+        return _windows_kill_handle(handle)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def terminate_tree(
+    proc: "subprocess.Popen | None",
+    pid: int | None = None,
+    expected_create_time: int | None = None,
+) -> dict:
     """Kill a process AND every descendant. Returns {'method', 'ok'}.
 
     Plain `proc.kill()` is not enough: on Windows it terminates the `.cmd` shim
     while node keeps running; on POSIX it misses grandchildren. Best-effort —
     a failure here must never mask the original error the caller is handling.
+
+    Windows, by PID alone (no `proc`): a PID names whatever holds it now, so the target
+    is killed only when its creation time equals `expected_create_time`, compared on a
+    handle held open until the kill is over. Absent or different, nothing is touched and
+    the result carries `method: skipped` and a `reason`. A `Popen` pins its PID itself.
     """
     target = pid if pid is not None else (proc.pid if proc else None)
     if not target:
@@ -332,16 +458,56 @@ def terminate_tree(proc: "subprocess.Popen | None", pid: int | None = None) -> d
     method, ok = "none", False
     try:
         if IS_WINDOWS:
-            method = "taskkill"
-            ok = (
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(target)],
-                    capture_output=True,
-                    timeout=20,
-                    **hidden_run_kwargs(),
-                ).returncode
-                == 0
-            )
+            pin, gone = _windows_open(target)
+            try:
+                target_created = _windows_handle_create_time(pin) if pin else None
+                if proc is None:
+                    if gone:
+                        return {"method": "skipped", "ok": True, "reason": "gone"}
+                    if expected_create_time is None or target_created is None:
+                        return {"method": "skipped", "ok": False, "reason": "identity_unverifiable"}
+                    if target_created != expected_create_time:
+                        return {"method": "skipped", "ok": False, "reason": "pid_reuse_detected"}
+                # From here the PID is pinned (by `pin` or by the Popen), so it still names
+                # the process meant and its tree can be walked. Each descendant is recorded
+                # with its creation time, so the fallback never kills a reused PID.
+                pinned = pin is not None or proc is not None
+                method = "taskkill"
+                descendants = [(c["pid"], pid_create_time(c["pid"])) for c in process_tree(target)]
+                try:
+                    ok = subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(target)],
+                        capture_output=True,
+                        timeout=20,
+                        **hidden_run_kwargs(),
+                    ).returncode == 0
+                except OSError:
+                    ok = False
+                if not ok:
+                    method = "winapi"
+                    # A failed taskkill may have killed part of the tree, and the tree may
+                    # have grown since: keep the first snapshot (orphans drop out of a new
+                    # walk) and add what a second one finds.
+                    if pinned:
+                        known = {child for child, _created in descendants}
+                        descendants += [(c["pid"], pid_create_time(c["pid"]))
+                                        for c in process_tree(target) if c["pid"] not in known]
+                    # Children first: killing the parent can orphan them before the snapshot.
+                    children_ok = True
+                    for child, created in reversed(descendants):
+                        if created is None:
+                            # Not ours to identify, so never killed; only a confirmed exit is done.
+                            children_ok = _windows_gone(child) and children_ok
+                            continue
+                        children_ok = _windows_terminate_pid(child, created) and children_ok
+                    if pin:
+                        target_ok = _windows_kill_handle(pin)
+                    else:
+                        target_ok = gone
+                    ok = target_ok and children_ok
+            finally:
+                if pin:
+                    _windows_kernel32().CloseHandle(pin)
         else:
             import signal
 

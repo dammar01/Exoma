@@ -441,12 +441,12 @@ def readiness() -> dict:
     if not installed:
         out["detail"] = (
             "playwright is not installed; /.verify-browser stops at preflight with playwright_missing "
-            f"until `python install.py --apply --with-e2e` installs it into {python}"
+            f"until `exoma install --with-e2e` installs it into {python}"
         )
     elif pinned and installed != pinned:
         out["fix"] = (
             f"playwright {installed} is installed but {pinned} is pinned; "
-            "rerun `python install.py --apply --with-e2e` if browser runs misbehave"
+            "rerun `exoma install --with-e2e` if browser runs misbehave"
         )
     return out
 

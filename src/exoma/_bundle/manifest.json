@@ -1,13 +1,13 @@
 {
-  "version": "0.3.0",
+  "version": "1.0.0",
   "versions": {
-    "prompt_bundle": "0.3.0",
-    "runtime": "0.3.0"
+    "prompt_bundle": "1.0.0",
+    "runtime": "1.0.0"
   },
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "4bba2894ebafda8abfd48df5aabbc19bdafa7af60486e373c1fe07ebf86fe681",
+      "sha256": "53362cc911c22c13ff4c24473aa340c792d46635ce8a9b5525c96b786cdb5849",
       "bytes": 36808,
       "merge": "merge",
       "component": "prompt_bundle"
@@ -35,8 +35,8 @@
     },
     {
       "path": "hosts/claude/skills/doctor.md",
-      "sha256": "eaec0a9789b4688d44915b015244e6475619c604795ec8635973daeaec6edd5c",
-      "bytes": 2740,
+      "sha256": "e5fee23585e0f5d2134e4c73d872919703630ee25fe879a0ded501fa9f4a46fc",
+      "bytes": 2742,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -56,15 +56,15 @@
     },
     {
       "path": "hosts/claude/skills/help.md",
-      "sha256": "873fd340e2f3d9f42da545df41702fb17c08c1ec77d7aee744aa43102e6ccd4d",
+      "sha256": "84d4ba026e14f054d904a0831dad7248c6fcb518bd63483041392aabc455de50",
       "bytes": 1707,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/init.md",
-      "sha256": "b85212f3627c7f7df1353f16ff5862aa0be63a95becbec1f30279f5f00ea8714",
-      "bytes": 2384,
+      "sha256": "7e87703a026e3c87bca608f145b842f4ea3919dbd76bc1c941b3ce789c547200",
+      "bytes": 2557,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -119,8 +119,8 @@
     },
     {
       "path": "hosts/claude/skills/verify-browser.md",
-      "sha256": "0e0392189e93f7d2858b12414a5177828841075e33a981dc8b539b863462bdb2",
-      "bytes": 32843,
+      "sha256": "fe16ba95dd07704ade3299ff0f23fb726f0ea56d407cd20254f421d6f82b8bb5",
+      "bytes": 32835,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -175,7 +175,7 @@
     },
     {
       "path": "hosts/claude/commands/.help.md",
-      "sha256": "aa74a7eb92e9794ac075870ba45b505a6a929065f27593fe06b9547f6e39492f",
+      "sha256": "bde9c966119cc9d45947abdf7bc360864ffa986246bf25d6b161cf7a86b097eb",
       "bytes": 145,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -252,8 +252,8 @@
     },
     {
       "path": "hosts/claude/hooks/agy-host.py",
-      "sha256": "12a9c53d15bca6375d43b4b0cca5f813daea506ea906ca10236d3d0be76b44f7",
-      "bytes": 17165,
+      "sha256": "36a096459082beccce556e4deedd290d01d3360c07059ac877cee20787e2675a",
+      "bytes": 17235,
       "merge": "replace",
       "component": "runtime"
     },
@@ -301,8 +301,8 @@
     },
     {
       "path": "hosts/claude/hooks/intent-gate-set.py",
-      "sha256": "1af8646f434fb0bb9291441e97de9e7ef57cebb6860a7f041c54be0369db07f7",
-      "bytes": 7931,
+      "sha256": "16ae6c38c26c48fb6453eaf0d1447bc067af257dcb4ab92d6d7c2d63c1fe9e9e",
+      "bytes": 8106,
       "merge": "replace",
       "component": "runtime"
     },
@@ -392,41 +392,41 @@
     },
     {
       "path": "providers/opencode/AGENTS.md",
-      "sha256": "d4b0c1b7fedbdc2e73cf5ef41634a35f0c5ab9c7eb0656c24ea6454d15cf7e68",
-      "bytes": 19712,
+      "sha256": "efe0608491696988b58346edc3a8db4381925878e01db1fd31a7de33880f0250",
+      "bytes": 19720,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
-      "path": "providers/opencode/agents/wf-db.md",
+      "path": "providers/opencode/agents/exm-db.md",
       "sha256": "9b7fa9a43d6359ad5a90755ac812e91f2ad1a3c95b338d2ab39669329b51b050",
       "bytes": 1266,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "providers/opencode/agents/wf-docs.md",
+      "path": "providers/opencode/agents/exm-docs.md",
       "sha256": "f10ca97fb61a2b190c1e34bd1468a5298f5f6ff90debbdf47ee6a5d9741bfd82",
       "bytes": 1002,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "providers/opencode/agents/wf-map.md",
+      "path": "providers/opencode/agents/exm-map.md",
       "sha256": "fba74e6e395a5c5a985c14cc3d7a1a8396fb1cad4eb8af299aa823ea2f8b0f7f",
       "bytes": 1058,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "providers/opencode/agents/wf-slice.md",
+      "path": "providers/opencode/agents/exm-slice.md",
       "sha256": "cae4a999cec60bdaee8d0c15d0a1a01c2d57d08c530c47f34f345ae2ad266f98",
       "bytes": 958,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
-      "path": "providers/opencode/agents/wf-trace.md",
+      "path": "providers/opencode/agents/exm-trace.md",
       "sha256": "6e46182e8b093eb2886e00007df1d397168d0600aa54b0acb8d696c143d1188a",
       "bytes": 1084,
       "merge": "replace",
@@ -434,15 +434,22 @@
     },
     {
       "path": "providers/codex/AGENTS.md",
-      "sha256": "25eb0cba60e646104b3edfa8ed003952487ea0fd60705a008c21be253a9ce1a2",
+      "sha256": "3dc6acc8aa7ec38f846ae1ed97ff33f695fac6aced361c1502806cabe4292775",
       "bytes": 16878,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
       "path": "providers/agy/agent.md",
-      "sha256": "4b40a5c3befe816485f9c81182c2e49f1c299581b79314e7b916204a3238d508",
+      "sha256": "544a88a73f5719e4ec9b91af64e0d4ea92ede15654bd476db522c3ba1ae4500d",
       "bytes": 19064,
+      "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "providers/claude/second-agent.md",
+      "sha256": "1e7b8e80e67e005d4d5da769ba5c483881efd76b3ee60d39a6feccc355a75a5d",
+      "bytes": 16801,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -482,9 +489,51 @@
       "component": "runtime"
     },
     {
+      "path": "hosts/codex/AGENTS.md",
+      "sha256": "71bfd7a14d988fda83e413d3d0e901a9ad69402e01e2424b5cf09581740b70fa",
+      "bytes": 1546,
+      "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "hosts/codex/hooks.template.json",
+      "sha256": "171d259d8201ae92266aa76a5784301c329b32b1218c81182d7e2cdb7817cf97",
+      "bytes": 706,
+      "merge": "merge",
+      "component": "runtime"
+    },
+    {
+      "path": "hosts/codex/codex-host.py",
+      "sha256": "1f834e71f21987317dda07171c5fe84ba66ba63380fc0f31fabd1e8453318897",
+      "bytes": 10963,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "hosts/opencode/AGENTS.md",
+      "sha256": "c3ec3c429def445a38051a1d9b2c1d541a982dbe8dbc923391a435fc943985d8",
+      "bytes": 1746,
+      "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "hosts/opencode/exoma.js",
+      "sha256": "559a48d7588defb6077f250409021273dcf9fcfecee924a07862f156345656d1",
+      "bytes": 2645,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "hosts/opencode/opencode-host.py",
+      "sha256": "dfe0c4a6e043ddfb81403c778d02afdcc7d1b126cbd552dfdfdbcaff2375cec6",
+      "bytes": 10217,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
       "path": "providers/opencode/opencode.template.json",
-      "sha256": "7ea8a6e301fdeb2ecd024851c315a9e74927be158faa283c8775557b48b5d023",
-      "bytes": 2085,
+      "sha256": "2c12ae9088cb7b559876a501a17eca23e4eab54cb5e8c24dab2574d7f18992ff",
+      "bytes": 2090,
       "merge": "merge",
       "component": "runtime"
     },
@@ -506,6 +555,12 @@
     "hosts/agy/hooks.template.json": "{{HOME}}/.gemini/config/hooks.json",
     "hosts/agy/permissions.template.json": "{{HOME}}/.gemini/antigravity-cli/settings.json",
     "hosts/agy/skills": "{{HOME}}/.gemini/antigravity-cli/skills",
+    "hosts/codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
+    "hosts/codex/hooks.template.json": "{{HOME}}/.codex/hooks.json",
+    "hosts/codex/codex-host.py": "{{HOME}}/.codex/exoma/hooks/codex-host.py",
+    "hosts/opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    "hosts/opencode/exoma.js": "{{HOME}}/.config/opencode/plugins/exoma.js",
+    "hosts/opencode/opencode-host.py": "{{HOME}}/.config/opencode/exoma/hooks/opencode-host.py",
     "providers/opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
     "providers/opencode/agents": "{{HOME}}/.config/opencode/agents",
     "providers/opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
@@ -515,6 +570,9 @@
     "providers/codex/codex.project.json": "{{PROJECT_ROOT}}/codex.project.json",
     "providers/agy/agent.md": "{{HOME}}/.gemini/config/agents/exoma-second-agent/agent.md",
     "providers/agy/agy.template.json": "{{HOME}}/.gemini/agy.json",
-    "providers/agy/agy.project.json": "{{PROJECT_ROOT}}/agy.project.json"
+    "providers/agy/agy.project.json": "{{PROJECT_ROOT}}/agy.project.json",
+    "providers/claude/second-agent.md": "{{HOME}}/.claude/exoma/second-agent.md",
+    "providers/claude/claude.template.json": "{{HOME}}/.claude/claude.json",
+    "providers/claude/claude.project.json": "{{PROJECT_ROOT}}/claude.project.json"
   }
 }

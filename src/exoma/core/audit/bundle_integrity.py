@@ -342,6 +342,8 @@ def _host_status(home: Path | None = None) -> dict:
     Read from the install mode file, so `both` reports both and a host not chosen is not
     reported missing. An install from before the choice recorded none: Claude, plus Agy when
     its hooks.json carries Exoma's hook (installer/rollback._migrated_hosts, restated here).
+    A lost mode file also adds Codex when ~/.codex/hooks.json registers Exoma's lifecycle
+    hooks, so a Codex install is not dropped from the report.
     """
     from exoma.utils.osutil import agent_home
 
@@ -360,6 +362,17 @@ def _host_status(home: Path | None = None) -> dict:
         except (OSError, ValueError):
             legacy_hooks = {}
         chosen = ["claude", "agy"] if isinstance(legacy_hooks, dict) and "exoma" in legacy_hooks else ["claude"]
+        try:
+            codex_hooks = read_json_file(home / ".codex" / "hooks.json")
+        except (OSError, ValueError):
+            codex_hooks = {}
+        if isinstance(codex_hooks, dict):
+            from exoma.installer.base import codex_hook_events_present
+
+            if codex_hook_events_present(codex_hooks.get("hooks"), home):
+                chosen.append("codex")
+        if (home / ".config" / "opencode" / "plugins" / "exoma.js").is_file():
+            chosen.append("opencode")
     result: dict = {"chosen": chosen, "hosts": {}}
     if "claude" in chosen:
         claude = home / ".claude"
@@ -404,4 +417,35 @@ def _host_status(home: Path | None = None) -> dict:
             if not isinstance(allow, list) or any(rule not in allow for rule in agy_permission_rules()):
                 missing.append("~/.gemini/antigravity-cli/settings.json (permission rules)")
         result["hosts"]["agy"] = {"missing": missing, "permissions": "on" if permissions else "off"}
+    if "codex" in chosen:
+        from exoma.installer.base import codex_hook_events_present
+
+        codex = home / ".codex"
+        missing = []
+        if not _has_block(codex / "AGENTS.md", "EXOMA-CODEX-HOST:START"):
+            missing.append("~/.codex/AGENTS.md (EXOMA-CODEX-HOST block)")
+        if not (codex / "exoma" / "CONTRACT.md").is_file():
+            missing.append("~/.codex/exoma/CONTRACT.md")
+        if not (codex / "exoma" / "hooks" / "codex-host.py").is_file():
+            missing.append("~/.codex/exoma/hooks/codex-host.py")
+        if not (codex / "skills" / "exoma-doctor" / "SKILL.md").is_file():
+            missing.append("~/.codex/skills/exoma-doctor/SKILL.md")
+        try:
+            hooks = read_json_file(codex / "hooks.json")
+        except (OSError, ValueError):
+            hooks = {}
+        events = hooks.get("hooks") if isinstance(hooks, dict) else None
+        if not codex_hook_events_present(events, home):
+            missing.append("~/.codex/hooks.json (Exoma lifecycle hooks)")
+        result["hosts"]["codex"] = {"missing": missing, "hook_trust": "check with /hooks"}
+    if "opencode" in chosen:
+        opencode = home / ".config" / "opencode"
+        missing = []
+        if not _has_block(opencode / "AGENTS.md", "EXOMA-OPENCODE-HOST:START"):
+            missing.append("~/.config/opencode/AGENTS.md (EXOMA-OPENCODE-HOST block)")
+        for rel in ("plugins/exoma.js", "exoma/CONTRACT.md", "exoma/hooks/opencode-host.py",
+                    "exoma/hooks/workflow_policy.py", "skills/exoma-doctor/SKILL.md"):
+            if not (opencode / rel).is_file():
+                missing.append("~/.config/opencode/" + rel)
+        result["hosts"]["opencode"] = {"missing": missing, "plugin_load": "restart opencode after an install"}
     return result

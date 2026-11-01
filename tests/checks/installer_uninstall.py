@@ -159,6 +159,25 @@ def _test_installer_uninstall() -> None:
         _flush_receipt(complete=True)
         _reset_receipt()
         assert_true(not mode.exists(), "uninstall removes the mode file")
+        skill_backup = root / "backup-skills"
+        _begin_receipt(skill_backup / "install_receipt.json", {"uninstall": True})
+        codex_skill = root / "home" / ".codex" / "skills" / "exoma-analyze" / "SKILL.md"
+        codex_skill.parent.mkdir(parents=True)
+        codex_skill.write_text("managed skill", encoding="utf-8")
+        _remove_receipted(codex_skill, "hosts/codex/skills/exoma-analyze/SKILL.md",
+                          Plan(), True, skill_backup, "managed skill")
+        assert_true(not codex_skill.parent.exists(),
+                    "uninstall removes an empty Codex skill directory along with SKILL.md")
+        kept_skill = root / "home" / ".codex" / "skills" / "exoma-verify" / "SKILL.md"
+        kept_skill.parent.mkdir(parents=True)
+        (kept_skill.parent / "user.txt").write_text("user data", encoding="utf-8")
+        kept_skill.write_text("managed skill", encoding="utf-8")
+        _remove_receipted(kept_skill, "hosts/codex/skills/exoma-verify/SKILL.md",
+                          Plan(), True, skill_backup, "managed skill")
+        assert_true((kept_skill.parent / "user.txt").is_file(),
+                    "uninstall preserves a skill directory containing a user file")
+        _flush_receipt(complete=True)
+        _reset_receipt()
         original = rollback_mod.HOME
         rollback_mod.HOME = fake_home
         try:

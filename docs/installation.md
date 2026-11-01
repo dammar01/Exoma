@@ -26,7 +26,7 @@ it again. Every installer flag, target file and hook is listed in the
 >
 > These files can change again on every upgrade, as the workflow changes. Each install keeps
 > backups and a receipt, and a rollback restores them, but only if you have not edited the
-> files since. Always read the dry run first.
+> files since. `exoma install --dry-run` shows every change first.
 
 ## Requirements
 
@@ -34,10 +34,14 @@ it again. Every installer flag, target file and hook is listed in the
 | --- | --- | --- |
 | **Python 3.10+** | Yes | The runtime needs no third-party packages. An older Python is refused with a message naming the version found. Optional browser verification uses Playwright (the `e2e` extra) |
 | **uv** or **pip** | Yes | To install the `exoma` package. `uv tool install` keeps it in its own environment |
-| **A secondary-agent CLI** | Yes | `opencode` (recommended), `codex`, or `agy`, on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
+| **A secondary-agent CLI** | Yes | `codex` (reference setup), `opencode` (default with a stricter read boundary), `agy`, or `claude` (Claude Code), on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
 | **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
-| **bash** | Yes | Hooks and the `.workflow/` runner are bash scripts on every OS. On Windows that is Git Bash, from Git for Windows; the installer finds it next to `git.exe` and refuses `--apply` without it |
-| **Claude Code** or **Agy** | Recommended | The primary agent's host. Claude Code is the reference host; Agy is installed for when `~/.gemini` exists ([hosts](reference.md#hosts)) |
+| **bash** | Yes | Hooks and the `.workflow/` runner are bash scripts on every OS. On Windows that is Git Bash, from Git for Windows; the installer finds it next to `git.exe` and refuses to install without it |
+| **Claude Code**, **Agy**, **Codex**, or **OpenCode** | Recommended | The primary agent's host; name it with `exoma install <host>` ([hosts](reference.md#hosts)) |
+
+The reference setup uses Claude Code as host and Codex as second agent. Choose OpenCode
+when the second agent must be prevented from reading project secret files. Host and
+second-agent choices are independent; Codex or Agy can also serve in either role.
 
 ## Install on a machine (once)
 
@@ -51,23 +55,27 @@ exoma --version
 `exoma` is the CLI; `python -m exoma` is the same entry point. For `/.verify-browser`, add the
 browser extra: `uv tool install "exoma[e2e]"` (or `pip install "exoma[e2e]"`).
 
-### 2. Read the dry run, then apply
+### 2. Install for your host
 
 ```bash
-exoma install                        # dry run: prints every change, writes nothing
+exoma install claude --dry-run      # optional: prints every change, writes nothing
+exoma install claude                 # or agy, codex, opencode, all
 ```
 
-Then pick how the workflow switches on and apply:
+An install writes; `--dry-run` previews it. Then pick how the workflow switches on:
 
 | You want | Install with |
 | --- | --- |
-| The workflow as the default way of working: plain requests are routed to commands | `exoma install --apply --auto-intent` |
-| Your own setup untouched until you type a `/.<command>` | `exoma install --apply --only-command` |
+| The workflow as the default way of working: plain requests are routed to commands | `exoma install <host> --auto-intent` |
+| Your own setup untouched until you type a `/.<command>` | `exoma install <host> --only-command` |
 
-On a terminal the installer asks which secondary agent to use; `--provider`/`--model` skip
-the question. If unsure, choose opencode, the only provider whose read-only boundary is
-enforced. The mode is
-remembered for later upgrades; run the other flag to switch.
+On a terminal the installer asks, for each host, which secondary agent to use and lists the
+models that agent's CLI offers now; `--provider`/`--model` skip the question. If unsure, choose
+opencode, the only provider whose read-only boundary is enforced. The host, the mode and each
+host's second agent are remembered for later upgrades; run the other flag to switch. The browser
+extra for `/.verify-browser` is installed only with `--with-e2e`.
+
+After installing for OpenCode, restart it: it loads Exoma's plugin at startup.
 
 > **Do not skip this step.** It installs the permission block for the secondary agent as
 > well as the skills and hooks; without it the secondary agent runs without write
@@ -79,11 +87,14 @@ apply only to calls the workflow makes; using codex or opencode directly is unaf
 
 ## Enable it in a project (once per project, per person)
 
-Open the primary agent (Claude Code or Agy) in the project and run:
+Open the primary agent you installed (Claude Code, Agy, or Codex) in the project and run
+the host's init skill:
 
 ```text
 /.init
 ```
+
+In Codex, invoke `$exoma-init` instead.
 
 It creates `.workflow/` in the project: config overrides, the provider selection, the entry
 scripts (`run`, `inspect`, `check`), live progress in `current/` and internal data in
@@ -111,31 +122,41 @@ Without a primary agent, or from a script, the skills run the same command:
 
 ## Update
 
-1. Update the package:
+From the project you are updating, run:
 
-   ```bash
-   uv tool upgrade exoma          # or: pip install -U exoma
-   ```
+```bash
+exoma update
+```
 
-2. Re-run the installer, dry run first. Run it from inside a project and it also upgrades
-   that project's workspace:
+This updates the installed package with `uv tool upgrade exoma` when the running Exoma is
+an uv tool, or `python -m pip install --upgrade exoma` in its current Python environment
+otherwise. `--manager pip` or `--manager uv` selects a manager explicitly; `uv` is accepted
+only when the running Exoma belongs to that uv tool installation. The command then runs
+the **new** Exoma process to refresh the global host configuration. If cwd is inside a
+project with `.workflow/`, it upgrades that workspace too. It runs `exoma install --check`
+last and returns a nonzero status when any step fails. Without `.workflow/`, no workspace
+is created. A missing, unreadable, or malformed workspace `config.json` is reported before
+the package is changed. Global configuration keeps the last host, mode, and provider choices.
 
-   ```bash
-   exoma install                    # what will change
-   exoma install --apply            # keeps your mode and provider
-   ```
+If install or check fails after the package step, update reports that the result is incomplete.
+It names any new install receipt and the exact command to undo that receipt's global writes.
+Repair the reported error, then rerun `exoma install` and `exoma install --check`.
+Workspace migration is outside the global receipt; use `exoma upgrade --work-dir <project>`
+if the workspace still needs recovery. The package manager step is not automatically reversed.
 
-   It refreshes the workflow's block, files and hooks, and removes files an older release
-   installed that are no longer shipped, unless you edited them.
+The manual sequence remains available: update the package with its manager, then run
+`exoma install` from the project to refresh the global configuration and that
+workspace in one pass. Use `exoma upgrade --work-dir <project>` when only the workspace
+needs refreshing.
 
-3. In every other project, open the primary agent and run `/.upgrade`. It refuses while a delegated
+In every other project, open the primary agent and run `/.upgrade`. It refuses while a delegated
    command is running in that project; wait for it to finish. Do not skip it: the skills of a new
    release can call the runner in a form an older `.workflow/run.sh` does not read (0.3.0 moved
    it to named options), and every workflow command fails in that project until it is upgraded.
 
-4. Run `/.doctor` in each project. `NEEDS_UPGRADE` or `run_script_drift` means step 3 was
+Run `/.doctor` in each project. `NEEDS_UPGRADE` or `run_script_drift` means that project's upgrade was
    missed there; a provider warning names the CLI release this workflow version was tested
-   on. `exoma install --update-providers --apply` brings an npm-installed codex or
+   on. `exoma install --update-providers` brings an npm-installed codex or
    opencode to that release; anything else is reported, not changed
    ([provider releases](reference.md#provider-releases)).
 
@@ -161,7 +182,7 @@ behavior you rely on, and the notes say what to set afterwards.
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `/.doctor` reports `NOT_READY` / `run_script_drift`, or a command fails with `argument --prompt/-p: expected one argument` | Tool updated, workspace scripts not | `/.upgrade` in that project |
-| `/.doctor` reports bundle drift | The package was updated, the global install was not | `exoma install --apply` |
+| `/.doctor` reports bundle drift | The package was updated, the global install was not | `exoma install` |
 | Provider not found | The agent CLI is not on `PATH` | Install it, then check `<cli> --version` |
 | Delegated calls fail after a provider update | The provider release broke something | Pin it back to the release `/.doctor` names ([provider releases](reference.md#provider-releases)) |
 | Commands fail after reinstalling Exoma or changing Python | Baked absolute paths are stale | `/.upgrade` in that project |

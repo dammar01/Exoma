@@ -1128,6 +1128,10 @@ class OpenCodeAdapter:
     def _child_env(self, work_dir: str | None) -> dict:
         """Allowlisted environment plus the active project's .env; see adapters/shared/child_env.py."""
         env, self._env_meta = project_scoped_env(detect_project_root(work_dir))
+        # The same OpenCode may be the user's host: Exoma's host plugin
+        # (plugins/exoma.js) registers no hooks in a process marked as the second agent, so
+        # a delegated call is never gated as if it were the user's own session.
+        env["WORKFLOW_AGENT_ROLE"] = "second_agent"
         return env
 
     @staticmethod

@@ -27,6 +27,8 @@ change there is reported as `secrets_changed`. Contents are never read or hashed
 What it still does not see, stated here rather than in a footnote, because a guard trusted
 past its range is worse than no guard:
 
+  * another edit to a tracked file already modified before the call: its `git status`
+    entry stays the same, so the set difference reports no mutation
   * an ignored file that matches no secret pattern — build output, caches
   * a secret whose name matches no pattern
   * any project that is not a git repository, where it reports itself unavailable

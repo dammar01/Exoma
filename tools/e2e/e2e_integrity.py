@@ -342,7 +342,7 @@ def integrity_checks(report: Report) -> None:
         from exoma.core.evidence.contract import FANOUT_MISMATCH, detect_subagent_usage
 
         untagged = detect_subagent_usage(
-            "subagents: c0, c1 (dispatched wf-slice)\n- Router routes by command [x.py:1]"
+            "subagents: c0, c1 (dispatched exm-slice)\n- Router routes by command [x.py:1]"
         )
         report.check(
             "fan-out: an untagged dispatch keeps its declared clusters visible",
@@ -406,7 +406,7 @@ def integrity_checks(report: Report) -> None:
         "AGENTS.md" in explore_prompt
         and "leads.json" in explore_prompt
         and "FAN-OUT call" in explore_prompt
-        and "wf-slice" in agents_contract,
+        and "exm-slice" in agents_contract,
     )
     report.check(
         "OUTPUT_FORMAT skeleton remains enforceable",

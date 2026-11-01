@@ -1,6 +1,6 @@
 # Team guide
 
-Practical guidance for developers using Exoma with Claude Code or Agy as the primary agent
+Practical guidance for developers using Exoma with Claude Code, Agy, Codex, or OpenCode as the primary agent
 (the "host"; what each one enforces: [reference, Hosts](../reference.md#hosts)). It explains how
 and when to use it, not how it works inside; for exact behavior, follow the links into the
 [reference](../reference.md).
@@ -18,6 +18,8 @@ Read in this order:
 7. [troubleshooting.md](troubleshooting.md) — errors, slowness, and what to do about them.
 8. [measure-your-use.md](measure-your-use.md) — summarize weeks of your own sessions, and
    share the figures without sharing your projects.
+9. [experiment-protocol.md](experiment-protocol.md) — run a light-touch study on real work:
+   one problem per session, each exported with its second-agent results and a review.
 
 The one idea to take away: Exoma changes **who does the decomposition and
 repository discovery**. If you still break every task into small instructions yourself, it

@@ -24,6 +24,12 @@ from pathlib import Path
 
 from exoma.installer.base import (
     AGY_HOOKS_PREFIX,
+    CODEX_HOOKS_PREFIX,
+    CODEX_HOST_HOOKS,
+    CODEX_HOST_INSTRUCTIONS,
+    OPENCODE_HOOKS_PREFIX,
+    OPENCODE_HOST_INSTRUCTIONS,
+    opencode_home,
     CLAUDE_HOOKS_PREFIX,
     CLAUDE_HOST,
     CLAUDE_INSTRUCTIONS,
@@ -46,6 +52,10 @@ from exoma.installer.base import (
     _record,
     _targets,
     agy_hooks_dest,
+    codex_hooks_reference_script,
+    codex_hooks_dest,
+    codex_hooks_state,
+    strip_codex_hooks,
 )
 from exoma.installer.settings import _hook_script_ids
 from exoma.installer.stale import (
@@ -141,7 +151,7 @@ def _uninstall_files(plan: Plan, apply: bool, backup_root: Path, keep_hooks: boo
         path = Path(dest)
         if not path.is_file():
             continue
-        if keep_hooks and key.startswith((HOOKS_PREFIX, AGY_HOOKS_PREFIX)):
+        if keep_hooks and key.startswith((HOOKS_PREFIX, AGY_HOOKS_PREFIX, CODEX_HOOKS_PREFIX, OPENCODE_HOOKS_PREFIX)):
             kept_hooks += 1
             continue
         hashes = (known.get(dest) or {}).get("hashes") or set()
@@ -151,8 +161,8 @@ def _uninstall_files(plan: Plan, apply: bool, backup_root: Path, keep_hooks: boo
             plan.warn(f"{path} looks like a workflow file but is not what an install wrote — kept")
     if kept_hooks:
         plan.warn(
-            f"kept {kept_hooks} hook script(s) under ~/.claude/hooks: settings.json still runs them; "
-            "remove the workflow hooks from it, then run --uninstall again"
+            f"kept {kept_hooks} hook script(s): a host registration may still run them; "
+            "repair that host registration, then run --uninstall again"
         )
 
 
@@ -254,6 +264,40 @@ def _uninstall_agy_hooks(plan: Plan, apply: bool, backup_root: Path) -> bool:
     return True
 
 
+def _uninstall_codex_hooks(plan: Plan, apply: bool, backup_root: Path) -> bool:
+    dest = codex_hooks_dest()
+    current, problem = codex_hooks_state(dest)
+    if problem:
+        owned = any(entry.get("key") == CODEX_HOST_HOOKS or
+                    str(entry.get("key") or "").startswith(CODEX_HOOKS_PREFIX)
+                    for entry in previously_installed().values())
+        if not owned:
+            return True
+        plan.warn(f"{dest}: {problem}; Codex hooks and their scripts were kept")
+        return False
+    if not dest.exists():
+        return True
+    remaining, removed = strip_codex_hooks(current)
+    script_still_used = codex_hooks_reference_script(remaining)
+    if not removed:
+        plan.add("unchanged", dest, "no Exoma Codex hooks")
+        if script_still_used:
+            plan.warn(f"{dest}: another hook still references codex-host.py; its script was kept")
+        return not script_still_used
+    if not remaining:
+        _remove_receipted(dest, CODEX_HOST_HOOKS, plan, apply, backup_root, "held only Exoma Codex hooks")
+        return True
+    pre_sha256 = _file_sha256(dest)
+    saved = _backup(dest, backup_root, plan, apply, f"uninstall/{CODEX_HOST_HOOKS}")
+    plan.add("merge", dest, "removed Exoma Codex hooks, kept your hooks")
+    if apply:
+        dest.write_text(json.dumps(remaining, indent=2) + "\n", encoding="utf-8")
+        _record("merge", dest, f"uninstall/{CODEX_HOST_HOOKS}", saved, pre_sha256)
+    if script_still_used:
+        plan.warn(f"{dest}: another hook still references codex-host.py; its script was kept")
+    return not script_still_used
+
+
 LEGACY_AGY_INSTRUCTIONS = "providers/agy/AGENTS.md"
 
 
@@ -263,6 +307,26 @@ def retire_agy_dot_dir(plan: Plan, apply: bool, backup_root: Path) -> None:
     out — backed up and receipted — and leave any text of the user's in the file."""
     _uninstall_text(HOME / ".agy" / "AGENTS.md", LEGACY_AGY_INSTRUCTIONS, plan, apply, backup_root,
                     markers=("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END"))
+
+
+def _opencode_plugin_removable(plan: Plan) -> bool:
+    """False while plugins/exoma.js is there but is not a file an install wrote.
+
+    The prune keeps an edited file, and that plugin would still call opencode-host.py: the
+    hook scripts must then stay too (the caller keeps that family), or the plugin's every
+    call fails open and the gates are silently gone.
+    """
+    from exoma.installer.stale import previously_installed
+
+    plugin = opencode_home() / "plugins" / "exoma.js"
+    if not plugin.is_file():
+        return True
+    hashes = (previously_installed().get(str(plugin)) or {}).get("hashes") or set()
+    if _file_sha256(plugin) in hashes:
+        return True
+    plan.warn(f"{plugin} was edited since Exoma installed it, so it and the hook scripts it calls were "
+              "kept; delete or restore it, then install again")
+    return False
 
 
 def withdraw_host(
@@ -278,6 +342,14 @@ def withdraw_host(
     if host == "claude":
         _uninstall_text(HOME / ".claude" / "CLAUDE.md", CLAUDE_INSTRUCTIONS, plan, apply, backup_root)
         return _uninstall_settings(plan, apply, backup_root), agy_rules
+    if host == "codex":
+        _uninstall_text(HOME / ".codex" / "AGENTS.md", CODEX_HOST_INSTRUCTIONS, plan, apply, backup_root)
+        return _uninstall_codex_hooks(plan, apply, backup_root), agy_rules
+    if host == "opencode":
+        # Nothing merged but the block: the plugin is a whole file OpenCode finds by itself,
+        # so the stale prune that follows removes it with the hook it calls.
+        _uninstall_text(opencode_home() / "AGENTS.md", OPENCODE_HOST_INSTRUCTIONS, plan, apply, backup_root)
+        return _opencode_plugin_removable(plan), agy_rules
     _uninstall_text(HOME / ".gemini" / "GEMINI.md", AGY_HOST_INSTRUCTIONS, plan, apply, backup_root)
     clean = _uninstall_agy_hooks(plan, apply, backup_root)
     return clean, _install_agy_permissions(False, agy_rules, plan, apply, backup_root)
@@ -305,11 +377,14 @@ def run_uninstall(apply: bool) -> int:
     # Agy's hooks.json runs agy-host.py from the same directory, so it is cleaned first too.
     settings_clean = _uninstall_settings(plan, apply, backup_root)
     agy_clean = _uninstall_agy_hooks(plan, apply, backup_root)
+    codex_clean = _uninstall_codex_hooks(plan, apply, backup_root)
+    opencode_clean = _opencode_plugin_removable(plan)
     # Read before the mode file goes below: it names the rules Exoma added.
     from exoma.installer.rollback import _stored_agy_permissions
 
     rules_left = _install_agy_permissions(False, _stored_agy_permissions()[1], plan, apply, backup_root)
-    _uninstall_files(plan, apply, backup_root, keep_hooks=not (settings_clean and agy_clean))
+    _uninstall_files(plan, apply, backup_root,
+                     keep_hooks=not (settings_clean and agy_clean and codex_clean and opencode_clean))
     # Receipted like everything else: a rollback that restored the files but not the mode
     # would reinstall the other intent mode, and one without the ledger could no longer tell
     # the workflow's files from the user's.
@@ -322,7 +397,7 @@ def run_uninstall(apply: bool) -> int:
         if path.is_file():
             _remove_receipted(path, key, plan, apply, backup_root, "installer bookkeeping")
     plan.warn(
-        "not touched: config/second_agent.seed.json, an AGENT_PATH persisted by --set-env, "
+        "not touched: config/second_agent.seed*.json, an AGENT_PATH persisted by --set-env, "
         "and every project's .workflow/ — remove those yourself if you want them gone"
     )
     if apply and _RECEIPT:
@@ -342,7 +417,7 @@ def run_uninstall(apply: bool) -> int:
         print(f"    ! {warning}")
     print()
     if apply:
-        print("  undo with: python install.py --rollback --apply")
+        print("  undo with: exoma install --rollback --apply")
     else:
         print("  DRY RUN — nothing was written. Re-run with --apply to uninstall.")
     return 0

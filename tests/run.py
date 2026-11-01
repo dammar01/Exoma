@@ -62,6 +62,7 @@ from tests.checks.continuation import (  # noqa: E402
     _test_continuation_prompt_is_bounded,
 )
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E402
+from tests.checks.self_update import _test_self_update  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.promote import _test_promote_boundaries  # noqa: E402
 from tests.checks.execution import _test_execution_chain  # noqa: E402
@@ -149,6 +150,20 @@ from tests.checks.agy_host import (  # noqa: E402
     _test_agy_permissions_and_doctor,
     _test_agy_host_uninstall,
 )
+from tests.checks.codex_host import _test_codex_host_contract, _test_codex_host_install  # noqa: E402
+from tests.checks.v1_surfaces import (  # noqa: E402
+    _test_claude_second_agent,
+    _test_e2e_stays_opt_in,
+    _test_opencode_host_contract,
+    _test_opencode_host_install,
+    _test_per_host_seed,
+    _test_session_export,
+)
+from tests.checks.same_provider import (  # noqa: E402
+    _test_recursion_guard,
+    _test_same_provider_child_isolation,
+    _test_same_provider_export_picks_the_host,
+)
 from tests.checks.os_resolvers import (  # noqa: E402
     _test_entry_points_refuse_an_old_python,
     _test_find_bash_and_os_locations,
@@ -218,6 +233,7 @@ SUITES: dict[str, tuple] = {
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
     "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
+    "self-update": (_test_self_update, "update refreshes the package and current workspace through a fresh CLI"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
@@ -299,19 +315,30 @@ SUITES: dict[str, tuple] = {
     "gate-non-ascii-root": (_test_intent_gate_non_ascii_root, "the hooks read the session registry as UTF-8 and the gate takes a non-ASCII project root in a runner path"),
     "hook-launchers": (_test_hooks_run_through_their_launchers, "every hook run through its real bash launcher (Git Bash on Windows) keeps its exit/stdout/file contract, within half its timeout; the DEC-068 failures replay clean"),
     "agy-host": (_test_agy_host_contract, "the Agy host wrapper answers every PreToolUse with a decision, fails open, passes [WORKFLOW_AGENT] turns, and gates through the same preflight_refusal as the Claude hooks (writes, precision reads, verify test selection)"),
+    "codex-host": (_test_codex_host_contract, "Codex hooks bind sessions, route delegation, gate tools, and skip second-agent processes"),
+    "codex-host-install": (_test_codex_host_install, "Codex host and provider blocks coexist; install and uninstall preserve user text and hooks"),
+    "opencode-host": (_test_opencode_host_contract, "OpenCode hooks bind on the first prompt, gate tools through the shared policy, and skip second-agent processes"),
+    "opencode-host-install": (_test_opencode_host_install, "OpenCode host installs beside its provider block, passes --check, and is withdrawn cleanly"),
+    "claude-second-agent": (_test_claude_second_agent, "Claude second agent runs with read tools only, no settings or MCP, over stdin"),
+    "per-host-seed": (_test_per_host_seed, "each host keeps its own provider seed and init copies the one of the host that ran it"),
+    "session-export": (_test_session_export, "session export bundles one session, redacted, with its stream rows and review"),
+    "e2e-opt-in": (_test_e2e_stays_opt_in, "the browser extra is installed only with --with-e2e"),
+    "recursion-guard": (_test_recursion_guard, "a second_agent process cannot delegate, queue or run a job, or change execution state: recursion_refused before any side effect"),
+    "same-provider-isolation": (_test_same_provider_child_isolation, "every adapter marks its child second_agent; Claude-on-Claude loads no host settings; the OpenCode plugin checks the marker"),
+    "same-provider-export": (_test_same_provider_export_picks_the_host, "with host and child on the same CLI, session export picks the host transcript"),
     "agy-host-install-whole": (_test_agy_host_install_all_or_nothing, "the Agy instructions and hook install together or not at all; a refused hook takes out an earlier instructions block"),
     "agy-host-uninstall": (_test_agy_host_uninstall, "uninstall takes only the `exoma` hook out of hooks.json, keeps the user's hooks, and receipts the change for --rollback"),
     "agy-host-install": (_test_agy_host_install_merges, "the installer merges only the `exoma` hook name into hooks.json and only the EXOMA-HOST block into GEMINI.md"),
-    "agy-doctor": (_test_agy_permissions_and_doctor, "Agy permission rules on with the agy host unless opted out; both installs both; /.doctor reports each chosen host and observes the Agy session only in Agy"),
+    "agy-doctor": (_test_agy_permissions_and_doctor, "Agy permission rules on with the agy host unless opted out; stored host pairs remain valid; /.doctor reports each chosen host and observes the Agy session only in Agy"),
     "bundle-layout": (_test_bundle_layout_and_agy_agent, "hosts/ and providers/ keys, old keys read as current, the Agy second agent as a custom agent, ~/.agy retired"),
-    "agy-host-select": (_test_agy_host_selection, "--host picks the targets; Agy files stay under ~/.gemini; permission rules are opt-in and only Exoma's are removed"),
+    "agy-host-select": (_test_agy_host_selection, "the host choice picks the targets; Agy files stay under ~/.gemini; permission rules are opt-in and only Exoma's are removed"),
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
     "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),
     "os-locations": (_test_find_bash_and_os_locations, "find_bash is Git Bash on Windows; cache dir, env location and command splitting follow the OS"),
     "gate-k5-fixtures": (_test_gate_k5_fixtures, "the single-tokeniser gate decides each K5 case as recorded (the #4 field cases included)"),
     "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),
-    "installer-stale": (_test_installer_leaves_no_stale_files, "--apply removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),
+    "installer-stale": (_test_installer_leaves_no_stale_files, "an install removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
     "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),

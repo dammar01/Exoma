@@ -2,8 +2,8 @@
 
 ## Setup and runtime errors
 
-Start with `doctor` (`bash .workflow/run.sh doctor --session '<MAIN_SESSION_ID>'`, the same on every OS) and
-read its `recommended_fixes`. The common cases are in the [README
+Start with `doctor` (`/.doctor`, or the runner call in the [reference](../reference.md#command)) and
+read its recommended fixes. The common cases are in the [README
 troubleshooting table](../../README.md#quick-start); commands and their options are in the
 [reference](../reference.md#command).
 
@@ -13,9 +13,9 @@ troubleshooting table](../../README.md#quick-start); commands and their options 
 | The provider CLI is not found | Install it and make sure it is on `PATH` |
 | codex on Windows fails with `sandbox_unavailable` | Codex's own Windows sandbox would not start. Start a new session (`/clear`) and repeat the request; if new sessions fail too, update codex and run `codex` once by itself to approve its sandbox setup; meanwhile switch the secondary agent with `/.provider`. The error's next action lists these steps, and `doctor` shows the codex version to quote in a bug report ([reference](../reference.md)) |
 | Commands fail after you moved the tool checkout | Run `upgrade` from the new location |
-| In Agy, `/.<command>` does nothing, the runner asks for approval every time, or it fails with `No such file or directory`, `NtCreateDirectoryObject` or `Access is denied` | Run `/.doctor` in Agy: its `checks.hosts` names a missing file and its `agy_session` block the part Agy did not load. A missing skill or hook means the install did not choose Agy (`exoma install --apply --host agy` or `both`); a prompt every time means the permission rules are off (an earlier `--no-agy-permissions`; `--agy-permissions` turns them back on). Hook errors are in `~/.gemini/exoma-hook-errors.log` ([reference, Hosts](../reference.md#hosts)) |
+| In Agy, `/.<command>` does nothing, the runner asks for approval every time, or it fails with `No such file or directory`, `NtCreateDirectoryObject` or `Access is denied` | Run `/.doctor` in Agy: it names the missing file and the part Agy did not load. A missing skill or hook means the install did not include Agy; install again choosing Agy. A prompt every time means Agy's permission rules were turned off at install; turn them back on with the installer option. What doctor reports, where hook errors are logged: [reference, Hosts](../reference.md#hosts); the installer options: [Installer details](../reference.md#installer-details) |
 | In Agy on Windows, a runner call exits 1 with no output at all, or doctor reports `provider config unreadable` | The runner ran inside Agy's sandbox, which stops Git Bash before the script starts and denies the home directory. Run the runner call with the sandbox bypassed (`BypassSandbox`); the permission rules approve the call but do not lift the sandbox ([reference, Hosts](../reference.md#hosts)) |
-| The runner answers `no session for '<command>'` or `usage: run.sh ...` | The call did not name its session, or a shell dropped an empty argument. Pass `--session '<MAIN_SESSION_ID>'` and leave `--task` out when there is no task ([reference, Daily usage](../reference.md#daily-usage)) |
+| The runner answers `no session for '<command>'` or `usage: run.sh ...` | The call did not name its session, or a shell dropped an empty argument. Name the session and leave the task out when there is none; the exact call form is in the [reference, Daily usage](../reference.md#daily-usage) |
 | Empty-looking `.lock` files in `.workflow/data` | `evidence.jsonl.lock` and the `.guard`/`.reclaim` files hold one invisible byte and stay between uses: normal. Other lock files are removed on release, so an empty one left behind is a writer that crashed and is reclaimed later. Do not delete any while something runs ([which ones and why](../runtime-contracts.md)) |
 
 ## "PROXY FAILED" (before v0.2.0: "PROXY GAGAL")
@@ -27,13 +27,13 @@ continue locally without the secondary agent, or `no` to stop and fix the provid
 
 ## "EXECUTION GATE" / an edit or commit was blocked
 
-Since 3.9.0 the approval rules are checked by hooks (Claude Code's, or Agy's wrapper), not
+The approval rules are checked by host hooks (Claude Code, Agy, Codex, or OpenCode), not
 only asked of the agent. A block
 means one of three things: the agent tried to edit a file its approved plan does not list,
 to write into another project, or to commit in a turn where you did not ask for a commit.
 The message says which. The usual fix is a revised plan and a new `/.execute -y`, or asking
-for the commit yourself. To relax it for one project, see `policies.enforcement` and
-`policies.write_allowed_outside_root` in the
+for the commit yourself. A project can soften the enforcement or allow writes to named
+paths outside it; the settings are in the
 [configuration reference](../reference.md#workflowconfigjson). A "STATUS GUARD" note is a
 warning, not a block: the agent said "done" before anything was verified.
 
@@ -46,7 +46,7 @@ not overhead around it. What you can do:
 summarizes how long delegated calls took in your project (mean, median, and how many calls
 were not measured); per-call detail is kept in the workspace too. How to run it and where
 the per-call files live: [reference, command table](../reference.md#command) and
-[workspace layout](../reference.md#layout-workspace).
+[workspace layout](../reference.md#workspace-layout).
 
 **Then reduce it:**
 
@@ -55,7 +55,7 @@ the per-call files live: [reference, command table](../reference.md#command) and
 - **Keep verify's tests targeted.** Verify no longer lets the secondary agent run your test
   suite: the primary agent picks the tests that cover the change and the runtime runs only those.
   Tell the project which test commands may run (an allowlist in the project's workflow
-  config, see the [reference](../reference.md), "Mode verify"); without it no test runs and
+  config, see [reference, Verify mode](../reference.md#verify-mode)); without it no test runs and
   verify reports the tests as not run.
 - **Do something else while it runs.** A delegated call runs as a background job, and
   the primary agent hands control back to you while it works. You cannot continue *that* line of
@@ -65,7 +65,7 @@ the per-call files live: [reference, command table](../reference.md#command) and
   checkout".
 - **Let reuse work.** Repeated or similar questions can reuse earlier evidence and facts.
   Forcing a fresh session turns that off; do it only when you know the earlier evidence is
-  stale. The option is in the [CLI reference](../reference.md#cli-langsung).
+  stale. The option is in the [CLI reference](../reference.md#direct-cli).
 - **Slow right after an implementing turn, on a large project?** That used to be the graph
   refresh running inside the turn. It now runs in the background, so the turn ends first
   and the graph catches up a little later; the `report` command shows what each refresh
@@ -73,7 +73,7 @@ the per-call files live: [reference, command table](../reference.md#command) and
 - **Use the quick verify mode when parsing is all you need.** A project can switch
   `/.verify` to parse checks only, without the secondary agent. It is much faster, but it
   proves only that files parse — **not** that the behavior is correct. The setting and what
-  each mode checks: [verify modes in the reference](../reference.md#mode-verify).
+  each mode checks: [verify modes in the reference](../reference.md#verify-mode).
 
 If a task is worth delegating but still too slow to be practical, say so in an issue: that
 feedback is worth more than a workaround.

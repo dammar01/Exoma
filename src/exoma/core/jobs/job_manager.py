@@ -313,7 +313,9 @@ class JobManager:
                 osutil.PROCESS_DEAD: "worker_dead",
             }.get(generation, "identity_unverifiable")
             return {"method": "skipped", "ok": False, "reason": reason, "pid": pid}
-        return osutil.terminate_tree(None, pid=pid)
+        # The check above and the kill are separate moments; passing the recorded creation
+        # time lets terminate_tree repeat the check on a handle that pins the PID (Windows).
+        return osutil.terminate_tree(None, pid=pid, expected_create_time=job.get("worker_create_time"))
 
     def touch_heartbeat(self, job_id: str, progress: dict | None = None) -> None:
         """Record one beat from the worker's poll loop.

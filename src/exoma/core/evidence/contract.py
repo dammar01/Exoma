@@ -17,6 +17,10 @@ ERROR_TYPES = {
     "timeout",
     "command_not_found",
     "routing_error",
+    # A second_agent process (WORKFLOW_AGENT_ROLE=second_agent) asked the runtime to
+    # delegate, queue a job, or change execution state. A delegated call that delegates
+    # again recurses on the same provider and quota; refused before any side effect.
+    "recursion_refused",
     "worker_died",
     # The worker process lived but its own body raised. Distinct from worker_died: nothing
     # needs reaping and no recovery claim applies, the job is simply failed and the stack

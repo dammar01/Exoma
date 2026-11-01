@@ -47,7 +47,7 @@ exploration and reasoning prompts, and only `promote-write` may write there.
   its prose, or in `docs/reference.md`, fails `tools/maintain/stamp_version.py --check`.
 - Release notes: `docs/releases/v<version>.md` plus one index row in `CHANGELOG.md` (the
   index stays one line per version).
-- Do not run `exoma install --apply` from a development checkout onto the real `~/.claude`:
-  daily sessions run the released Exoma from PyPI, and a checkout install would replace its
+- Do not run `exoma install` (it writes by default; `--dry-run` only previews) from a
+  development checkout onto the real `~/.claude`: daily sessions run the released Exoma from PyPI, and a checkout install would replace its
   hooks and skills under the same names. Point `AGENT_HOME` and `EXOMA_HOME` at a temporary
   directory instead (`docs/development.md`).

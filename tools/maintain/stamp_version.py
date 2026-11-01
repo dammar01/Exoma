@@ -109,6 +109,10 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "Up to 3.8.0, `intent-gate-set`",
         "In 3.8.0 this was observed",
         "Before 3.8.0 this hook ran",
+        # The 0.3.0 bundle-key layout change, described as history.
+        "Keys an install before v0.3.0",
+        # Claude Code's version, not ours.
+        "Probed on Claude Code 2.1.316",
     ),
     "src/exoma/_bundle/config/hosts/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.

@@ -112,7 +112,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
     "codex": {
         "home_dir": ".codex",
         "instructions": ("AGENTS.md", "AGENTS.md"),
-        # No subagent roster. OpenCode's `wf-*` files are per-agent markdown it loads from
+        # No subagent roster. OpenCode's `exm-*` files are per-agent markdown it loads from
         # a directory; codex's subagent configuration has not been verified, so nothing is
         # shipped rather than a guessed roster that would never load.
         "agents_dir": None,
@@ -266,6 +266,47 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # working tree around each call, which DETECTS a write; nothing prevents one.
         "boundary": {"reads": "unbounded", "writes": "unbounded"},
     },
+    "claude": {
+        # Claude Code as a second agent. Its home is the user's ~/.claude, which is also the
+        # Claude host's: the contract therefore goes into a file of its own, copied whole and
+        # passed per call with --append-system-prompt-file, never into ~/.claude/CLAUDE.md
+        # (a block there would reach the user's own sessions).
+        "home_dir": ".claude",
+        "instructions": ("second-agent.md", "exoma/second-agent.md"),
+        "instructions_whole": True,
+        "agents_dir": None,
+        # Declared, deliberately not shipped: the boundary is argv on every call
+        # (adapters/providers/claude_adapter.py), and the indexes below are read positionally.
+        "global_config": ("claude.template.json", "claude.json"),
+        "project_config": ("claude.project.json", "claude.project.json"),
+        "config_aliases": (),
+        "config_candidates": (),
+        "default_command": "claude",
+        "command_env": "CLAUDE_COMMAND",
+        # The release the read-only argv was probed on (tool list, no settings, no CLAUDE.md).
+        "stable_version": "2.1.316",
+        "update": {"method": "npm", "package": "@anthropic-ai/claude-code"},
+        "default_agent": None,
+        "agent_env": None,
+        # `claude --help`: --effort low|medium|high|xhigh|max.
+        "effort_arg": ("--effort", "{value}"),
+        # The CLI has no model-listing command, so this list is the whole catalog the picker
+        # offers (core/provider/model_catalog.py falls back to it); any other id can still be
+        # typed. Aliases first: they follow the newest model of each family.
+        "models": (
+            {"id": "opus", "efforts": ("low", "medium", "high", "xhigh", "max")},
+            {"id": "sonnet", "efforts": ("low", "medium", "high", "xhigh", "max")},
+            {"id": "haiku", "efforts": ()},
+            {"id": "claude-opus-5-5", "efforts": ("low", "medium", "high", "xhigh", "max")},
+            {"id": "claude-sonnet-5-5", "efforts": ("low", "medium", "high", "xhigh", "max")},
+            {"id": "claude-haiku-5-5", "efforts": ()},
+            {"id": "claude-fable-5-1", "efforts": ("low", "medium", "high", "xhigh", "max")},
+        ),
+        "install_module": "exoma.adapters.providers.claude_adapter",
+        # Writes: no write tool exists in the session (`--tools Read,Grep,Glob`). Reads: Read
+        # opens anything the process can.
+        "boundary": {"reads": "unbounded", "writes": "denied"},
+    },
 }
 
 
@@ -416,6 +457,8 @@ PROVIDER_TRANSPORT: dict[str, dict] = {
         "reserved": 512,
     },
     "codex": {"kind": "stdin", "limit": None, "headroom": 0, "newline_cost": 0, "reserved": 0},
+    # `claude -p` with no prompt argument reads it from stdin, as codex does.
+    "claude": {"kind": "stdin", "limit": None, "headroom": 0, "newline_cost": 0, "reserved": 0},
 }
 
 

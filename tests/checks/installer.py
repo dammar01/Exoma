@@ -625,10 +625,16 @@ def _seed_repo(stdin_text: str | None = None):
                 return True
 
         sys.stdin = _Tty(stdin_text)
+    from exoma.core.provider import model_catalog
+
+    # The model menu is the live catalog; a test reads the bundled shortlist, the same on
+    # every machine whatever provider CLIs are installed.
+    live, model_catalog.LIVE_ENABLED = model_catalog.LIVE_ENABLED, False
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             yield install_mod, dest
     finally:
+        model_catalog.LIVE_ENABLED = live
         install_mod.SEED_DIR, install_mod.EXAMPLE_FILE = original_root
         sys.stdin = original_stdin
         shutil.rmtree(root.parent, ignore_errors=True)
@@ -745,7 +751,7 @@ def _test_installer_seed_is_non_interactive_without_a_tty() -> None:
 
 def _test_installer_seed_prompt_answers() -> None:
     """Every answer the picker accepts, including the two ways of declining."""
-    with _seed_repo("2\n1\n") as (install_mod, dest):
+    with _seed_repo("3\n1\n") as (install_mod, dest):
         install_mod._seed_second_agent_config(Plan(), True, None, None)
         written = json.loads(dest.read_text(encoding="utf-8"))
         assert_true(
@@ -753,7 +759,7 @@ def _test_installer_seed_prompt_answers() -> None:
             "picking a provider then a model writes both",
         )
 
-    with _seed_repo("3\n\n") as (install_mod, dest):
+    with _seed_repo("4\n\n") as (install_mod, dest):
         install_mod._seed_second_agent_config(Plan(), True, None, None)
         written = json.loads(dest.read_text(encoding="utf-8"))
         assert_true(
@@ -761,7 +767,7 @@ def _test_installer_seed_prompt_answers() -> None:
             "a blank model leaves the pin unset so the CLI keeps its own default",
         )
 
-    with _seed_repo("3\nopencode/not-on-the-menu\n") as (install_mod, dest):
+    with _seed_repo("4\nopencode/not-on-the-menu\n") as (install_mod, dest):
         plan = Plan()
         install_mod._seed_second_agent_config(plan, True, None, None)
         assert_true(
@@ -770,7 +776,7 @@ def _test_installer_seed_prompt_answers() -> None:
             "the shortlist is a picker, not the set of models that exist",
         )
         assert_true(
-            any("shortlist" in warning for warning in plan.warnings),
+            any("model catalog" in warning for warning in plan.warnings),
             "an unlisted pin is accepted with a warning, not silently",
         )
 
@@ -1003,9 +1009,11 @@ def _test_provider_update() -> None:
             assert_true("result" not in done["agy"], "an unsupported provider is never run")
             assert_true(plan()["codex"]["action"] == "current", "a CLI on its stable release is current")
 
+            from exoma.config.providers import PROVIDER_BUNDLES
+
             journal = pu.write_journal(list(done.values()), Path(tmp) / "backup")
             data = json.loads(journal.read_text(encoding="utf-8"))
-            assert_true(len(data["providers"]) == 3, f"the journal holds every provider: {data}")
+            assert_true(len(data["providers"]) == len(PROVIDER_BUNDLES), f"the journal holds every provider: {data}")
 
             # POSIX: <prefix>/lib/node_modules, shims in <prefix>/bin; <prefix>/lib is no bin.
             pu.osutil.IS_WINDOWS = False

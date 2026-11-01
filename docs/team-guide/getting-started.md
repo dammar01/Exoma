@@ -6,20 +6,23 @@ Follow the [installation guide](../installation.md); it also covers upgrading an
 uninstalling, and [installation.md](installation.md) helps you choose a mode. In short:
 
 1. Clone the repository to a permanent location.
-2. Run the global install once per machine. Do not skip it: it installs the Claude Code
-   skills and hooks (and, where Agy is installed, its host block and hook) **and** the permission block for the secondary agent. How much that
-   block actually enforces depends on the provider: with `opencode` writes are prevented;
-   with `codex` the boundary is unproven; with `agy` changes are only detected afterwards.
+2. Run the global install once per machine. Choose the host whose CLI you use: Claude Code,
+   Agy, Codex, or all three. The install also sets up the secondary agent. Its boundary
+   depends on the provider: `opencode` prevents writes and secret-file reads; `codex`
+   prevents writes but does not confine reads; `agy` only detects some writes afterwards.
 3. Run `/.init` once per project, on your own machine (`/.upgrade` when the project already
    has a `.workflow/`). The generated `.workflow/` contains
    absolute paths from your machine, so it is never committed or shared.
+   In Codex, use `$exoma-init` and `$exoma-upgrade` instead.
 4. Run `/.doctor` and check that it reports `READY`.
 
-Which secondary agent to choose, and what each one enforces: [security](../security.md). If unsure, use `opencode`.
+The reference setup pairs Claude Code as host with Codex as second agent. If the second
+agent must be prevented from reading project secrets, choose `opencode`. See
+[security](../security.md) for each provider's boundary.
 
 ## Day to day
 
-You do not type runtime commands. You talk to the primary agent (Claude Code or Agy) normally,
+You do not type runtime commands. You talk to the primary agent (Claude Code, Agy, Codex, or OpenCode) normally,
 and it recognizes what kind of request you are making:
 
 | You ask… | The primary agent runs | What comes back |
@@ -33,7 +36,8 @@ and it recognizes what kind of request you are making:
 
 Before running a delegated command, the primary agent prints one line such as
 `[INTENT] explore — location question`. If it guessed wrong, stop it (Esc in Claude Code) and rephrase, or use
-the explicit form (`/.explore`, `/.analyze`, `/.plan`, `/.verify`, `/.verify-browser`). The full list of trigger
+the explicit form (`/.explore`, `/.analyze`, `/.plan`, `/.verify`, `/.verify-browser`; in Codex,
+`$exoma-<command>`). The full list of trigger
 phrases lives in the shipped Claude Code configuration (`src/exoma/_bundle/config/hosts/claude/CLAUDE.md`,
 "Command registry").
 

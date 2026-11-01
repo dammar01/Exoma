@@ -785,7 +785,7 @@ def run_doctor(
             )
         if "locally_edited" in drift_by_reason or "content_differs" in drift_by_reason:
             recommended_fixes.append(
-                "Re-run `exoma install --apply` to reinstall the shipped bundle; if the bundle "
+                "Re-run `exoma install` to reinstall the shipped bundle; if the bundle "
                 "changed on purpose, regenerate the manifest (python tools/maintain/gen_manifest.py)"
             )
         if "not_installed" in drift_by_reason:
@@ -809,7 +809,7 @@ def run_doctor(
     for host, state in hosts["hosts"].items():
         if state["missing"]:
             issues.append(f"host {host}: missing {', '.join(state['missing'][:5])}")
-            recommended_fixes.append(f"Re-run `exoma install --apply` to restore the {host} host's files")
+            recommended_fixes.append(f"Re-run `exoma install {host}` to restore the {host} host's files")
 
     if issues:
         status = "NOT_READY"

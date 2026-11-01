@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v0.3.0, do not edit manually -->
-# OpenCode Second Agent — v0.3.0
+<!-- WORKFLOW-SECOND-AGENT:START — v1.0.0, do not edit manually -->
+# OpenCode Second Agent — v1.0.0
 
 ## Scope
 This block applies ONLY when the request's instructions — inline, or in the file attached
@@ -121,21 +121,21 @@ You are the ONLY primary. Every specialisation below is a subagent, called throu
 
 | Subagent | For | Produces |
 |---|---|---|
-| `wf-slice` | one slice/community in a fan-out | max 5 grounded claims + file:line |
-| `wf-map` | an area's structure: where to start, the flow, the modules involved | `entry_points`, `flow`, `related_modules` |
-| `wf-trace` | who uses symbol X, what breaks if it changes | `dependents`, `blast_radius` |
-| `wf-docs` | an external library's API/version via context7 | `external` `[EXTERNAL:context7 …]` |
-| `wf-db` | the real database contents (schema, columns, sample rows) | `external` `[EXTERNAL:db …]` |
+| `exm-slice` | one slice/community in a fan-out | max 5 grounded claims + file:line |
+| `exm-map` | an area's structure: where to start, the flow, the modules involved | `entry_points`, `flow`, `related_modules` |
+| `exm-trace` | who uses symbol X, what breaks if it changes | `dependents`, `blast_radius` |
+| `exm-docs` | an external library's API/version via context7 | `external` `[EXTERNAL:context7 …]` |
+| `exm-db` | the real database contents (schema, columns, sample rows) | `external` `[EXTERNAL:db …]` |
 
 - A subagent is not in your tool list → use `explore` (the built-in read-only one) as a general substitute.
-- `permission.task` in the config = deny by default + an allowlist of `wf-*`. A target outside the table above (including `general`, which can write) is REFUSED by the config, not by your judgement. Do not try; the call fails.
+- `permission.task` in the config = deny by default + an allowlist of `exm-*`. A target outside the table above (including `general`, which can write) is REFUSED by the config, not by your judgement. Do not try; the call fails.
 - Use the `task` TOOL, not `@name` in text. In non-interactive `opencode run`, `@name` is plain text: zero spawns, zero child sessions, and the primary quietly does the work itself.
 - Subagents cannot spawn subagents (`task: deny` in each agent file). Do not build chains.
-- You are read-only, and that is NO reason to refuse `task`. Every `wf-*` is also `write/edit/bash: deny`, so spawning them means zero writes, zero side effects — `task` here is a reading tool, not a changing one. "I am read-only so I may not spawn" = a misunderstanding, and the runtime counts it as `declined`.
+- You are read-only, and that is NO reason to refuse `task`. Every `exm-*` is also `write/edit/bash: deny`, so spawning them means zero writes, zero side effects — `task` here is a reading tool, not a changing one. "I am read-only so I may not spawn" = a misunderstanding, and the runtime counts it as `declined`.
 
 ## Fan-out Protocol (the [EVIDENCE_SIDECARS] block marks a "FAN-OUT call")
 The prompt says FAN-OUT → the clusters are in `leads.json` `communities[]`. One sub-agent per community.
-- Use the `task` tool with the subagent **`wf-slice`**. The tool exists → you MUST use it; reading the slices yourself = a failed instruction.
+- Use the `task` tool with the subagent **`exm-slice`**. The tool exists → you MUST use it; reading the slices yourself = a failed instruction.
 - Spawn ALL of them at once, each sub-agent scope-bounded to its community (the files in `communities[].files`), forbidden to read outside its slice.
 - Each sub-agent's report is SHORT: max 5 grounded claims, file:line on every line. You merge; sub-agent text = raw material, not the answer.
 - Tag every merged claim with its community of origin as a leading `[cN]` (e.g. `[c3] Router routes by command [core/router.py:16]`). This is a REQUIREMENT, not decoration: the runtime uses two signals — the `subagents:` line and the `[cN]` tags. One without the other → the fan-out is recorded as `claimed_unconfirmed` and your work counts as a sequential read. You already paid for the spawn; do not throw the result away by losing the prefix.

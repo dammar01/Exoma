@@ -773,7 +773,7 @@ attempted and recovered, first-error and remaining-category distributions, and d
 carried a literal credential.
 
 Dependency policy: Playwright is an optional extra (`exoma[e2e]`), pinned in the bundled
-`requirements-e2e.txt` and installed by `exoma install --apply --with-e2e` (pip, then
+`requirements-e2e.txt` and installed by `exoma install --with-e2e` (pip, then
 `python -m playwright install chromium`). The runtime stays stdlib-only;
 `core/evidence/e2e/preflight.py` and `browser.py` import it inside the call, under an
 `ImportError` guard, and `tests/checks/deps.py` permits exactly that shape in exactly that
@@ -792,7 +792,7 @@ A project runs on its own `.workflow/second_agent.json` and nothing else
 file resolves `source: missing` and an unparseable one `source: invalid`, and the executor
 refuses both before any provider call (`provider_config_missing`, `provider_config_invalid`,
 each with a next_action). The per-user `second_agent.seed.json` (in the data directory) is a
-template `init` copies into a new workspace and `exoma install --apply` rebuilds from
+template `init` copies into a new workspace and every writing `exoma install` rebuilds from
 `second_agent.example.json` on every run, carrying only the previous selection (provider,
 default model, per-route models). An old `second_agent.json` beside it, written once and never
 refreshed, is renamed `.retired` and its selection is not carried over.
@@ -805,9 +805,16 @@ Only opencode's read boundary is enforced (`<project_root>/opencode.json`, whose
 `permission` carries `external_directory: deny` next to the secret `read`/`grep` denials).
 Its child process gets an allowlisted environment plus the active project's `.env`, not the
 parent's (`adapters/shared/child_env.py`; counts, never values, land in the call meta as
-`env_policy`/`project_dotenv`/`parent_env_dropped`). `codex` and `agy`
+`env_policy`/`project_dotenv`/`parent_env_dropped`); that environment also carries
+`WORKFLOW_AGENT_ROLE=second_agent`, so Exoma's OpenCode host plugin registers no hooks in a
+delegated call. `codex`, `agy` and `claude`
 install as `not_enforceable`, and their adapters pass the full process environment to the
-provider CLI. Both are treated as trusted providers — an accepted risk, not a defect waiting
+provider CLI, `WORKFLOW_AGENT_ROLE=second_agent` included. A process carrying that marker is refused
+`recursion_refused` by the CLI when it asks to delegate, queue or run a job, or change execution
+state (`cli._recursion_refusal`, checked in `cli.main`, `run()` and `job_lifecycle.submit()`; the
+stalled-job probe in `check_stalled_job` is skipped for a marked caller, which keeps waiting;
+see [reference](reference.md#error_type)); this stops a
+same-CLI child from recursing, it bounds nothing a child that can unset the variable. All three are treated as trusted providers — an accepted risk, not a defect waiting
 for an env allowlist: an allowlist can break the CLI's own auth, and it protects nothing from
 a provider that can already read `.env`. What the runtime guarantees instead is visibility:
 `/.doctor` reports `checks.second_agent_read_boundary` (`not_enforceable` + `trusted: true`,
@@ -816,7 +823,9 @@ or `enforceable` for opencode) and one `WARNING: second_agent provider ...` entr
 
 Writes are a separate axis, declared per bundle as `boundary.writes` in `config/providers.py`
 and read through `provider_boundary()`: opencode `denied` (permission map), codex `sandboxed`,
-agy `unbounded`. codex's `sandboxed` takes TWO flags on every call, resumed ones included:
+agy `unbounded`, claude `denied` (the call's tool list is `--tools Read,Grep,Glob`, so no write,
+edit or shell tool exists; `--setting-sources ''` and `--strict-mcp-config` keep the user's
+hooks, permission rules and MCP servers out, on fresh and resumed calls alike). codex's `sandboxed` takes TWO flags on every call, resumed ones included:
 `--sandbox read-only` (an `exec` option, so `exec --sandbox read-only resume <id>` on a resumed
 call; `-c sandbox_mode=` there made codex 0.155+ refuse every resume on Windows)
 confines shell commands, and
@@ -850,9 +859,9 @@ injection. Any remaining argument that cmd.exe would interpret (`" & | < > ^ %` 
 in the command path, prompt-file path, model, agent or effort) is refused before spawning
 as `unsafe_command_line`.
 
-## exoma install --apply and leftovers
+## exoma install and leftovers
 
-`--apply` refuses a bundle (`exoma/_bundle/config/`) that does not match `exoma/_bundle/manifest.json` (dry run warns). After
+An install that writes (the default; `--dry-run` only previews) refuses a bundle (`exoma/_bundle/config/`) that does not match `exoma/_bundle/manifest.json` (dry run warns). After
 installing, it removes files an earlier release installed and this one no longer ships —
 only a file an install recorded writing (the ledger `~/.claude/.workflow-installed.json`, or
 any install receipt), in a family installed file by file (skills, commands, hooks, provider

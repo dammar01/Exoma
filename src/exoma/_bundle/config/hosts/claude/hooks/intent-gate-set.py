@@ -139,7 +139,9 @@ try:
                      {"claude_sid": claude_sid, "prompt_id": payload.get("prompt_id")})
 
     mp = load_intent_map(globals().get("HOOK_DIR") or os.environ.get("HOOK_DIR", ""))
-    if mp is None:
+    if not isinstance(mp, dict):
+        # A partial install must not keep the previous user turn's delegation armed.
+        set_delegated_marker(None, runtime_dir, {"claude_sid": claude_sid})
         sys.exit(0)
 
     # Only a command the user named arms the gate. A sentence that resembles one under the NL

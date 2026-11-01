@@ -30,12 +30,14 @@ _SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:E
 # The main-agent hosts an install can target, chosen with --host (docs/reference.md,
 # "Installer details"). Second-agent provider bundles are not a host choice: they install
 # whichever host is picked.
-HOSTS = ("claude", "agy")
+HOSTS = ("claude", "agy", "codex", "opencode")
 
 # Bundle folders and keys (config/bundle_keys.py): hosts/<name>/ for a host, providers/<name>/
 # for a second-agent provider.
 CLAUDE_HOST = host_dir("claude")
 AGY_HOST = host_dir("agy")
+CODEX_HOST = host_dir("codex")
+OPENCODE_HOST = host_dir("opencode")
 CLAUDE_INSTRUCTIONS = f"{CLAUDE_HOST}/CLAUDE.md"
 CLAUDE_SETTINGS = f"{CLAUDE_HOST}/settings.template.json"
 CLAUDE_HOOKS_PREFIX = f"{CLAUDE_HOST}/hooks/"
@@ -56,6 +58,19 @@ AGY_HOST_HOOK_NAME = "exoma"
 # to `/.<name>` there too).
 AGY_CONTRACT = "hosts/agy/exoma/CONTRACT.md"
 AGY_HOOKS_PREFIX = "hosts/agy/exoma/hooks/"
+CODEX_HOST_INSTRUCTIONS = f"{CODEX_HOST}/AGENTS.md"
+CODEX_HOST_HOOKS = f"{CODEX_HOST}/hooks.template.json"
+CODEX_CONTRACT = f"{CODEX_HOST}/exoma/CONTRACT.md"
+CODEX_HOOKS_PREFIX = f"{CODEX_HOST}/exoma/hooks/"
+CODEX_SKILLS_PREFIX = f"{CODEX_HOST}/skills/"
+# The OpenCode host (docs/reference.md, "Hosts"): its block in ~/.config/opencode/AGENTS.md
+# (beside the opencode provider's WORKFLOW-SECOND-AGENT block, as for Codex), the plugin shim
+# OpenCode loads from plugins/, and the hook, contract and skills under that directory.
+OPENCODE_HOST_INSTRUCTIONS = f"{OPENCODE_HOST}/AGENTS.md"
+OPENCODE_PLUGIN = f"{OPENCODE_HOST}/exoma.js"
+OPENCODE_CONTRACT = f"{OPENCODE_HOST}/exoma/CONTRACT.md"
+OPENCODE_HOOKS_PREFIX = f"{OPENCODE_HOST}/exoma/hooks/"
+OPENCODE_SKILLS_PREFIX = f"{OPENCODE_HOST}/skills/"
 AGY_SKILLS_PREFIX = "hosts/agy/skills/"
 AGY_DOCTOR_SKILL = f"{AGY_SKILLS_PREFIX}doctor/SKILL.md"
 AGY_DOCTOR_FRAGMENT = "hosts/agy/doctor.agy.md"
@@ -67,6 +82,8 @@ MARKERS = {
     # Not WORKFLOW-MAIN-AGENT: a GEMINI.md may already hold another workflow's block, and a
     # shared marker pair would splice over it.
     AGY_HOST_INSTRUCTIONS: ("EXOMA-HOST:START", "EXOMA-HOST:END"),
+    CODEX_HOST_INSTRUCTIONS: ("EXOMA-CODEX-HOST:START", "EXOMA-CODEX-HOST:END"),
+    OPENCODE_HOST_INSTRUCTIONS: ("EXOMA-OPENCODE-HOST:START", "EXOMA-OPENCODE-HOST:END"),
     # A provider whose instructions are copied whole (Agy's custom agent) has no block.
     **{
         f"{provider_dir(name)}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
@@ -80,7 +97,7 @@ SETTINGS_REQUIRED = ("hooks",)
 
 
 class Plan:
-    """Collected actions, so a dry run can print exactly what --apply would do."""
+    """Collected actions, so a dry run can print exactly what a writing install would do."""
 
     def __init__(self) -> None:
         self.actions: list[tuple[str, str, str]] = []
@@ -93,7 +110,7 @@ class Plan:
         self.warnings.append(message)
 
 
-# What --apply actually did, written next to the backups so --rollback does not have to
+# What a writing install actually did, written next to the backups so --rollback does not have to
 # guess. A backup directory alone cannot be undone safely: it holds the files that existed
 # BEFORE, with no record of which files the install created, and those must be deleted
 # rather than restored.
@@ -492,14 +509,63 @@ def _agy_text(text: str, key: str) -> str:
     return text
 
 
+def _codex_text(text: str, key: str) -> str:
+    """Render shared Claude workflow text as a Codex contract or native skill."""
+    if key == CODEX_CONTRACT:
+        text = _managed_block(text, *MARKERS[CLAUDE_INSTRUCTIONS]) or text
+    if key == CODEX_CONTRACT or key.startswith(CODEX_SKILLS_PREFIX):
+        text = _BARE_RUNNER.sub(runner_prefix() + " ", text)
+        text = text.replace("~/.claude/skills/<name>.md", "~/.codex/skills/exoma-<name>/SKILL.md")
+    if key.startswith(CODEX_SKILLS_PREFIX):
+        name = key[len(CODEX_SKILLS_PREFIX):].split("/", 1)[0]
+        text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
+        text = text.replace("---\n\n", "---\n\nCodex host: `$exoma-<command>` invokes this workflow. "
+                            "Read ~/.codex/exoma/CONTRACT.md and use Codex tool names.\n\n", 1)
+    return text
+
+
+def opencode_home() -> Path:
+    return HOME / ".config" / "opencode"
+
+
+def opencode_host_hook_path(home: Path | None = None) -> Path:
+    base = (home / ".config" / "opencode") if home is not None else opencode_home()
+    return base / "exoma" / "hooks" / "opencode-host.py"
+
+
+def _opencode_text(text: str, key: str) -> str:
+    """Shared Claude workflow text as an OpenCode contract or skill; the plugin shim with
+    this machine's interpreter and hook path, as JSON string literals."""
+    if key == OPENCODE_PLUGIN:
+        return (text.replace("{{PYTHON_JSON}}", json.dumps(Path(sys.executable).as_posix()))
+                .replace("{{HOOK_JSON}}", json.dumps(opencode_host_hook_path().as_posix())))
+    if key == OPENCODE_CONTRACT:
+        text = _managed_block(text, *MARKERS[CLAUDE_INSTRUCTIONS]) or text
+    if key == OPENCODE_CONTRACT or key.startswith(OPENCODE_SKILLS_PREFIX):
+        text = _BARE_RUNNER.sub(runner_prefix() + " ", text)
+        text = text.replace("~/.claude/skills/<name>.md", "~/.config/opencode/skills/exoma-<name>/SKILL.md")
+    if key.startswith(OPENCODE_SKILLS_PREFIX):
+        name = key[len(OPENCODE_SKILLS_PREFIX):].split("/", 1)[0]
+        text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
+        text = text.replace("---\n\n", "---\n\nOpenCode host: the `" + name + "` skill is this workflow command. "
+                            "Read ~/.config/opencode/exoma/CONTRACT.md and use OpenCode tool names.\n\n", 1)
+    return text
+
+
 def _render_text(src: Path, key: str, project_root: Path | None, only_command: bool = False) -> str:
     """The text an install writes for `key` from `src`. One function for the install and
     for --check, so the check compares against exactly what an install would write."""
     text = _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
-    if key in (CLAUDE_INSTRUCTIONS, AGY_CONTRACT):
+    # The host a skill is installed for, so /.init can name it (`exoma init --host`).
+    text = text.replace("{{HOST}}", key.split("/", 2)[1] if key.startswith("hosts/") else "claude")
+    if key in (CLAUDE_INSTRUCTIONS, AGY_CONTRACT, CODEX_CONTRACT, OPENCODE_CONTRACT):
         text = _apply_intent_mode(text, only_command)
     if key.startswith(AGY_HOST + "/"):
         text = _agy_text(text, key)
+    if key.startswith(CODEX_HOST + "/"):
+        text = _codex_text(text, key)
+    if key.startswith(OPENCODE_HOST + "/"):
+        text = _opencode_text(text, key)
     return text
 
 
@@ -532,6 +598,164 @@ _AGY_UNSAFE_PATH_CHARS = ' &%^|<>()"'
 
 def agy_hooks_dest() -> Path:
     return HOME / ".gemini" / "config" / "hooks.json"
+
+
+def codex_hooks_dest() -> Path:
+    return HOME / ".codex" / "hooks.json"
+
+
+def codex_host_hook_path(home: Path | None = None) -> Path:
+    return (home if home is not None else HOME) / ".codex" / "exoma" / "hooks" / "codex-host.py"
+
+
+def codex_hook_entries(home: Path | None = None) -> dict:
+    """The event groups Exoma owns in Codex's user-level hooks.json."""
+    template = json.loads((DIST_CONFIG / CODEX_HOST_HOOKS).read_text(encoding="utf-8"))
+    python = '"' + Path(sys.executable).as_posix() + '"'
+    hook = '"' + codex_host_hook_path(home).as_posix() + '"'
+    def render(value):
+        if isinstance(value, dict):
+            return {key: render(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [render(item) for item in value]
+        if isinstance(value, str):
+            return value.replace("{{PYTHON}}", python).replace("{{HOOK}}", hook)
+        return value
+    return render(template["hooks"])
+
+
+def codex_hooks_state(dest: Path) -> tuple[dict | None, str | None]:
+    if not dest.exists():
+        return {"hooks": {}}, None
+    try:
+        current = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, "unreadable JSON"
+    if not isinstance(current, dict) or not isinstance(current.get("hooks", {}), dict):
+        return None, "expected a hooks object"
+    for event, groups in current.get("hooks", {}).items():
+        if not isinstance(groups, list) or any(not isinstance(group, dict) or not isinstance(group.get("hooks"), list) for group in groups):
+            return None, f"invalid hook groups for {event}"
+    return current, None
+
+
+_CODEX_HOOK_COMMAND = re.compile(
+    r'^\s*"[^"\r\n]+"\s+"(?P<script>[^"\r\n]+)"\s+'
+    r'(?P<event>SessionStart|UserPromptSubmit|PreToolUse|Stop)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _codex_command_invokes_script(command: object, home: Path | None = None,
+                                  event: str | None = None) -> bool:
+    match = _CODEX_HOOK_COMMAND.fullmatch(command) if isinstance(command, str) else None
+    if not match:
+        return False
+    script = codex_host_hook_path(home).as_posix().casefold()
+    return (match.group("script").replace("\\", "/").casefold() == script
+            and (event is None or match.group("event").casefold() == event.casefold()))
+
+
+def _codex_hook_owned(handler: dict, home: Path | None = None, event: str | None = None) -> bool:
+    """Recognize only Exoma's generated command, not a mention of its script path."""
+    if not isinstance(handler, dict) or handler.get("type") != "command":
+        return False
+    commands = [handler[key] for key in ("command", "commandWindows") if key in handler]
+    if not commands:
+        return False
+    return all(_codex_command_invokes_script(command, home, event) for command in commands)
+
+
+def codex_hooks_reference_script(current: dict, home: Path | None = None) -> bool:
+    """Keep the script if any surviving hook could still refer to it."""
+    script = codex_host_hook_path(home).as_posix().casefold()
+    for groups in current.get("hooks", {}).values():
+        for group in groups:
+            for handler in group["hooks"]:
+                if isinstance(handler, dict) and any(
+                    script in str(handler.get(key) or "").replace("\\", "/").casefold()
+                    for key in ("command", "commandWindows")
+                ):
+                    return True
+    return False
+
+
+def codex_hook_events_present(events: object, home: Path | None = None) -> bool:
+    """Check each Exoma event without tying it to the current Python executable."""
+    if not isinstance(events, dict):
+        return False
+    hook = '"' + codex_host_hook_path(home).as_posix().lower() + '"'
+    command_key = "commandWindows" if os.name == "nt" else "command"
+    for event in codex_hook_entries(home):
+        groups = events.get(event)
+        if not isinstance(groups, list):
+            return False
+        found = False
+        for group in groups:
+            if event == "PreToolUse" and (not isinstance(group, dict) or group.get("matcher") != "*"):
+                continue
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(handlers, list):
+                continue
+            for handler in handlers:
+                if not isinstance(handler, dict) or handler.get("type") != "command":
+                    continue
+                if str(handler.get(command_key) or "").replace("\\", "/").lower().strip().endswith(
+                    hook + " " + event.lower()):
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            return False
+    return True
+
+
+def strip_codex_hooks(current: dict) -> tuple[dict, int]:
+    """Remove only Exoma's handlers; retain other handlers in the same group."""
+    out = json.loads(json.dumps(current))
+    removed = 0
+    events = out.get("hooks", {})
+    for event in list(events):
+        kept = []
+        for group in events[event]:
+            handlers = []
+            for handler in group["hooks"]:
+                if _codex_hook_owned(handler, event=event):
+                    removed += 1
+                else:
+                    handlers.append(handler)
+            if handlers:
+                kept.append({**group, "hooks": handlers})
+        if kept:
+            events[event] = kept
+        else:
+            del events[event]
+    if not events:
+        out.pop("hooks", None)
+    return out, removed
+
+
+def _install_codex_hooks(dest: Path, plan: Plan, apply: bool, backup_root: Path) -> None:
+    current, problem = codex_hooks_state(dest)
+    if problem:
+        plan.add("refused", dest, problem)
+        plan.warn(f"{dest}: Codex host hooks not installed ({problem}); repair hooks.json and retry")
+        return
+    merged, _ = strip_codex_hooks(current)
+    events = merged.setdefault("hooks", {})
+    for event, groups in codex_hook_entries().items():
+        events.setdefault(event, []).extend(groups)
+    if merged == current:
+        plan.add("unchanged", dest)
+        return
+    saved = _backup(dest, backup_root, plan, apply, CODEX_HOST_HOOKS) if dest.exists() else None
+    pre_sha256 = _file_sha256(dest)
+    plan.add("merge" if dest.exists() else "create", dest, "Codex lifecycle hooks")
+    if apply:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _record("merge" if saved else "create", dest, CODEX_HOST_HOOKS, saved, pre_sha256)
 
 
 def agy_hooks_state(dest: Path) -> tuple[dict | None, tuple[str, str] | None]:
@@ -682,15 +906,15 @@ def _install_agy_permissions(
     return now_owned
 
 
-def _withdraw_agy_instructions(dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path) -> None:
-    """GEMINI.md when its hook is refused: install nothing, and take out the block an earlier
+def _withdraw_host_instructions(dest: Path, key: str, plan: Plan, apply: bool, backup_root: Path) -> None:
+    """Host instructions when hooks are refused: take out an earlier block, if any,
     install left, since instructions with no hook enforcing them are a half install."""
     from exoma.installer.uninstall import _uninstall_text  # uninstall imports this module
 
     start, end = MARKERS[key]
     text = _read_text_lenient(dest) if dest.is_file() else ""
     if _marker_problem(text, start, end) is None and _managed_block(text, start, end) is None:
-        plan.add("refused", dest, "its Agy hook cannot be installed")
+        plan.add("refused", dest, "its host hooks cannot be installed")
         return
     # A block to take out, or markers that do not pair up: _uninstall_text removes the
     # first and warns about the second rather than leaving either unreported.
@@ -707,6 +931,15 @@ def _install_text(
     project_root: Path | None,
     only_command: bool = False,
 ) -> None:
+    if key == CODEX_HOST_HOOKS:
+        _install_codex_hooks(dest, plan, apply, backup_root)
+        return
+    if key == CODEX_HOST_INSTRUCTIONS:
+        _current, problem = codex_hooks_state(codex_hooks_dest())
+        if problem:
+            plan.warn(f"Codex host instructions withdrawn: hooks.json is {problem}")
+            _withdraw_host_instructions(dest, key, plan, apply, backup_root)
+            return
     if key == AGY_HOST_HOOKS:
         _install_agy_hooks(src, dest, key, plan, apply, backup_root)
         return
@@ -714,7 +947,7 @@ def _install_text(
         hooks_dest = agy_hooks_dest()
         _AGY_SNAPSHOT[hooks_dest] = agy_hooks_state(hooks_dest)
         if _AGY_SNAPSHOT[hooks_dest][1]:
-            _withdraw_agy_instructions(dest, key, plan, apply, backup_root)
+            _withdraw_host_instructions(dest, key, plan, apply, backup_root)
             return
     incoming = _render_text(src, key, project_root, only_command)
 
@@ -791,6 +1024,47 @@ def _agy_targets() -> list[tuple[Path, Path, str]]:
     return mapping
 
 
+def _codex_targets() -> list[tuple[Path, Path, str]]:
+    """Codex host files. Provider AGENTS.md is a separate managed block at the same path."""
+    claude = DIST_CONFIG / CLAUDE_HOST
+    codex = DIST_CONFIG / CODEX_HOST
+    dest = HOME / ".codex"
+    mapping = [
+        (codex / "hooks.template.json", codex_hooks_dest(), CODEX_HOST_HOOKS),
+        (codex / "AGENTS.md", dest / "AGENTS.md", CODEX_HOST_INSTRUCTIONS),
+        (claude / "CLAUDE.md", dest / "exoma" / "CONTRACT.md", CODEX_CONTRACT),
+        (codex / "codex-host.py", dest / "exoma" / "hooks" / "codex-host.py", CODEX_HOOKS_PREFIX + "codex-host.py"),
+        (claude / "hooks" / "workflow_policy.py", dest / "exoma" / "hooks" / "workflow_policy.py", CODEX_HOOKS_PREFIX + "workflow_policy.py"),
+        (claude / "hooks" / "intent-map.json", dest / "exoma" / "hooks" / "intent-map.json", CODEX_HOOKS_PREFIX + "intent-map.json"),
+    ]
+    for source in sorted((claude / "skills").glob("*.md")):
+        name = "exoma-" + source.stem
+        mapping.append((source, dest / "skills" / name / "SKILL.md", f"{CODEX_SKILLS_PREFIX}{name}/SKILL.md"))
+    return mapping
+
+
+def _opencode_targets() -> list[tuple[Path, Path, str]]:
+    """OpenCode host files, all under ~/.config/opencode. Whole files the install owns,
+    except the AGENTS.md block, which shares its file with the provider's block."""
+    claude = DIST_CONFIG / CLAUDE_HOST
+    opencode = DIST_CONFIG / OPENCODE_HOST
+    dest = opencode_home()
+    hooks = dest / "exoma" / "hooks"
+    mapping = [
+        (opencode / "AGENTS.md", dest / "AGENTS.md", OPENCODE_HOST_INSTRUCTIONS),
+        (claude / "CLAUDE.md", dest / "exoma" / "CONTRACT.md", OPENCODE_CONTRACT),
+        (opencode / "opencode-host.py", hooks / "opencode-host.py", OPENCODE_HOOKS_PREFIX + "opencode-host.py"),
+        (claude / "hooks" / "workflow_policy.py", hooks / "workflow_policy.py", OPENCODE_HOOKS_PREFIX + "workflow_policy.py"),
+        (claude / "hooks" / "intent-map.json", hooks / "intent-map.json", OPENCODE_HOOKS_PREFIX + "intent-map.json"),
+    ]
+    for source in sorted((claude / "skills").glob("*.md")):
+        name = "exoma-" + source.stem
+        mapping.append((source, dest / "skills" / name / "SKILL.md", f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"))
+    # Last: the plugin is what switches the gates on, so it lands after what it calls.
+    mapping.append((opencode / "exoma.js", dest / "plugins" / "exoma.js", OPENCODE_PLUGIN))
+    return mapping
+
+
 def _targets(hosts=HOSTS) -> list[tuple[Path, Path, str]]:
     """(source, destination, key) for everything in dist/config that the given hosts take.
 
@@ -835,6 +1109,10 @@ def _targets(hosts=HOSTS) -> list[tuple[Path, Path, str]]:
             )
     if "agy" in hosts:
         mapping += _agy_targets()
+    if "codex" in hosts:
+        mapping += _codex_targets()
+    if "opencode" in hosts:
+        mapping += _opencode_targets()
     # One set of files for every OS: hooks are bash launchers (Git Bash on Windows) beside
     # the .py they run.
     for family, sub, dest_dir in dir_families:

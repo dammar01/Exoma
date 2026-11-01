@@ -51,6 +51,12 @@ def submit(
     allow_reuse: bool = True,
 ) -> dict:
     normalized_command = command.strip().lower()
+    # Every job, and so every worker spawn (_spawn_worker is reached only from here), goes
+    # through submit: the CLI's submit/await, `exoma check --wait` reclaiming a pending
+    # reservation, recovery. One refusal here covers callers that skip cli.main's parser.
+    refusal = _main()._recursion_refusal("submit", normalized_command)
+    if refusal is not None:
+        return refusal
     if normalized_command not in _main().BACKGROUND_COMMANDS:
         return make_error(
             "job_submit_error",
@@ -321,6 +327,12 @@ def check_stalled_job(
                 "Check .workflow job logs for the worker traceback, then resubmit the command."
             ),
         )
+
+    # The probe is a provider call. A second_agent process (`exoma check --wait` run by a
+    # marked child) must not start one: keep waiting and leave reaping to an unmarked
+    # caller. `_recursion_refusal` is the shared marker test; "await" is a refused command.
+    if _main()._recursion_refusal("await") is not None:
+        return None
 
     probe = _main().probe_second_agent(work_dir, model)
     try:

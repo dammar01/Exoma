@@ -88,6 +88,34 @@ def _check_prompt_field() -> None:
             notify("/.analyze kenapa <task-notification> muncul di log")
             assert_true(marker.is_file(), f"[{label}] a user prompt that merely mentions the tag still arms the gate")
 
+            # A partial install without the intent map must release an earlier user's gate.
+            partial_hooks = base / "hooks-no-intent-map"
+            shutil.copytree(HOOKS, partial_hooks,
+                            ignore=shutil.ignore_patterns("intent-map.json", "__pycache__"))
+            plain = json.dumps({"session_id": "c1", "cwd": str(project),
+                                "hook_event_name": "UserPromptSubmit", "prompt": "normal question"})
+            partial_command = [arg.replace(str(HOOKS), str(partial_hooks)) for arg in command]
+            partial = subprocess.run(partial_command, input=plain, text=True,
+                                     env={**env, "HOOK_DIR": str(partial_hooks), "CLAUDE_HOOK_RAW": plain},
+                                     capture_output=True, timeout=60, **no_console())
+            assert_true(partial.returncode == 0 and not marker.exists(),
+                        f"[{label}] a missing intent map clears the previous user's delegation marker")
+            notify("/.analyze kenapa gate ini memblokir")
+            assert_true(marker.is_file(), f"[{label}] the marker is armed again")
+
+            # An intent map that is valid JSON but not an object is as unusable as a missing one.
+            list_hooks = base / "hooks-list-intent-map"
+            shutil.copytree(HOOKS, list_hooks, ignore=shutil.ignore_patterns("__pycache__"))
+            (list_hooks / "intent-map.json").write_text("[]", encoding="utf-8")
+            list_command = [arg.replace(str(HOOKS), str(list_hooks)) for arg in command]
+            listed = subprocess.run(list_command, input=plain, text=True,
+                                    env={**env, "HOOK_DIR": str(list_hooks), "CLAUDE_HOOK_RAW": plain},
+                                    capture_output=True, timeout=60, **no_console())
+            assert_true(listed.returncode == 0 and not marker.exists(),
+                        f"[{label}] a non-object intent map clears the previous user's delegation marker")
+            notify("/.analyze kenapa gate ini memblokir")
+            assert_true(marker.is_file(), f"[{label}] the marker is armed again after the non-object map case")
+
             # DEC-068: a sentence that only resembles a delegated command arms nothing and
             # clears the marker the previous command left; it gets a hint instead.
             sentence = json.dumps({"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit",

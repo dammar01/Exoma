@@ -40,8 +40,8 @@ Claude Code's own commands. See [installation](installation.md#choose-a-mode-alw
 
 ## Hooks: what runs without being asked
 
-In Claude Code all four run. Agy runs a subset (session binding and the gates, not task
-events or graph refresh): [reference, Hosts](../reference.md#hosts).
+In Claude Code all four run. Agy and Codex run a subset (session binding and the gates,
+without task events or graph refresh): [reference, Hosts](../reference.md#hosts).
 
 | Hook | What it does for you |
 | --- | --- |
@@ -57,7 +57,7 @@ None of these blocks your answer: a hook that fails is skipped.
 
 `report` in a project summarises its recorded history: how often verification passes, what
 delegated calls cost, how often stored evidence was reused, and how tasks ended. It reads
-local files only and sends nothing anywhere. See [reference](../reference.md#cli-langsung).
+local files only and sends nothing anywhere. See [reference](../reference.md#direct-cli).
 
 ## Not included
 

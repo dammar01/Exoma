@@ -132,6 +132,48 @@ def _check_ledger_is_evidence_too() -> None:
         assert_true([p for p, _ in removable] == [skill], "and makes it removable once no longer shipped")
 
 
+def _check_legacy_opencode_agents_migrate() -> None:
+    """1.0.0 renamed the OpenCode agents wf-* to exm-*: an older install's wf-* files go,
+    recorded under the old provider key, unless the user edited them."""
+    import exoma.installer.stale as stale
+
+    with _sandbox() as (home, backups):
+        agents = home.parent / ".config" / "opencode" / "agents"
+        agents.mkdir(parents=True)
+        old = agents / "wf-map.md"
+        old.write_text("an old agent\n", encoding="utf-8")
+        edited = agents / "wf-trace.md"
+        edited.write_text("as installed\n", encoding="utf-8")
+        edited_sha = _sha(edited)
+        edited.write_text("as installed, then changed by the user\n", encoding="utf-8")
+        current = agents / "exm-map.md"
+        current.write_text("the renamed agent\n", encoding="utf-8")
+        # The ledger an older release wrote: provider keys before the providers/ layout.
+        stale.LEDGER.write_text(json.dumps({"schema": 1, "files": {
+            str(old): {"key": "opencode/agents/wf-map.md", "sha256": _sha(old)},
+            str(edited): {"key": "opencode/agents/wf-trace.md", "sha256": edited_sha},
+        }}), encoding="utf-8")
+
+        known = stale.previously_installed()
+        assert_true(
+            known.get(str(old), {}).get("key") == "providers/opencode/agents/wf-map.md",
+            f"a legacy OpenCode agent key is read in the current layout: {known}",
+        )
+
+        plan = Plan()
+        install_dir = backups / "install_29990101_000000"
+        stale.prune({str(current)}, plan, True, install_dir)
+        assert_true(not old.exists(), "an unedited legacy wf-* agent is removed")
+        assert_true(edited.exists() and current.exists(), "the edited wf-* agent and the shipped exm-* agent stay")
+        assert_true(any("wf-trace.md" in w and "kept" in w for w in plan.warnings),
+                    f"the kept wf-* agent is named: {plan.warnings}")
+        assert_true(
+            (install_dir / "stale" / "providers" / "opencode" / "agents" / "wf-map.md").read_text(encoding="utf-8")
+            == "an old agent\n",
+            "the removed wf-* agent is backed up first",
+        )
+
+
 def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
     import exoma.installer.stale as stale
     from exoma.installer.base import DIST_CONFIG
@@ -242,6 +284,7 @@ def _check_upgrade_points_at_the_running_build() -> None:
 def _test_installer_leaves_no_stale_files() -> None:
     _check_only_our_unedited_leftovers_go()
     _check_ledger_is_evidence_too()
+    _check_legacy_opencode_agents_migrate()
     _check_settings_drop_retired_hooks_and_refresh_statusline()
     _check_unstamped_dist_is_refused()
     _check_upgrade_points_at_the_running_build()

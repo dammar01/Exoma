@@ -16,6 +16,9 @@ from exoma.installer.base import (
     HOSTS,
     agy_hooks_dest,
     agy_hooks_state,
+    codex_hook_events_present,
+    codex_hooks_dest,
+    codex_hooks_state,
     Plan,
     _RECEIPT_SCHEMA_VERSION,
     _backup,
@@ -53,13 +56,24 @@ def _stored_hosts() -> tuple[str, ...] | None:
 def _migrated_hosts() -> tuple[str, ...] | None:
     """The hosts an install from before the choice existed left, read from what it wrote:
     Claude always (every earlier install took it), Agy when its hooks.json still carries
-    Exoma's hook. None on a machine with no earlier install."""
+    Exoma's hook. None on a machine with no earlier install. Codex postdates the choice, so
+    it appears here only when the mode file was lost: added when ~/.codex/hooks.json
+    registers Exoma's lifecycle hooks, the same test doctor uses."""
     from exoma.installer.stale import LEDGER
 
     if not (_MODE_FILE.exists() or LEDGER.exists()):
         return None
     current, _refusal = agy_hooks_state(agy_hooks_dest())
-    return HOSTS if current and AGY_HOST_HOOK_NAME in current else ("claude",)
+    hosts = ("claude", "agy") if current and AGY_HOST_HOOK_NAME in current else ("claude",)
+    codex_current, _codex_refusal = codex_hooks_state(codex_hooks_dest())
+    if codex_current and codex_hook_events_present(codex_current.get("hooks")):
+        hosts += ("codex",)
+    from exoma.installer.base import opencode_home
+
+    # OpenCode's only registration is the plugin file itself.
+    if (opencode_home() / "plugins" / "exoma.js").is_file():
+        hosts += ("opencode",)
+    return hosts
 
 
 def _installed_hosts() -> tuple[str, ...]:
@@ -150,7 +164,7 @@ def _backup_dirs() -> list[Path]:
 
 
 def _run_rollback(which: str | None, apply: bool) -> int:
-    """Undo one install from its receipt. Dry run by default, like install itself."""
+    """Undo one install from its receipt. Dry run unless `--apply` (install itself writes by default)."""
     dirs = _backup_dirs()
     if not dirs:
         print("[ROLLBACK] no install backups found under ~/.claude/backups/")

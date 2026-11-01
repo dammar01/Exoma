@@ -280,7 +280,7 @@ def main() -> int:
         print(
             "\nThat pattern means the change was authored in dist/ directly, and copying\n"
             "over it would erase it silently. Pick one:\n"
-            "  - keep the dist/ version: install it first (exoma install --apply),\n"
+            "  - keep the dist/ version: install it first (exoma install),\n"
             "    then rerun this to extract it back as a normal build\n"
             "  - discard the dist/ version: rerun with --force\n"
             "Nothing was written."

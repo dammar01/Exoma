@@ -1,0 +1,320 @@
+"""1.0 surfaces: OpenCode host, Claude second agent, per-host seeds, session export, e2e opt-in."""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+from tests.checks.support import assert_true, no_console
+
+REPO = Path(__file__).resolve().parents[2]
+BUNDLE = REPO / "src" / "exoma" / "_bundle" / "config"
+
+
+def _env(home: Path) -> dict:
+    env = dict(os.environ)
+    for key in ("HOME", "USERPROFILE", "AGENT_HOME"):
+        env[key] = str(home)
+    env["PYTHONPATH"] = str(REPO / "src")
+    env.pop("WORKFLOW_AGENT_ROLE", None)
+    return env
+
+
+def _opencode_hook(home: Path, event: str, payload: dict, role: str | None = None) -> dict:
+    hooks = home / ".config" / "opencode" / "exoma" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(BUNDLE / "hosts" / "opencode" / "opencode-host.py", hooks / "opencode-host.py")
+    for name in ("workflow_policy.py", "intent-map.json"):
+        shutil.copyfile(BUNDLE / "hosts" / "claude" / "hooks" / name, hooks / name)
+    env = _env(home)
+    if role:
+        env["WORKFLOW_AGENT_ROLE"] = role
+    proc = subprocess.run([sys.executable, str(hooks / "opencode-host.py"), event], input=json.dumps(payload),
+                          text=True, capture_output=True, env=env, timeout=15, **no_console())
+    assert_true(proc.returncode == 0, f"{event} hook failed: {proc.stderr}")
+    return json.loads(proc.stdout)
+
+
+def _test_opencode_host_contract() -> None:
+    with tempfile.TemporaryDirectory(prefix="exoma-opencode-host-") as tmp:
+        home = Path(tmp) / "home"
+        project = Path(tmp) / "project"
+        (project / ".workflow").mkdir(parents=True)
+        sid = "ses_test1"
+        first = _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "hello"})
+        assert_true("[SESSION BINDING" in first.get("context", ""), "the first prompt binds the session")
+        main_id = first["context"].split("MAIN_SESSION_ID=")[1].split()[0]
+        again = _opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)})
+        assert_true(main_id in again.get("context", ""), "every model call carries the same binding")
+        outside = _opencode_hook(home, "UserPromptSubmit", {"session_id": "ses_x", "cwd": str(Path(tmp)), "prompt": "hi"})
+        assert_true(outside == {}, "a directory without .workflow/ is left alone")
+
+        _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "/.explore where is X"})
+        denied = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "grep",
+                                                     "tool_input": {"pattern": "X"}})
+        assert_true("[EXECUTION GATE]" in denied.get("deny", ""), "an armed delegation refuses gathering: %s" % denied)
+        runner = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "write",
+                                                     "tool_input": {"filePath": str(project / ".workflow" / "run.sh")}})
+        assert_true("deny" in runner, "the runner scripts are never written by hand")
+        second = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "grep",
+                                                     "tool_input": {"pattern": "X"}}, role="second_agent")
+        assert_true(second == {}, "a second-agent process is never gated")
+
+        plugin = (BUNDLE / "hosts" / "opencode" / "exoma.js").read_text(encoding="utf-8")
+        assert_true('"tool.execute.before"' in plugin and "WORKFLOW_AGENT_ROLE" in plugin
+                    and "{{PYTHON_JSON}}" in plugin, "the plugin shim forwards tool calls and skips second agents")
+    _opencode_second_agent_is_marked()
+
+    with tempfile.TemporaryDirectory(prefix="exoma-opencode-quoted-") as tmp:
+        home = Path(tmp) / "home"
+        project = Path(tmp) / "project"
+        (project / ".workflow").mkdir(parents=True)
+        sid = "ses_quoted"
+        _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project),
+                                                  "prompt": '"$exoma-explore where is main"'})
+        denied = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "glob",
+                                                     "tool_input": {"pattern": "*.py"}})
+        assert_true("deny" in denied, "a prompt wrapped in quotes (opencode run on Windows) still arms the gate")
+
+
+def _test_opencode_host_install() -> None:
+    with tempfile.TemporaryDirectory(prefix="exoma-opencode-install-") as tmp:
+        home = Path(tmp)
+        env = _env(home)
+        result = subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"],
+                                cwd=home, env=env, text=True, capture_output=True, timeout=120, **no_console())
+        assert_true(result.returncode == 0, "opencode install succeeds: " + result.stdout[-800:] + result.stderr[-500:])
+        oc = home / ".config" / "opencode"
+        for rel in ("plugins/exoma.js", "exoma/CONTRACT.md", "exoma/hooks/opencode-host.py",
+                    "exoma/hooks/workflow_policy.py", "skills/exoma-plan/SKILL.md", "agents/exm-slice.md"):
+            assert_true((oc / rel).is_file(), f"opencode install writes {rel}")
+        assert_true(not list((oc / "agents").glob("wf-*.md")), "the retired wf- agents are not installed")
+        agents = (oc / "AGENTS.md").read_text(encoding="utf-8")
+        assert_true("EXOMA-OPENCODE-HOST" in agents and "WORKFLOW-SECOND-AGENT" in agents,
+                    "OpenCode host and provider blocks share AGENTS.md")
+        plugin = (oc / "plugins" / "exoma.js").read_text(encoding="utf-8")
+        assert_true("{{" not in plugin and "opencode-host.py" in plugin, "the plugin is rendered with real paths")
+        assert_true((home / ".claude" / "exoma" / "second-agent.md").is_file(),
+                    "the claude second-agent contract is installed as its own file")
+        claude_md = home / ".claude" / "CLAUDE.md"
+        assert_true(not claude_md.exists() or "WORKFLOW-SECOND-AGENT" not in claude_md.read_text(encoding="utf-8"),
+                    "the claude second-agent contract never lands in ~/.claude/CLAUDE.md")
+        checked = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
+                                 text=True, capture_output=True, timeout=60, **no_console())
+        assert_true(checked.returncode == 0, "opencode install passes --check: " + checked.stdout[-800:])
+
+        # Dropping the host takes Exoma's OpenCode files back out, the provider block stays.
+        subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--provider", "codex"], cwd=home,
+                       env=env, text=True, capture_output=True, timeout=120, **no_console())
+        assert_true(not (oc / "plugins" / "exoma.js").exists(), "a host no longer chosen loses its plugin")
+        agents = (oc / "AGENTS.md").read_text(encoding="utf-8")
+        assert_true("EXOMA-OPENCODE-HOST" not in agents and "WORKFLOW-SECOND-AGENT" in agents,
+                    "withdrawing the OpenCode host keeps the provider block")
+
+        # An edited plugin survives the prune, and then the hook it calls must survive too.
+        subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"], cwd=home,
+                       env=env, text=True, capture_output=True, timeout=120, **no_console())
+        plugin = oc / "plugins" / "exoma.js"
+        plugin.write_text(plugin.read_text(encoding="utf-8") + "\n// local tweak\n", encoding="utf-8")
+        dropped = subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--provider", "codex"], cwd=home,
+                                 env=env, text=True, capture_output=True, timeout=120, **no_console())
+        assert_true(plugin.is_file() and (oc / "exoma" / "hooks" / "opencode-host.py").is_file(),
+                    "an edited plugin keeps the hook it calls")
+        assert_true("was edited since Exoma installed it" in dropped.stdout,
+                    "the kept plugin is reported: " + dropped.stdout[-600:])
+
+
+def _test_claude_second_agent() -> None:
+    from exoma.adapters.contract.registry import resolve_adapter
+    from exoma.config.providers import provider_boundary, transport_budget
+
+    adapter = resolve_adapter("claude")
+    args = adapter._build_args(resume_id="abc", model="sonnet", cwd=None, last_message=None)
+    tools = args[args.index("--tools") + 1]
+    assert_true(tools == "Read,Grep,Glob", "the delegated call has only read tools")
+    assert_true(args[args.index("--setting-sources") + 1] == "" and "--strict-mcp-config" in args,
+                "no settings file, hook or MCP server reaches the delegated call")
+    assert_true(args[args.index("--resume") + 1] == "abc", "a session is continued with --resume")
+    assert_true(transport_budget("claude")["kind"] == "stdin", "the prompt rides stdin")
+    assert_true(provider_boundary("claude") == {"reads": "unbounded", "writes": "denied"},
+                "the boundary states what the tool list enforces")
+    stream = "\n".join([
+        json.dumps({"type": "system", "subtype": "init", "session_id": "11111111-2222-3333-4444-555555555555"}),
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}}),
+        json.dumps({"type": "result", "is_error": False, "result": "[EVIDENCE] final",
+                    "usage": {"input_tokens": 3, "output_tokens": 2}}),
+    ])
+    assert_true(adapter.extract_session_id(stream) == "11111111-2222-3333-4444-555555555555", "session id from init")
+    assert_true(adapter.clean_output(stream) == "[EVIDENCE] final", "the answer is the result event")
+    assert_true(adapter.extract_usage(stream)["output_tokens"] == 2, "usage from the result event")
+
+    import subprocess as _subprocess
+    from unittest.mock import patch
+
+    failed = "\n".join([
+        json.dumps({"type": "system", "subtype": "init", "session_id": "11111111-2222-3333-4444-555555555555"}),
+        json.dumps({"type": "result", "is_error": True, "result": "API Error: overloaded"}),
+    ])
+
+    class _Proc:
+        def __init__(self, *args, **kwargs):
+            import io
+            self.stdin, self.stdout, self.stderr = io.StringIO(), io.StringIO(failed + "\n"), io.StringIO("")
+            self.returncode, self.pid = 0, 1
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    with patch.object(_subprocess, "Popen", _Proc):
+        result = adapter.run("task", {}, work_dir=None)
+    assert_true(result.get("ok") is False, "an is_error result fails the call even at exit 0: %s" % result)
+
+
+def _test_per_host_seed() -> None:
+    from exoma import install as install_mod
+    from exoma.adapters.install.opencode_install import _copy_provider_config
+    from exoma.installer.base import Plan
+
+    with tempfile.TemporaryDirectory(prefix="exoma-seed-") as tmp:
+        seeds = Path(tmp) / "config"
+        seeds.mkdir()
+        saved = install_mod.SEED_DIR
+        install_mod.SEED_DIR = seeds
+        try:
+            install_mod._seed_second_agent_config(Plan(), True, "codex", "gpt-5.6-sol", host="codex")
+            install_mod._seed_second_agent_config(Plan(), True, "claude", "sonnet", host="claude")
+        finally:
+            install_mod.SEED_DIR = saved
+        codex = json.loads((seeds / "second_agent.seed.codex.json").read_text(encoding="utf-8"))
+        claude = json.loads((seeds / "second_agent.seed.claude.json").read_text(encoding="utf-8"))
+        assert_true(codex["provider"] == "codex" and claude["provider"] == "claude",
+                    "each host keeps its own second-agent choice")
+        from exoma.adapters.install import opencode_install
+        from exoma.core.workspace.workspace_paths import PROVIDER_SEED_NAME
+
+        # support.py points the seed name at the example for every other check; this one
+        # is about the real per-host names.
+        examples = Path(tmp) / "example"
+        examples.mkdir()
+        (examples / "second_agent.example.json").write_text('{"provider": "opencode"}', encoding="utf-8")
+        isolated, opencode_install.PROVIDER_SEED_NAME = opencode_install.PROVIDER_SEED_NAME, PROVIDER_SEED_NAME
+        try:
+            for host in ("claude", "codex", "agy"):
+                project = Path(tmp) / host
+                (project / ".workflow").mkdir(parents=True)
+                _copy_provider_config(project, seed_dir=seeds, example_dir=examples, host=host)
+        finally:
+            opencode_install.PROVIDER_SEED_NAME = isolated
+        # agy has no seed of its own and there is no shared one: it falls back to the example.
+        for host, provider in (("claude", "claude"), ("codex", "codex"), ("agy", "opencode")):
+            project = Path(tmp) / host
+            copied = json.loads((project / ".workflow" / "second_agent.json").read_text(encoding="utf-8"))
+            assert_true(copied["provider"] == provider, f"init from {host} copies its seed (or the example)")
+
+
+def _test_session_export() -> None:
+    from exoma.core.audit.session_export import export_session
+
+    with tempfile.TemporaryDirectory(prefix="exoma-export-") as tmp:
+        root = Path(tmp) / "project"
+        sid = "main_project_20261031_000000000_abcd"
+        session = root / ".workflow" / "data" / "sessions" / sid
+        (session / "logs" / "call1").mkdir(parents=True)
+        (session / "logs" / "call1" / "output.raw.md").write_text(
+            "[EVIDENCE]\ntoken ghp_" + "a" * 36 + "\n", encoding="utf-8")
+        (session / "runtime").mkdir()
+        (session / "runtime" / "lock").write_text("x", encoding="utf-8")
+        data = root / ".workflow" / "data"
+        rows = [{"session_id": sid, "command": "explore"}, {"session_id": "other", "command": "plan"}]
+        (data / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        home = Path(tmp) / "home"
+        home.mkdir()
+
+        first = export_session(root, sid, home=home)
+        assert_true(first["ok"], "export succeeds")
+        manifest = first["manifest"]
+        assert_true(manifest["review"]["status"] == "template", "an unfilled review is reported as such")
+        assert_true(manifest["transcript"]["status"] == "unavailable", "no host transcript is said, not guessed")
+        with zipfile.ZipFile(first["path"]) as bundle:
+            names = set(bundle.namelist())
+            raw = bundle.read("session/logs/call1/output.raw.md").decode("utf-8")
+            usage = bundle.read("streams/usage.jsonl").decode("utf-8")
+        assert_true("session/runtime/lock" not in names and "review.md" in names and "manifest.json" in names,
+                    "lock files stay out; review and manifest go in")
+        assert_true("ghp_" not in raw and "[REDACTED" in raw and manifest["redactions"] >= 1,
+                    "credential-shaped text is redacted")
+        assert_true(sid in usage and "other" not in usage, "only this session's stream rows")
+
+        review = Path(manifest["review"]["source"])
+        review.write_text(review.read_text(encoding="utf-8") + "\n- solved | partly solved | not solved: solved\n",
+                          encoding="utf-8")
+        second = export_session(root, sid, home=home)
+        assert_true(second["manifest"]["review"]["status"] == "filled", "a filled review is picked up")
+        (session / "logs" / "blob.bin").write_bytes(b"\xff\xfe secret-ish \x00\x81")
+        outside = Path(tmp) / "outside.txt"
+        outside.write_text("token ghp_" + "b" * 36, encoding="utf-8")
+        linked = True
+        try:
+            os.symlink(outside, session / "logs" / "link.txt")
+        except (OSError, NotImplementedError):
+            linked = False  # Windows without the symlink privilege: the binary case still runs
+        third = export_session(root, sid, home=home)
+        skipped = {entry["path"]: entry["reason"] for entry in third["manifest"]["skipped"]}
+        with zipfile.ZipFile(third["path"]) as bundle:
+            names = set(bundle.namelist())
+        assert_true("session/logs/blob.bin" in skipped and "session/logs/blob.bin" not in names,
+                    "bytes that are not UTF-8 text are listed, never copied unredacted")
+        if linked:
+            assert_true("session/logs/link.txt" in skipped and "session/logs/link.txt" not in names,
+                        "a symbolic link is listed, never followed")
+        review.write_bytes(b"\xff\xfe not utf-8 \x81")
+        unreadable = export_session(root, sid, home=home)
+        assert_true(unreadable["ok"] and unreadable["manifest"]["review"]["status"] == "unreadable",
+                    "an unreadable review is reported, the export still completes")
+        from exoma.utils.path_guard import safe_path_component
+
+        for hostile in ("../../evil", "a/b", ".."):
+            (data / "sessions" / safe_path_component(hostile)).mkdir(parents=True, exist_ok=True)
+            refused = export_session(root, hostile, home=home)
+            assert_true(not refused["ok"], f"an id that is not a safe path component is refused: {hostile!r}")
+        assert_true(not (data.parent.parent / "evil.review.md").exists() and not list(Path(tmp).glob("evil*")),
+                    "nothing is written outside the exports directory")
+        missing = export_session(root, "main_nope", home=home)
+        assert_true(not missing["ok"], "an unknown session is refused")
+
+
+def _test_e2e_stays_opt_in() -> None:
+    from unittest.mock import patch
+
+    from exoma.installer import settings as installer_settings
+    from exoma.installer.base import Plan
+
+    called = []
+    plan = Plan()
+    with patch.object(installer_settings, "_install_e2e_deps", side_effect=lambda *a: called.append(a)):
+        installer_settings._install_deps(plan, True, False)
+        assert_true(not called and not plan.actions, "an install without --with-e2e installs nothing")
+        installer_settings._install_deps(plan, True, True)
+        assert_true(len(called) == 1, "--with-e2e is the only way in")
+    install = (REPO / "src" / "exoma" / "install.py").read_text(encoding="utf-8")
+    assert_true('"--with-e2e",\n        action="store_true"' in install, "--with-e2e defaults off")
+    update = (REPO / "src" / "exoma" / "self_update.py").read_text(encoding="utf-8")
+    assert_true("with-e2e" not in update, "exoma update never adds the browser extra")
+
+
+def _opencode_second_agent_is_marked() -> None:
+    """The delegated OpenCode process carries the role, so the host plugin stays off."""
+    from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+
+    with tempfile.TemporaryDirectory(prefix="exoma-oc-role-") as tmp:
+        (Path(tmp) / ".workflow").mkdir()
+        env = OpenCodeAdapter()._child_env(tmp)
+    assert_true(env.get("WORKFLOW_AGENT_ROLE") == "second_agent",
+                "an OpenCode second-agent call is marked as one")

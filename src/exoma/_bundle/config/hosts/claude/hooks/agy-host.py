@@ -175,12 +175,14 @@ def pre_invocation(payload, cid, prompt):
     wp.record_approvals(text, rt, False, provenance)
     lines = [wp.session_binding(main_id, root, "resume" if reused else "startup", reused)]
     mp = wp.load_intent_map(HERE)
-    if mp is not None:
+    if isinstance(mp, dict):
         resolved = wp.explicit_command(text, mp.get("prefix_regex"))
         hinted = None if resolved else wp.nl_command(text, mp)
         if hinted:
             lines.append(wp.intent_hint(hinted, root, main_id))
         wp.set_delegated_marker(resolved, rt, {**provenance, "prompt_excerpt": prompt[:160]})
+    else:
+        wp.set_delegated_marker(None, rt, provenance)
     return {"injectSteps": [{"ephemeralMessage": "\n\n".join(lines)}]}
 
 

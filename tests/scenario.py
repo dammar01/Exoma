@@ -182,6 +182,21 @@ from tests.checks.agy_host import (
     _test_agy_permissions_and_doctor,
     _test_agy_host_uninstall,
 )
+from tests.checks.codex_host import _test_codex_host_contract, _test_codex_host_install
+from tests.checks.self_update import _test_self_update
+from tests.checks.v1_surfaces import (
+    _test_claude_second_agent,
+    _test_e2e_stays_opt_in,
+    _test_opencode_host_contract,
+    _test_opencode_host_install,
+    _test_per_host_seed,
+    _test_session_export,
+)
+from tests.checks.same_provider import (
+    _test_recursion_guard,
+    _test_same_provider_child_isolation,
+    _test_same_provider_export_picks_the_host,
+)
 from tests.checks.os_resolvers import (
     _test_entry_points_refuse_an_old_python,
     _test_find_bash_and_os_locations,
@@ -239,6 +254,18 @@ def run_tests() -> None:
     _test_bundle_layout_and_agy_agent()
     _test_agy_permissions_and_doctor()
     _test_agy_host_uninstall()
+    _test_codex_host_contract()
+    _test_codex_host_install()
+    _test_self_update()
+    _test_opencode_host_contract()
+    _test_opencode_host_install()
+    _test_claude_second_agent()
+    _test_per_host_seed()
+    _test_session_export()
+    _test_e2e_stays_opt_in()
+    _test_recursion_guard()
+    _test_same_provider_child_isolation()
+    _test_same_provider_export_picks_the_host()
     _test_gate_k5_fixtures()
     _test_entry_points_refuse_an_old_python()
     _test_find_python_runs_each_candidate()

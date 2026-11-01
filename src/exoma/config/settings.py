@@ -102,7 +102,7 @@ PROVIDER_SEED_FILE = DATA_DIR / "config" / "second_agent.seed.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = getenv("EXOMA_PROVIDER", "opencode")
 
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "1.0.0"
 
 # Component stamps allow lazy upgrades and may diverge when only one surface changes.
 # v3.6.0 moves both surfaces: `/.verify-browser` ships a new skill and CLAUDE.md registry
@@ -234,7 +234,7 @@ DEFAULT_SLIM_CONTENT_MIN_CHARS = _env_int(
 )
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 # The opencode agent that runs delegated calls. `plan` is opencode's own read-only
-# primary, and the workflow deliberately adds no second primary: every wf-* agent ships
+# primary, and the workflow deliberately adds no second primary: every exm-* agent ships
 # as a subagent that `plan` spawns through the `task` tool.
 DEFAULT_PROVIDER_AGENT = getenv("EXOMA_OPENCODE_AGENT", "plan")
 # How long a learned "this project cannot fan out" verdict stands before it is retried.

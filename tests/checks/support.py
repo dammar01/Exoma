@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-# `install.py --apply` writes `config/second_agent.seed.json` from the maintainer's provider
+# `exoma install` writes `config/second_agent.seed.json` from the maintainer's provider
 # pick (git-ignored), and every workspace a test initialises copies it. A machine that picked
 # codex ran the suite as codex: an opencode-shaped thread id (`ses_...`) was dropped by
 # `bind_provider`, and the continuation and recovery checks failed on that machine only.

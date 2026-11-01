@@ -16,6 +16,7 @@ workspacePaths, lastUserInput, invocationNum, toolCall {name, args}). What each 
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,7 +29,7 @@ HOOKS = REPO / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "ho
 WRAPPER = HOOKS / "agy-host.py"
 
 
-def _run(home: Path, event: str, payload, env: dict | None = None) -> dict:
+def _run(home: Path, event: str, payload, env: dict | None = None, wrapper: Path = WRAPPER) -> dict:
     environ = {k: v for k, v in os.environ.items() if k not in ("WORKFLOW_AGENT_ROLE", "WORKFLOW_LOCAL_MODE")}
     # The system temp dir is always writable to the gate, and this fixture lives in it: point
     # the wrapper's temp elsewhere so "outside the root" is outside.
@@ -38,7 +39,7 @@ def _run(home: Path, event: str, payload, env: dict | None = None) -> dict:
                     "TMP": str(fake_temp), "TMPDIR": str(fake_temp), **(env or {})})
     stdin = payload if isinstance(payload, str) else json.dumps(payload)
     proc = subprocess.run(
-        [sys.executable, str(WRAPPER), event], input=stdin.encode("utf-8"),
+        [sys.executable, str(wrapper), event], input=stdin.encode("utf-8"),
         capture_output=True, env=environ, timeout=30, **no_console(),
     )
     assert_true(proc.returncode == 0, f"{event}: the wrapper always exits 0, got {proc.returncode}: {proc.stderr!r}")
@@ -168,6 +169,27 @@ def _test_agy_host_contract() -> None:
         # A turn without a command clears the marker.
         _run(home, "PreInvocation", _payload(root, cid, "terima kasih", invocationNum=0))
         assert_true(not (rt / "delegated.marker").exists(), "a plain turn clears the marker")
+        _run(home, "PreInvocation", _payload(root, cid, "/.analyze lagi", invocationNum=0))
+        assert_true((rt / "delegated.marker").exists(), "a new delegated turn arms the marker")
+        partial_hooks = Path(tmp) / "agy-hooks-no-intent-map"
+        partial_hooks.mkdir()
+        for name in ("agy-host.py", "workflow_policy.py"):
+            shutil.copyfile(HOOKS / name, partial_hooks / name)
+        _run(home, "PreInvocation", _payload(root, cid, "terima kasih", invocationNum=0),
+             wrapper=partial_hooks / "agy-host.py")
+        assert_true(not (rt / "delegated.marker").exists(),
+                    "a missing intent map clears the previous Agy delegation marker")
+        _run(home, "PreInvocation", _payload(root, cid, "/.analyze lagi", invocationNum=0))
+        assert_true((rt / "delegated.marker").exists(), "the marker is armed again")
+        list_hooks = Path(tmp) / "agy-hooks-list-intent-map"
+        list_hooks.mkdir()
+        for name in ("agy-host.py", "workflow_policy.py"):
+            shutil.copyfile(HOOKS / name, list_hooks / name)
+        (list_hooks / "intent-map.json").write_text("[]", encoding="utf-8")
+        _run(home, "PreInvocation", _payload(root, cid, "terima kasih", invocationNum=0),
+             wrapper=list_hooks / "agy-host.py")
+        assert_true(not (rt / "delegated.marker").exists(),
+                    "an intent map that is valid JSON but not an object clears the Agy delegation marker")
 
         # Execution gate: root, allowed outside path, scope, commit.
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "write_to_file", TargetFile=str(other / "x.py")))
@@ -478,7 +500,7 @@ def _test_agy_host_selection() -> None:
 
             # Host resolution: the flag, then the stored choice, then claude without a terminal.
             plan = base.Plan()
-            assert_true(_resolve_hosts("both", False, plan) == base.HOSTS, "--host both names both")
+            assert_true(_resolve_hosts("all", False, plan) == base.HOSTS, "--host all selects every host")
             assert_true(_resolve_hosts(None, False, plan) == ("claude",) and plan.warnings,
                         "no choice and no terminal installs claude, and says so")
             rollback._MODE_FILE.parent.mkdir(parents=True)
@@ -489,9 +511,27 @@ def _test_agy_host_selection() -> None:
             hooks.write_text(json.dumps({"exoma": {}}), encoding="utf-8")
             if not any(ch in p for p in (Path(sys.executable).as_posix(), home.as_posix())
                        for ch in base._AGY_UNSAFE_PATH_CHARS):
-                assert_true(rollback._migrated_hosts() == base.HOSTS, "one with the Agy hook was both")
+                assert_true(rollback._migrated_hosts() == ("claude", "agy"), "one with the Agy hook was both")
+            # A lost mode file after a Codex install: Codex is inferred only from Exoma's own hooks.
+            before = rollback._migrated_hosts()
+            codex_hooks = base.codex_hooks_dest()
+            codex_hooks.parent.mkdir(parents=True, exist_ok=True)
+            decoy = {"hooks": {event: [{"hooks": [{"type": "command", "command": "echo codex-host.py"}]}]
+                               for event in base.codex_hook_entries()}}
+            codex_hooks.write_text(json.dumps(decoy), encoding="utf-8")
+            assert_true(rollback._migrated_hosts() == before,
+                        "a hooks.json that only mentions the Codex script infers no Codex host")
+            codex_hooks.write_text(json.dumps({"hooks": base.codex_hook_entries()}), encoding="utf-8")
+            assert_true(rollback._migrated_hosts() == before + ("codex",),
+                        "Exoma's Codex lifecycle hooks add Codex to the migrated hosts")
+            assert_true(rollback._installed_hosts() == before + ("codex",),
+                        "--check follows the same inference")
+            codex_hooks.unlink()
             rollback._MODE_FILE.write_text(json.dumps({"hosts": ["agy"]}), encoding="utf-8")
             assert_true(_resolve_hosts(None, True, base.Plan()) == ("agy",), "an upgrade keeps the stored choice")
+            rollback._MODE_FILE.write_text(json.dumps({"hosts": ["claude", "agy"]}), encoding="utf-8")
+            assert_true(_resolve_hosts(None, True, base.Plan()) == ("claude", "agy"),
+                        "an upgrade keeps an existing Claude and Agy selection")
 
             # Permission rules: added beside the user's, claimed only when added, removed alone.
             settings = base.agy_settings_dest()
@@ -688,7 +728,7 @@ def _test_bundle_layout_and_agy_agent() -> None:
 
 
 def _test_agy_permissions_and_doctor() -> None:
-    """The Agy permission rules come with the agy host unless opted out; `both` installs and
+    """The Agy permission rules come with the agy host unless opted out; a stored host pair
     checks both hosts; /.doctor reports each chosen host, and only the Agy one observes the
     Agy session."""
     from exoma.core.audit.bundle_integrity import _host_status
@@ -701,7 +741,7 @@ def _test_agy_permissions_and_doctor() -> None:
         base.HOME = home
         rollback._MODE_FILE = home / ".claude" / ".workflow-install-mode.json"
         try:
-            agy, both, claude = ("agy",), base.HOSTS, ("claude",)
+            agy, both, claude = ("agy",), ("claude", "agy"), ("claude",)
             assert_true(_resolve_agy_permissions(None, agy) == (True, False), "agy alone: rules on")
             assert_true(_resolve_agy_permissions(None, both) == (True, False), "both: rules on")
             assert_true(_resolve_agy_permissions(None, claude)[0] is False, "claude alone: never")

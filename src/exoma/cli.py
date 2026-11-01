@@ -314,6 +314,39 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
     }
 
 
+# What a second_agent child may not ask the runtime for: delegating again, queueing or
+# running a job, or changing execution state. Read-only commands (inspect, status, result,
+# report, audit, ...) stay open. The marker is the one every provider adapter sets on its
+# child (WORKFLOW_AGENT_ROLE=second_agent). It stops inherited recursion; it is not a
+# security boundary — a child that can run commands can also unset it (docs/security.md).
+RECURSION_REFUSED_COMMANDS = frozenset({
+    "explore", "plan", "analyze", "verify", "verify-browser",
+    "submit", "await", "worker",
+    "plan-record", "execute-begin", "execute-end",
+})
+SECOND_AGENT_ROLE_ENV = "WORKFLOW_AGENT_ROLE"
+
+
+def _recursion_refusal(command: str, job_command: str | None = None) -> dict | None:
+    """The structured refusal when a second_agent process asks for a refused command."""
+    if os.environ.get(SECOND_AGENT_ROLE_ENV, "").strip().lower() != "second_agent":
+        return None
+    normalized = (command or "").strip().lower()
+    if normalized not in RECURSION_REFUSED_COMMANDS:
+        return None
+    meta = {"command": normalized}
+    if normalized in {"submit", "await"} and job_command:
+        meta["job_command"] = job_command
+    return make_error(
+        "recursion_refused",
+        f"'{normalized}' is refused inside a second_agent process "
+        f"({SECOND_AGENT_ROLE_ENV}=second_agent): a delegated call cannot delegate again",
+        next_action="Gather the evidence with your own read tools and return it; only the "
+        "main agent dispatches workflow commands.",
+        meta=meta,
+    )
+
+
 def run(
     command: str,
     task: str,
@@ -325,6 +358,9 @@ def run(
     require_provider_session: bool = False,
 ) -> dict:
     normalized_command = command.strip().lower()
+    refusal = _recursion_refusal(normalized_command)
+    if refusal is not None:
+        return refusal
     if normalized_command in INTERNAL_COMMANDS:
         # An internal route reached by name is a caller that skipped the stage that owns
         # it. Refused here, not in the executor: the executor is exactly where the owning
@@ -339,7 +375,9 @@ def run(
 
     if normalized_command == "init":
         try:
-            meta = ensure_workflow_workspace(project_root)
+            # Which host ran /.init decides which provider seed the project starts from
+            # (second_agent.seed.<host>.json); main() records --host here.
+            meta = ensure_workflow_workspace(project_root, host=_INIT_HOST)
         except (OSError, ValueError) as exc:
             return make_error(
                 "workflow_init_error",
@@ -637,6 +675,9 @@ def _browser_exit_commands(command: str, result: dict, job_command: str) -> tupl
     return (command, mapped) if via_job else (mapped, job_command)
 
 
+# `--host` of `exoma init`: the host whose provider seed a new project copies.
+_INIT_HOST: str | None = None
+
 COMMANDS = (
     "init",
     "upgrade",
@@ -681,9 +722,22 @@ def _run_install(argv: list[str]) -> int:
     return install.main()
 
 
+def _run_update(argv: list[str]) -> int:
+    from exoma import self_update
+
+    return self_update.main(argv)
+
+
+def _run_session(argv: list[str]) -> int:
+    from exoma.core.audit import session_export
+
+    return session_export.main(argv)
+
+
 # Entry points that keep their own argument parser: `exoma check ...` is the old
 # `python check.py ...`, `exoma install ...` the old `python install.py ...`.
-_DELEGATED_ENTRY_POINTS = {"check": _run_check, "install": _run_install}
+_DELEGATED_ENTRY_POINTS = {"check": _run_check, "install": _run_install, "update": _run_update,
+                           "session": _run_session}
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -700,13 +754,18 @@ def main(argv: list[str] | None = None) -> None:
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     if argv and argv[0] in _DELEGATED_ENTRY_POINTS:
         raise SystemExit(_DELEGATED_ENTRY_POINTS[argv[0]](argv[1:]))
+    if len(argv) >= 2 and argv[0] in ("--command", "-c") and argv[1] == "update":
+        raise SystemExit(_run_update(argv[2:]))
     if argv in (["--version"], ["-V"]):
         from exoma.config.settings import TOOL_VERSION
 
         print(f"exoma {TOOL_VERSION}")
         raise SystemExit(0)
 
-    parser = argparse.ArgumentParser(prog="exoma", description="Exoma CLI")
+    parser = argparse.ArgumentParser(
+        prog="exoma", description="Exoma CLI",
+        epilog="Package commands: exoma install, exoma check, exoma update, exoma session export",
+    )
     parser.add_argument(
         "--command",
         "-c",
@@ -759,7 +818,22 @@ def main(argv: list[str] | None = None) -> None:
         help="max seconds to wait in await mode; 0 means wait forever",
     )
     parser.add_argument("--pretty", action="store_true", help="pretty print output")
+    parser.add_argument(
+        "--host",
+        choices=("claude", "agy", "codex", "opencode"),
+        default=None,
+        help="init only: the main-agent host running it, which picks that host's provider "
+        "seed (second_agent.seed.<host>.json) for the new project",
+    )
     args = parser.parse_args(argv)
+    # Before the prompt checks and any session or job side effect, so the refusal is the
+    # structured result on stdout rather than an argument error.
+    refusal = _recursion_refusal(args.command, args.job_command)
+    if refusal is not None:
+        print(json.dumps(refusal, indent=2) if args.pretty else json.dumps(refusal))
+        raise SystemExit(_verify_exit_code(args.command, refusal, args.job_command))
+    global _INIT_HOST
+    _INIT_HOST = args.host
 
     work_dir = str(Path(args.work_dir).resolve()) if args.work_dir else str(Path.cwd())
 

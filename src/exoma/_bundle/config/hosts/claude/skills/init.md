@@ -15,8 +15,9 @@ Do NOT conclude "package missing" before checking `exoma --version` and `<python
 
 ## STEP 2 — Run init
 work_dir = absolute path of the active project.
-Every OS (Bash tool): exoma init --work-dir "<work_dir>" --pretty
-(fallback: `<python> -m exoma init --work-dir "<work_dir>" --pretty`)
+Every OS (Bash tool): exoma init --work-dir "<work_dir>" --host {{HOST}} --pretty
+(fallback: `<python> -m exoma init --work-dir "<work_dir>" --host {{HOST}} --pretty`)
+`--host {{HOST}}` names this host, so the project starts from the second agent chosen for it at install (`second_agent.seed.{{HOST}}.json`).
 <python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.10 (Windows often has `python`, mac/linux often only `python3`). Older → exoma refuses with one message; use another interpreter, do not guess "package missing".
 init automatically: generates scripts (run/inspect/check .sh, bash on every OS, calling `<python> -m exoma`) + config (interpreter + package root, abs-path) + copies second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, created lazily on the first delegated call (NOT at the root).
 init is a SCAFFOLD, not an update: an EXISTING config.json and second_agent.json are not overwritten (init has no active-job guard — that belongs to /.upgrade). A workspace from an old build stays at the old version after init. `meta.upgrade_needed: true` + `meta.versions` in the output = run /.upgrade.
@@ -24,7 +25,7 @@ init is a SCAFFOLD, not an update: an EXISTING config.json and second_agent.json
 ## Output
 [INIT]
 bootstrap: exoma <version> (<exoma | python -m exoma>)
-generated: run/inspect/check.sh + config.json (v0.3.0, python + package_root abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
+generated: run/inspect/check.sh + config.json (v1.0.0, python + package_root abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
 upgrade_needed: <meta.upgrade_needed> (true → name the versions from meta.versions + offer /.upgrade)
 status: READY

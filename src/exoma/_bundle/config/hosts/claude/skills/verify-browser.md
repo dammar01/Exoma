@@ -8,7 +8,7 @@ Different from /.verify: /.verify = code review (delegated|syntax). /.verify-bro
 DELEGATED command: the Pre-flight gate applies. Before `.workflow/run verify-browser` runs, Read/Grep/Glob/Bash/MCP are FORBIDDEN (reading config.json included) — the `intent-gate-check` hook blocks them. Writing request.json is allowed (it is not gathering). Division of work: second_agent = reasoning + writing the spec (stage 1) and reviewing the evidence (stage 3); runtime player = a child process the runtime starts to drive Playwright (stage 2). main_agent does not run the browser, and neither does the second_agent (read-only sandbox). A `ready` draft goes STRAIGHT to the run — asking "run it or not" is FORBIDDEN. What still stops it: `blocked`/`invalid` from the draft, `missing_env`, and proposed `read_only_requests` never allowed before (that is a permission decision, not a run gate).
 
 ## Prerequisites
-- Playwright: `exoma install --apply --with-e2e`. /.doctor → `e2e_readiness`.
+- Playwright: `exoma install --with-e2e`. /.doctor → `e2e_readiness`.
 - The target app is ALREADY running at the URL the user names. The runtime does not start servers.
 - An old run script (that does not know `verify-browser`) answers with a job without a result / `unsupported command` → run /.upgrade first.
 

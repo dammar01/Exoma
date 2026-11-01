@@ -1,4 +1,4 @@
-# Exoma v0.3.0
+# Exoma v1.0.0
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -11,7 +11,7 @@ the package, `src/exoma/` in the repository.
 Two roles, strictly separated:
 
 - **main_agent** — the agent you use (Claude Code, Codex, Cursor, etc.). Orchestrator, user interface, and the **only** one allowed to write files.
-- **second_agent** — the selected provider (OpenCode, Codex, or Agy), a **read-only** evidence gatherer by role. Not the final answer. Only OpenCode enforces that boundary; each provider's write boundary differs, see [Security](security.md).
+- **second_agent** — the selected provider (OpenCode, Codex, Agy, or Claude Code), a **read-only** evidence gatherer by role. Not the final answer. Only OpenCode enforces that boundary; each provider's write boundary differs, see [Security](security.md).
 
 Terms: `main_agent` and `second_agent` are the identifiers the runtime, hooks, skills and
 JSON fields use. Prose elsewhere may say *primary agent* and *second agent* (or *secondary
@@ -40,7 +40,7 @@ Prompt user
 → python -m exoma --command await → JobManager → detached worker
 → Executor → Router
 → Graphify leads + fact store → PromptBuilder
-→ selected provider adapter (OpenCode/Codex/Agy) → second_agent
+→ selected provider adapter (OpenCode/Codex/Agy/Claude) → second_agent
 → sub-agent fan-out when enabled
 → contract validation + digest + evidence storage
 → await returns {ok, content, meta, digest?}
@@ -82,9 +82,11 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 | second_agent output | `empty_output`, `invalid_evidence`, `session_capture_failed`, `task_truncated`, `fact_ingest_failed` |
 | Prompt and command line | `prompt_too_long`, `unsafe_command_line` |
 | Provider config | `provider_config_missing`, `provider_config_invalid`, `model_unset`, `invalid_provider_selection` |
-| Job, session, workspace | `job_already_running`, `job_submit_error`, `worker_capacity`, `runtime_lock`, `session_state_error`, `routing_error`, `workflow_init_error`, `workflow_upgrade_error`, `sweep_git_error`, `budget_exceeded` |
+| Job, session, workspace | `job_already_running`, `job_submit_error`, `worker_capacity`, `runtime_lock`, `session_state_error`, `routing_error`, `recursion_refused`, `workflow_init_error`, `workflow_upgrade_error`, `sweep_git_error`, `budget_exceeded` |
 | Promote and knowledge | `promote_input_missing`, `promote_input_unreadable`, `promote_existing_unreadable`, `promote_not_on_branch`, `promote_not_production_branch`, `promote_write_rejected`, `invalid_knowledge`, `secret_shaped_content`, `ignored_source`, `ignored_destination` |
 | Other | `unknown` |
+
+`recursion_refused`: the process carries `WORKFLOW_AGENT_ROLE=second_agent` (every provider adapter sets it on its child) and asked for `explore`, `plan`, `analyze`, `verify`, `verify-browser`, `submit`, `await`, `worker`, `plan-record`, `execute-begin` or `execute-end`. Refused in `cli.main` after argument parsing, at `run()` entry, and at `submit()` entry, the one path to a job and a worker spawn (so `exoma check --wait` reclaiming a pending job spawns nothing either), before any session, job or file side effect. The stalled-job probe (`check_stalled_job`, reached from `check --wait`) is a provider call too: for a marked caller the probe of a live worker is skipped and the job keeps waiting, not reaped on the probe's word (a worker whose process is gone is still reaped, which calls no provider); `meta.command` (and `meta.job_command` for `submit`/`await`) names the request, and the exit status follows the usual mapping (1, or 2 for `verify`). Read-only commands (`inspect`, `status`, `result`, `report`, `audit`, ...) stay open, as do local commands outside that list such as `doctor` (which writes its own report). The marker stops inherited recursion when the host and the second agent are the same CLI; it is not a security boundary, since a child that can run commands can unset it ([Security](security.md)).
 
 `worker_died` with `meta.reason: recovery_exhausted` means automatic recovery has already been used; do not retry automatically (see [Async jobs & recovery](#async-jobs--recovery)).
 
@@ -113,7 +115,7 @@ git --version
 
 ---
 
-## Install (v0.3.0)
+## Install (v1.0.0)
 
 ### New team member — full sequence from scratch
 
@@ -121,7 +123,7 @@ Three steps, run once per machine (except step 3, once per project):
 
 ```bash
 uv tool install exoma                       # 1. get the tool (or: pip install exoma)
-exoma install --apply                       # 2. install the global agent config
+exoma install                               # 2. install the global agent config (asks the host and second agent)
 exoma init --work-dir /path/to/your-project # 3. per project
 ```
 
@@ -152,54 +154,78 @@ under the same names, and the last install wins.
 Install the package → run one command → configured.
 
 ```bash
-exoma install            # DRY RUN — show every change, write nothing
-exoma install --apply    # now writes
-exoma install --apply --only-command      # workflow active only through /.<command>
-exoma install --apply --host both           # Claude Code and Agy, each with its own files
-exoma install --apply --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
+exoma install                             # install for the last chosen host (a terminal asks the first time)
+exoma install --dry-run                   # show every change, write nothing
+exoma install claude                      # Claude Code main agent
+exoma install opencode --provider claude  # OpenCode main agent, Claude Code second agent
+exoma install codex --provider codex      # Codex main agent and Codex second agent
+exoma install all                         # Claude Code, Agy, Codex, and OpenCode
+exoma install --only-command              # workflow active only through /.<command>
+exoma install claude --provider codex --model gpt-5.6-sol   # choose the second agent without a prompt
+exoma install --with-e2e                  # also the browser extra for /.verify-browser (never without this flag)
 exoma install --check                     # check bundle + install (including the project when cwd has .workflow/)
 exoma install --rollback                  # dry run of the latest rollback
 exoma install --rollback --apply          # rollback after a hash preflight
 exoma install --uninstall                 # dry run: what would be removed
 exoma install --uninstall --apply         # remove, with a receipt (can be rolled back)
+exoma update                              # update package, global config, and current workspace
 ```
+
+`exoma update` detects an uv tool installation, otherwise uses pip in the running Python
+environment. It invokes the newly installed Exoma to apply global config, upgrades the
+workspace when cwd or a parent contains `.workflow/`, and checks the resulting install.
+If that directory has a missing, unreadable, or malformed `config.json`, update stops before
+changing the package. A later install or check failure reports an incomplete update and names
+any new global install receipt for an explicit rollback; workspace changes are outside it.
+Use `--manager uv` or `--manager pip` to select the package manager explicitly.
 
 All `exoma install` flags:
 
-| Flag | Effect | Writes? |
+| Argument / flag | Effect | Writes? |
 |---|---|---|
-| (no flag) | dry run: print the plan | no |
-| `--apply` | execute the plan; combined with the other flags below to actually write | yes |
-| `--only-command` | command-only mode (see "Intent mode"); persisted, applies to subsequent installs | with `--apply` |
-| `--auto-intent` | restore auto-intent mode | with `--apply` |
-| `--host claude\|agy\|both` | which main-agent host to install for (see "Host choice"); persisted | with `--apply` |
-| `--no-agy-permissions` / `--agy-permissions` | the Agy allow rules are added whenever the `agy` host is chosen; `--no-agy-permissions` removes them and is persisted, `--agy-permissions` undoes that (see "Hosts") | with `--apply` |
-| `--provider NAME` / `--model ID` | second agent choice for the seed (`--model` requires `--provider`) | with `--apply` |
-| `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser` | with `--apply` |
-| `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | with `--apply` |
+| `[claude\|agy\|codex\|opencode\|all]` | which main-agent host to install for (`all` installs all four); persisted | yes |
+| (no argument) | install for the stored host choice; a terminal asks when there is none | yes |
+| `--dry-run` | print the plan, write nothing (combines with every install flag below) | no |
+| `--only-command` | command-only mode (see "Intent mode"); persisted, applies to subsequent installs | yes |
+| `--auto-intent` | restore auto-intent mode | yes |
+| `--no-agy-permissions` / `--agy-permissions` | the Agy allow rules are added whenever the `agy` host is chosen; `--no-agy-permissions` removes them and is persisted, `--agy-permissions` undoes that (see "Hosts") | yes |
+| `--provider NAME` / `--model ID` | second agent choice for every chosen host's seed (`--model` requires `--provider`) | yes |
+| `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser`; never installed without it | yes |
+| `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | yes |
 | `--check` | drift report for the bundle, the global install, and the project when cwd has `.workflow/` | no |
 | `--rollback [ID]` | undo one install/uninstall from its receipt (default: latest) | with `--apply` |
 | `--uninstall` | remove what the workflow installed (see "Uninstall") | with `--apply` |
 
+Since 1.0 an install writes by default. `--apply` is still accepted on an install, with a notice
+that it is no longer needed; it keeps its meaning for `--rollback` and `--uninstall`, which preview
+without it. `--host <name>` is accepted as a deprecated spelling of the positional host. The 0.x
+choice `both` is gone: each install replaces the stored host choice rather than adding to it, so
+name `all` to keep several hosts.
+
 <a id="detail-host-choice"></a>
-**Host choice.** The main agent runs in one host or both: `claude` (Claude Code, `~/.claude`)
-and `agy` (Antigravity CLI, `~/.gemini`). It is a different choice from the second agent
+**Host choice.** The main agent runs in `claude` (Claude Code, `~/.claude`), `agy`
+(Antigravity CLI, `~/.gemini`), `codex` (Codex CLI, `~/.codex`), or `opencode` (OpenCode,
+`~/.config/opencode`); `all` installs all four.
+An earlier Claude+Agy selection remains valid when read from stored install state. The host is a different choice from the second agent
 (`--provider`): the provider bundles install whichever host is picked. The hosts come from, in
-order: `--host`; the choice the last install recorded; for an install from before the choice
+order: the positional host (or the deprecated `--host`); the choice the last install recorded; for an install from before the choice
 existed, what it wrote (Claude, plus Agy when `~/.gemini/config/hooks.json` holds the `exoma`
-hook); a prompt on `--apply` from a terminal; else `claude`, with a warning. The choice is stored
+hook, plus Codex when `~/.codex/hooks.json` registers Exoma's lifecycle hooks, plus OpenCode when
+`~/.config/opencode/plugins/exoma.js` exists — the last two only arise when the mode file was
+lost); a prompt from a terminal; else `claude`, with a warning. The choice is stored
 with the intent mode in `~/.claude/.workflow-install-mode.json` (`hosts`, `agy_permissions`,
 `agy_permissions_opt_out`,
 `agy_permission_rules`), receipted like it. A host dropped from the choice is taken out: its
-instruction block, its hook registration (`settings.json` hooks, or the `exoma` hook and the
-permission rules for Agy), then its files through the stale prune — only files an install
+instruction block, its hook registration (`settings.json` hooks, the Agy `exoma` hook, or
+Exoma handlers in Codex `hooks.json`; plus Agy permission rules; the OpenCode plugin is a file
+and goes with the prune), then its files through the stale prune — only files an install
 wrote and nobody edited. `~/.claude/` still holds the installer's own state (backups, ledger,
 mode file, `hooks/python.path`) when only `agy` is chosen; no Agy file reads it.
 
 <a id="detail-bundle-layout"></a>
 **Bundle layout.** `exoma/_bundle/config/` holds one folder per role: `hosts/<name>/` for a
-main-agent host (`hosts/claude/`, `hosts/agy/`) and `providers/<name>/` for a second-agent
-provider (`providers/{opencode,codex,agy}/`), so a host and a provider may share a name. A
+main-agent host (`hosts/claude/`, `hosts/agy/`, `hosts/codex/`, `hosts/opencode/`) and `providers/<name>/` for a second-agent
+provider (`providers/{opencode,codex,agy,claude}/`), so a host and a provider may share a name. A
 bundle key — in the manifest, the install ledger and every receipt — is a path relative to that
 folder. Keys an install before v0.3.0 recorded (`claude/...`, `agy-host/...`, `<provider>/...`)
 are read as their current form (`config/bundle_keys.canonical_key`), so stale cleanup,
@@ -208,12 +234,16 @@ the current form. doctor (`checks.bundle_integrity`) skips the files of a host t
 choose (`skipped`, reason `host_not_chosen`).
 
 doctor also writes `checks.hosts`: `{chosen, hosts: {<host>: {missing: [...]}}}` for every host the
-install chose (`both` lists both; an install from before the choice is Claude, plus Agy when
-`~/.gemini/config/hooks.json` holds the `exoma` hook). Claude: the `WORKFLOW-MAIN-AGENT` block, the
+install chose (a stored Claude+Agy selection lists both; with no recorded choice it is Claude, plus Agy when
+`~/.gemini/config/hooks.json` holds the `exoma` hook, plus Codex when `~/.codex/hooks.json` registers
+Exoma's lifecycle hooks — the same inference as the installer's). Claude: the `WORKFLOW-MAIN-AGENT` block, the
 skills, the hooks. Agy: the `EXOMA-HOST` block, the `exoma` hook in `hooks.json`, `CONTRACT.md`, the
 hook scripts, the skills, and — with `permissions: on` — every permission rule this machine needs,
 whether Exoma added it or the user already had it. A host with something missing
-is an issue, fixed by `exoma install --apply`. These are file checks; what only a session in the
+is an issue, fixed by `exoma install`. Codex checks its main-agent block, contract,
+hook file, and skills; hook trust remains a separate `/hooks` review. OpenCode checks its
+`EXOMA-OPENCODE-HOST` block, the plugin, the contract, the hook files, and the skills; a running
+OpenCode loads the plugin only when it starts. These are file checks; what only a session in the
 host can see is the Agy `/.doctor` STEP 3 ("Hosts", "Probe").
 
 `AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
@@ -221,16 +251,18 @@ install into a temporary HOME. The runtime reads the interpreter pin (`.claude/h
 from the same home, so `.workflow/*.sh` generated under `AGENT_HOME` name the interpreter that
 install pinned there, not the one in the real home. `EXOMA_HOME` moves runtime data only.
 
-Bundle drift (`--check`, and the `--apply` refusal) is computed in both directions: bundle files
+Bundle drift (`--check`, and the install refusal) is computed in both directions: bundle files
 (`exoma/_bundle/config/`) whose hash does not match or that are not recorded in
 `exoma/_bundle/manifest.json`, **and** manifest entries whose source file no longer exists. `doctor` (`checks.bundle_integrity`) first validates the shape of each
 manifest entry: an entry that is not an object, lacks `path`, or lacks a 64-hex `sha256` makes the check
 stop with `error` + `malformed` (the entry indices), which `doctor` turns into an issue — not local
 install drift.
 
-**Dry run is the default, deliberately.** This script writes to the global agent config — read by every project on that machine. A mistake here is not confined to one repo.
+**An install writes; `--dry-run` previews.** It writes to the global agent config, read by
+every project on that machine, so every overwritten file is backed up and receipted, and
+`--rollback` undoes a whole install (below).
 
-What `--apply` does:
+What an install does:
 
 | Target | Strategy |
 |---|---|
@@ -238,11 +270,12 @@ What `--apply` does:
 | `~/.claude/skills/*.md`, `~/.claude/commands/*.md` | replace (template) |
 | `~/.claude/hooks/*` | replace; one set for all OSes: `<hook>.sh` launcher, `<hook>.py` logic, `workflow_hooks.py`, `intent-map.json`. `.ps1` files from old releases are deleted as stale files (edited ones are left alone and reported) |
 | `~/.claude/settings.json` | add the workflow's hooks and `statusLine`; user hooks and keys are preserved (see "Registered hooks") |
+| `~/.claude/exoma/second-agent.md` | replace (whole file): the claude second agent's contract, passed per call with `--append-system-prompt-file`. Never a block in `~/.claude/CLAUDE.md`, which the user's own sessions read |
 | `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md` | replace content between the `WORKFLOW-SECOND-AGENT` markers; file does not exist yet → only the marker block. That block applies only to runtime calls (instructions opened with `[WORKFLOW_AGENT]`); provider sessions the user runs directly ignore it |
 | `~/.gemini/config/agents/exoma-second-agent/agent.md` | replace (whole file: Agy reads the custom agent's frontmatter only at the top). The agy second agent's contract, selected per call with `--agent` (see "Choosing a provider"), so an Agy host session never reads it. A `WORKFLOW-SECOND-AGENT` block an earlier release left in `~/.agy/AGENTS.md`, which Agy does not read, is cut (backed up, receipted; the user's text stays) |
 | `~/.claude/.workflow-install-mode.json`, `~/.claude/.workflow-installed.json` | the selected intent mode and the ledger of files written by install (for cleaning up stale files) |
 | `~/.config/opencode/opencode.{json,jsonc}` | additive merge for general config; the workflow's `agent.plan` permission is enforced, other user keys are preserved |
-| `~/.config/opencode/agents/*.md` | replace — one global subagent roster, used by every project managed by the workflow |
+| `~/.config/opencode/agents/*.md` | replace — one global subagent roster (`exm-*`), used by every project managed by the workflow. The `wf-*` files of 0.x go through the stale prune; the `wf-*` entries 0.x merged into `permission.task` of the user's `opencode.json` stay (they allow agents that no longer exist) |
 | `<project_root>/opencode.json` | **not** the installer's job — installed and refreshed by `init`/`upgrade` (the secret-file deny rule is enforced every time) |
 
 Everything that will be overwritten is backed up first to `~/.claude/backups/install_<timestamp>/`.
@@ -263,13 +296,16 @@ The receipt covers the global install targets and the bundle. Stateful init/upgr
 and adding `.workflow/` to `.gitignore` are not part of the installer rollback because they can
 hold session and project state that is unsafe to delete automatically.
 
-#### Seed `second_agent.seed.json`
+#### Seeds `second_agent.seed.<host>.json`
 
-`<data dir>/config/second_agent.seed.json` lives in the per-user data directory, outside any
-repository. The installer **rebuilds it on every
-`--apply`** from `second_agent.example.json` — this is the file `init` copies into each new
-`.workflow/second_agent.json` (`adapters/install/opencode_install._copy_provider_config`,
-with the example as the last fallback). The runtime itself never reads it: a project
+`<data dir>/config/second_agent.seed.<host>.json` — one per chosen host — lives in the per-user
+data directory, outside any repository. The installer **rebuilds each on every install** from
+`second_agent.example.json`. `init` copies the seed of the host that ran it into the new
+`.workflow/second_agent.json`: each host's `/.init` passes `exoma init --host <host>`
+(rendered into the skill at install), and `adapters/install/opencode_install._copy_provider_config`
+takes, first that exists, `second_agent.seed.<host>.json`, the shared `second_agent.seed.json`
+(written by 0.x installs, still honoured), then the example. So Claude Code and OpenCode on one
+machine can delegate to different second agents. The runtime itself never reads it: a project
 without `.workflow/second_agent.json` is rejected with `provider_config_missing`, a broken file is rejected with
 `provider_config_invalid`. There is no longer a silent fallback to machine-level config.
 
@@ -280,8 +316,9 @@ Order in which the choice is determined:
 | Condition | What happens |
 |---|---|
 | `--provider NAME` (optional `--model ID`) | used as is, zero questions |
-| a previous seed exists | its old choice is reused on top of the new example |
-| `--apply` from a terminal, no seed yet | the installer **asks** for the provider, then the model |
+| a previous seed for this host exists | its old choice is reused on top of the new example |
+| no host seed, a shared 0.x seed exists | the shared seed's choice is carried into the host seed |
+| an install from a terminal, no seed yet | the installer **asks**, per host, for the provider, then the model |
 | non-interactive, no seed yet | `second_agent.example.json` is copied as is |
 
 An old `second_agent.json` beside the seed (written once, never refreshed — the source of
@@ -292,11 +329,13 @@ The non-interactive path is not an oversight: `tools/e2e/e2e_installer.py` and C
 `exoma install` without stdin, and a prompt there would **hang** the run, not fail it.
 
 The prompt shows each provider along with whether its CLI is on `PATH` and whether it keeps a
-read boundary (codex and agy are marked as trusted providers), then a shortlist of the selected provider's models with
-the reasoning efforts each accepts. Blank on the provider cancels the selection
+read boundary (codex, agy and claude are marked as trusted providers), then the selected
+provider's models from the live catalog (`core/provider/model_catalog.py`: what the installed
+CLI lists now, newest first, at most 20; the bundled shortlist when the CLI cannot be asked —
+always for claude, whose CLI has no model listing) with the reasoning efforts each accepts. Blank on the provider cancels the selection
 (the example is copied). Blank on the model leaves `default_model` empty — for opencode that is
 rejected at call time (`model_unset`), because without `-m` opencode uses the last model
-used on that machine. Model ids outside the shortlist are still accepted with a warning.
+used on that machine. Model ids outside the catalog are still accepted with a warning.
 
 The model is pinned to `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`, `e2e_spec`);
 `sweep` is left alone. `routes` is edited per key via `_merge_routes` so that per-route `timeout_seconds`
@@ -311,7 +350,7 @@ created.
 this file has no counterpart in the bundle, so it has no source to drift from, and its absence
 is not breakage (init still works via the example).
 
-When the installer is run from inside a project that already has `.workflow/`, it performs an **in-place upgrade**: the old workspace layout is migrated to `.workflow/data/` (with a backup), scripts are regenerated, the config version stamp is updated, `<project_root>/opencode.json` is refreshed, and `sessions/` is preserved. A new workspace is not scaffolded by the installer — use `exoma init --work-dir DIR` (skill `/.init`). The workspace upgrade is refused while there is still an active job; the global install still completes and the warning must be checked.
+When the installer is run from inside a project that already has `.workflow/`, it performs an **in-place upgrade**: the old workspace layout is migrated to `.workflow/data/` (with a backup), scripts are regenerated, the config version stamp is updated, `<project_root>/opencode.json` is refreshed, and `sessions/` is preserved. A new workspace is not scaffolded by the installer — use `exoma init --work-dir DIR` (skill `/.init`). The workspace upgrade is refused while there is still an active job; the global install still completes, but `exoma install` exits nonzero and reports the unfinished workspace in its warnings.
 
 ### Statusline (second agent badge)
 
@@ -323,7 +362,7 @@ carries only `hooks` and `statusLine` — `model`, `enabledPlugins`,
 `extraKnownMarketplaces`, `effortLevel`, and `permissions.defaultMode` are no longer planted
 (those are preferences, not workflow requirements; ones already planted by old releases are left alone). Already have
 your own `statusLine` → yours wins, the badge does not appear, and the collision is reported in the
-install output. Delete that key and rerun `exoma install --apply` if you want to use
+install output. Delete that key and rerun `exoma install` if you want to use
 the shipped one.
 
 The script file itself follows the `~/.claude/hooks/*` rule in the table above: **replace**,
@@ -419,7 +458,7 @@ unlocked rather than delay the session start, and a lock older than 10 s (its ho
 removed only while it still holds the token judged stale, which leaves the instant between
 that check and the removal unguarded.
 Without Git Bash on
-Windows, or without `bash` on PATH on POSIX, `--apply` is refused (exit 6) before writing anything.
+Windows, or without `bash` on PATH on POSIX, an install is refused (exit 6) before writing anything.
 Maintainer and e2e tools that run hooks or the runner also refuse (rather than guessing a plain
 `bash`) when bash is not found. Old commands of the form
 `powershell ... .ps1` are recognized by their hook name and replaced.
@@ -456,7 +495,7 @@ markers are unpaired (START without END, END without START, END before START, or
 one block) are refused at install (action `refused` + a warning with the path and both markers) and
 left alone at uninstall.
 
-Not touched: the seed `second_agent.seed.json` and
+Not touched: the seeds `second_agent.seed.<host>.json` (and a 0.x `second_agent.seed.json`) and
 `.workflow/` in each project. All changes go through the same backup + receipt as install,
 so `exoma install --rollback --apply` undoes an uninstall.
 
@@ -561,7 +600,7 @@ cites this rule. A marker without `set_at` (not written by `intent-gate-set`) do
 
 `src/exoma/_bundle/config/hosts/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
 `AUTO-INTENT`, each wrapped in `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->` markers.
-That file is the source before trimming, not the installed result. On `--apply`, the installer
+That file is the source before trimming, not the installed result. On install, the installer
 (`_apply_intent_mode`) drops the unselected mode stanza along with both modes' markers,
 so the installed `~/.claude/CLAUDE.md` contains exactly one stanza. The two stanzas live in
 one file, not two file variants, so the difference between them is visible in review.
@@ -613,8 +652,8 @@ The installer is tested against a **temporary HOME**, not the machine that produ
 ## Hosts
 
 The host is the CLI the developer talks to: it runs the main agent, and its hooks enforce the
-runtime's rules at the tool boundary. Claude Code is the reference host. Agy (Antigravity CLI)
-is the second; `--host` picks which are installed ("Host choice"). The decisions both hosts
+runtime's rules at the tool boundary. Claude Code is the reference host; Agy (Antigravity CLI),
+Codex CLI and OpenCode are additional hosts. `exoma install <host>` picks which are installed ("Host choice"). The decisions the hosts
 enforce live once, in `workflow_policy.py` (one source, installed beside each host's hooks): the
 pre-flight decision (`preflight_refusal`), write root and scope, commit approval, the user's
 approvals, intent classification, the pre-flight marker, the `[EXECUTION RESULT]` claim. Each
@@ -623,18 +662,49 @@ host keeps only its payload parsing — which of its tools is a `write`, `shell`
 format. A Claude hook that cannot import that
 module (a partial install) exits 0 without acting, like every other state it cannot read.
 
-| Capability | Claude Code | Agy (as calibrated, CASE-029) |
-|---|---|---|
-| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, which points at `~/.gemini/antigravity-cli/exoma/CONTRACT.md` (the `CLAUDE.md` block, rendered for Agy) with a tool-name table |
-| Commands | skills + slash commands | Agy skills `~/.gemini/antigravity-cli/skills/.<name>/SKILL.md`, answering to `/.<name>` |
-| Prompt routing | `UserPromptSubmit` | `PreInvocation` with `invocationNum` 0, prompt from `lastUserInput` |
-| Context injection | `additionalContext` | `injectSteps` `ephemeralMessage` from `PreInvocation` (not `SessionStart`: ignored) |
-| Tool gate | `PreToolUse`, exit 2 blocks | `PreToolUse`, `decision: deny`; `{}` also denies, so every answer names a decision |
-| Session identity | `SessionStart` + `session_registry.json` | `conversationId` + `~/.gemini/exoma_session_registry.json`; a known id is a resume |
-| Questions | `AskUserQuestion` | `ask_question` (not calibrated) |
-| Background jobs | `run_in_background` | asynchronous `run_command`, `/tasks` (not calibrated) |
-| End of turn | `Stop`: status guard warns | `Stop`: status guard sends the reply back once (`decision: continue`) |
-| Graph refresh, task telemetry, statusline | `Stop` / `PostToolUse` / `statusLine` | not registered |
+| Capability | Claude Code | Agy (as calibrated, CASE-029) | Codex CLI | OpenCode |
+|---|---|---|---|---|
+| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, pointing to its rendered `CONTRACT.md` | `~/.codex/AGENTS.md` block `EXOMA-CODEX-HOST`, pointing to `~/.codex/exoma/CONTRACT.md`; separate from the Codex provider block | `~/.config/opencode/AGENTS.md` block `EXOMA-OPENCODE-HOST`, pointing to `~/.config/opencode/exoma/CONTRACT.md`; separate from the opencode provider block |
+| Commands | skills + slash commands | `/.<name>` skills | `$exoma-<name>` skills under `~/.codex/skills/` | `exoma-<name>` skills under `~/.config/opencode/skills/`; `/.<name>` and `$exoma-<name>` in a prompt map to workflow commands |
+| Prompt routing | `UserPromptSubmit` | `PreInvocation`, `invocationNum` 0 | `UserPromptSubmit`; explicit skill mentions map to workflow commands | plugin `chat.message` |
+| Context injection | `additionalContext` | `PreInvocation` ephemeral message | `SessionStart` and `UserPromptSubmit` additional context | plugin `experimental.chat.system.transform`, on every model call |
+| Tool gate | `PreToolUse`, exit 2 blocks | `PreToolUse`, `decision: deny` | `PreToolUse`, `permissionDecision: deny`; requires hook trust | plugin `tool.execute.before` throws |
+| Session identity | `SessionStart` + `session_registry.json` | `conversationId` + Agy registry | `SessionStart` + per-thread files under `~/.codex/exoma/sessions/` | first prompt of a session + per-session files under `~/.config/opencode/exoma/sessions/` |
+| End of turn | `Stop`: status guard warns | `Stop`: status guard continues once | `Stop`: status guard warns (`systemMessage`); skipped while `stop_hook_active` | not registered |
+| Graph refresh, task telemetry, statusline | Registered | Not registered | Not registered | Not registered |
+
+**OpenCode host.** Install with `exoma install opencode`, then restart OpenCode: it loads plugins
+at startup. `~/.config/opencode/plugins/exoma.js` is a shim (OpenCode plugin API v1, 1.19) that
+hands each event to `~/.config/opencode/exoma/hooks/opencode-host.py` as JSON on stdin and acts on
+the JSON it prints; the decisions are `workflow_policy`'s, as for every host. It does nothing in a
+process started with `WORKFLOW_AGENT_ROLE=second_agent`, and fails open (a hook that cannot run
+answers nothing). OpenCode exposes no session-start hook, so the first prompt of a session in a
+project with `.workflow/` binds it; the binding is re-injected on every model call. The status
+guard is not registered: OpenCode offers no end-of-turn hook a plugin can answer. Its `AGENTS.md`
+block coexists with the opencode second-agent block, as for Codex.
+
+**Codex host.** Install with `exoma install codex`, then review and trust the
+Exoma handlers with `/hooks` in Codex before relying on the gates. `~/.codex/hooks.json` is
+merged: Exoma adds one handler for each of `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+and `Stop` and preserves other handlers. Its `AGENTS.md` block coexists with the always
+installed Codex second-agent block. The latter applies only to runtime prompts beginning
+`[WORKFLOW_AGENT]`; the hooks distinguish the delegated process using
+`WORKFLOW_AGENT_ROLE=second_agent`, set by `CodexAdapter` on fresh and resumed calls. Thus
+Codex host + Codex provider is two separate CLI processes and two separate thread IDs.
+
+The Codex host shares `workflow_policy.py` with Claude/Agy. Its adapter reads
+`exec_command`, file-read tools, and `apply_patch` calls and delegates the same pre-flight,
+write-scope and commit decisions. A single-file `cat` or `Get-Content` call can use a precision
+read when the file has at most 200 lines; `sed -n '<start>,<end>p'` and
+`Get-Content -TotalCount <n>` can read a bounded slice. Two precision reads pass per marker.
+The `UserPromptSubmit` event does not expose a prompt-source field; Exoma accepts an
+execute or commit approval only when the explicit command begins the submitted prompt.
+This is weaker provenance than Claude's source field. Codex hooks also require trust,
+may be disabled by the user, and do not cover every specialized tool path; the gate is a
+workflow guardrail, not an OS security boundary. Codex's write sandbox for the second
+agent remains independent of the host hooks, and its read boundary remains unenforceable.
+See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks) for current event
+and tool coverage.
 
 **Agy's hook contract, as measured** (CASE-029, a draft in agent-workflow). Hooks load from
 `~/.gemini/config/hooks.json` and the workspace's `.agents/hooks.json`. Every payload carries
@@ -683,7 +753,7 @@ other. The header stays a prompt-level cue: the `GEMINI.md` block tells the mode
 itself on such a call. None of this bounds the second agent: agy's boundary stays `unbounded`
 ("Choosing a provider").
 
-**Install** (`--host agy` or `both`). The installer splices the `EXOMA-HOST` block into
+**Install** (`exoma install agy` or `all`). The installer splices the `EXOMA-HOST` block into
 `~/.gemini/GEMINI.md` (another workflow's block is left beside it) and merges the `exoma` name
 into `~/.gemini/config/hooks.json` (other names are the user's). Under `~/.gemini/antigravity-cli/`
 it writes `exoma/CONTRACT.md`, `exoma/hooks/{agy-host.py,workflow_policy.py,intent-map.json}`,
@@ -704,7 +774,7 @@ compares the installed block and files, reports a missing or drifted `exoma` ent
 `hooks.json`, and prints `agy host: NOT INSTALLABLE` with the reason when the hook would be refused.
 
 **Permission rules.** Agy asks before every command unless a rule allows it, and its sandbox
-refuses writes outside the workspace. Whenever the `agy` host is chosen (`agy` or `both`), the
+refuses writes outside the workspace. Whenever the `agy` host is chosen (`agy` or `all`), the
 installer adds two rules to `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`, from
 `hosts/agy/permissions.template.json`: `command(regex:...)` for one runner call through this
 machine's bash, script inside a `.workflow/` directory, every argument a single-quoted string or
@@ -789,7 +859,7 @@ The project root written into `run.sh` and `inspect.sh` is resolved first (symli
 The recommended path after updating Exoma (`uv tool upgrade exoma` or `pip install -U exoma`):
 
 ```bash
-cd /path/to/target-app && exoma install --apply
+cd /path/to/target-app && exoma install
 ```
 
 That command updates the global config and upgrades the workspace in the cwd. A project that does not
@@ -1042,7 +1112,7 @@ The retired key `commands.autoverify` is migrated on upgrade. A typo in any othe
 
 This project-local adapter file may be changed per project. Its name follows the ROLE, not the vendor — since v3.4.3 the second_agent provider is chosen through config, so this file no longer assumes OpenCode. A v3.4.2 workspace that still uses `.workflow/opencode.json` is migrated once on `upgrade` (values moved, old keys deleted). Do not confuse it with `<project_root>/opencode.json` and `~/.config/opencode/opencode.json`, which genuinely belong to OpenCode itself and keep those names.
 
-At `init`, its source is the user's `second_agent.seed.json` if present, or the shipped `exoma/config/second_agent.example.json`. This file MUST exist per project: without it (or if it does not parse) delegated commands are rejected, with no fallback to machine-level config. The loader fills in keys not yet stored with the source defaults in memory; `upgrade` writes them to the file additively. Its effective shape:
+At `init`, its source is, first that exists, the seed of the host that ran it (`second_agent.seed.<host>.json`, from `exoma init --host <host>`), the shared 0.x `second_agent.seed.json`, or the shipped `exoma/config/second_agent.example.json`. This file MUST exist per project: without it (or if it does not parse) delegated commands are rejected, with no fallback to machine-level config. The loader fills in keys not yet stored with the source defaults in memory; `upgrade` writes them to the file additively. Its effective shape:
 
 ```json
 {
@@ -1070,18 +1140,33 @@ At `init`, its source is the user's `second_agent.seed.json` if present, or the 
 
 #### Choosing a provider — and its security consequences
 
-`provider` accepts `opencode`, `codex`, or `agy`. The three are not equivalent choices:
+`provider` accepts `opencode`, `codex`, `agy`, or `claude`. The four are not equivalent choices:
 
-| | `opencode` | `codex` | `agy` |
-| --- | --- | --- | --- |
-| Secret-file read boundary | **enforced** via `<project_root>/opencode.json` | **none** | **none** |
-| Write sandbox | yes | yes (`--sandbox read-only` + `approval_policy="never"`) | **no** — writes in the working tree, and changes to files matching the secret patterns (ignored ones included), are only *detected* (`core/policy/agy_guard.py`), not prevented |
-| Selection | no question | confirmed in the `/.provider` picker | confirmed in the `/.provider` picker |
-| Project-root boundary config | file, refreshed on every `init`/`upgrade` | no such layer | no such layer |
-| `boundary` (`config/providers.py`) | `reads: secrets_denied`, `writes: denied` | `reads: unbounded`, `writes: sandboxed` | `reads: unbounded`, `writes: unbounded` |
-| Second-agent instructions | `~/.config/opencode/AGENTS.md` block | `~/.codex/AGENTS.md` block | custom agent `~/.gemini/config/agents/exoma-second-agent/agent.md`, passed as `--agent` only while that file is installed (`provider_agent`, default `exoma-second-agent`, env `EXOMA_AGY_AGENT`) |
+| | `opencode` | `codex` | `agy` | `claude` |
+| --- | --- | --- | --- | --- |
+| Secret-file read boundary | **enforced** via `<project_root>/opencode.json` | **none** | **none** | **none** |
+| Write sandbox | yes | yes (`--sandbox read-only` + `approval_policy="never"`) | **no** — writes in the working tree, and changes to files matching the secret patterns (ignored ones included), are only *detected* (`core/policy/agy_guard.py`), not prevented | yes — the session has only `Read`, `Grep` and `Glob` (`--tools`); no write, edit or shell tool exists |
+| Selection | no question | confirmed in the `/.provider` picker | confirmed in the `/.provider` picker | confirmed in the `/.provider` picker |
+| Project-root boundary config | file, refreshed on every `init`/`upgrade` | no such layer | no such layer | no such layer |
+| `boundary` (`config/providers.py`) | `reads: secrets_denied`, `writes: denied` | `reads: unbounded`, `writes: sandboxed` | `reads: unbounded`, `writes: unbounded` | `reads: unbounded`, `writes: denied` |
+| Second-agent instructions | `~/.config/opencode/AGENTS.md` block | `~/.codex/AGENTS.md` block | custom agent `~/.gemini/config/agents/exoma-second-agent/agent.md`, passed as `--agent` only while that file is installed (`provider_agent`, default `exoma-second-agent`, env `EXOMA_AGY_AGENT`) | `~/.claude/exoma/second-agent.md`, passed with `--append-system-prompt-file` while that file is installed |
+| Prompt transport | attached file (`-f`) | stdin | argv | stdin |
 
-`codex` and `agy` are both reported by `doctor` as `not_enforceable` with `trusted: true`: both can read every project file and receive the full process environment — their boundary is the agent's obligation, not runtime enforcement. Choosing `codex` or `agy` needs no variable or config key. The `/.provider` catalog gives each provider a `boundary_warning` (null for opencode) — `providers.provider_boundary_warning`, worded from the provider's `boundary`: codex "can read every file", agy "can read AND write every file" — and the picker quotes it in one confirmation question before applying. Every apply of such a provider, including direct mode (`/.provider <provider> ...`) and `exoma install --provider`, which ask nothing, returns the same text first in `meta.warnings` (the installer prints it as a plan warning). Nothing is refused: the acknowledgement is prompt-level, not runtime-enforced.
+**Claude as second agent.** `ClaudeAdapter` (`adapters/providers/claude_adapter.py`) runs
+`claude -p --output-format stream-json --verbose --tools Read,Grep,Glob --setting-sources ''
+--strict-mcp-config` with the prompt on stdin, plus `--resume <id>`, `--model` and `--effort`
+when set. `--setting-sources ''` loads no user, project or local settings, so the user's hooks
+(Exoma's Claude host hooks among them), permission rules, MCP servers and `~/.claude/CLAUDE.md`
+never reach the call; `WORKFLOW_AGENT_ROLE=second_agent` is set as for codex. It works under the
+subscription login: `--bare` would isolate further but accepts only `ANTHROPIC_API_KEY`. The
+session id is read from the stream's `init` event; the answer is the closing `result` event, and a
+result with `is_error: true` fails the call even at exit 0. Probed on Claude Code 2.1.316: the
+init event listed exactly the three tools, a request to create a file was refused for lack of a
+write tool, and nothing of the user's CLAUDE.md or SessionStart hooks was in context. The CLI has
+no model listing, so the picker offers the bundled list (aliases `opus`, `sonnet`, `haiku`, then
+pinned ids) and accepts any other id typed in.
+
+`codex`, `agy` and `claude` are reported by `doctor` as `not_enforceable` with `trusted: true`: each can read every project file and receive the full process environment — their boundary is the agent's obligation, not runtime enforcement. Choosing `codex` or `agy` needs no variable or config key. The `/.provider` catalog gives each provider a `boundary_warning` (null for opencode) — `providers.provider_boundary_warning`, worded from the provider's `boundary`: codex "can read every file", agy "can read AND write every file" — and the picker quotes it in one confirmation question before applying. Every apply of such a provider, including direct mode (`/.provider <provider> ...`) and `exoma install --provider`, which ask nothing, returns the same text first in `meta.warnings` (the installer prints it as a plan warning). Nothing is refused: the acknowledgement is prompt-level, not runtime-enforced.
 
 The write side is reported separately. `doctor` writes `checks.second_agent_write_boundary` (`{provider, writes}`) and, only for `writes: unbounded` (`agy`), one additional `WARNING: second_agent provider '<p>' can WRITE ...` in `recommended_fixes` — still not an issue. Every delegated result that reaches the provider stage (success or failure) carries `meta.provider_boundary` (`{reads, writes}`), and for `agy` also `meta.provider_write_warning`.
 
@@ -1150,7 +1235,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v0.3.0):
+Reliability keys (v1.0.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1185,7 +1270,7 @@ When active, the prompt carries the `[EVIDENCE_SIDECARS]` anchor; the fan-out cl
 - the graph has ≥2 communities → one slice per community;
 - no graph, or it yields only 0–1 communities → still fan out to four investigation angles: entry points, core flow, reverse dependencies, and config/tests.
 
-Second_agent must use the custom agent `wf-slice` via the `task` tool when available,
+Second_agent must use the custom agent `exm-slice` via the `task` tool when available,
 run the slices in parallel, then merge the claims with `[cN]` tags. If the spawn
 tool is not available, it must state the list of tools that are actually available before
 reading the slices sequentially.
@@ -1201,6 +1286,31 @@ reading the slices sequentially.
 A declaration without tagged claims is a claim of work, not proof of work — and is not counted as success.
 
 ---
+
+## Session export
+
+`exoma session export <MAIN_SESSION_ID> [--work-dir DIR] [--out PATH] [--no-transcript]`
+writes one main session as a zip, by default to `<data dir>/exports/<id>_<UTC stamp>.zip`
+(`core/audit/session_export.py`). Made for collecting real sessions in a study
+([experiment protocol](team-guide/experiment-protocol.md)); nothing is uploaded.
+
+| Bundle path | Content |
+| --- | --- |
+| `session/...` | the session directory (prompts, responses, per-call logs and their archived evidence, runtime sidecars); `lock` files and files over 8 MB are listed under `skipped` instead |
+| `streams/{usage,audit,quality}.jsonl` | the rows of each shared stream whose `session_id` (or `main_session_id`) is this session |
+| `transcript/<file>` | the host's transcript of the main session: Claude Code (from `~/.claude/session_registry.json`) or Codex (the rollout file of the bound thread); otherwise `transcript.status: unavailable` with the reason. OpenCode and Agy transcripts are not collected |
+| `review.md` | the participant's review |
+| `manifest.json` | `schema`, `exoma_version`, `session_id`, `host`, `transcript`, `redactions`, `files` (path, bytes, sha256), `skipped`, `review` (`status: template\|filled\|unreadable`, `source`) |
+
+Every text file is passed through `utils/redact.redact` before it is written: credential-shaped
+runs become `[REDACTED:<kind>]`, and only the count reaches the manifest. A file that is not UTF-8
+text, a symbolic link, or a file resolving outside the session directory is never copied: it
+is listed under `skipped` with the reason, because redaction cannot check it. The review lives beside
+the bundles as `<id>.review.md`: the first export writes it from a template and reports
+`review: template`; once edited, the next export of the same session carries it and reports
+`filled`. A review file that is not UTF-8 text is not copied: the export completes with
+`review: unreadable` and lists it under `skipped`. An unknown session, or an id that is not a plain path component
+(separators, `..`), exits 1 without writing anything.
 
 ## Graphify
 
@@ -1289,7 +1399,9 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   exit, the pipe is waited on for at most 5 s and then any remaining processes still holding it are killed (process
   group on POSIX, job object on Windows) and the original exit code is used, so a runner that
   leaves a server/watcher behind no longer reads as a timeout. A timeout kills the command's whole process
-  tree (process group + `taskkill /T` / `killpg`), then output is collected for at most 5 s; a boolean
+  tree (process group + `taskkill /T` / `killpg`; on Windows a Toolhelp snapshot and process handles
+  provide a fallback when `taskkill` is denied, killing a descendant only while its creation time
+  still matches the snapshot), then output is collected for at most 5 s; a boolean
   timeout value is ignored (default 900). The prompt line "jangan jalankan test runner" ("do not run the test runner") is only
   sent when `verify_test_commands` is set; while it is empty, `doctor` gives a warning
   (`checks.verify_test_commands: empty`) because verify runs no tests and cannot `pass`.
@@ -1330,7 +1442,7 @@ release, including pre-releases), `unreadable` (the CLI did not answer). `doctor
 only changes providers when asked to with `--update-providers`.
 
 `exoma install --update-providers` (opt-in) brings each CLI to `stable_version`, never
-to a newer release. The dry run prints the plan per provider; `--apply` executes it
+to a newer release. `--dry-run` prints the plan per provider; an install executes it
 after all files are installed. A provider is changed only when its bundle names an update method
 (`update` in `config/providers.py`: codex `@openai/codex`, opencode `opencode-ai`, both npm),
 its CLI is on PATH, is not already on the stable release, is a global npm install (a shim in npm's global bin
@@ -1512,7 +1624,7 @@ exoma --command clean --work-dir /path/to/target-app --pretty
 `<data dir>` is the per-user data directory: `$EXOMA_HOME` when set, else
 `%LOCALAPPDATA%\exoma` (Windows), `~/Library/Application Support/exoma` (macOS), or
 `$XDG_DATA_HOME/exoma` / `~/.local/share/exoma` (Linux). It holds `storage/` (jobs, main-session
-cache) and `config/second_agent.seed.json`; never anything per project. Jobs an agent-workflow
+cache) and the `config/second_agent.seed*.json` seeds; never anything per project. Jobs an agent-workflow
 checkout recorded in its own `storage/` stay there: they belong to that runtime.
 
 Mutable state (`state`/`scope`/`cache`/`runtime`/`logs`) lives under `data/sessions/<id>/`, so two main_agents on the same project never overwrite each other. The `.workflow/` root holds only human-edited files plus scripts.
@@ -1561,7 +1673,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v0.3.0)
+### Liveness worker (v1.0.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

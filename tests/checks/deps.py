@@ -43,11 +43,14 @@ _OPTIONAL_EXTRAS = {
 }
 _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 
-# Shipped modules imported by their bare name from the directory they are installed into:
-# the hooks run standalone from ~/.claude/hooks and reach workflow_policy.py beside them.
-# First-party, but only from that directory, and only while the sibling exists.
+# Shipped modules imported by their bare name from the directory they are installed into.
+# The Codex and OpenCode hosts install the Claude source beside their hook at its destination.
 _HOOK_SIBLINGS = {
-    "workflow_policy": "src/exoma/_bundle/config/hosts/claude/hooks/",
+    "workflow_policy": (
+        "src/exoma/_bundle/config/hosts/claude/hooks/",
+        "src/exoma/_bundle/config/hosts/codex/",
+        "src/exoma/_bundle/config/hosts/opencode/",
+    ),
 }
 
 
@@ -137,9 +140,10 @@ def _test_runtime_is_stdlib_only() -> None:
         for root in sorted(_imported_roots(path)):
             if root in stdlib or root in _INTERNAL:
                 continue
-            sibling_dir = _HOOK_SIBLINGS.get(root)
-            if (sibling_dir and path.relative_to(REPO_ROOT).as_posix().startswith(sibling_dir)
-                    and (REPO_ROOT / sibling_dir / f"{root}.py").is_file()):
+            sibling_dirs = _HOOK_SIBLINGS.get(root, ())
+            relative = path.relative_to(REPO_ROOT).as_posix()
+            if (any(relative.startswith(folder) for folder in sibling_dirs)
+                    and (REPO_ROOT / "src/exoma/_bundle/config/hosts/claude/hooks" / f"{root}.py").is_file()):
                 continue
             offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()}: {root}")
 

@@ -7,11 +7,11 @@
         "external_directory": "deny",
         "task": {
           "*": "deny",
-          "wf-slice": "allow",
-          "wf-map": "allow",
-          "wf-trace": "allow",
-          "wf-docs": "allow",
-          "wf-db": "allow"
+          "exm-slice": "allow",
+          "exm-map": "allow",
+          "exm-trace": "allow",
+          "exm-docs": "allow",
+          "exm-db": "allow"
         },
         "bash": {
           "*": "deny",

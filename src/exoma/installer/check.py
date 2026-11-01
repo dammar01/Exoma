@@ -17,6 +17,8 @@ from exoma.installer.base import (
     AGY_HOST_INSTRUCTIONS,
     AGY_DOCTOR_FRAGMENT,
     AGY_HOST_PERMISSIONS,
+    CODEX_HOST_HOOKS,
+    CODEX_HOST_INSTRUCTIONS,
     DIST_CONFIG,
     HOME,
     MARKERS,
@@ -32,6 +34,9 @@ from exoma.installer.base import (
     agy_hooks_state,
     agy_permission_rules,
     agy_settings_dest,
+    codex_hook_events_present,
+    codex_hooks_dest,
+    codex_hooks_state,
     bundle_key,
 )
 from exoma.config.providers import PROVIDER_BUNDLES
@@ -81,7 +86,7 @@ def _second_agent_state() -> str:
     Informational on purpose; see the call site in `_run_check` for why it stays out of
     the drift tally. Reads the file rather than trusting it exists, because a hand-edited
     one that no longer parses is the failure this line is worth printing for. A retired
-    config/second_agent.json still on disk is named too: --apply renames it, and until then
+    config/second_agent.json still on disk is named too: the next install renames it, and until then
     it is a stale selection sitting next to the one init actually copies.
     """
     import json
@@ -91,7 +96,7 @@ def _second_agent_state() -> str:
     path = SEED_DIR / PROVIDER_SEED_NAME
     legacy = SEED_DIR / PROVIDER_CONFIG_NAME
     retire_note = (
-        f"; {PROVIDER_CONFIG_NAME} is retired and will be renamed by --apply"
+        f"; {PROVIDER_CONFIG_NAME} is retired and will be renamed by the next install"
         if legacy.exists()
         else ""
     )
@@ -99,7 +104,7 @@ def _second_agent_state() -> str:
         return (
             f"NOT SET — {PROVIDER_SEED_NAME} absent; init falls back to "
             "second_agent.example.json (opencode, no model pinned). "
-            f"`exoma install --apply` asks, or pass --provider{retire_note}"
+            f"`exoma install` asks, or pass --provider{retire_note}"
         )
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
@@ -155,7 +160,7 @@ def _orphaned_entries(manifest: dict) -> list[str]:
 def _bundle_stale(manifest: dict) -> list[str]:
     """Manifest keys whose dist/ file no longer matches, or that dist/ has but the manifest lacks.
 
-    Shared by `--check` and by `--apply`, which refuses to install a bundle nobody stamped:
+    Shared by `--check` and by a writing install, which refuses a bundle nobody stamped:
     a dist/ edited without regenerating the manifest is exactly the half-finished state that
     must not reach ~/.claude.
     """
@@ -205,11 +210,15 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     # absence the expected state, not a missing file.
     # One read of hooks.json for the refusal and the entry check below (no second read to race).
     agy_current, agy_refusal = agy_hooks_state(agy_hooks_dest()) if agy else ({}, None)
+    # Codex withdraws its AGENTS.md block the same way when its hooks.json is refused.
+    codex = "codex" in hosts
+    codex_current, codex_refusal = codex_hooks_state(codex_hooks_dest()) if codex else ({}, None)
     # hooks.json is a merge of one hook name, like settings.json: its `exoma` entry is
     # checked below rather than the whole file here.
     installed_targets = _targets(hosts)
+    refused = {AGY_HOST_INSTRUCTIONS: agy_refusal, CODEX_HOST_INSTRUCTIONS: codex_refusal}
     checks = [
-        (s, None if k == AGY_HOST_HOOKS or (k == AGY_HOST_INSTRUCTIONS and agy_refusal) else d, k)
+        (s, None if k in (AGY_HOST_HOOKS, CODEX_HOST_HOOKS) or refused.get(k) else d, k)
         for s, d, k in installed_targets
     ]
     for source, _dest, key in _targets():
@@ -283,6 +292,20 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
                 installed_missing.append(AGY_HOST_HOOKS)
             elif installed_hook != agy_hook_entry(DIST_CONFIG / AGY_HOST_HOOKS):
                 installed_drift.append(AGY_HOST_HOOKS)
+
+    if codex:
+        if codex_refusal:
+            installed_drift.append(CODEX_HOST_HOOKS)
+            # As for Agy: an install now would take out a block an earlier one left.
+            agents_md = next((d for _s, d, k in installed_targets if k == CODEX_HOST_INSTRUCTIONS), None)
+            start, end = MARKERS[CODEX_HOST_INSTRUCTIONS]
+            text = _read_text_lenient(agents_md) if agents_md and agents_md.is_file() else ""
+            if _managed_block(text, start, end) or _marker_problem(text, start, end):
+                installed_drift.append(CODEX_HOST_INSTRUCTIONS)
+        elif not codex_hooks_dest().is_file():
+            installed_missing.append(CODEX_HOST_HOOKS)
+        elif not codex_hook_events_present(codex_current.get("hooks")):
+            installed_drift.append(CODEX_HOST_HOOKS)
 
     settings_dest = HOME / ".claude" / "settings.json"
     if settings_src.exists() and "claude" in hosts:
@@ -373,7 +396,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         for path, _entry in stale_removable:
             print(f"    - STALE {path}")
         for path in stale_edited:
-            print(f"    - STALE (edited, --apply keeps it) {path}")
+            print(f"    - STALE (edited, install keeps it) {path}")
     if project_scope_note:
         print(f"  project scope: SKIPPED — {project_scope_note}")
     if agy_refusal:
@@ -382,7 +405,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     # Reported beside the drift list rather than inside it. This file has no shipped
     # counterpart to drift FROM, and its absence is not a fault: init falls back to
     # second_agent.example.json and works. Folding it into `installed_missing` would turn
-    # a working checkout into DRIFTED and send the user to --apply for nothing.
+    # a working checkout into DRIFTED and send the user to reinstall for nothing.
     print(f"  second agent default: {_second_agent_state()}")
 
     # Report component ownership so the required version bump is explicit.
@@ -412,6 +435,6 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     print(f"  status: {status}")
     if status != "READY":
         print(
-            "  fix: python tools/maintain/gen_manifest.py (bundle) | python install.py --apply (installed)"
+            "  fix: python tools/maintain/gen_manifest.py (bundle) | exoma install (installed)"
         )
     return 0 if status == "READY" else 1

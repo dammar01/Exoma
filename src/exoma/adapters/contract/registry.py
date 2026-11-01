@@ -23,6 +23,7 @@ matches it, and a config.json naming something else is reported through
 from pathlib import Path
 
 from exoma.adapters.providers.agy_adapter import AgyAdapter
+from exoma.adapters.providers.claude_adapter import ClaudeAdapter
 from exoma.adapters.providers.codex_adapter import CodexAdapter
 from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
 from exoma.config.settings import DEFAULT_PROVIDER
@@ -33,6 +34,8 @@ _ADAPTERS: dict[str, type] = {
     # agy enforces no read-only boundary — see the note in config/providers.py and the
     # module docstring of adapters/agy_adapter.py before selecting it for a project.
     AgyAdapter.adapter: AgyAdapter,
+    # Writes are impossible (tool list), reads are not bounded: see claude_adapter.py.
+    ClaudeAdapter.adapter: ClaudeAdapter,
 }
 
 

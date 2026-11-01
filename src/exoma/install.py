@@ -3,8 +3,8 @@
 Consumes `dist/` (produced by tools/maintain/extract_config.py) and applies it to the local
 agent directories.
 
-    python install.py              # DRY RUN — show every change, write nothing
-    python install.py --apply      # actually write
+    exoma install [claude|agy|codex|opencode|all]   # install (writes)
+    exoma install --dry-run                          # show every change, write nothing
 
 Project scope is detected, not passed: run it from anywhere inside a directory that has a
 .workflow/ and that workspace is refreshed in place too (scripts regenerated, new config
@@ -12,8 +12,10 @@ keys backfilled, opencode.json boundary re-enforced, sessions/ untouched). Scaff
 NEW workspace belongs to init — `python main.py --command init --work-dir DIR` — so there
 is one bootstrap path rather than a flag that half-duplicates it.
 
-Dry run is the default on purpose. This writes into the user's global agent config,
-which every project on the machine reads; a mistake here is not contained to one repo.
+A bare install writes. This changes the user's global agent config, which every project
+on the machine reads, so a mistake here is not contained to one repo: run `--dry-run`
+first to see every change, and never install from a development checkout onto the real
+home (point HOME/AGENT_HOME/EXOMA_HOME at a temporary directory instead).
 
 Safety:
 - everything it would overwrite is backed up first, under a timestamped folder
@@ -191,10 +193,14 @@ def _ask(prompt: str) -> str:
         return ""
 
 
-def _prompt_second_agent() -> tuple[str | None, str | None]:
-    """Ask which second agent to use. Returns (provider, model); (None, None) to skip.
+def _prompt_second_agent(host: str | None = None) -> tuple[str | None, str | None]:
+    """Ask which second agent `host` should use. Returns (provider, model); (None, None) to skip.
 
-    Only reached on --apply from a terminal — see `_seed_second_agent_config`. Skipping is
+    The model menu is the live catalog (core/provider/model_catalog.py): what the installed
+    provider CLI lists now, newest first, falling back to the bundled shortlist when the
+    CLI cannot be asked (missing, offline, or a provider with no listing, like claude).
+
+    Only reached when installing from a terminal — see `_seed_second_agent_config`. Skipping is
     a first-class answer at both steps: an empty provider seeds the example unchanged, and
     an empty model leaves the pin unset so the provider CLI keeps its own default.
     """
@@ -202,12 +208,13 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
         bundled_providers,
         provider_boundary,
         provider_command_default,
-        provider_models,
     )
+    from exoma.core.provider.model_catalog import catalog
 
     providers = sorted(bundled_providers())
     print()
-    print("  config/second_agent.seed.json has no selection yet. Which second agent should new projects use?")
+    who = f"{host} projects" if host else "new projects"
+    print(f"  No second agent chosen yet for {host or 'this machine'}. Which second agent should {who} use?")
     for index, name in enumerate(providers, start=1):
         command = provider_command_default(name, os.getenv)
         notes = ["on PATH" if shutil.which(command) else f"{command} not on PATH"]
@@ -219,10 +226,12 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
         return None, None
     provider = providers[int(choice) - 1]
 
-    models = provider_models(provider)
+    listing = catalog(provider)
+    models = listing["models"]
     if not models:
         return provider, None
     print()
+    print(f"  models for {provider} ({'live from the CLI' if listing['source'] in ('live', 'cache') else 'bundled list'}):")
     for index, entry in enumerate(models, start=1):
         efforts = ", ".join(entry.get("efforts") or ()) or "no reasoning effort"
         print(f"    {index}) {entry['id']:<42} ({efforts})")
@@ -238,10 +247,25 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
     return provider, choice
 
 
+_LEGACY_RETIRED: set = set()
+
+
+def seed_name(host: str | None = None) -> str:
+    """`second_agent.seed.<host>.json` for a host, the shared seed without one."""
+    from exoma.core.workspace.workspace_paths import PROVIDER_SEED_NAME
+
+    return PROVIDER_SEED_NAME.replace(".json", f".{host}.json") if host else PROVIDER_SEED_NAME
+
+
 def _seed_second_agent_config(
-    plan, apply: bool, provider: str | None = None, model: str | None = None
+    plan, apply: bool, provider: str | None = None, model: str | None = None,
+    host: str | None = None,
 ) -> None:
-    """Rebuild config/second_agent.seed.json, the template every `init` copies.
+    """Rebuild config/second_agent.seed.<host>.json, the template `init` copies into a
+    project initialised from that host (`exoma init --host <host>`, rendered into each
+    host's /.init). One seed per host, so Claude Code and Codex on the same machine can
+    delegate to different second agents. Without a host: the shared seed, which init
+    falls back to when a host has none.
 
     Rebuilt on EVERY run, from the shipped example, so the seed can never outlive the
     release that wrote it. Its predecessor, config/second_agent.json, was created once and
@@ -252,7 +276,7 @@ def _seed_second_agent_config(
     in order:
       --provider/--model     taken as given;
       the previous seed      the last deliberate choice, re-applied to the new example;
-      a terminal on --apply  asked interactively, with skipping as a valid answer;
+      a terminal install     asked interactively, with skipping as a valid answer;
       anything else          the example, verbatim.
 
     The old file is retired rather than read: it is exactly the state that went stale.
@@ -273,7 +297,8 @@ def _seed_second_agent_config(
         PROVIDER_SEED_NAME,
     )
 
-    dest = SEED_DIR / PROVIDER_SEED_NAME
+    dest = SEED_DIR / seed_name(host)
+    shared = SEED_DIR / PROVIDER_SEED_NAME
     legacy = SEED_DIR / PROVIDER_CONFIG_NAME
     src = EXAMPLE_FILE
     if not src.exists():
@@ -281,7 +306,9 @@ def _seed_second_agent_config(
         return
     template = json.loads(src.read_text(encoding="utf-8"))
 
-    if legacy.exists():
+    # Once per install run, not once per host: main() clears this before the host loop.
+    if legacy.exists() and not (host and legacy in _LEGACY_RETIRED):
+        _LEGACY_RETIRED.add(legacy)
         retired = legacy.with_name(f"{legacy.name}.retired")
         old = _seed_selection(legacy)
         described = (
@@ -304,17 +331,19 @@ def _seed_second_agent_config(
             os.replace(legacy, retired)
 
     route_models: dict = {}
-    previous = _seed_selection(dest)
+    # A host seed that does not exist yet starts from the shared seed's selection: the
+    # choice made before seeds were per host carries over instead of being asked again.
+    previous = _seed_selection(dest) or (_seed_selection(shared) if host else None)
     if provider is None and previous is not None:
         provider, model, route_models = previous["provider"], previous["model"], previous["routes"]
     elif provider is None:
         if apply and sys.stdin.isatty():
-            provider, model = _prompt_second_agent()
+            provider, model = _prompt_second_agent(host)
         elif not apply:
             plan.add(
                 "create",
                 dest,
-                "rebuilt from the example; --apply from a terminal asks which provider "
+                "rebuilt from the example; an install from a terminal asks which provider "
                 "and model, or pass --provider/--model",
             )
             return
@@ -327,10 +356,13 @@ def _seed_second_agent_config(
         if boundary_warning:
             plan.warn(boundary_warning)
         if model and not model_is_listed(provider, model):
-            plan.warn(
-                f"{model!r} is not on {provider}'s shortlist — pinned anyway, but "
-                "verify the id is one the CLI accepts"
-            )
+            from exoma.core.provider.model_catalog import lookup
+
+            if lookup(provider, model) is None:
+                plan.warn(
+                    f"{model!r} is not in {provider}'s model catalog — pinned anyway, but "
+                    "verify the id is one the CLI accepts"
+                )
         if not model and provider == "opencode":
             plan.warn(
                 "opencode without a model is refused at call time (model_unset): without "
@@ -355,23 +387,26 @@ def _seed_second_agent_config(
         dest.write_text(payload, encoding="utf-8")
 
 
-_HOST_CHOICES = {"claude": ("claude",), "agy": ("agy",), "both": HOSTS}
+_HOST_CHOICES = {"claude": ("claude",), "agy": ("agy",), "codex": ("codex",),
+                 "opencode": ("opencode",), "all": HOSTS}
 
 
 def _prompt_hosts() -> tuple[str, ...]:
-    """Ask which main-agent host to install. Only reached on --apply from a terminal."""
+    """Ask which main-agent host to install. Only reached when installing from a terminal."""
     print()
     print("  Which main agent should Exoma install for?")
     print("    1) claude   (Claude Code: ~/.claude)")
     print(f"    2) agy      (Antigravity CLI: ~/.gemini{'' if agy_host_present() else ', not found on this machine'})")
-    print("    3) both")
-    choice = _ask("  host [1-3, blank = claude]: ")
-    return {"2": ("agy",), "3": HOSTS}.get(choice, ("claude",))
+    print("    3) codex    (Codex CLI: ~/.codex)")
+    print("    4) opencode (OpenCode: ~/.config/opencode)")
+    print("    5) all      (Claude Code, Agy, Codex, and OpenCode)")
+    choice = _ask("  host [1-5, blank = claude]: ")
+    return {"2": ("agy",), "3": ("codex",), "4": ("opencode",), "5": HOSTS}.get(choice, ("claude",))
 
 
 def _resolve_hosts(flag: str | None, apply: bool, plan: Plan) -> tuple[str, ...]:
-    """--host, else the last install's choice, else the 0.3.0 migration, else asked on
-    --apply from a terminal, else Claude — what every install did before the choice."""
+    """The positional host, else the last install's choice, else the 0.3.0 migration, else
+    asked from a terminal, else Claude — what every install did before the choice."""
     if flag:
         return _HOST_CHOICES[flag]
     hosts = _stored_hosts() or _migrated_hosts()
@@ -379,7 +414,8 @@ def _resolve_hosts(flag: str | None, apply: bool, plan: Plan) -> tuple[str, ...]
         return hosts
     if apply and sys.stdin.isatty():
         return _prompt_hosts()
-    plan.warn("no host chosen yet: installing for claude; --apply from a terminal asks, or pass --host")
+    plan.warn("no host chosen yet: installing for claude; a terminal install asks, or name one: "
+              "exoma install <claude|agy|codex|opencode|all>")
     return ("claude",)
 
 
@@ -421,9 +457,28 @@ def _update_providers(plan: Plan, apply: bool, backup_root: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="exoma install", description="Install the Exoma bundle into ~/.claude and the provider configs")
+    parser = argparse.ArgumentParser(
+        prog="exoma install",
+        description="Install Exoma for a main-agent host and its second agent. Writes by "
+        "default; --dry-run previews.",
+    )
     parser.add_argument(
-        "--apply", action="store_true", help="write changes (default: dry run)"
+        "host",
+        nargs="?",
+        choices=sorted(_HOST_CHOICES),
+        help="the main-agent host to install for: claude, agy, codex, opencode, or all. "
+        "Without it the last install's choice is kept; with none, a terminal asks and a "
+        "non-interactive run installs claude. A host dropped from the choice has Exoma's "
+        "files taken out of it",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="show every change, write nothing"
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the changes of --rollback or --uninstall (both preview without it). "
+        "For an install it is the default and the flag is accepted with a notice",
     )
     parser.add_argument(
         "--only-command",
@@ -458,22 +513,21 @@ def main() -> int:
         action="store_true",
         help="also install the optional browser-verification extra: pip install -r "
         "the bundled requirements-e2e.txt, then python -m playwright install chromium (large download). "
-        "Only needed for /.verify-browser. Dry run unless --apply is also given",
+        "Only needed for /.verify-browser; never installed without this flag",
     )
     parser.add_argument(
         "--provider",
         choices=sorted(PROVIDER_BUNDLES),
-        help="which second agent the user's second_agent.seed.json (the template new projects "
-        "copy) should select. Without it the previous seed's selection is kept; with none, "
-        "--apply from a terminal asks and a non-interactive run copies the example",
+        help="which second agent each chosen host's seed (second_agent.seed.<host>.json, the "
+        "template that host's new projects copy) should select. Without it each host keeps "
+        "its previous selection; with none, a terminal asks per host from the live model "
+        "catalog and a non-interactive run copies the example",
     )
     parser.add_argument(
         "--host",
+        dest="host_flag",
         choices=sorted(_HOST_CHOICES),
-        help="which main-agent host to install for: claude (~/.claude), agy (~/.gemini), or "
-        "both. Without it the last install's choice is kept; with none, --apply from a "
-        "terminal asks and a non-interactive run installs claude. A host dropped from the "
-        "choice has Exoma's files taken out of it",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--agy-permissions",
@@ -495,7 +549,7 @@ def main() -> int:
         action="store_true",
         help="also bring each provider CLI to the release this workflow version was tested "
         "on (stable_version), never a newer one. Only npm-global installs are touched; agy "
-        "and anything else are reported, not changed. Dry run unless --apply is also given",
+        "and anything else are reported, not changed",
     )
     parser.add_argument(
         "--check",
@@ -504,15 +558,26 @@ def main() -> int:
         "project-scoped files when run from a directory that has a .workflow/)",
     )
     args = parser.parse_args()
-    apply = args.apply
     _reset_receipt()
+    _LEGACY_RETIRED.clear()
 
+    # Undoing an install keeps its preview-first default: it removes or restores files,
+    # and the command that does it is typed far less often than the one that installs.
     if args.rollback is not None:
-        return _run_rollback(args.rollback or None, apply)
+        return _run_rollback(args.rollback or None, args.apply and not args.dry_run)
     if args.uninstall:
         from exoma.installer.uninstall import run_uninstall
 
-        return run_uninstall(apply)
+        return run_uninstall(args.apply and not args.dry_run)
+
+    if args.host and args.host_flag and args.host != args.host_flag:
+        print(f"[INSTALL] host named twice ({args.host} and --host {args.host_flag}); name it once")
+        return 2
+    host_choice = args.host or args.host_flag
+    apply = not args.dry_run
+    if args.apply and args.dry_run:
+        print("[INSTALL] --apply and --dry-run are opposites; an install writes unless --dry-run")
+        return 2
 
     if args.only_command and args.auto_intent:
         print("[INSTALL] --only-command and --auto-intent are opposites; pick one")
@@ -556,7 +621,15 @@ def main() -> int:
     print(f"  backup: {backup_root}")
     # Asked before anything is written, like the provider: an answer cut short by Ctrl+C
     # leaves nothing half installed.
-    hosts = _resolve_hosts(args.host, apply, plan)
+    if args.apply:
+        plan.warn("--apply is no longer needed: `exoma install` writes by default (--dry-run previews)")
+    if args.host_flag:
+        plan.warn(f"--host is deprecated: name the host directly, `exoma install {args.host_flag}`")
+    hosts = _resolve_hosts(host_choice, apply, plan)
+    if "codex" in hosts:
+        plan.warn("Codex host hooks must be reviewed and trusted in Codex with /hooks before the host gates run")
+    if "opencode" in hosts:
+        plan.warn("OpenCode loads its plugins at startup: restart any running opencode session to load Exoma's host plugin")
     agy_permissions, agy_opt_out = _resolve_agy_permissions(args.agy_permissions, hosts)
     print(f"  hosts:  {', '.join(hosts)}")
     print()
@@ -575,10 +648,10 @@ def main() -> int:
             )
             return 5
         for name in sorted(missing_env):
-            plan.warn(f"env value not set (dry run, would block --apply): {name}")
+            plan.warn(f"env value not set (dry run, would block the install): {name}")
 
     for key in stale_bundle:
-        plan.warn(f"the bundle does not match the manifest for {key} (dry run; --apply refuses)")
+        plan.warn(f"the bundle does not match the manifest for {key} (dry run; an install refuses)")
 
     # Every hook is a bash launcher on every OS. Without a bash the settings would register
     # commands that cannot start, and Claude Code shows a hook that cannot start as nothing.
@@ -593,7 +666,7 @@ def main() -> int:
         if apply:
             print(f"[INSTALL] ABORTED — {message} Nothing was written.")
             return 6
-        plan.warn(f"{message} (dry run, would block --apply)")
+        plan.warn(f"{message} (dry run, would block the install)")
 
     if apply:
         # Begun after every abort-before-writing check and before the first write,
@@ -623,7 +696,9 @@ def main() -> int:
         owned_rules = _install_agy_permissions(agy_permissions, owned_rules, plan, apply, backup_root)
     # A host no longer chosen: its merged entries come out first, so no registration is
     # left pointing at a script the prune below removes.
-    from exoma.installer.base import AGY_HOOKS_PREFIX, CLAUDE_HOOKS_PREFIX
+    from exoma.installer.base import (
+        AGY_HOOKS_PREFIX, CLAUDE_HOOKS_PREFIX, CODEX_HOOKS_PREFIX, OPENCODE_HOOKS_PREFIX,
+    )
     from exoma.installer.uninstall import retire_agy_dot_dir, withdraw_host
 
     retire_agy_dot_dir(plan, apply, backup_root)
@@ -633,7 +708,8 @@ def main() -> int:
         if host not in hosts:
             clean, owned_rules = withdraw_host(host, owned_rules, plan, apply, backup_root)
             if not clean:
-                keep_prefixes.append(CLAUDE_HOOKS_PREFIX if host == "claude" else AGY_HOOKS_PREFIX)
+                keep_prefixes.append({"claude": CLAUDE_HOOKS_PREFIX, "agy": AGY_HOOKS_PREFIX,
+                                      "codex": CODEX_HOOKS_PREFIX, "opencode": OPENCODE_HOOKS_PREFIX}[host])
     # Before settings: the hook commands for scripts removed here are dropped there.
     from exoma.installer.stale import prune as _prune_stale, write_ledger as _write_ledger
 
@@ -667,8 +743,10 @@ def main() -> int:
     # <project_root>/opencode.json (the secret-file boundary) is NOT installed here. It
     # belongs to a workspace, so init/upgrade owns it — see
     # core.runtime.upgrade._install_project_boundary. The upgrade call below reaches it.
-    _seed_second_agent_config(plan, apply, args.provider, args.model)
+    for host in hosts:
+        _seed_second_agent_config(plan, apply, args.provider, args.model, host=host)
 
+    workspace_upgrade_failed = False
     if project_root:
         # project_root is only set when a .workflow/ already exists here, so this is always
         # an in-place upgrade. Scaffolding a NEW workspace is `init`'s job (main.py
@@ -686,10 +764,10 @@ def main() -> int:
             try:
                 upgrade_workflow_workspace(project_root)
             except ValueError as exc:
-                # Refuses while a delegated job is live. Reported, not raised: the
-                # global config install above already succeeded, and aborting here
-                # would leave the user unsure which half of the run took effect.
+                # Finish the global install and its receipt, but report the incomplete
+                # workspace upgrade through the process status as well as the warning.
                 plan.warn(f"workspace not upgraded: {exc}")
+                workspace_upgrade_failed = True
 
     _store_install_mode(
         args.only_command, hosts, agy_permissions, owned_rules, agy_opt_out, plan, apply, backup_root
@@ -734,8 +812,8 @@ def main() -> int:
 
     if not apply:
         print()
-        print("  DRY RUN — nothing was written. Re-run with --apply to install.")
-    return 0
+        print("  DRY RUN — nothing was written. Re-run without --dry-run to install.")
+    return 1 if workspace_upgrade_failed else 0
 
 
 if __name__ == "__main__":

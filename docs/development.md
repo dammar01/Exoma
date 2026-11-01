@@ -21,7 +21,7 @@ The `~/.claude` you work in every day runs a **released** Exoma, installed from 
 
 ```bash
 python -m pip install --upgrade exoma
-exoma install --apply
+exoma install
 ```
 
 A development checkout never installs onto that `~/.claude`, nor onto `~/.gemini`, where the
@@ -31,7 +31,7 @@ every session on the machine, including the one you are using to fix it. If it h
 anyway, `exoma install --rollback` previews and `exoma install --rollback --apply` restores
 the previous install, but it refuses when an
 installed file has changed since or its receipt is missing; then reinstall the release with
-`python -m pip install --force-reinstall exoma` and `exoma install --apply`.
+`python -m pip install --force-reinstall exoma` and `exoma install`.
 
 ## Working in the checkout
 
@@ -49,7 +49,7 @@ directory so nothing reaches the real `~/.claude`, `~/.gemini` or user data dire
 ```bash
 export AGENT_HOME="$(mktemp -d)"
 export EXOMA_HOME="$AGENT_HOME"   # separate line: in one export it would expand while still empty
-uv run exoma install --apply
+uv run exoma install
 uv run exoma init --work-dir "$(mktemp -d)"
 ```
 

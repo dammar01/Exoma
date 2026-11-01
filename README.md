@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](docs/installation.md#requirements)
 [![PyPI](https://img.shields.io/badge/pip-exoma-blue.svg)](docs/installation.md)
-[![Version](https://img.shields.io/badge/version-0.3.0-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](CHANGELOG.md)
 
 **[Installation guide](docs/installation.md)** · [Security](docs/security.md) · [Team guide](docs/team-guide/README.md) · [Reference](docs/reference.md)
 
@@ -73,7 +73,7 @@ Exoma organizes the processes and resources that support that work. The aim is n
 replace the model or to make the whole process fully automatic; it is to let the AI complete
 a task more effectively without a person directing every step or conclusion.
 
-The current implementation targets **coding agents**, with Claude Code or Agy as the primary
+The current implementation targets **coding agents**, with Claude Code, Agy, Codex, or OpenCode as the primary
 agent ([hosts](docs/reference.md#hosts)).
 It is installed as a Python package (`pip install exoma`) with a CLI (`exoma`), and separates
 work that needs **broad repository inspection** from work that needs the **primary agent's
@@ -84,7 +84,7 @@ structured evidence: a digest, `file:line` anchors, and a reference to the full 
 disk.
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/architecture.svg" alt="Exoma architecture. The developer briefs the primary agent (Claude Code or Agy) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
+<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/architecture.svg" alt="Exoma architecture. The developer briefs the primary agent (Claude Code, Agy, or Codex) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
 </p>
 
 <sub>The primary agent reasons and writes the code; the developer answers open questions and
@@ -107,9 +107,9 @@ agent can be incomplete or wrong even when its output looks plausible.
 
 | Role | Who | Responsibility |
 | --- | --- | --- |
-| **Primary agent** | Claude Code, or Agy ([hosts](docs/reference.md#hosts)) | Reasoning, decisions, code changes, and final review |
+| **Primary agent** | Claude Code, Agy, Codex, or OpenCode ([hosts](docs/reference.md#hosts)) | Reasoning, decisions, code changes, and final review |
 | **Workflow runtime** | The `exoma` package, Python standard library only | Routing, sessions and locks, policy, prompt building, redaction, evidence contracts, digests, persistence, recovery |
-| **Secondary agent** | `opencode`, `codex`, or `agy` | Repository exploration, analysis, planning, and verification evidence |
+| **Secondary agent** | `opencode`, `codex`, `agy`, or `claude` | Repository exploration, analysis, planning, and verification evidence |
 
 The design keeps code-writing with the primary agent. The secondary agent's role is
 read-only; the degree to which each provider **enforces** that differs, and the runtime
@@ -194,13 +194,15 @@ requests.
 
 ```bash
 uv tool install exoma            # or: pip install exoma
-exoma install                    # dry run: read what it will change in ~/.claude
-exoma install --apply
+exoma install --dry-run          # optional: read what it will change first
+exoma install                    # asks the host and its second agent, then installs
 ```
 
 Then, in a project, run `/.init` in the primary agent (or `exoma init --work-dir .`), and `/.doctor`.
 A project that already has a `.workflow/` from agent-workflow is taken over by `/.upgrade`.
 Details, modes and undo: [installation guide](docs/installation.md).
+To update later, run `exoma update` from inside a project; it refreshes the package and
+global configuration, plus that project's `.workflow/` when present.
 
 Ask in natural language; the primary agent routes it (shown in Claude Code):
 

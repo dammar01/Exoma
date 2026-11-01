@@ -174,7 +174,7 @@ def _render_hook_commands(template: dict, bash: str | None = None) -> dict:
     statusline that names no interpreter, and Claude Code renders a broken statusline as an
     empty one. A user's own command carries no placeholder and is left untouched. With no
     bash on the machine the placeholder becomes `bash`, so a dry run still shows a command;
-    install refuses --apply before that matters (install.py).
+    an install that writes refuses before that matters (install.py).
     """
     bash = bash or hook_bash_command() or "bash"
     status = template.get("statusLine")

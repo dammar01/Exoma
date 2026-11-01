@@ -80,7 +80,7 @@ def set_fanout_capability(project_root: Path, capable: bool) -> None:
     atomic_write_json(path, data)
 
 def ensure_workflow_workspace(
-    project_root: Path, agent_workflow_path: str | None = None
+    project_root: Path, agent_workflow_path: str | None = None, host: str | None = None
 ) -> dict:
     """Create STATIC scaffolding only. Per-session state/scope/cache/runtime are
     created lazily under sessions/<sid>/ on first delegated call (see load_workspace_state).
@@ -112,7 +112,7 @@ def ensure_workflow_workspace(
         created_files.append(str(paths["gitignore"]))
 
     tool = _tool_paths()
-    opencode_copied = _copy_provider_config(project_root)
+    opencode_copied = _copy_provider_config(project_root, host=host)
     # Comes after the config.json write above: the boundary dispatch reads
     # runtime.second_agent from it to learn which provider this workspace runs.
     project_boundary = _install_project_boundary(project_root)

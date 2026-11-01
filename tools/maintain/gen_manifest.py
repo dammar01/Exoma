@@ -64,6 +64,14 @@ TARGETS = {
     "hosts/agy/permissions.template.json": "{{HOME}}/.gemini/antigravity-cli/settings.json",
     # Each skill directory installs dotted (`.<name>/`); core/audit/bundle_integrity.py maps it.
     "hosts/agy/skills": "{{HOME}}/.gemini/antigravity-cli/skills",
+    "hosts/codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
+    "hosts/codex/hooks.template.json": "{{HOME}}/.codex/hooks.json",
+    "hosts/codex/codex-host.py": "{{HOME}}/.codex/exoma/hooks/codex-host.py",
+    # The OpenCode host (installer/base.py OPENCODE_*): block, plugin shim and hook; its
+    # contract and skills are rendered from the hosts/claude/ sources above.
+    "hosts/opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    "hosts/opencode/exoma.js": "{{HOME}}/.config/opencode/plugins/exoma.js",
+    "hosts/opencode/opencode-host.py": "{{HOME}}/.config/opencode/exoma/hooks/opencode-host.py",
     **_provider_targets(),
 }
 
@@ -111,6 +119,10 @@ def _dist_files() -> list[str]:
     if agy_skills.is_dir():
         # One directory per skill (`<name>/SKILL.md`), as Agy lays them out.
         paths += [p.relative_to(DIST_CONFIG).as_posix() for p in sorted(agy_skills.glob("*/SKILL.md"))]
+    for rel in ("hosts/codex/AGENTS.md", "hosts/codex/hooks.template.json", "hosts/codex/codex-host.py",
+                "hosts/opencode/AGENTS.md", "hosts/opencode/exoma.js", "hosts/opencode/opencode-host.py"):
+        if (DIST_CONFIG / rel).is_file():
+            paths.append(rel)
     for name, bundle in PROVIDER_BUNDLES.items():
         for key in ("global_config", "project_config"):
             entry = bundle.get(key)
@@ -126,6 +138,7 @@ def _merge_kind(rel: str) -> str:
         or "/commands/" in rel
         or "/agents/" in rel
         or "/hooks/" in rel
+        or rel in ("hosts/codex/codex-host.py", "hosts/opencode/opencode-host.py", "hosts/opencode/exoma.js")
         else "merge"
     )
 
@@ -147,7 +160,8 @@ def _component(rel: str) -> str:
         "/skills/" in rel
         or "/commands/" in rel
         or "/agents/" in rel
-        or rel in ("hosts/claude/CLAUDE.md", "hosts/agy/GEMINI.md")
+        or rel in ("hosts/claude/CLAUDE.md", "hosts/agy/GEMINI.md", "hosts/codex/AGENTS.md",
+                   "hosts/opencode/AGENTS.md")
         or rel in instructions
     ):
         return "prompt_bundle"
