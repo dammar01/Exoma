@@ -740,6 +740,16 @@ def _test_verify_reuses_unchanged_runs() -> None:
         shutil.rmtree(root, ignore_errors=True)
     # Registered through this suite (`verify-reuse`), so the run.py table stays as it is.
     _check_verify_reuse_identity()
+    _check_index_flags_do_not_hide_edits()
+    _check_batch_binds_each_pass_to_its_own_state()
+    _check_verify_failure_ends_an_earlier_pass()
+    _check_reusable_rechecks_after_reading()
+    _check_usage_row_counts_reused_tests()
+    _check_unrecorded_verify_failure_still_withholds()
+    _check_run_sh_test_reports_each_reusable_pass()
+    _check_tree_fingerprint_edge_cases()
+    _check_reported_reusable_matches_the_record()
+    _check_run_sh_test_note_follows_reusable()
 
 
 def _test_verify_reuse_needs_git() -> None:
@@ -1076,5 +1086,346 @@ def _check_verify_reuse_identity() -> None:
             (root / "app.py").write_text("print(2)\n", encoding="utf-8")
             missed += verify_tests.reuse_identity(root) == before
         assert_true(missed == 0, f"a same-size edit right after the index write is seen: missed {missed}/15")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _stale_reuse_repo():
+    """A Git repository whose tests read inputs the stale-reuse checks steer: `state.txt`
+    (tracked), `fail.txt` (ignored and unlisted, so outside the identity) and `count.txt`."""
+    import subprocess
+
+    python = f'"{sys.executable}"'
+    root = _workspace([python])
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True, **no_console())
+    (root / ".gitignore").write_text("count.txt\nfail.txt\n", encoding="utf-8")
+    (root / "counter.py").write_text(
+        "import pathlib, sys\n"
+        "pathlib.Path('count.txt').open('a').write('x')\n"
+        "f = pathlib.Path('fail.txt')\n"
+        "if f.exists():\n    sys.exit(int(f.read_text()))\n"
+        "if '--expect' in sys.argv:\n"
+        "    want = sys.argv[sys.argv.index('--expect') + 1]\n"
+        "    sys.exit(0 if pathlib.Path('state.txt').read_text() == want else 1)\n",
+        encoding="utf-8",
+    )
+    (root / "mutate.py").write_text(
+        "import pathlib, sys\npathlib.Path('state.txt').write_text(sys.argv[1])\n", encoding="utf-8"
+    )
+    (root / "noop.py").write_text("", encoding="utf-8")
+    (root / "state.txt").write_text("A", encoding="utf-8")
+    subprocess.run([*git, "add", "-A"], check=True, **no_console())
+    subprocess.run([*git, "commit", "-qm", "base"], check=True, **no_console())
+    return root, git, python
+
+
+def _check_index_flags_do_not_hide_edits() -> None:
+    """An entry marked assume-unchanged or skip-worktree keeps its old blob in a copied
+    index; an edit to it must still change the identity and end the reuse."""
+    import subprocess
+
+    root, git, python = _stale_reuse_repo()
+    try:
+        command = f"{python} counter.py --expect A"
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            (root / "state.txt").write_text("A", encoding="utf-8")
+            verify_tests.runs_path(root, "s1").unlink(missing_ok=True)
+            recorded = verify_tests.run_and_record(root, "s1", [command])
+            assert_true(recorded["outcomes"][0]["status"] == "passed" and recorded["fingerprint"],
+                        f"{flag}: baseline records a pass: {recorded}")
+            subprocess.run([*git, "update-index", flag, "state.txt"], check=True, **no_console())
+            try:
+                assert_true(command in verify_tests.reusable(root, "s1"),
+                            f"{flag}: the flag alone changes no content, the pass is still reused")
+                (root / "state.txt").write_text("B", encoding="utf-8")
+                assert_true(command not in verify_tests.reusable(root, "s1"),
+                            f"{flag}: an edit to a flagged entry ends the reuse")
+            finally:
+                undo = "--no-assume-unchanged" if flag == "--assume-unchanged" else "--no-skip-worktree"
+                subprocess.run([*git, "update-index", undo, "state.txt"], check=True, **no_console())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_batch_binds_each_pass_to_its_own_state() -> None:
+    """A batch that changes an input, tests it and restores it records the middle pass
+    under the middle state, never under the state the batch started and ended in."""
+    root, _git, python = _stale_reuse_repo()
+    try:
+        to_b, test_b, to_a = (f"{python} mutate.py B", f"{python} counter.py --expect B",
+                              f"{python} mutate.py A")
+        recorded = verify_tests.run_and_record(root, "s1", [to_b, test_b, to_a])
+        assert_true([o["status"] for o in recorded["outcomes"]] == ["passed"] * 3,
+                    f"the batch runs: {recorded['outcomes']}")
+        assert_true(recorded["fingerprint"] is None,
+                    f"a batch whose commands changed the inputs has no single identity: {recorded}")
+        now = verify_tests.reusable(root, "s1")
+        assert_true(test_b not in now, f"a pass proved on state B is not reused on state A: {now}")
+        assert_true(to_b not in now and to_a not in now,
+                    f"a command that changed its own inputs is not reusable: {now}")
+        (root / "state.txt").write_text("B", encoding="utf-8")
+        assert_true(test_b in verify_tests.reusable(root, "s1"),
+                    "the middle pass is reused on the state it actually ran on")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_verify_failure_ends_an_earlier_pass() -> None:
+    """A command that fails while /.verify runs it makes an earlier recorded pass for it
+    unusable; a pass inside verify still records nothing."""
+    root, _git, python = _stale_reuse_repo()
+    try:
+        command, noop = f"{python} counter.py", f"{python} noop.py"
+        verify_tests.run_and_record(root, "s1", [command])
+        assert_true(command in verify_tests.reusable(root, "s1"), "baseline: the pass is reusable")
+        (root / "fail.txt").write_text("1", encoding="utf-8")  # ignored, unlisted: same identity
+        _request(root, {"commands": [noop, command], "reason": "covers the change"})
+        result, _ = _verify(root)
+        outs = result["meta"]["runtime_tests"]["outcomes"]
+        assert_true(outs[1]["status"] == "failed" and not outs[1].get("reused"),
+                    f"the uncached command runs first, so the cached one runs and fails: {outs}")
+        (root / "fail.txt").unlink()
+        assert_true(command not in verify_tests.reusable(root, "s1"),
+                    "the failure seen by verify ends the earlier pass")
+        assert_true(noop not in verify_tests.reusable(root, "s1"),
+                    "a pass inside verify is still not recorded as reusable")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_reusable_rechecks_after_reading() -> None:
+    """A `run.sh test` that starts or finishes while `reusable` reads is not missed."""
+    from unittest.mock import patch
+
+    root, _git, python = _stale_reuse_repo()
+    try:
+        command = f"{python} counter.py"
+        record = verify_tests.runs_path(root, "s1")
+        real_identity = verify_tests._identity
+
+        def interleave(writer):
+            busy = []
+
+            def identity(project_root):
+                if not busy:
+                    busy.append(True)
+                    writer()
+                return real_identity(project_root)
+
+            return patch.object(verify_tests, "_identity", identity)
+
+        # A run that records a failure between the record read and the identity.
+        verify_tests.run_and_record(root, "s1", [command])
+
+        def failing_run():
+            (root / "fail.txt").write_text("1", encoding="utf-8")
+            try:
+                verify_tests.run_and_record(root, "s1", [command])
+            finally:
+                (root / "fail.txt").unlink()
+
+        with interleave(failing_run):
+            seen = verify_tests.reusable(root, "s1")
+        assert_true(command not in seen, f"a failure recorded while reading is not missed: {seen}")
+
+        # A run that starts after the marker scan: its marker must withhold the command.
+        record.unlink()
+        verify_tests.run_and_record(root, "s1", [command])
+        late = record.parent / f"test-runs.{os.getpid()}-late.pending"
+
+        def starting_run():
+            late.write_text(json.dumps({"pid": os.getpid(), "identity": None, "commands": [command]}),
+                            encoding="utf-8")
+
+        try:
+            with interleave(starting_run):
+                seen = verify_tests.reusable(root, "s1")
+            assert_true(command not in seen, f"a run that started while reading withholds it: {seen}")
+        finally:
+            late.unlink(missing_ok=True)
+        assert_true(command in verify_tests.reusable(root, "s1"), "with nothing in between, reuse holds")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_usage_row_counts_reused_tests() -> None:
+    """The usage row tells a reused test from one that ran."""
+    from exoma.core.evidence.contracts import UsageRecord, _runtime_tests_fields
+
+    root, _git, python = _stale_reuse_repo()
+    try:
+        command, noop = f"{python} counter.py", f"{python} noop.py"
+        verify_tests.run_and_record(root, "s1", [command])
+        _request(root, {"commands": [command, noop], "reason": "covers the change"})
+        result, _ = _verify(root)
+        fields = _runtime_tests_fields(result["meta"]["runtime_tests"])
+        assert_true(fields.get("tests_run") == 2 and fields.get("tests_reused") == 1,
+                    f"one reused, one run, both counted by tests_run: {fields}")
+        assert_true(_runtime_tests_fields(None) == {} and UsageRecord().tests_reused is None,
+                    "tests_reused is None on a row with no runtime tests")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_unrecorded_verify_failure_still_withholds() -> None:
+    """A failure verify saw but could not append still ends the earlier pass: a marker
+    withholds the command until a later run records it; with no marker, the record goes."""
+    import pathlib
+    from unittest.mock import patch
+
+    root, _git, python = _stale_reuse_repo()
+    try:
+        command, noop = f"{python} counter.py", f"{python} noop.py"
+        record = verify_tests.runs_path(root, "s1")
+        real_open = pathlib.Path.open
+
+        def no_append(self, mode="r", *args, **kwargs):
+            if self == record and "a" in mode:
+                raise PermissionError(13, "injected: append refused", str(self))
+            return real_open(self, mode, *args, **kwargs)
+
+        def failing_verify():
+            (root / "fail.txt").write_text("1", encoding="utf-8")
+            _request(root, {"commands": [noop, command], "reason": "covers the change"})
+            try:
+                with patch.object(pathlib.Path, "open", no_append):
+                    return _verify(root)[0]["meta"]["runtime_tests"]
+            finally:
+                (root / "fail.txt").unlink()
+
+        verify_tests.run_and_record(root, "s1", [command])
+        tests = failing_verify()
+        markers = sorted(record.parent.glob("test-runs*.pending"))
+        assert_true(tests.get("record_error") and "withheld" in tests["record_error"],
+                    f"the unrecorded failure is reported: {tests}")
+        assert_true(len(markers) == 1
+                    and json.loads(markers[0].read_text(encoding="utf-8"))["commands"] == [command],
+                    f"a marker names the failed command: {markers}")
+        assert_true(command not in verify_tests.reusable(root, "s1"),
+                    "the earlier pass is withheld although the failure row was not written")
+        assert_true(json.loads(markers[0].read_text(encoding="utf-8")).get("kind") == "verify_failure",
+                    "the marker says it records a finished failure, not a live run")
+        # Its owner (this process) is still alive: a foreground verify must not withhold forever.
+        verify_tests.run_and_record(root, "s1", [command])
+        assert_true(not markers[0].exists() and command in verify_tests.reusable(root, "s1"),
+                    "a run recorded after the failure clears its marker, owner alive or not")
+
+        with patch.object(verify_tests, "_marker_path", lambda *_: record / "cannot.pending"):
+            tests = failing_verify()
+        assert_true(not record.exists() and verify_tests.reusable(root, "s1") == {},
+                    f"no marker either: the record is removed, nothing is reused: {tests}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_run_sh_test_reports_each_reusable_pass() -> None:
+    """`run.sh test` names the passes it recorded as reusable, not one batch verdict."""
+    from exoma import cli
+
+    root, _git, python = _stale_reuse_repo()
+    try:
+        to_b, test_b = f"{python} mutate.py B", f"{python} counter.py --expect B"
+        out = cli._test_command(root, "s1", json.dumps([to_b, test_b]))
+        assert_true(out["ok"] and out["meta"]["reusable"] == [test_b],
+                    f"the pass that left its inputs alone is reusable: {out['meta']}")
+        assert_true("1 of 2 passes reusable" in out["content"],
+                    f"the note counts what was recorded, not the batch: {out['content']}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_reported_reusable_matches_the_record() -> None:
+    """`run_and_record`'s `reusable` follows the rules `reusable` applies: the latest
+    outcome of each command, and no command a remaining marker withholds."""
+    root, _git, python = _stale_reuse_repo()
+    try:
+        (root / ".gitignore").write_text("count.txt\nfail.txt\nflip.txt\n", encoding="utf-8")
+        # Passes on its first run, fails on every later one; flip.txt is ignored and unlisted.
+        (root / "flip.py").write_text(
+            "import pathlib, sys\nf = pathlib.Path('flip.txt')\n"
+            "sys.exit(1) if f.exists() else f.write_text('1')\n",
+            encoding="utf-8",
+        )
+        flip, command = f"{python} flip.py", f"{python} counter.py"
+        out = verify_tests.run_and_record(root, "s1", [flip, flip])
+        assert_true([o["status"] for o in out["outcomes"]] == ["passed", "failed"]
+                    and flip not in out["reusable"] and flip not in verify_tests.reusable(root, "s1"),
+                    f"a command whose latest outcome failed is not reported reusable: {out}")
+
+        junk = verify_tests.runs_path(root, "s1").parent / "test-runs.junk.pending"
+        junk.write_text("not json", encoding="utf-8")  # recent, so kept: withholds everything
+        try:
+            out = verify_tests.run_and_record(root, "s1", [command])
+            assert_true(out["outcomes"][0]["status"] == "passed" and out["reusable"] == []
+                        and verify_tests.reusable(root, "s1") == {},
+                        f"nothing is reported reusable while an unreadable marker withholds all: {out}")
+        finally:
+            junk.unlink()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_run_sh_test_note_follows_reusable() -> None:
+    """The `[TESTS]` note never claims a reuse `meta.reusable` does not list, whatever the
+    batch's own fingerprint says."""
+    from exoma import cli
+
+    root, _git, python = _stale_reuse_repo()
+    try:
+        (root / ".gitignore").write_text("count.txt\nfail.txt\nflip.txt\n", encoding="utf-8")
+        (root / "flip.py").write_text(
+            "import pathlib, sys\nf = pathlib.Path('flip.txt')\n"
+            "sys.exit(1) if f.exists() else f.write_text('1')\n",
+            encoding="utf-8",
+        )
+        flip, command = f"{python} flip.py", f"{python} counter.py"
+        out = cli._test_command(root, "s1", json.dumps([flip, flip]))
+        assert_true(out["meta"]["fingerprint"] and out["meta"]["reusable"] == []
+                    and "reuses each pass" not in out["content"] and "not reusable" in out["content"],
+                    f"pass then fail: the batch kept its identity, yet nothing is reusable: {out['content']}")
+
+        live = verify_tests.runs_path(root, "s1").parent / f"test-runs.{os.getpid()}-live.pending"
+        live.write_text(json.dumps({"pid": os.getpid(), "identity": None, "commands": [command]}),
+                        encoding="utf-8")
+        try:
+            out = cli._test_command(root, "s1", command)
+            assert_true(out["ok"] and out["meta"]["reusable"] == []
+                        and "reuses each pass" not in out["content"] and "withholds" in out["content"],
+                        f"a live run's marker withholds the pass, and the note says so: {out['content']}")
+        finally:
+            live.unlink()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_tree_fingerprint_edge_cases() -> None:
+    """A flagged file whose name holds a carriage return round-trips; a failing
+    `.workflow` removal gives no tree id."""
+    import subprocess
+    from unittest.mock import patch
+
+    from exoma.core.evidence import tree_fingerprint as tf
+
+    root, git, _python = _stale_reuse_repo()
+    try:
+        if os.name != "nt":  # Windows refuses control characters in file names
+            odd = root / "a\rb.txt"
+            odd.write_text("1", encoding="utf-8")
+            subprocess.run([*git, "add", "-A"], check=True, **no_console())
+            before = tf.tree_fingerprint(root)
+            subprocess.run([*git, "update-index", "--assume-unchanged", "a\rb.txt"], check=True, **no_console())
+            odd.write_text("2", encoding="utf-8")
+            after = tf.tree_fingerprint(root)
+            assert_true(after is not None and after != before,
+                        f"an edit to a flagged CR-named file is seen: {before} -> {after}")
+        real_git = tf._git
+
+        def rm_fails(root_, args, env=None):
+            return None if args[:1] == ["rm"] else real_git(root_, args, env)
+
+        with patch.object(tf, "_git", rm_fails):
+            assert_true(tf.tree_fingerprint(root) is None,
+                        "a .workflow removal that fails gives no tree id")
     finally:
         shutil.rmtree(root, ignore_errors=True)

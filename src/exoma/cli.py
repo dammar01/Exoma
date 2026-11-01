@@ -291,18 +291,29 @@ def _test_command(project_root: Path, session_id: str, task: str | None) -> dict
         if outcome["status"] in ("failed", "timeout", "error") and outcome.get("tail"):
             lines.append("  tail: " + " ".join(outcome["tail"].split())[-600:])
     passed = all(o["status"] == "passed" for o in outcomes)
-    if ran.get("record_error") and ran["fingerprint"]:
+    # From `reusable` alone, never the batch fingerprint: a batch can keep its identity while
+    # a command's latest outcome failed or another run's marker withholds it. Per command,
+    # too: a batch whose setup step changed the tree still records the tests after it.
+    reusable = ran.get("reusable") or []
+    passes = len({o["command"] for o in outcomes if o["status"] == "passed"})
+    if ran.get("record_error") and reusable:
         note = f"recorded, with a warning: {ran['record_error']}"
     elif ran.get("record_error"):
         note = f"not reusable: the run could not be recorded ({ran['record_error']})"
-    elif ran["fingerprint"]:
+    elif reusable and len(reusable) == passes:
         note = "recorded: a later /.verify reuses each pass while its inputs stay unchanged"
+    elif reusable:
+        note = (f"recorded: {len(reusable)} of {passes} passes reusable; the others changed "
+                "their inputs, failed later in the list, or are withheld, so a later /.verify "
+                "runs them again")
     else:
-        note = "not reusable: the tree could not be fingerprinted (no Git) or the run changed its inputs"
+        note = ("not reusable: no pass is bound to the tree (no Git, a failure, or the run "
+                "changed its inputs), or another run's marker withholds it")
     content = "\n".join(["[TESTS]", *lines, note])
     meta = {
         "outcomes": [{k: v for k, v in o.items() if k != "tail"} for o in outcomes],
         "fingerprint": ran["fingerprint"],
+        "reusable": reusable,
         "record_error": ran.get("record_error"),
         "record": str(verify_tests.runs_path(project_root, session_id)),
     }

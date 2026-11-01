@@ -1016,11 +1016,15 @@ Contract version 4 adds two fields and drops one kind of row:
 - `provider_version_status` — `stable` when that release is the bundle's `stable_version`,
   `untested` for any other release, `unreadable` when no version was read
   (`core/provider/versions.py`; reference "Provider releases").
-- `tests_requested`, `tests_run`, `tests_failed`, `tests_seconds` — `/.verify` only, on the
-  command's final row: whether main_agent wrote `verify/tests.json`, how many requested
-  commands the runtime ran (refused ones excluded), how many of those did not pass, and their
-  summed wall time. A command reused from an earlier `run.sh test` pass under an unchanged reuse
-  identity (`verify_tests.reuse_identity`; reference, `verify_mode`) counts as run and passed, with 0 s. Not part of `duration_seconds`. `None` on every other row.
+- `tests_requested`, `tests_run`, `tests_reused`, `tests_failed`, `tests_seconds` — `/.verify`
+  only, on the command's final row: whether main_agent wrote `verify/tests.json`, how many
+  requested commands the runtime ran (refused ones excluded), how many of those were taken from
+  an earlier pass instead of run, how many did not pass, and their summed wall time. A command
+  reused from an earlier `run.sh test` pass under an unchanged reuse identity
+  (`verify_tests.reuse_identity`; reference, `verify_mode`) counts in `tests_run` as run and
+  passed, with 0 s, and in `tests_reused`, so `tests_run - tests_reused` is what actually ran. Not
+  part of `duration_seconds`. `None` on every other row, and `tests_reused` also on verify rows
+  written before it existed (an additive field: the contract version stays 4).
 - A browser run that ended before its review (incomplete, preflight, refused spec or env, no
   request) reached no provider and writes **no** usage or audit row; the `e2e_run` quality row
   and the `verify` task event still record it. Before v4 such a run wrote a `verify` row with

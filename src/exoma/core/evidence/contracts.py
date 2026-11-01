@@ -334,9 +334,11 @@ class UsageRecord:
     provider_version_status: str | None = None
     # /.verify only, on the command's final row: whether main_agent wrote a test request,
     # how many requested commands the runtime ran and how many of those did not pass, and
-    # their summed wall time — none of it inside `duration_seconds`.
+    # their summed wall time — none of it inside `duration_seconds`. `tests_reused` is the
+    # part of `tests_run` taken from an earlier `run.sh test` pass instead of run again.
     tests_requested: bool | None = None
     tests_run: int | None = None
+    tests_reused: int | None = None
     tests_failed: int | None = None
     tests_seconds: float | None = None
     # Fact lifecycle for the command, on its final row only (exploration/reasoning). How
@@ -546,6 +548,7 @@ def _runtime_tests_fields(runtime_tests) -> dict:
     return {
         "tests_requested": bool(runtime_tests.get("requested")),
         "tests_run": len(ran),
+        "tests_reused": sum(1 for o in ran if o.get("reused")),
         "tests_failed": sum(1 for o in ran if o.get("status") != "passed"),
         "tests_seconds": runtime_tests.get("seconds"),
     }

@@ -201,18 +201,28 @@ def _beat(on_progress, started: float, **fields) -> None:
         pass
 
 
-def run_tests(project_root, request: dict, on_progress=None, reuse: dict | None = None) -> list[dict]:
+def run_tests(
+    project_root, request: dict, on_progress=None, reuse: dict | None = None, identity=None,
+) -> list[dict]:
     """One outcome per requested command: passed | failed | timeout | error | refused.
 
     `reuse` maps a command to its earlier passing run on this same tree (`reusable`): that
     command is not run again, and its outcome is the earlier one marked `reused`. The map
     is taken before the first command, so it holds only until a command actually runs: a
-    test may write into the tree, and every later command then runs as well."""
+    test may write into the tree, and every later command then runs as well.
+
+    `identity`, when given, is called before the first command that runs and after every
+    command that runs; each such outcome gets `fingerprint`: the identity it ran on when the
+    command left it unchanged, else None. A batch that changes an input, tests it and
+    restores it thus binds the middle pass to the middle state, not to the state the batch
+    started and ended in."""
     prefixes, timeout = _policy(project_root)
     outcomes: list[dict] = []
     commands = request.get("commands")
     if not isinstance(commands, list):
         return [{"command": "", "status": "refused", "detail": "`commands` must be a list"}]
+    unsampled = object()
+    current = unsampled
     run_started = time.monotonic()
     for index, raw in enumerate(commands[:MAX_COMMANDS]):
         command = str(raw).strip()
@@ -240,6 +250,8 @@ def run_tests(project_root, request: dict, on_progress=None, reuse: dict | None 
                 "seconds": 0.0, "ran_at": earlier.get("at"), "ran_seconds": earlier.get("seconds"),
             })
             continue
+        if identity is not None and current is unsampled:
+            current = identity()
         started = time.monotonic()
         progress = {"command_index": index, "commands": min(len(commands), MAX_COMMANDS)}
         _beat(on_progress, run_started, **progress)
@@ -263,6 +275,10 @@ def run_tests(project_root, request: dict, on_progress=None, reuse: dict | None 
         outcome["seconds"] = round(time.monotonic() - started, 1)
         if outcome.get("tail"):
             outcome["tail"] = redact(outcome["tail"])[0]
+        if identity is not None:
+            after = identity()
+            outcome["fingerprint"] = current if current is not None and current == after else None
+            current = after
         outcomes.append(outcome)
         # The identity behind `reuse` was the tree before this command ran.
         reuse = None
@@ -388,6 +404,7 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
         if request and not request.get("invalid")
         else []
     )
+    record_error = _record_verify_failures(project_root, session_id, outcomes)
     result["content"] = merge(result.get("content") or "", request, outcomes)
     # Consumed only now that its results are in the result. Renaming on read lost the
     # request when the worker died while the tests ran: the recovered run of the same job
@@ -403,7 +420,71 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
         "reused": sum(1 for o in outcomes if o.get("reused")),
         "seconds": round(sum(o.get("seconds") or 0 for o in outcomes), 1),
     }
+    if record_error:
+        meta["runtime_tests"]["record_error"] = record_error
     return result
+
+
+# Outcomes of a command that ran and did not pass.
+_NOT_PASSED = ("failed", "timeout", "error")
+# A marker of this kind records a failure verify already saw, not a run still going: a
+# later `run.sh test` that recorded its commands retires it even while its owner lives.
+VERIFY_FAILURE_MARKER = "verify_failure"
+
+
+def _record_verify_failures(project_root, session_id: str, outcomes: list[dict]) -> str | None:
+    """Append a row for every command verify ran that did not pass, so an earlier `run.sh
+    test` pass for it stops being the latest row and is no longer reused. A pass inside
+    verify is still not recorded: only `run.sh test` makes a command reusable. The rows
+    carry no fingerprint, so they can never be reused themselves. Returns an error, or None.
+
+    When the rows cannot be appended the earlier pass would stay the latest row, so the
+    failure is kept another way: a pending marker owned by this process names the failed
+    commands, which `reusable` withholds until a `run.sh test` started after this process
+    started records them again (`run_and_record` retires it then, owner alive or not: the
+    failure is over, and that run's rows are newer than it). When even the marker
+    cannot be written, the record is removed: no pass is reused rather than a stale one."""
+    failed = [o for o in outcomes if o.get("status") in _NOT_PASSED and not o.get("reused")]
+    if not failed:
+        return None
+    rows = "".join(
+        json.dumps({
+            "command": o["command"], "status": o["status"], "seconds": o.get("seconds"),
+            "fingerprint": None, "at": _now(), "source": "verify",
+        }) + "\n"
+        for o in failed
+    )
+    path = runs_path(project_root, session_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(rows)
+    except OSError as exc:
+        error = f"verify failure not recorded: {type(exc).__name__}: {exc}"
+    else:
+        return None
+    marker = _marker_path(project_root, session_id)
+    partial = marker.with_name(marker.name + ".tmp")
+    try:
+        pid = os.getpid()
+        partial.write_text(json.dumps({
+            "pid": pid, "identity": osutil.process_identity(pid),
+            "commands": [o["command"] for o in failed], "at": _now(),
+            "kind": VERIFY_FAILURE_MARKER,
+        }), encoding="utf-8")
+        os.replace(partial, marker)
+    except OSError as exc:
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as unlink_exc:
+            return (f"{error}; marker not written ({type(exc).__name__}) and record not removed "
+                    f"({type(unlink_exc).__name__}): an earlier pass may still be reused")
+        return f"{error}; marker not written ({type(exc).__name__}): record removed, nothing is reused"
+    return f"{error}; the earlier pass is withheld by {marker.name} until the command is recorded again"
 
 
 def _now() -> str:
@@ -534,11 +615,14 @@ def _retire_torn(project_root, session_id: str, torn: list[Path]) -> str | None:
 
 def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
     """`run.sh test`: run `commands` under the verify policy, record each outcome with the
-    reuse identity, and return `{outcomes, fingerprint, record_error}`.
+    reuse identity, and return `{outcomes, fingerprint, reusable, record_error}`;
+    `reusable` lists the passing commands a later verify may reuse.
 
-    The identity is taken before the run: a test that writes into the tree (a build
-    artifact Git does not ignore) or a listed input makes it differ afterwards, and verify
-    then runs it again rather than trusting a pass on inputs that no longer exist.
+    The identity is taken before and after every command, and each row carries the one
+    its command ran on. A command that writes into the tree (a build artifact Git does not
+    ignore) or a listed input is recorded with no identity, so it is never reused, and a
+    later command in the batch is bound to the state that command left. `fingerprint` in
+    the result is the batch's starting identity, None when any command changed it.
 
     Fails closed. Each run first writes its own marker, `test-runs.<pid>-<token>.pending`,
     naming its owner (pid + process identity) and its commands; `reusable` withholds every
@@ -568,7 +652,7 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
         except OSError:
             pass
         return {
-            "outcomes": [], "fingerprint": None,
+            "outcomes": [], "fingerprint": None, "reusable": [],
             "record_error": f"pending marker not written, nothing was run: {type(exc).__name__}: {exc}",
         }
     # Taken before the run: only these may be cleared after it (see the docstring).
@@ -583,21 +667,31 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
                     torn.append(other)
             except OSError:
                 pass
-        elif not _owner_alive(owner):
+        elif owner.get("kind") == VERIFY_FAILURE_MARKER or not _owner_alive(owner):
             retire.append((other, owner))
     record_error = _retire_torn(project_root, session_id, torn)
-    fingerprint = _identity(project_root)
-    outcomes = run_tests(project_root, {"commands": commands})
-    if fingerprint is not None and fingerprint != _identity(project_root):
-        fingerprint = None  # the run changed its inputs: nothing it proved is reusable
+    # Sampled around every command, not once around the batch: each row carries the
+    # identity its own command ran on, None when that command changed it (`run_tests`).
+    start = _identity(project_root)
+    first = [start]
+
+    def identity():
+        return first.pop() if first else _identity(project_root)
+
+    outcomes = run_tests(project_root, {"commands": commands}, identity=identity)
+    ran = [o for o in outcomes if o["status"] != "refused"]
+    bound = {id(o): o.pop("fingerprint", None) for o in ran}
+    # The batch's own identity only when no command changed it: nothing it proved is
+    # reusable on inputs that no longer exist.
+    fingerprint = start if all(bound[id(o)] == start for o in ran) else None
+    trusted = True  # False once a failure below leaves the rows unreadable or withheld
     path = runs_path(project_root, session_id)
     rows = "".join(
         json.dumps({
             "command": outcome["command"], "status": outcome["status"],
-            "seconds": outcome.get("seconds"), "fingerprint": fingerprint, "at": _now(),
+            "seconds": outcome.get("seconds"), "fingerprint": bound[id(outcome)], "at": _now(),
         }) + "\n"
-        for outcome in outcomes
-        if outcome["status"] != "refused"
+        for outcome in ran
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -606,7 +700,7 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
     except OSError as exc:
         # The marker stays: it is what keeps an older pass from being reused.
         record_error = "; ".join(filter(None, [record_error, f"record not written: {type(exc).__name__}: {exc}"]))
-        fingerprint = None
+        fingerprint, trusted = None, False
         try:
             path.unlink(missing_ok=True)
         except OSError as unlink_exc:
@@ -618,18 +712,40 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
         except OSError as exc:
             # Left behind, it withholds these commands until a later run records them: safe.
             record_error = "; ".join(filter(None, [record_error, f"pending marker not removed: {type(exc).__name__}"]))
-            fingerprint = None
-        # A run that was dead before this one started is cleared once every command it
-        # named has a row from this run, which is then provably the newer outcome.
+            fingerprint, trusted = None, False
+        # A run that was dead before this one started, or a verify failure recorded as a
+        # marker before it, is cleared once every command it named has a row from this run,
+        # which is then provably the newer outcome.
         for other, owner in retire:
             if set(owner["commands"]) <= recorded:
                 try:
                     other.unlink(missing_ok=True)
                 except OSError:
                     pass
-    if record_error and fingerprint is not None and not os.access(path, os.W_OK):
-        fingerprint = None
-    return {"outcomes": outcomes, "fingerprint": fingerprint, "record_error": record_error}
+    if record_error and not os.access(path, os.W_OK):
+        fingerprint, trusted = None, False
+    return {"outcomes": outcomes, "fingerprint": fingerprint,
+            "reusable": _reported_reusable(project_root, session_id, ran, bound) if trusted else [],
+            "record_error": record_error}
+
+
+def _reported_reusable(project_root, session_id: str, ran: list[dict], bound: dict) -> list[str]:
+    """What a later verify may reuse from this run, by the rules `reusable` applies: the
+    command's latest outcome passed, bound to the state it ran on, and no marker left
+    after this run withholds it (an unreadable one withholds all). Whether the project is
+    still in that state when verify asks is not known here."""
+    latest = {}
+    for outcome in ran:
+        latest[outcome["command"]] = outcome
+    withheld: set[str] = set()
+    for _marker, owner in _markers(project_root, session_id):
+        if owner is None:
+            return []
+        withheld.update(owner["commands"])
+    return [
+        command for command, o in latest.items()
+        if command not in withheld and o["status"] == "passed" and bound[id(o)]
+    ]
 
 
 def _marker_path(project_root, session_id: str) -> Path:
@@ -672,6 +788,16 @@ def _owner_alive(owner: dict) -> bool:
     return recorded is None or osutil.process_identity(pid) in (None, recorded)
 
 
+def _record_stamp(path: Path) -> tuple[int, int] | None:
+    """The record's size and mtime: an append grows the size, so a row written between
+    two stamps always shows. None when the record cannot be stat'ed."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
+
+
 def reusable(project_root, session_id: str) -> dict:
     """Command -> its latest recorded run, for each command whose latest run passed under
     the reuse identity the project has now. Empty when the identity cannot be computed, or
@@ -680,12 +806,21 @@ def reusable(project_root, session_id: str) -> dict:
     marker (`run_and_record`) is withheld, live run or crashed one: its newest outcome may
     not be in the record. A marker that cannot be read withholds everything, and so does a
     record that cannot be written (a run since then may have failed to append to it). A
-    barrier row (`_retire_torn`) drops every row before it."""
+    barrier row (`_retire_torn`) drops every row before it.
+
+    Nothing is locked. Instead the markers and the record's size and mtime are taken again
+    once the identity is in: a run that started (new marker) or recorded (the record grew)
+    while this read went on returns nothing rather than a snapshot it may contradict. A run
+    that starts after this returns is not seen; see the reference."""
     path = runs_path(project_root, session_id)
     if not path.is_file() or not os.access(path, os.W_OK):
         return {}
+    markers = _markers(project_root, session_id)
+    seen = _record_stamp(path)
+    if seen is None:
+        return {}
     withheld: set[str] = set()
-    for _marker, owner in _markers(project_root, session_id):
+    for _marker, owner in markers:
         if owner is None:
             return {}
         withheld.update(owner["commands"])
@@ -710,6 +845,8 @@ def reusable(project_root, session_id: str) -> dict:
         return {}
     current = _identity(project_root)
     if current is None:
+        return {}
+    if _markers(project_root, session_id) != markers or _record_stamp(path) != seen:
         return {}
     return {
         command: row for command, row in latest.items()

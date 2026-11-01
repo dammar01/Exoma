@@ -30,6 +30,8 @@ from pathlib import Path
 from exoma.utils.osutil import hidden_run_kwargs
 
 GIT_TIMEOUT_S = 60
+# Flagged paths per `update-index` call: short enough for any platform's command line.
+FLAG_CHUNK = 100
 
 
 def _git(root: Path, args: list[str], env: dict | None = None) -> str | None:
@@ -46,6 +48,63 @@ def _git(root: Path, args: list[str], env: dict | None = None) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout.strip() if done.returncode == 0 else None
+
+
+def _flagged(root: Path, env: dict) -> list[str] | None:
+    """Paths of the index entries marked assume-unchanged or skip-worktree, or None when
+    the index cannot be listed. `ls-files -v` tags each entry: lowercase is
+    assume-unchanged, `S` skip-worktree, `s` both."""
+    # Read as bytes: text mode's universal newlines would turn a `\r` in a name into `\n`,
+    # and update-index would then be handed a path that does not exist.
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-v", "-z"],
+            capture_output=True,
+            timeout=GIT_TIMEOUT_S,
+            check=False,
+            env=env,
+            **hidden_run_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return [
+        os.fsdecode(entry[2:]) for entry in done.stdout.split(b"\0")
+        if len(entry) > 2 and entry[1:2] == b" " and (entry[:1].islower() or entry[:1] == b"S")
+    ]
+
+
+def _clear_index_flags(root: Path, scratch: Path, env: dict) -> bool:
+    """Clear assume-unchanged and skip-worktree on every entry of the copied index.
+
+    Git never looks at a flagged entry's file, so `add -A` keeps its old blob however the
+    file was edited, and the tree id says nothing changed. Cleared, the entry's cached stat
+    no longer matches and the file is hashed like any other. The rewrite stamps the copy
+    "now", so its original mtime is put back: the racy-git rule (see the copy2 below) needs
+    it. False when the flags cannot be listed or cleared: the copy is not trustworthy."""
+    flagged = _flagged(root, env)
+    if flagged is None:
+        return False
+    if not flagged:
+        return True
+    try:
+        stamp = scratch.stat()
+    except OSError:
+        return False
+    # One flag per call: given together, --no-skip-worktree did not take (git 2.52, exit 0,
+    # `S` still listed). The re-list below is what proves the clear, never the exit code.
+    for option in ("--no-assume-unchanged", "--no-skip-worktree"):
+        for at in range(0, len(flagged), FLAG_CHUNK):
+            if _git(root, ["update-index", option, "--", *flagged[at:at + FLAG_CHUNK]], env) is None:
+                return False
+    if _flagged(root, env) != []:
+        return False  # unlistable, or a flag survived: no tree id over a stale blob
+    try:
+        os.utime(scratch, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    except OSError:
+        return False
+    return True
 
 
 def tree_fingerprint(project_root) -> str | None:
@@ -69,13 +128,17 @@ def tree_fingerprint(project_root) -> str | None:
         except OSError:
             pass  # an empty index still gives the right answer, only slower
         env = dict(os.environ, GIT_INDEX_FILE=str(scratch))
+        if scratch.is_file() and not _clear_index_flags(root, scratch, env):
+            return None
         # No `:(exclude).workflow` pathspec here: when `.workflow/` is ignored (the usual
         # case) naming it makes `git add` exit 1 ("paths are ignored"). The rm below takes
         # it out whether it was ignored, untracked or tracked.
         if _git(root, ["add", "-A", "--", "."], env) is None:
             return None
         # `.workflow/` is the runtime's own state, never part of what was tested.
-        _git(root, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".workflow"], env)
+        # Checked: a failed removal would leave the runtime's own state inside the tree id.
+        if _git(root, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".workflow"], env) is None:
+            return None
         return _git(root, ["write-tree"], env) or None
 
 

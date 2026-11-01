@@ -1455,6 +1455,12 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   identity (`verify_tests.reuse_identity`): a sha256 over the Git tree id of the working tree's content
   outside `.workflow/` (`core/evidence/tree_fingerprint.py`: `git add -A` into a copy of the index that
   keeps its mtime, so Git's racy-entry check still catches a same-size edit, then `git write-tree`;
+  `assume-unchanged` and `skip-worktree` are cleared on the copy first, one `update-index` option per
+  call, and the copy's mtime put back, because Git never reads a flagged entry's file and an edit to
+  it would otherwise keep the old blob; the flagged paths are read as bytes, so a name holding a
+  carriage return round-trips; a flag that cannot be cleared, or a listing that fails, gives no tree
+  id (`null`, nothing reusable); the real index is never touched; any failing Git step (`git add
+  -A`, the removal of `.workflow/` from the copy, `git write-tree`) also gives `null`;
   HEAD is not part of it, so a commit that changes no file keeps it; content as Git stores it, so an
   edit Git's conversions undo, such as LF to CRLF under `text`/`eol` attributes, `core.autocrlf` or a
   clean filter, keeps it too: list a byte-sensitive input in `verify_reuse_files`), the bytes of
@@ -1462,7 +1468,12 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   `commands.verify_reuse_env` (default `WORKFLOW_*`, `EXOMA_*`, `PYTEST_*`, `CI`, `NODE_ENV`,
   `APP_ENV`), and every file matching `commands.verify_reuse_files` (globs under the project root,
   default `.env`, `.env.*`; for inputs Git ignores). Only hashes are stored. The identity is taken
-  before the run and dropped (`null`) when the run itself changed it. When a verify then requests the
+  before the first command and after every command, and each row carries the identity its own
+  command ran on, `null` when that command changed it. A list that changes an input, tests it, then
+  restores it therefore records the middle pass under the middle state, never under the state the
+  list started and ended in; the call's `fingerprint` is the starting identity, `null` when any
+  command changed it. A list in which N commands run takes N + 1 identities (a refused command
+  takes none). When a verify then requests the
   **exact same command string** and that command's **latest** recorded run `passed` under the
   identity the project has now, it is not run: its outcome is `passed` with `reused: true`, `ran_at`
   and `ran_seconds`, its `checks_run` line ends `— reused, not rerun`, and `meta.runtime_tests.reused`
@@ -1487,11 +1498,30 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   the OS cannot answer for (Windows access denied, any other query failure) counts as alive, unlike
   `osutil.process_alive`, which the job reaper uses and which counts unknown as dead. A run whose record cannot be written leaves its marker
   and removes the record file; every such failure is reported as `record_error` (in `meta` and the
-  `[TESTS]` note) with `fingerprint: null`. Runs made by verify itself are not
-  recorded. Not covered: installed dependencies and virtualenvs, submodule contents, `PATH` and
+  `[TESTS]` note) with `fingerprint: null`. A pass made by verify itself is not recorded; a command
+  verify ran that did not pass (`failed`, `timeout`, `error`) is appended as a row with
+  `"source": "verify"` and `fingerprint: null`, so an earlier `run.sh test` pass for it is no longer
+  the latest row and is not reused. When that append fails, verify writes a pending marker naming the
+  failed commands, with `"kind": "verify_failure"`, so they stay withheld until a `run.sh test` that
+  saw the marker before it started records them all again; that run retires it even while the
+  verify's process is still alive (a foreground verify), because the marker records a failure that
+  is over, not a run that is going; when the marker cannot be written either, the record
+  file is removed (nothing in the session is reused); `meta.runtime_tests.record_error` says which
+  happened, and that an earlier pass may still be reused when neither worked. A verify that dies
+  before its tests finish records nothing. `reusable` takes no lock: after
+  computing the identity it reads the markers and the record's size and mtime again, and returns
+  nothing when either changed, so a `run.sh test` that started or recorded during the read is not
+  missed; one that starts after the read returned is not seen by that verify. Not covered: installed dependencies and virtualenvs, submodule contents, `PATH` and
   `PYTHONPATH` (they differ between `run.sh test` and the verify worker), and ignored inputs nobody
   listed; a project whose tests read such inputs lists them in `verify_reuse_files` or keeps those
-  tests out of `run.sh test`. Output: `[TESTS]` with one line per command; any
+  tests out of `run.sh test`. Output: `[TESTS]` with one line per command and a note that counts
+  the passes a later verify may reuse, taken from `meta.reusable` alone, never from the call's
+  `fingerprint` (a list can keep its identity while a command's last outcome failed or another
+  run's marker withholds it) (`recorded: K of M passes reusable` when some command in the list
+  changed the inputs; that command's own pass is the one not reusable); `meta.reusable` lists those
+  commands by the rules verify applies (each command's last outcome in the list passed under the
+  state it ran on, and no marker left after the run withholds it; an unreadable marker empties it),
+  not whether the project is still in that state when a verify asks; any
   command that did not pass → `tests_failed`; bad `--task` → `test_input_invalid`; empty allowlist →
   `test_not_configured`.
 - **`syntax`** — answered locally, without calling OpenCode at all. Checks staged, unstaged, and untracked files, including a repository with no commits: `.py` via in-process `compile()`, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. Python files also require the `pyflakes` name check; if the tool is not available, the result is `incomplete`. A Git discovery failure also yields `incomplete`, not `skipped`.
