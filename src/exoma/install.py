@@ -541,7 +541,8 @@ def main() -> int:
     parser.add_argument(
         "--model",
         metavar="ID",
-        help="pin this model in config/second_agent.seed.json. Requires --provider. "
+        help="pin this model in each chosen host's seed (second_agent.seed.<host>.json). "
+        "Requires --provider. "
         "An id outside the provider's shortlist is accepted with a warning",
     )
     parser.add_argument(

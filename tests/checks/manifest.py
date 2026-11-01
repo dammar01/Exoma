@@ -72,3 +72,57 @@ def _test_malformed_manifest_entry_fails_closed() -> None:
             assert_true(result.get("checked") == 0, f"{label}: nothing is vouched for from a broken manifest: {result}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _test_doctor_agrees_with_install_check() -> None:
+    """Doctor's bundle integrity judges a clean 1.0 install clean.
+
+    A skill rendered with its host (`{{HOST}}`) never matches the manifest hash, and a
+    codex project has no opencode.json because init installs only the selected provider's
+    boundary. Doctor reported both as drift while `exoma install --check` said READY.
+    """
+    import hashlib
+    import json
+    import shutil
+    import tempfile
+
+    from exoma.core.audit.bundle_integrity import _bundle_integrity
+    from exoma.installer.base import _render_text
+
+    dist = REPO_ROOT / "src" / "exoma" / "_bundle" / "config"
+    skill = "hosts/claude/skills/init.md"
+    boundary = "providers/opencode/opencode.project.json"
+    root = Path(tempfile.mkdtemp(prefix="bundle-rendered-"))
+    try:
+        project = root / "project"
+        (project / ".workflow").mkdir(parents=True)
+        (project / ".workflow" / "second_agent.json").write_text(
+            json.dumps({"provider": "codex"}), encoding="utf-8"
+        )
+        installed = root / "skills"
+        installed.mkdir()
+        rendered = _render_text(dist / skill, skill, project)
+        assert_true("{{HOST}}" not in rendered and rendered != (dist / skill).read_text(encoding="utf-8"),
+                    "the fixture skill is one the installer renders")
+        (installed / "init.md").write_text(rendered, encoding="utf-8")
+
+        def digest(rel: str) -> str:
+            return hashlib.sha256((dist / rel).read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+
+        manifest = root / "manifest.json"
+        manifest.write_text(json.dumps({
+            "targets": {"hosts/claude/skills": installed.as_posix(), boundary: "{{PROJECT_ROOT}}/opencode.json"},
+            "files": [{"path": skill, "sha256": digest(skill)},
+                      {"path": boundary, "sha256": digest(boundary), "merge": "merge"}],
+        }), encoding="utf-8")
+        result = _bundle_integrity(dist, manifest, project)
+        assert_true(result["drift"] == [], f"a rendered skill and an unselected provider's boundary are not drift: {result}")
+        assert_true({"path": boundary, "reason": "provider_not_selected"} in result["skipped"],
+                    f"the unselected boundary is reported as skipped: {result}")
+
+        (installed / "init.md").write_text(rendered + "\nlocal edit\n", encoding="utf-8")
+        result = _bundle_integrity(dist, manifest, project)
+        assert_true({"path": skill, "reason": "content_differs"} in result["drift"],
+                    f"a real edit to a rendered file is still drift: {result}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

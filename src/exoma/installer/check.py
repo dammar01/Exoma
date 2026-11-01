@@ -80,6 +80,26 @@ def _provider_config_would_change(
     )
 
 
+def _host_seed_state(host: str) -> str:
+    """The seed `exoma init --host <host>` copies: the host's own, else the shared one."""
+    import json
+
+    from exoma.core.workspace.workspace_paths import PROVIDER_SEED_NAME
+
+    path = SEED_DIR / PROVIDER_SEED_NAME.replace(".json", f".{host}.json")
+    if not path.exists():
+        return f"no {path.name}; init uses the shared seed ({_second_agent_state()})"
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"UNREADABLE — {path} ({exc})"
+    if not isinstance(config, dict):
+        return f"UNREADABLE — {path} (root is not a JSON object)"
+    provider = config.get("provider") or "unset"
+    model = config.get("default_model") or "unset"
+    return f"{provider}, model={model}"
+
+
 def _second_agent_state() -> str:
     """One line describing config/second_agent.seed.json — the template every `init` copies.
 
@@ -407,6 +427,10 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     # second_agent.example.json and works. Folding it into `installed_missing` would turn
     # a working checkout into DRIFTED and send the user to reinstall for nothing.
     print(f"  second agent default: {_second_agent_state()}")
+    # Since 1.0 each host has its own seed (second_agent.seed.<host>.json), and that one,
+    # not the shared default, is what a project set up from the host starts with.
+    for host in sorted(hosts):
+        print(f"  second agent ({host}): {_host_seed_state(host)}")
 
     # Report component ownership so the required version bump is explicit.
     versions = manifest.get("versions") or {}

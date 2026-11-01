@@ -157,6 +157,44 @@ def _marker_block(text: str, start: str, end: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _matches_rendered(
+    dist_config_dir: Path, rel: str, text: str, project_root: Path | str | None, only_command: bool
+) -> bool:
+    """True when `text` is exactly what an install writes for `rel`.
+
+    Some shipped files are rendered at install, not copied: a skill names its host
+    (`{{HOST}}`), the OpenCode plugin shim carries this machine's interpreter and hook path.
+    Their bytes never match the manifest hash, so hashing alone reported every such file as
+    drift on a clean install. The installer's own renderer is the reference, the one
+    `exoma install --check` uses, so doctor and --check cannot disagree about a file.
+    """
+    try:
+        from exoma.installer.base import _render_text
+
+        root = Path(project_root) if project_root else None
+        return _render_text(dist_config_dir / rel, rel, root, only_command) == text
+    except Exception:
+        return False
+
+
+def _project_scoped_elsewhere(rel: str, targets: dict, project_root: Path | str | None) -> bool:
+    """True for another provider's project-root file (`{{PROJECT_ROOT}}` target).
+
+    init installs only the boundary of the provider the project runs
+    (core.runtime.upgrade._install_project_boundary), so the others are absent by design;
+    reporting them as `not_installed` named a drift no command could repair. Mirrors
+    `exoma install --check`.
+    """
+    if not project_root or "{{PROJECT_ROOT}}" not in str(targets.get(rel, "")):
+        return False
+    from exoma.adapters.contract.registry import selected_provider
+
+    selected = selected_provider(project_root)
+    return any(
+        rel.startswith(provider_dir(name) + "/") and name != selected for name in PROVIDER_BUNDLES
+    )
+
+
 def _bundle_integrity(
     dist_config_dir: Path, manifest_path: Path, project_root: Path | str | None = None
 ) -> dict:
@@ -226,6 +264,9 @@ def _bundle_integrity(
         if rel in _RENDERED_INTO_ANOTHER_FILE:
             result["skipped"].append({"path": rel, "reason": "rendered_into_another_file"})
             continue
+        if _project_scoped_elsewhere(rel, targets, project_root):
+            result["skipped"].append({"path": rel, "reason": "provider_not_selected"})
+            continue
         installed = _installed_path_for(rel, targets, project_root)
         # An Agy skill directory is installed dotted, so it answers to `/.<name>`.
         if installed is not None and rel.startswith(f"{host_dir('agy')}/skills/"):
@@ -292,7 +333,9 @@ def _bundle_integrity(
                 result["drift"].append({"path": rel, "reason": "locally_edited"})
             continue
 
-        if hashlib.sha256(text.encode("utf-8")).hexdigest() != entry.get("sha256"):
+        if hashlib.sha256(text.encode("utf-8")).hexdigest() != entry.get(
+            "sha256"
+        ) and not _matches_rendered(dist_config_dir, rel, text, project_root, only_command):
             result["mismatched"].append(rel)
             result["drift"].append({"path": rel, "reason": "content_differs"})
 

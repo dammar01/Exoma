@@ -751,6 +751,13 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
     import json
 
+    # A Windows pipe defaults to the ANSI codepage, so the text reports (`install --check`,
+    # `session export`) reached the agent with every em dash as a replacement character.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
     if argv and argv[0] in _DELEGATED_ENTRY_POINTS:
         raise SystemExit(_DELEGATED_ENTRY_POINTS[argv[0]](argv[1:]))

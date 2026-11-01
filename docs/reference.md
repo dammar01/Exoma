@@ -231,7 +231,10 @@ folder. Keys an install before v0.3.0 recorded (`claude/...`, `agy-host/...`, `<
 are read as their current form (`config/bundle_keys.canonical_key`), so stale cleanup,
 `--uninstall` and doctor still recognise what an older install left; keys are only written in
 the current form. doctor (`checks.bundle_integrity`) skips the files of a host the install did not
-choose (`skipped`, reason `host_not_chosen`).
+choose (`skipped`, reason `host_not_chosen`) and the project-root boundary of every provider the
+project does not run (`skipped`, reason `provider_not_selected`), as `--check` does. A file the
+install renders rather than copies (a skill naming its host, the OpenCode plugin shim) is compared
+against the installer's rendering, not the manifest hash.
 
 doctor also writes `checks.hosts`: `{chosen, hosts: {<host>: {missing: [...]}}}` for every host the
 install chose (a stored Claude+Agy selection lists both; with no recorded choice it is Claude, plus Agy when
@@ -348,7 +351,9 @@ created.
 `--check` reports it as a separate `second agent default:` line — `NOT SET`,
 `UNREADABLE`, or `<provider>, model=<id>` — and it is deliberately **outside** the drift count:
 this file has no counterpart in the bundle, so it has no source to drift from, and its absence
-is not breakage (init still works via the example).
+is not breakage (init still works via the example). One `second agent (<host>):` line per chosen
+host follows it, naming that host's `second_agent.seed.<host>.json` selection, or saying the host
+has none and init uses the shared seed.
 
 When the installer is run from inside a project that already has `.workflow/`, it performs an **in-place upgrade**: the old workspace layout is migrated to `.workflow/data/` (with a backup), scripts are regenerated, the config version stamp is updated, `<project_root>/opencode.json` is refreshed, and `sessions/` is preserved. A new workspace is not scaffolded by the installer — use `exoma init --work-dir DIR` (skill `/.init`). The workspace upgrade is refused while there is still an active job; the global install still completes, but `exoma install` exits nonzero and reports the unfinished workspace in its warnings.
 

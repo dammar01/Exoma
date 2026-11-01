@@ -144,6 +144,7 @@ from tests.checks.bundle_sync import (
 )
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses
 from tests.checks.manifest import (
+    _test_doctor_agrees_with_install_check,
     _test_malformed_manifest_entry_fails_closed,
     _test_manifest_matches_dist,
 )
@@ -236,6 +237,7 @@ def run_tests() -> None:
     _test_stamp_version_reads_versions_not_addresses()
     _test_manifest_matches_dist()
     _test_malformed_manifest_entry_fails_closed()
+    _test_doctor_agrees_with_install_check()
     _test_workflow_layout()
     _test_workspace_migration()
     _test_installer_leaves_no_stale_files()
