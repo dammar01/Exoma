@@ -155,6 +155,119 @@ def _test_codex_host_contract():
                 "a Codex provider child carries the role that bypasses Codex host hooks")
 
 
+# Codex's Windows hook wrapper (codex-rs core/src/hook_environment_executor.rs): the command
+# runs at the top level of `powershell -NoProfile -Command`, fed one stdin line.
+_CODEX_POWERSHELL_WRAPPER = (
+    "$global:LASTEXITCODE = 0\n[Console]::In.ReadLine() | {command}\n"
+    "if ($?) {{ exit 0 }}\nif ($LASTEXITCODE) {{ exit $LASTEXITCODE }}\nexit 1"
+)
+
+
+def _codex_windows_hooks_launch():
+    """Every rendered `commandWindows` launches under Codex's PowerShell wrapper.
+
+    1.0.0 wrote it as `"python" "codex-host.py" Event`: PowerShell reads the leading quoted
+    path as a string expression and fails to parse the rest, so every hook exited 1 while
+    `--check` reported READY. The direct-script checks above could not see it."""
+    from exoma.installer import base
+
+    # `$` and a backtick in the home path: PowerShell expands both inside double quotes.
+    with tempfile.TemporaryDirectory(prefix="exoma-codex-win-$x`y-") as tmp:
+        home = Path(tmp)
+        root = home / "project"
+        (root / ".workflow").mkdir(parents=True)
+        _hook(home, "SessionStart", {"session_id": "warm", "cwd": str(root), "source": "startup"})
+        entries = base.codex_hook_entries(home)
+        old_form = json.loads(json.dumps(entries))
+        python, script = Path(sys.executable).as_posix(), base.codex_host_hook_path(home).as_posix()
+        for event, groups in old_form.items():
+            for group in groups:
+                for handler in group["hooks"]:
+                    # Pre-release 1.0.0: one double-quoted form for both keys.
+                    handler["command"] = handler["commandWindows"] = f'"{python}" "{script}" {event}'
+        if os.name == "nt":
+            assert_true(base.codex_hook_events_present(entries, home)
+                        and not base.codex_hook_events_present(old_form, home),
+                        "--check accepts the call-operator form and flags the 1.0.0 form")
+        assert_true(base.codex_hook_events_present(old_form, home, launchable=False),
+                    "host recovery still finds the 1.0.0 form registered, so it is repaired, not withdrawn")
+        assert_true(all(base._codex_hook_owned(group["hooks"][0], home, event)
+                        for event, groups in old_form.items() for group in groups),
+                    "the 1.0.0 form stays Exoma's, so a reinstall replaces it")
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        if os.name != "nt" or not powershell:
+            return
+        env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), AGENT_HOME=str(home))
+        env.pop("WORKFLOW_AGENT_ROLE", None)
+        payload = json.dumps({"session_id": "codex-win", "cwd": str(root), "source": "startup",
+                              "prompt": "hi", "tool_name": "Bash", "tool_input": {"command": "ls"}}) + "\n"
+        for event, groups in entries.items():
+            command = groups[0]["hooks"][0]["commandWindows"]
+            proc = subprocess.run([powershell, "-NoProfile", "-Command",
+                                   _CODEX_POWERSHELL_WRAPPER.format(command=command)],
+                                  input=payload, text=True, capture_output=True, env=env,
+                                  timeout=60, **no_console())
+            assert_true(proc.returncode == 0 and isinstance(json.loads(proc.stdout or "null"), dict),
+                        f"{event} launches under Codex's PowerShell wrapper: rc={proc.returncode} "
+                        f"{proc.stderr[-400:]}")
+        legacy = old_form["Stop"][0]["hooks"][0]["commandWindows"]
+        proc = subprocess.run([powershell, "-NoProfile", "-Command",
+                               _CODEX_POWERSHELL_WRAPPER.format(command=legacy)],
+                              input=payload, text=True, capture_output=True, env=env,
+                              timeout=60, **no_console())
+        assert_true(proc.returncode != 0, "the 1.0.0 form fails under the wrapper (the bug this guards)")
+
+
+def _codex_hook_quoting():
+    """Both shells get single-quoted paths: `$`/backticks stay literal under a POSIX shell,
+    and a home holding `'` stays Exoma's (owned, present) and keeps a custom handler's
+    reference to the script visible to uninstall, under either escaping."""
+    from exoma.installer import base
+
+    # Two apostrophes in a row: decoding POSIX then PowerShell in a chain changed the path.
+    with tempfile.TemporaryDirectory(prefix="exoma-codex-o''q-") as tmp:
+        home = Path(tmp)
+        script = base.codex_host_hook_path(home).as_posix()
+        for custom in ("'py' " + base._sh_quote(script) + " custom",
+                       "& 'py' " + base._ps_quote(script) + " Custom"):
+            current = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": custom}]}]}}
+            assert_true(base.codex_hooks_reference_script(current, home),
+                        f"a home holding '' keeps a custom handler's script: {custom}")
+
+    with tempfile.TemporaryDirectory(prefix="exoma-codex-o'q-$x`y-") as tmp:
+        home = Path(tmp)
+        entries = base.codex_hook_entries(home)
+        for event, groups in entries.items():
+            handler = groups[0]["hooks"][0]
+            assert_true(handler["command"].count("'") >= 4 and '"' not in handler["command"],
+                        f"POSIX command is single-quoted: {handler['command']}")
+            assert_true(base._codex_hook_owned(handler, home, event),
+                        f"{event}: a quote-bearing home stays Exoma's under both escapings")
+        assert_true(base.codex_hook_events_present(entries, home), "and every event is present")
+        script = base.codex_host_hook_path(home).as_posix()
+        for custom in ("& 'py' " + base._ps_quote(script) + " Custom",
+                       "'py' " + base._sh_quote(script) + " custom"):
+            current = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": custom}]}]}}
+            assert_true(base.codex_hooks_reference_script(current, home),
+                        f"a custom handler naming the script through its escaping keeps it: {custom}")
+
+        # The launch uses `entries`, rendered for this home: it stays inside this context.
+        if os.name == "nt" or not shutil.which("sh"):
+            return
+        root = home / "project"
+        (root / ".workflow").mkdir(parents=True)
+        env = dict(os.environ, HOME=str(home), AGENT_HOME=str(home))
+        env.pop("WORKFLOW_AGENT_ROLE", None)
+        _hook(home, "SessionStart", {"session_id": "warm", "cwd": str(root), "source": "startup"})
+        command = entries["SessionStart"][0]["hooks"][0]["command"]
+        payload = json.dumps({"session_id": "codex-sh", "cwd": str(root), "source": "startup"}) + "\n"
+        proc = subprocess.run(["sh", "-c", command], input=payload, text=True, capture_output=True,
+                              env=env, timeout=60, **no_console())
+        assert_true(proc.returncode == 0 and isinstance(json.loads(proc.stdout or "null"), dict),
+                    f"the POSIX command launches with `$`, a backtick and `'` in the home: "
+                    f"rc={proc.returncode} {proc.stderr[-400:]}")
+
+
 def _test_codex_host_install():
     from exoma.installer import base, uninstall
     from exoma.install import _resolve_hosts
@@ -205,7 +318,10 @@ def _test_codex_host_install():
                     for handler in group["hooks"]:
                         if base._codex_hook_owned(handler, home):
                             for key in ("command", "commandWindows"):
-                                handler[key] = '"different-python" ' + handler[key].split('" ', 1)[1]
+                                call = "& " if handler[key].startswith("&") else ""
+                                quote = handler[key].removeprefix(call)[0]
+                                rest = handler[key].removeprefix(call).split(quote + " ", 1)[1]
+                                handler[key] = f"{call}{quote}different-python{quote} {rest}"
             (codex / "hooks.json").write_text(json.dumps(changed_python), encoding="utf-8")
             assert_true(_host_status(home)["hosts"]["codex"]["missing"] == [],
                         "doctor accepts an Exoma hook installed by another Python")
@@ -275,6 +391,9 @@ def _test_codex_host_install():
                         "invalid hooks.json withdraws an earlier Codex host block")
         finally:
             base.HOME, uninstall.HOME = saved
+
+    _codex_windows_hooks_launch()
+    _codex_hook_quoting()
 
     # Exercise the public installer entry point with an isolated agent home.
     with tempfile.TemporaryDirectory(prefix="exoma-codex-cli-") as tmp:

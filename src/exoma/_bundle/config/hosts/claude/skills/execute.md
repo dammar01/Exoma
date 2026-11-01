@@ -32,9 +32,29 @@ explicit approval for that path. The rule is the same for every write path; what
   `policies.write_allowed_outside_root`.
 - Bash/script patches → NOT checked by a hook. Nothing blocks them; only you enforce the rule.
 
+## Tests after the edits
+Run the project's tests through the runtime, not a plain shell call:
+  bash '<work_dir>/.workflow/run.sh' test --session '<MAIN_SESSION_ID>' --task '<allowlisted command>'
+(one command, or a JSON list of up to 5; same allowlist as /.verify: `commands.verify_test_commands`).
+The runtime records each pass with a reuse identity: the Git-visible tree's content as Git stores it,
+`.workflow/config.json`, env vars matching `commands.verify_reuse_env`, and ignored files matching
+`commands.verify_reuse_files` (default `.env`, `.env.*`). A later /.verify that requests the EXACT same
+command string while that identity is unchanged reuses the pass instead of running it again; once a
+command in that verify actually runs, the commands after it run too (it may have written the tree).
+A change to those inputs after the run → the pass no longer counts; run them again after the LAST edit.
+Not covered: installed dependencies/venv, submodule contents, ignored inputs nobody listed, and edits
+Git's own conversions undo (`text`/`eol` attributes, `core.autocrlf`, clean filters: LF→CRLF in a
+normalized file keeps the identity) — a test that depends on them must be listed in
+`verify_reuse_files`, or simply not run through `run.sh test`.
+A test run is evidence, not verification: `verification` stays `not_run` until /.verify.
+
 ## Post (read .workflow/config.json → commands.auto_verify_after_execute)
 Close the execution first: bash '<work_dir>/.workflow/run.sh' execute-end --session '<MAIN_SESSION_ID>'
 (status `implemented`, verification `not_run`; a finished /.verify writes its verdict here).
+Its `meta.changed_files` lists what changed since execute-begin (Git tree snapshots, so edits the tree
+already carried are not counted) and `meta.outside_scope` those outside the plan's `files` — Bash
+writes included. Non-empty `outside_scope` → name each file in [EXECUTION RESULT] and say why it
+changed; never omit it. `null` = no Git snapshot: changed files unknown, say so.
 [EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status
 true  → auto-trigger /.verify. status: done|partial|blocked. Do NOT declare done before verify finishes.
 false (default) → do NOT auto-run /.verify (avoid heavy tests nobody asked for). REQUIRED:

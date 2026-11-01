@@ -111,6 +111,7 @@ from tests.checks.installer import (  # noqa: E402
     _test_installer_rollback_receipt,
     _test_installer_seed_is_non_interactive_without_a_tty,
     _test_installer_seed_prompt_answers,
+    _test_installer_asks_every_choice,
     _test_installer_seed_reports_unenforced_provider,
     _test_installer_seeds_second_agent_config,
     _test_installer_settings_are_additive,
@@ -169,7 +170,7 @@ from tests.checks.os_resolvers import (  # noqa: E402
     _test_find_bash_and_os_locations,
     _test_find_python_runs_each_candidate,
 )
-from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
+from tests.checks.verify_tests import _test_verify_runtime_tests, _test_verify_reuses_unchanged_runs, _test_verify_reuse_needs_git, _test_run_sh_test_command  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
 from tests.checks.replay import _test_fact_replay  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
@@ -304,12 +305,16 @@ SUITES: dict[str, tuple] = {
     "installer-seed": (_test_installer_seeds_second_agent_config, "second_agent.json is seeded once and never overwritten"),
     "installer-seed-tty": (_test_installer_seed_is_non_interactive_without_a_tty, "no tty, no prompt: CI and e2e cannot hang"),
     "installer-seed-prompt": (_test_installer_seed_prompt_answers, "every answer the provider/model picker accepts"),
+    "installer-asks": (_test_installer_asks_every_choice, "a terminal install asks every choice with the stored one as default; --no-input asks nothing"),
     "installer-seed-boundary": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider is named as one while it is chosen, with no opt-in variable"),
     "provider-update": (_test_provider_update, "DEC-057: --update-providers pins npm-global CLIs to stable_version only, verified, failures named"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
     "metrics-contract": (_test_metrics_contract, "every benchmark metric has an ID, version and method, is documented, and its producers stamp provenance"),
     "verify-runtime-tests": (_test_verify_runtime_tests, "tests main_agent chose run only under the allowlist, without a shell, and decide the verdict beside the review"),
+    "verify-reuse": (_test_verify_reuses_unchanged_runs, "verify reuses a run.sh test pass while the tree content is unchanged; an edit or failure runs it again"),
+    "verify-reuse-no-git": (_test_verify_reuse_needs_git, "without Git nothing is fingerprinted and nothing is reused"),
+    "run-sh-test": (_test_run_sh_test_command, "run.sh test refuses bad input and an empty allowlist by name, and is closed to a second agent"),
     "gate-prompt-field": (_test_intent_gate_reads_the_prompt_field, "intent-gate-set arms the gate from Claude Code's `prompt` field"),
     "gate-runner-parsed": (_test_intent_gate_runner_parsed, "one tokeniser for the Bash and PowerShell tools: one plain call to [bash] <root>/.workflow/{run,check,inspect}.sh passes; $ ; | & < > pass only inside single quotes; run.ps1 is retired"),
     "gate-runner-tamper": (_test_intent_gate_runner_tamper, "a write to the runner scripts is refused, armed or not; other writes pass"),

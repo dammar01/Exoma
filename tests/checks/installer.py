@@ -37,7 +37,9 @@ from exoma.installer.settings import (
     _render_hook_commands,
     hook_bash_command,
 )
-from tests.checks.support import assert_true
+from unittest.mock import patch
+
+from tests.checks.support import assert_true, no_console
 
 
 def _test_installer_settings_are_additive() -> None:
@@ -749,10 +751,17 @@ def _test_installer_seed_is_non_interactive_without_a_tty() -> None:
         shutil.rmtree(root.parent, ignore_errors=True)
 
 
+def _seed_from_answers(install_mod, previous=None, plan=None):
+    """What main() does from a terminal: ask, then seed with the answer."""
+    asked = install_mod._prompt_second_agent(None, previous)
+    install_mod._seed_second_agent_config(plan or Plan(), True, None, None, asked=asked)
+    return asked
+
+
 def _test_installer_seed_prompt_answers() -> None:
     """Every answer the picker accepts, including the two ways of declining."""
-    with _seed_repo("3\n1\n") as (install_mod, dest):
-        install_mod._seed_second_agent_config(Plan(), True, None, None)
+    with _seed_repo("3\n1\n\n") as (install_mod, dest):
+        _seed_from_answers(install_mod)
         written = json.loads(dest.read_text(encoding="utf-8"))
         assert_true(
             written["provider"] == "codex" and written["default_model"] == "gpt-5.6-sol",
@@ -760,7 +769,7 @@ def _test_installer_seed_prompt_answers() -> None:
         )
 
     with _seed_repo("4\n\n") as (install_mod, dest):
-        install_mod._seed_second_agent_config(Plan(), True, None, None)
+        _seed_from_answers(install_mod)
         written = json.loads(dest.read_text(encoding="utf-8"))
         assert_true(
             written["provider"] == "opencode" and written["default_model"] is None,
@@ -769,7 +778,7 @@ def _test_installer_seed_prompt_answers() -> None:
 
     with _seed_repo("4\nopencode/not-on-the-menu\n") as (install_mod, dest):
         plan = Plan()
-        install_mod._seed_second_agent_config(plan, True, None, None)
+        _seed_from_answers(install_mod, plan=plan)
         assert_true(
             json.loads(dest.read_text(encoding="utf-8"))["default_model"]
             == "opencode/not-on-the-menu",
@@ -782,12 +791,97 @@ def _test_installer_seed_prompt_answers() -> None:
 
     for answer, label in (("\n", "a blank provider"), ("", "stdin ending mid-prompt")):
         with _seed_repo(answer) as (install_mod, dest):
-            install_mod._seed_second_agent_config(Plan(), True, None, None)
+            _seed_from_answers(install_mod)
             assert_true(
                 dest.read_text(encoding="utf-8")
                 == (dest.parent / "second_agent.example.json").read_text("utf-8"),
                 f"{label} declines the question and falls back to the example",
             )
+
+    # Asked on every terminal install: the previous selection is each step's default.
+    from exoma.core.provider.model_catalog import catalog_static
+
+    codex_models = catalog_static("codex")["models"]
+    with_effort = next(m for m in codex_models if m.get("efforts"))
+    effort = with_effort["efforts"][-1]
+    index = codex_models.index(with_effort) + 1
+    with _seed_repo(f"3\n{index}\n{len(with_effort['efforts'])}\n") as (install_mod, dest):
+        _seed_from_answers(install_mod)
+        written = json.loads(dest.read_text(encoding="utf-8"))
+        assert_true(written["default_model"] == with_effort["id"] and written["effort"] == effort,
+                    f"a picked effort is written into the seed: {written.get('effort')}")
+        previous = install_mod._seed_selection(dest)
+        assert_true(previous["effort"] == effort, "the seed's effort is part of its selection")
+    with _seed_repo("\n\n\n") as (install_mod, dest):
+        asked = install_mod._prompt_second_agent(None, previous)
+        assert_true(asked == ("codex", with_effort["id"], effort),
+                    f"Enter at every step keeps provider, model and effort: {asked}")
+    with _seed_repo("4\n\n") as (install_mod, dest):
+        asked = install_mod._prompt_second_agent(None, previous)
+        assert_true(asked == ("opencode", None, None),
+                    f"another provider does not inherit the old model or effort: {asked}")
+
+    # A pin the catalog does not list has no effort menu: Enter keeps its stored effort,
+    # as --no-input does; changing the model drops it.
+    custom = {"provider": "codex", "model": "codex-custom-unlisted", "effort": "high", "routes": {}}
+    with _seed_repo("\n\n") as (install_mod, dest):
+        asked = install_mod._prompt_second_agent(None, custom)
+        assert_true(asked == ("codex", "codex-custom-unlisted", "high"),
+                    f"Enter keeps an unlisted model's effort: {asked}")
+    with _seed_repo("\nanother-unlisted\n") as (install_mod, dest):
+        asked = install_mod._prompt_second_agent(None, custom)
+        assert_true(asked == ("codex", "another-unlisted", None),
+                    f"a different unlisted model starts without the old effort: {asked}")
+
+    # Ctrl+C at a question stops the install; it is not an empty answer.
+    with _seed_repo() as (install_mod, dest), patch("builtins.input", side_effect=KeyboardInterrupt):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                install_mod._prompt_second_agent(None, custom)
+        except install_mod.InstallInterrupted:
+            pass
+        else:
+            raise AssertionError("Ctrl+C at a question raises InstallInterrupted")
+
+
+def _test_installer_asks_every_choice() -> None:
+    """From a terminal the host picker takes any combination and keeps the last choice on
+    Enter; a stored choice no longer skips it. --no-input asks nothing."""
+    import os
+    import subprocess
+    import sys
+
+    from exoma import install as install_mod
+
+    for answer, default, expected in (
+        ("1,3\n", ("claude",), ("claude", "codex")),
+        ("codex opencode\n", ("claude",), ("codex", "opencode")),
+        ("5\n", ("claude",), install_mod.HOSTS),
+        ("\n", ("claude", "codex"), ("claude", "codex")),
+        ("9\n", ("agy",), ("agy",)),
+    ):
+        with _seed_repo(answer):
+            got = install_mod._prompt_hosts(default)
+        assert_true(got == expected, f"host answer {answer!r}: {got} != {expected}")
+
+    with _seed_repo("3\n"), patch.object(install_mod, "_stored_hosts", return_value=("claude",)):
+        assert_true(install_mod._resolve_hosts(None, True, Plan(), ask=True) == ("codex",),
+                    "a stored host choice is offered, not silently reused")
+    with patch.object(install_mod, "_stored_hosts", return_value=("claude", "codex")):
+        assert_true(install_mod._resolve_hosts(None, True, Plan(), ask=False) == ("claude", "codex"),
+                    "without asking, the stored choice stands")
+    for answer, default, expected in (("\n", True, True), ("n\n", True, False), ("y\n", False, True)):
+        with _seed_repo(answer):
+            assert_true(install_mod._ask_yes_no("q?", default) is expected, f"yes/no {answer!r}")
+
+    with tempfile.TemporaryDirectory(prefix="exoma-no-input-") as tmp:
+        env = dict(os.environ, AGENT_HOME=tmp, EXOMA_HOME=str(Path(tmp) / "data"),
+                   PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
+        result = subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--no-input"],
+                                cwd=tmp, env=env, text=True, capture_output=True,
+                                stdin=subprocess.DEVNULL, timeout=120, **no_console())
+        assert_true(result.returncode == 0 and "Which" not in result.stdout,
+                    f"--no-input installs without asking: {result.stdout[-400:]}{result.stderr[-400:]}")
 
 
 def _test_installer_seed_reports_unenforced_provider() -> None:

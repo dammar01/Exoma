@@ -13,7 +13,7 @@ from pathlib import Path
 # with no session at all).
 SESSION_REQUIRED = (
     "explore", "plan", "analyze", "verify", "verify-browser",
-    "sweep", "plan-record", "execute-begin", "execute-end",
+    "sweep", "plan-record", "execute-begin", "execute-end", "test",
 )
 
 

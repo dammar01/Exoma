@@ -102,6 +102,11 @@ ERROR_TYPES = {
     "execute_plan_not_proceed",
     "execute_not_approved",
     "execution_not_active",
+    # `run.sh test` (core/evidence/verify_tests.run_and_record): no command given, no
+    # allowlist to run one under, or a command that did not pass.
+    "test_input_invalid",
+    "test_not_configured",
+    "tests_failed",
     "unknown",
 }
 

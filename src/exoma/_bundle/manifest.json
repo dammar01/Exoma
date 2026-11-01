@@ -42,8 +42,8 @@
     },
     {
       "path": "hosts/claude/skills/execute.md",
-      "sha256": "a72118a6e298640f81ee2132acb63bcc0e69aa5ece43350b59adbc0f8c0e821a",
-      "bytes": 4139,
+      "sha256": "d1306291811dd0acd5347b5eb1d273955e1ed30e0dfefc2d3232e38c3d9214a8",
+      "bytes": 5874,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -126,8 +126,8 @@
     },
     {
       "path": "hosts/claude/skills/verify.md",
-      "sha256": "3f4133667cf4d9afa5c6ab447182458b502927aba2bfd7ce05304f81df79005a",
-      "bytes": 6066,
+      "sha256": "d90891564ce3583d4b57b24fca1e5ee182a2a7b92db0c5420d4d7d3ffdefab76",
+      "bytes": 7028,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -497,8 +497,8 @@
     },
     {
       "path": "hosts/codex/hooks.template.json",
-      "sha256": "171d259d8201ae92266aa76a5784301c329b32b1218c81182d7e2cdb7817cf97",
-      "bytes": 706,
+      "sha256": "11d895388302f7b412ae6ecc5cfd1fb9af7a2a96779c957d28542fd501b1d5b5",
+      "bytes": 714,
       "merge": "merge",
       "component": "runtime"
     },

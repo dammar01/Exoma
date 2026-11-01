@@ -33,12 +33,23 @@ same job is not a new job and finds its request still claimed. It is consumed, r
 before that (the provider call failed, the run was refused) leaves its claim for the next
 job to drop, so a later verify never reruns an old choice silently (CASE-023, DEC-062). Only
 a job's own run reads a claim (`job`); a direct `main.run` reads tests.json alone.
+
+A test main_agent already ran through the runtime is not run again. `run.sh test` runs
+allowlisted commands the same way (`run_and_record`) and appends each outcome, with the
+reuse identity (`reuse_identity`: the working tree's content, `.workflow/config.json`, the
+listed environment variables and ignored input files), to `verify/test-runs.jsonl`. When
+verify then requests the exact same command string and its latest recorded run passed
+under the identity the project still has, its outcome is that run, marked `reused`, and
+`checks_run` says so. A filtered command never stands in for another: the key is the
+command text. A failed run, any change to those inputs, an unknown tree (no Git), an
+unreadable record, or a command no longer allowlisted is run as usual.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import time
 from contextvars import ContextVar
@@ -64,6 +75,10 @@ HEARTBEAT_SECONDS = 20.0
 
 def request_path(project_root, session_id: str) -> Path:
     return workflow_paths(Path(project_root), session_id)["session_dir"] / "verify" / "tests.json"
+
+
+def runs_path(project_root, session_id: str) -> Path:
+    return request_path(project_root, session_id).with_name("test-runs.jsonl")
 
 
 def claimed_path(project_root, session_id: str) -> Path:
@@ -186,8 +201,13 @@ def _beat(on_progress, started: float, **fields) -> None:
         pass
 
 
-def run_tests(project_root, request: dict, on_progress=None) -> list[dict]:
-    """One outcome per requested command: passed | failed | timeout | error | refused."""
+def run_tests(project_root, request: dict, on_progress=None, reuse: dict | None = None) -> list[dict]:
+    """One outcome per requested command: passed | failed | timeout | error | refused.
+
+    `reuse` maps a command to its earlier passing run on this same tree (`reusable`): that
+    command is not run again, and its outcome is the earlier one marked `reused`. The map
+    is taken before the first command, so it holds only until a command actually runs: a
+    test may write into the tree, and every later command then runs as well."""
     prefixes, timeout = _policy(project_root)
     outcomes: list[dict] = []
     commands = request.get("commands")
@@ -211,6 +231,13 @@ def run_tests(project_root, request: dict, on_progress=None) -> list[dict]:
                 "command": command,
                 "status": "refused",
                 "detail": "not under commands.verify_test_commands in .workflow/config.json",
+            })
+            continue
+        earlier = (reuse or {}).get(command)
+        if earlier is not None:
+            outcomes.append({
+                "command": command, "status": "passed", "reused": True,
+                "seconds": 0.0, "ran_at": earlier.get("at"), "ran_seconds": earlier.get("seconds"),
             })
             continue
         started = time.monotonic()
@@ -237,6 +264,8 @@ def run_tests(project_root, request: dict, on_progress=None) -> list[dict]:
         if outcome.get("tail"):
             outcome["tail"] = redact(outcome["tail"])[0]
         outcomes.append(outcome)
+        # The identity behind `reuse` was the tree before this command ran.
+        reuse = None
     for raw in commands[MAX_COMMANDS:]:
         outcomes.append({"command": str(raw), "status": "refused", "detail": f"over {MAX_COMMANDS} commands"})
     return outcomes
@@ -261,7 +290,13 @@ def _findings(request: dict | None, outcomes: list[dict]) -> dict[str, list[str]
     for outcome in outcomes:
         command = _one_line(outcome["command"])
         status = outcome["status"]
-        if status == "passed":
+        if status == "passed" and outcome.get("reused"):
+            add["checks_run"].append(
+                f"runtime: `{command}` passed in {outcome.get('ran_seconds')} s at "
+                f"{_one_line(outcome.get('ran_at') or 'an earlier run')} on this same tree "
+                "(nothing edited since) — reused, not rerun"
+            )
+        elif status == "passed":
             add["checks_run"].append(f"runtime: `{command}` passed in {outcome['seconds']} s")
         elif status == "refused":
             add["not_verified"].append(f"{RUNTIME_GAP_PREFIX} `{command}` was not run — {_one_line(outcome['detail'])}")
@@ -349,7 +384,7 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
     """
     request = read_request(project_root, session_id)
     outcomes = (
-        run_tests(project_root, request, on_progress)
+        run_tests(project_root, request, on_progress, reusable(project_root, session_id))
         if request and not request.get("invalid")
         else []
     )
@@ -365,6 +400,319 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
         "requested": request is not None and not request.get("invalid"),
         "reason": (request or {}).get("reason"),
         "outcomes": [{k: v for k, v in o.items() if k != "tail"} for o in outcomes],
+        "reused": sum(1 for o in outcomes if o.get("reused")),
         "seconds": round(sum(o.get("seconds") or 0 for o in outcomes), 1),
     }
     return result
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+DEFAULT_REUSE_ENV = ("WORKFLOW_*", "EXOMA_*", "PYTEST_*", "CI", "NODE_ENV", "APP_ENV")
+DEFAULT_REUSE_FILES = (".env", ".env.*")
+
+
+def _reuse_policy(project_root) -> tuple[list[str], list[str]]:
+    """`commands.verify_reuse_env` (variable-name patterns) and `commands.verify_reuse_files`
+    (globs under the project root), each falling back to its default when absent or not a
+    list of strings."""
+    try:
+        config = read_json_file(workflow_paths(Path(project_root))["config"])
+    except (OSError, ValueError):
+        config = {}
+    commands = config.get("commands") if isinstance(config.get("commands"), dict) else {}
+
+    def strings(key, default):
+        value = commands.get(key)
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return [v for v in value if v.strip()]
+        return list(default)
+
+    return strings("verify_reuse_env", DEFAULT_REUSE_ENV), strings("verify_reuse_files", DEFAULT_REUSE_FILES)
+
+
+def reuse_identity(project_root, environ=None) -> str | None:
+    """What a test run is reused under: the tree's content plus the inputs Git does not see.
+
+    sha256 over the Git tree id of the working tree (core/evidence/tree_fingerprint.py),
+    the bytes of `.workflow/config.json`, every environment variable whose name matches
+    `commands.verify_reuse_env`, and every file matching `commands.verify_reuse_files`
+    (ignored inputs such as `.env`). Only the hash is stored, never a value. None when the
+    tree cannot be fingerprinted (no Git): then nothing is reusable.
+
+    Not covered, and stated in the docs: installed dependencies and virtualenvs, the
+    contents of submodules, PATH/PYTHONPATH (they differ between `run.sh test` and the
+    verify worker, so hashing them would end every reuse), and any input nobody listed.
+    """
+    import fnmatch
+    import hashlib
+    import os
+
+    from exoma.core.evidence.tree_fingerprint import tree_fingerprint
+
+    tree = tree_fingerprint(project_root)
+    if tree is None:
+        return None
+    root = Path(project_root)
+    env_patterns, file_globs = _reuse_policy(root)
+    digest = hashlib.sha256()
+    digest.update(b"tree\0" + tree.encode())
+    try:
+        config = workflow_paths(root)["config"].read_bytes()
+    except OSError:
+        config = b"\0missing"
+    digest.update(b"\0config\0" + hashlib.sha256(config).digest())
+    source = os.environ if environ is None else environ
+    for name in sorted(source):
+        if any(fnmatch.fnmatchcase(name, pattern) for pattern in env_patterns):
+            digest.update(b"\0env\0" + name.encode("utf-8", "surrogateescape") + b"=")
+            digest.update(hashlib.sha256(str(source[name]).encode("utf-8", "surrogateescape")).digest())
+    files = set()
+    for pattern in file_globs:
+        try:
+            files.update(p for p in root.glob(pattern) if p.is_file())
+        except (OSError, ValueError):
+            continue
+    for path in sorted(files):
+        try:
+            content = hashlib.sha256(path.read_bytes()).digest()
+        except OSError:
+            content = b"\0unreadable"
+        # A POSIX name that is not UTF-8 decodes to lone surrogates; `surrogatepass` hashes
+        # it as it is instead of raising after the run's marker is already written.
+        name = path.relative_to(root).as_posix().encode("utf-8", "surrogatepass")
+        digest.update(b"\0file\0" + name + content)
+    return digest.hexdigest()[:40]
+
+
+def _identity(project_root) -> str | None:
+    """`reuse_identity`, or None when computing it fails: an identity that cannot be taken
+    makes nothing reusable, it never stops a run from being recorded."""
+    try:
+        return reuse_identity(project_root)
+    except (OSError, ValueError):  # ValueError covers UnicodeError
+        return None
+
+
+# A torn marker older than this cannot belong to a run still going: every command is
+# bounded by the timeout and tree-killed past it, and there are at most MAX_COMMANDS.
+TORN_MARKER_GRACE_SECONDS = 300
+
+
+def _torn_marker_limit(project_root) -> float:
+    return MAX_COMMANDS * _policy(project_root)[1] + TORN_MARKER_GRACE_SECONDS
+
+
+def _retire_torn(project_root, session_id: str, torn: list[Path]) -> str | None:
+    """Retire torn markers too old to be a live run's. The run that wrote one may have
+    ended without recording a newer outcome of any command, so a barrier row goes into the
+    record first and every row before it stops being reusable; only then is the marker set
+    aside as `.corrupt` (kept for inspection, no longer read). Returns an error, or None."""
+    if not torn:
+        return None
+    path = runs_path(project_root, session_id)
+    barrier = json.dumps({
+        "barrier": "torn pending marker retired: " + ", ".join(p.name for p in torn), "at": _now(),
+    }) + "\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(barrier)
+    except OSError as exc:
+        return f"torn pending marker kept, barrier not written: {type(exc).__name__}"
+    for marker in torn:
+        try:
+            marker.replace(marker.with_name(marker.name + ".corrupt"))
+        except OSError:
+            pass  # still withholds everything: safe
+    return None
+
+
+def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
+    """`run.sh test`: run `commands` under the verify policy, record each outcome with the
+    reuse identity, and return `{outcomes, fingerprint, record_error}`.
+
+    The identity is taken before the run: a test that writes into the tree (a build
+    artifact Git does not ignore) or a listed input makes it differ afterwards, and verify
+    then runs it again rather than trusting a pass on inputs that no longer exist.
+
+    Fails closed. Each run first writes its own marker, `test-runs.<pid>-<token>.pending`,
+    naming its owner (pid + process identity) and its commands; `reusable` withholds every
+    command a marker names, whoever owns it. When the marker cannot be written, nothing
+    runs (`outcomes` is empty, `record_error` says why): a run that cannot be recorded would
+    leave an older pass in charge. The marker is written whole (a temporary name, then a
+    rename), so a live run's marker is never torn. After the append the run removes its own
+    marker and those of owners that were already dead before it ran whose commands it has
+    just recorded, never a live run's, nor one that appeared while it ran (its rows are
+    then older than that run's lost outcome). A torn marker older than any run can last is
+    retired before the run, behind a barrier row (`_retire_torn`). On an append failure the
+    marker stays and the record is removed. Every failure is reported in `record_error`.
+    """
+    clean = [str(command).strip() for command in commands]
+    marker = _marker_path(project_root, session_id)
+    partial = marker.with_name(marker.name + ".tmp")
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        pid = os.getpid()
+        partial.write_text(json.dumps({
+            "pid": pid, "identity": osutil.process_identity(pid), "commands": clean, "at": _now(),
+        }), encoding="utf-8")
+        os.replace(partial, marker)
+    except OSError as exc:
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return {
+            "outcomes": [], "fingerprint": None,
+            "record_error": f"pending marker not written, nothing was run: {type(exc).__name__}: {exc}",
+        }
+    # Taken before the run: only these may be cleared after it (see the docstring).
+    retire, torn = [], []
+    limit = _torn_marker_limit(project_root)
+    for other, owner in _markers(project_root, session_id):
+        if other == marker:
+            continue
+        if owner is None:
+            try:
+                if time.time() - other.stat().st_mtime > limit:
+                    torn.append(other)
+            except OSError:
+                pass
+        elif not _owner_alive(owner):
+            retire.append((other, owner))
+    record_error = _retire_torn(project_root, session_id, torn)
+    fingerprint = _identity(project_root)
+    outcomes = run_tests(project_root, {"commands": commands})
+    if fingerprint is not None and fingerprint != _identity(project_root):
+        fingerprint = None  # the run changed its inputs: nothing it proved is reusable
+    path = runs_path(project_root, session_id)
+    rows = "".join(
+        json.dumps({
+            "command": outcome["command"], "status": outcome["status"],
+            "seconds": outcome.get("seconds"), "fingerprint": fingerprint, "at": _now(),
+        }) + "\n"
+        for outcome in outcomes
+        if outcome["status"] != "refused"
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(rows)
+    except OSError as exc:
+        # The marker stays: it is what keeps an older pass from being reused.
+        record_error = "; ".join(filter(None, [record_error, f"record not written: {type(exc).__name__}: {exc}"]))
+        fingerprint = None
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as unlink_exc:
+            record_error += f"; stale record not removed: {type(unlink_exc).__name__}"
+    else:
+        recorded = {o["command"] for o in outcomes if o["status"] != "refused"}
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError as exc:
+            # Left behind, it withholds these commands until a later run records them: safe.
+            record_error = "; ".join(filter(None, [record_error, f"pending marker not removed: {type(exc).__name__}"]))
+            fingerprint = None
+        # A run that was dead before this one started is cleared once every command it
+        # named has a row from this run, which is then provably the newer outcome.
+        for other, owner in retire:
+            if set(owner["commands"]) <= recorded:
+                try:
+                    other.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    if record_error and fingerprint is not None and not os.access(path, os.W_OK):
+        fingerprint = None
+    return {"outcomes": outcomes, "fingerprint": fingerprint, "record_error": record_error}
+
+
+def _marker_path(project_root, session_id: str) -> Path:
+    import secrets
+
+    return runs_path(project_root, session_id).with_name(
+        f"test-runs.{os.getpid()}-{secrets.token_hex(4)}.pending"
+    )
+
+
+def _markers(project_root, session_id: str) -> list[tuple[Path, dict | None]]:
+    """Every pending marker with its content; None for one that cannot be read as a
+    marker (torn, foreign, or from an earlier build)."""
+    found = []
+    for path in sorted(runs_path(project_root, session_id).parent.glob("test-runs*.pending")):
+        try:
+            owner = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            owner = None
+        if not (
+            isinstance(owner, dict)
+            and isinstance(owner.get("pid"), int)
+            and isinstance(owner.get("commands"), list)
+            and all(isinstance(c, str) for c in owner["commands"])
+        ):
+            owner = None
+        found.append((path, owner))
+    return found
+
+
+def _owner_alive(owner: dict) -> bool:
+    """False only when the marker's run is provably over: its pid is dead, or now hosts a
+    different process than the recorded identity (a reused pid). A pid the OS cannot
+    answer for (Windows access denied, any other query failure) counts as alive, so another
+    run never clears a marker whose owner may still be running (osutil.process_state)."""
+    pid = owner["pid"]
+    if osutil.process_state(pid) == "dead":
+        return False
+    recorded = owner.get("identity")
+    return recorded is None or osutil.process_identity(pid) in (None, recorded)
+
+
+def reusable(project_root, session_id: str) -> dict:
+    """Command -> its latest recorded run, for each command whose latest run passed under
+    the reuse identity the project has now. Empty when the identity cannot be computed, or
+    when any line of the record cannot be read: a torn or foreign line may be the newer
+    outcome of some command, so no row is trusted over it. A command named by any pending
+    marker (`run_and_record`) is withheld, live run or crashed one: its newest outcome may
+    not be in the record. A marker that cannot be read withholds everything, and so does a
+    record that cannot be written (a run since then may have failed to append to it). A
+    barrier row (`_retire_torn`) drops every row before it."""
+    path = runs_path(project_root, session_id)
+    if not path.is_file() or not os.access(path, os.W_OK):
+        return {}
+    withheld: set[str] = set()
+    for _marker, owner in _markers(project_root, session_id):
+        if owner is None:
+            return {}
+        withheld.update(owner["commands"])
+    latest: dict = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                return {}
+            if isinstance(row, dict) and row.get("barrier"):
+                latest.clear()
+                continue
+            if not isinstance(row, dict) or not isinstance(row.get("command"), str):
+                return {}
+            latest[row["command"]] = row
+    except (OSError, UnicodeDecodeError):
+        return {}
+    if not any(row.get("status") == "passed" and row.get("fingerprint") for row in latest.values()):
+        return {}
+    current = _identity(project_root)
+    if current is None:
+        return {}
+    return {
+        command: row for command, row in latest.items()
+        if command not in withheld
+        and row.get("status") == "passed" and row.get("fingerprint") == current
+    }

@@ -114,6 +114,7 @@ from tests.checks.installer import (
     _test_installer_rollback_receipt,
     _test_installer_seed_is_non_interactive_without_a_tty,
     _test_installer_seed_prompt_answers,
+    _test_installer_asks_every_choice,
     _test_installer_seed_reports_unenforced_provider,
     _test_installer_seeds_second_agent_config,
     _test_installer_settings_are_additive,
@@ -203,7 +204,7 @@ from tests.checks.os_resolvers import (
     _test_find_bash_and_os_locations,
     _test_find_python_runs_each_candidate,
 )
-from tests.checks.verify_tests import _test_verify_runtime_tests
+from tests.checks.verify_tests import _test_verify_runtime_tests, _test_verify_reuses_unchanged_runs, _test_verify_reuse_needs_git, _test_run_sh_test_command
 from tests.checks.metrics import _test_metrics_contract
 from tests.checks.replay import _test_fact_replay
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
@@ -273,6 +274,9 @@ def run_tests() -> None:
     _test_find_python_runs_each_candidate()
     _test_find_bash_and_os_locations()
     _test_verify_runtime_tests()
+    _test_verify_reuses_unchanged_runs()
+    _test_verify_reuse_needs_git()
+    _test_run_sh_test_command()
     _test_metrics_contract()
     _test_fact_replay()
     _test_opencode_prompt_never_reaches_cmd()
@@ -1366,6 +1370,7 @@ confidence: high — all requested checks ran
         _test_installer_seeds_second_agent_config()
         _test_installer_seed_is_non_interactive_without_a_tty()
         _test_installer_seed_prompt_answers()
+        _test_installer_asks_every_choice()
         _test_installer_seed_reports_unenforced_provider()
         _test_installer_check_reports_second_agent_default()
         _test_provider_update()

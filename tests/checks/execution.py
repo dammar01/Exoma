@@ -8,6 +8,7 @@ verify returns is what the execution carries — never `pass` for a syntax-only 
 
 import datetime
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -134,7 +135,74 @@ def _cli_speaks_the_error_contract() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _execution_tracks_its_own_edits() -> None:
+    """Tree snapshots on plan, begin and end name the files an execution changed on a tree
+    that already carried uncommitted edits, flag those outside the scope (whatever tool
+    wrote them), and name edits made after execute-end at verify. No Git: unknown."""
+    import subprocess
+
+    from tests.checks.support import no_console
+
+    root = Path(tempfile.mkdtemp(prefix="execution-tree-"))
+    session = "tree-session"
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    try:
+        (root / ".workflow").mkdir()
+        subprocess.run([*git, "init", "-q"], check=True, **no_console())
+        (root / "src").mkdir()
+        (root / "src" / "x.py").write_text("x = 1\n", encoding="utf-8")
+        (root / "dirty.py").write_text("d = 1\n", encoding="utf-8")
+        subprocess.run([*git, "add", "-A"], check=True, **no_console())
+        subprocess.run([*git, "commit", "-qm", "base"], check=True, **no_console())
+        (root / "dirty.py").write_text("d = 2\n", encoding="utf-8")  # uncommitted before the plan
+
+        execution.record_plan(root, session, _plan(files=["src/"]))
+        assert_true(execution.current_plan(root, session).get("base_tree"), "the plan records its tree")
+        (root / "between.py").write_text("b = 1\n", encoding="utf-8")
+        _token(root, session)
+        begun = execution.begin_execution(root, session)["execution"]
+        assert_true(begun["begin_tree"] and [c["path"] for c in begun["changed_since_plan"]] == ["between.py"],
+                    f"an edit between plan and execute-begin is named: {begun}")
+
+        (root / "src" / "x.py").write_text("x = 2\n", encoding="utf-8")
+        (root / "src" / "new.py").write_text("n = 1\n", encoding="utf-8")
+        (root / "outside.py").write_text("o = 1\n", encoding="utf-8")  # as a Bash write would
+        ended = execution.end_execution(root, session)["execution"]
+        changed = {c["path"]: c["status"] for c in ended["changed_files"]}
+        assert_true(changed == {"src/x.py": "M", "src/new.py": "A", "outside.py": "A"},
+                    f"only the execution's own edits, not the tree's earlier ones: {changed}")
+        assert_true(ended["outside_scope"] == ["outside.py"], f"outside the scope is flagged: {ended}")
+        assert_true(execution.in_scope("src/x.py", ["SRC/"], casefold=True)
+                    and not execution.in_scope("src/x.py", ["SRC/"], casefold=False),
+                    "scope case: ignored where the gate ignores it (Windows), kept elsewhere")
+        assert_true(execution.in_scope("src/x.py", ["SRC/"]) == (os.name == "nt"),
+                    "the default follows the platform, as the execution gate does")
+
+        (root / "late.py").write_text("l = 1\n", encoding="utf-8")
+        result = {"ok": True, "meta": {"verdict": "pass"}}
+        execution.record_verification(root, session, result)
+        late = [c["path"] for c in result["meta"].get("changed_since_execute") or []]
+        assert_true(late == ["late.py"]
+                    and [c["path"] for c in execution.current_execution(root, session)["changed_since_execute"]] == late,
+                    f"an edit after execute-end is named at verify: {result}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    bare = Path(tempfile.mkdtemp(prefix="execution-nogit-"))
+    try:
+        (bare / ".workflow").mkdir()
+        execution.record_plan(bare, session, _plan())
+        _token(bare, session)
+        execution.begin_execution(bare, session)
+        ended = execution.end_execution(bare, session)["execution"]
+        assert_true(ended["changed_files"] is None and ended["outside_scope"] is None,
+                    f"no Git: unknown, never an empty change list: {ended}")
+    finally:
+        shutil.rmtree(bare, ignore_errors=True)
+
+
 def _test_execution_chain() -> None:
     _plan_is_checked_mechanically()
     _execution_needs_the_users_yes()
     _cli_speaks_the_error_contract()
+    _execution_tracks_its_own_edits()

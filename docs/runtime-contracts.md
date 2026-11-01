@@ -21,7 +21,7 @@ nothing in Python. The list is kept explicit so that "configured" is never mista
 [reference.md, "`.workflow/config.json`"](reference.md#workflowconfigjson).
 
 - `commands.verify_mode` (`delegated` | `syntax`; anything else warns and falls back to `delegated`)
-- `commands.verify_test_commands`, `commands.verify_test_timeout_seconds` (`core/evidence/verify_tests.py`)
+- `commands.verify_test_commands`, `commands.verify_test_timeout_seconds`, `commands.verify_reuse_env`, `commands.verify_reuse_files` (`core/evidence/verify_tests.py`)
 - `policies.fact_relevant_limit`, `policies.fact_relevant_limits`, `policies.fact_min_relevance`
 - `policies.fact_recurrence_threshold`, `policies.fact_max_claim_chars`, `policies.fact_max_facts`
 - `policies.enforcement`, `policies.write_allowed_outside_root` (read by the `execution-gate` and `status-guard` hooks and the Agy host wrapper `agy-host.py`, not by Python)
@@ -1019,7 +1019,8 @@ Contract version 4 adds two fields and drops one kind of row:
 - `tests_requested`, `tests_run`, `tests_failed`, `tests_seconds` — `/.verify` only, on the
   command's final row: whether main_agent wrote `verify/tests.json`, how many requested
   commands the runtime ran (refused ones excluded), how many of those did not pass, and their
-  summed wall time. Not part of `duration_seconds`. `None` on every other row.
+  summed wall time. A command reused from an earlier `run.sh test` pass under an unchanged reuse
+  identity (`verify_tests.reuse_identity`; reference, `verify_mode`) counts as run and passed, with 0 s. Not part of `duration_seconds`. `None` on every other row.
 - A browser run that ended before its review (incomplete, preflight, refused spec or env, no
   request) reached no provider and writes **no** usage or audit row; the `e2e_run` quality row
   and the `verify` task event still record it. Before v4 such a run wrote a `verify` row with

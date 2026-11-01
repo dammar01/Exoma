@@ -750,6 +750,61 @@ def _win_process_alive(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def process_state(pid: int | None) -> str:
+    """`"alive"`, `"dead"` or `"unknown"` for `pid`. Cross-OS, stdlib only.
+
+    The three-way answer `process_alive` folds into a bool. That one counts unknown as
+    dead, on purpose: the job reaper must be able to act on a worker it cannot see. This
+    one is for callers that must only act on a PROVEN death, such as clearing another run's
+    `run.sh test` marker (core/evidence/verify_tests.py): a process that exists but cannot
+    be opened (Windows ERROR_ACCESS_DENIED, POSIX EPERM) is alive, and anything the OS will
+    not say is unknown.
+    """
+    if not pid or pid <= 0:
+        return "dead"
+    if IS_WINDOWS:
+        return _win_process_state(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead"
+    except PermissionError:
+        return "alive"  # exists, owned by someone else
+    except OSError:
+        return "unknown"
+    return "alive"
+
+
+def _win_process_state(pid: int) -> str:
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_ACCESS_DENIED = 5
+    ERROR_INVALID_PARAMETER = 87  # no process with this id
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == ERROR_ACCESS_DENIED:
+                return "alive"
+            return "dead" if error == ERROR_INVALID_PARAMETER else "unknown"
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return "unknown"
+            return "alive" if exit_code.value == STILL_ACTIVE else "dead"
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError, ValueError):
+        return "unknown"
+
+
 def pid_create_time(pid: int | None) -> int | None:
     """Process creation time as an opaque comparable integer, or None if unknowable.
 

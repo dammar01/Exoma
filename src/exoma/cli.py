@@ -239,6 +239,84 @@ def _promote(command: str, project_root: Path, task: str) -> dict:
     }
 
 
+def _test_command(project_root: Path, session_id: str, task: str | None) -> dict:
+    """`run.sh test`: run project tests through the runtime and record them for /.verify.
+
+    `--task` is one command line, or a JSON list of them (at most five). The policy is the
+    verify one (core/evidence/verify_tests.py): `commands.verify_test_commands` prefixes, no
+    shell syntax, the verify timeout. Each outcome is recorded with the tree's fingerprint,
+    so a later /.verify that requests the same command on an unchanged tree reuses the pass
+    instead of running it again.
+    """
+    from exoma.core.evidence import verify_tests
+
+    text = str(task or "").strip()
+    commands: object = text
+    if text.startswith("["):
+        try:
+            commands = json.loads(text)
+        except ValueError:
+            commands = None
+    commands = [commands] if isinstance(commands, str) and commands else commands
+    if not isinstance(commands, list) or not commands or not all(isinstance(c, str) for c in commands):
+        return make_error(
+            "test_input_invalid",
+            "test needs a command line in --task, or a JSON list of command lines",
+            next_action="Pass one allowlisted command, e.g. --task 'python -m pytest tests/x.py'.",
+        )
+    if not verify_tests.configured(project_root):
+        return make_error(
+            "test_not_configured",
+            "commands.verify_test_commands in .workflow/config.json is empty: no command may run",
+            next_action="List the project's test command prefixes there, then retry.",
+        )
+    ran = verify_tests.run_and_record(project_root, session_id, commands)
+    outcomes = ran["outcomes"]
+    if not outcomes and ran.get("record_error"):
+        # Nothing ran: a run the session cannot record would leave an older pass in charge.
+        return make_error(
+            "session_state_error",
+            f"tests not run: {ran['record_error']}",
+            next_action="Make the session's .workflow/data/sessions/<id>/verify/ directory "
+            "writable, then run the tests again.",
+            meta={"record_error": ran["record_error"],
+                  "record": str(verify_tests.runs_path(project_root, session_id))},
+        )
+    lines = []
+    for outcome in outcomes:
+        detail = outcome.get("detail") or (
+            f"exit {outcome['exit_code']}" if "exit_code" in outcome else outcome["status"]
+        )
+        lines.append(f"- `{outcome['command']}` {outcome['status']} ({detail}, {outcome.get('seconds', 0)} s)")
+        if outcome["status"] in ("failed", "timeout", "error") and outcome.get("tail"):
+            lines.append("  tail: " + " ".join(outcome["tail"].split())[-600:])
+    passed = all(o["status"] == "passed" for o in outcomes)
+    if ran.get("record_error") and ran["fingerprint"]:
+        note = f"recorded, with a warning: {ran['record_error']}"
+    elif ran.get("record_error"):
+        note = f"not reusable: the run could not be recorded ({ran['record_error']})"
+    elif ran["fingerprint"]:
+        note = "recorded: a later /.verify reuses each pass while its inputs stay unchanged"
+    else:
+        note = "not reusable: the tree could not be fingerprinted (no Git) or the run changed its inputs"
+    content = "\n".join(["[TESTS]", *lines, note])
+    meta = {
+        "outcomes": [{k: v for k, v in o.items() if k != "tail"} for o in outcomes],
+        "fingerprint": ran["fingerprint"],
+        "record_error": ran.get("record_error"),
+        "record": str(verify_tests.runs_path(project_root, session_id)),
+    }
+    if not passed:
+        return make_error(
+            "tests_failed",
+            content,
+            next_action="Fix the failure (or a refused command), then run the tests again; "
+            "/.verify reuses only passing runs.",
+            meta=meta,
+        )
+    return {"ok": True, "content": content, "meta": meta}
+
+
 def _execution_command(command: str, project_root: Path, session_id: str, task: str | None) -> dict:
     """plan-record / execute-begin / execute-end (core/runtime/execution.py).
 
@@ -307,10 +385,18 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
             ended["error"],
             next_action="Nothing to close; execute-begin opens an execution.",
         )
+    closed = ended["execution"]
+    changed, outside = closed.get("changed_files"), closed.get("outside_scope")
+    if changed is None:
+        summary = "changed files unknown (no tree snapshot to compare)"
+    else:
+        summary = f"{len(changed)} file(s) changed since execute-begin"
+        if outside:
+            summary += f"; {len(outside)} outside the plan's scope: " + ", ".join(outside)
     return {
         "ok": True,
-        "content": "execution closed: implemented, verification not_run",
-        "meta": ended["execution"],
+        "content": f"execution closed: implemented, verification not_run; {summary}",
+        "meta": closed,
     }
 
 
@@ -322,7 +408,7 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
 RECURSION_REFUSED_COMMANDS = frozenset({
     "explore", "plan", "analyze", "verify", "verify-browser",
     "submit", "await", "worker",
-    "plan-record", "execute-begin", "execute-end",
+    "plan-record", "execute-begin", "execute-end", "test",
 })
 SECOND_AGENT_ROLE_ENV = "WORKFLOW_AGENT_ROLE"
 
@@ -468,6 +554,9 @@ def run(
     if normalized_command == "provider":
         from exoma.core.provider import provider_select
         return provider_select.run(project_root, task)
+
+    if normalized_command == "test":
+        return _test_command(project_root, session_id, task)
 
     if normalized_command == "sweep":
         output = run_sweep(project_root, session_id)
@@ -697,6 +786,7 @@ COMMANDS = (
     "plan-record",
     "execute-begin",
     "execute-end",
+    "test",
     "report",
     "audit",
     "graph-meta",

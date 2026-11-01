@@ -33,6 +33,12 @@ def default_commands() -> dict:
         # and a requested test is reported as not run.
         "verify_test_commands": [],
         "verify_test_timeout_seconds": 900,
+        # what a `run.sh test` pass is reused under, besides the Git-visible tree and
+        # .workflow/config.json (verify_tests.reuse_identity): environment variable name
+        # patterns and project-root globs for inputs Git ignores. A change to any of them
+        # makes /.verify run the test again.
+        "verify_reuse_env": ["WORKFLOW_*", "EXOMA_*", "PYTEST_*", "CI", "NODE_ENV", "APP_ENV"],
+        "verify_reuse_files": [".env", ".env.*"],
     }
 
 def default_policies() -> dict:

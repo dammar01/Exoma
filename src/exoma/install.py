@@ -28,6 +28,7 @@ Safety:
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -131,6 +132,7 @@ def _second_agent_config(
     provider: str,
     model: str | None,
     route_models: dict | None = None,
+    effort: str | None = None,
 ) -> dict:
     """The example config with one provider and model selected into it.
 
@@ -153,6 +155,8 @@ def _second_agent_config(
         if name in picks and value:
             picks[name] = value
     config["routes"] = _merge_routes(template.get("routes"), picks)
+    if effort:
+        config["effort"] = effort
     agent = provider_agent_default(provider, os.getenv)
     if agent:
         config["provider_agent"] = agent
@@ -160,7 +164,7 @@ def _second_agent_config(
 
 
 def _seed_selection(path: Path) -> dict | None:
-    """`{provider, model, routes}` from an existing seed, or None when there is none to keep.
+    """`{provider, model, effort, routes}` from an existing seed, or None when there is none to keep.
 
     Only the SELECTION is read. Everything else in the file is rebuilt from the example, so
     a key the release changed can never be carried forward from an older seed.
@@ -173,9 +177,11 @@ def _seed_selection(path: Path) -> dict | None:
         return None
     routes = loaded.get("routes") if isinstance(loaded.get("routes"), dict) else {}
     model = loaded.get("default_model")
+    effort = loaded.get("effort")
     return {
         "provider": loaded["provider"],
         "model": model if isinstance(model, str) else None,
+        "effort": effort if isinstance(effort, str) and effort else None,
         "routes": {
             name: entry.get("model")
             for name, entry in routes.items()
@@ -184,67 +190,158 @@ def _seed_selection(path: Path) -> dict | None:
     }
 
 
+class InstallInterrupted(Exception):
+    """Ctrl+C at a question: the install stops before anything is written."""
+
+
 def _ask(prompt: str) -> str:
-    """One line from the operator, or "" when the stream ends or they interrupt."""
+    """One line from the operator, or "" when the stream ends. Ctrl+C raises
+    InstallInterrupted: it means stop, not "take the default for everything left"."""
     try:
         return input(prompt).strip()
-    except (EOFError, KeyboardInterrupt):
+    except EOFError:
         print()
         return ""
+    except KeyboardInterrupt:
+        print()
+        raise InstallInterrupted from None
 
 
-def _prompt_second_agent(host: str | None = None) -> tuple[str | None, str | None]:
-    """Ask which second agent `host` should use. Returns (provider, model); (None, None) to skip.
+def _ask_choices(args, host_choice, apply: bool, plan, interactive: bool, intent_stated) -> tuple:
+    """The hosts, then (from a terminal) every remaining choice a flag did not state:
+    `(hosts, asked)`, `asked` mapping a host to its second-agent answer. Each answer is
+    written back onto `args`. Raises InstallInterrupted on Ctrl+C, before any write."""
+    hosts = _resolve_hosts(host_choice, apply, plan, ask=interactive)
+    asked: dict = {}
+    if not interactive:
+        return hosts, asked
+    if not intent_stated:
+        print()
+        print("  Intent mode: auto-intent maps plain sentences to workflow commands;")
+        print("  command-only requires the /. prefix and drops the intent hook.")
+        args.only_command = not _ask_yes_no(
+            f"use auto-intent? (current: {'command-only' if args.only_command else 'auto-intent'})",
+            not args.only_command,
+        )
+    if not args.with_e2e:
+        args.with_e2e = _ask_yes_no(
+            "install the browser-verification extra (Playwright + Chromium, large download)?",
+            False,
+        )
+    if "agy" in hosts and args.agy_permissions is None:
+        args.agy_permissions = _ask_yes_no(
+            "add Agy allow rules for the .workflow runner and Exoma's data directory?",
+            not _stored_agy_opt_out(),
+        )
+    if not args.update_providers:
+        args.update_providers = _ask_yes_no(
+            "bring provider CLIs to their tested stable_version (npm-global only)?", False
+        )
+    if args.provider is None:
+        from exoma.core.workspace.workspace_paths import PROVIDER_SEED_NAME
+
+        for host in hosts:
+            previous = _seed_selection(SEED_DIR / seed_name(host)) or _seed_selection(
+                SEED_DIR / PROVIDER_SEED_NAME
+            )
+            print()
+            print(f"  [{host}]")
+            asked[host] = _prompt_second_agent(host, previous)
+    return hosts, asked
+
+
+def _prompt_second_agent(
+    host: str | None = None, previous: dict | None = None
+) -> tuple[str | None, str | None, str | None]:
+    """Ask which second agent `host` should use: (provider, model, effort).
+
+    Asked on every install from a terminal, with `previous` (the host's current seed
+    selection) as the default at each step, so Enter keeps it. (None, None, None) means
+    "no choice": the seed keeps its previous selection, or the example when there is none.
 
     The model menu is the live catalog (core/provider/model_catalog.py): what the installed
     provider CLI lists now, newest first, falling back to the bundled shortlist when the
     CLI cannot be asked (missing, offline, or a provider with no listing, like claude).
-
-    Only reached when installing from a terminal — see `_seed_second_agent_config`. Skipping is
-    a first-class answer at both steps: an empty provider seeds the example unchanged, and
-    an empty model leaves the pin unset so the provider CLI keeps its own default.
+    A blank model leaves the pin unset so the provider CLI keeps its own default; a blank
+    effort keeps the previous one for the same model, else the provider's default. A model
+    whose variants carry the effort in the id (agy) gets that id, and no separate effort.
     """
     from exoma.config.providers import (
         bundled_providers,
         provider_boundary,
         provider_command_default,
     )
-    from exoma.core.provider.model_catalog import catalog
+    from exoma.core.provider.model_catalog import catalog, compose_model_id, lookup
 
     providers = sorted(bundled_providers())
     print()
     who = f"{host} projects" if host else "new projects"
-    print(f"  No second agent chosen yet for {host or 'this machine'}. Which second agent should {who} use?")
+    current = (
+        f"current: {previous['provider']}, model={previous['model'] or 'unset'}, "
+        f"effort={previous.get('effort') or 'default'}"
+        if previous
+        else "none chosen yet"
+    )
+    print(f"  Which second agent should {who} use? ({current})")
     for index, name in enumerate(providers, start=1):
         command = provider_command_default(name, os.getenv)
         notes = ["on PATH" if shutil.which(command) else f"{command} not on PATH"]
         if provider_boundary(name)["reads"] == "unbounded":
             notes.append("no enforced read boundary — trusted provider")
         print(f"    {index}) {name:<10} ({'; '.join(notes)})")
-    choice = _ask(f"  provider [1-{len(providers)}, blank = keep the example default]: ")
-    if not choice.isdigit() or not 1 <= int(choice) <= len(providers):
-        return None, None
-    provider = providers[int(choice) - 1]
+    keep = f"keep {previous['provider']}" if previous else "keep the example default"
+    choice = _ask(f"  provider [1-{len(providers)}, blank = {keep}]: ")
+    if choice.isdigit() and 1 <= int(choice) <= len(providers):
+        provider = providers[int(choice) - 1]
+    elif previous:
+        provider = previous["provider"]
+    else:
+        return None, None, None
+    same_provider = bool(previous) and previous["provider"] == provider
+    previous_model = previous["model"] if same_provider else None
 
     listing = catalog(provider)
     models = listing["models"]
-    if not models:
-        return provider, None
-    print()
-    print(f"  models for {provider} ({'live from the CLI' if listing['source'] in ('live', 'cache') else 'bundled list'}):")
-    for index, entry in enumerate(models, start=1):
-        efforts = ", ".join(entry.get("efforts") or ()) or "no reasoning effort"
-        print(f"    {index}) {entry['id']:<42} ({efforts})")
-    choice = _ask(
-        f"  model [1-{len(models)}, or a model id, blank = let the CLI decide]: "
+    model = previous_model
+    if models:
+        print()
+        print(f"  models for {provider} ({'live from the CLI' if listing['source'] in ('live', 'cache') else 'bundled list'}):")
+        for index, entry in enumerate(models, start=1):
+            efforts = ", ".join(entry.get("efforts") or ()) or "no reasoning effort"
+            print(f"    {index}) {entry['id']:<42} ({efforts})")
+        keep = f"keep {previous_model}" if previous_model else "let the CLI decide"
+        choice = _ask(f"  model [1-{len(models)}, or a model id, blank = {keep}]: ")
+        if choice.isdigit() and 1 <= int(choice) <= len(models):
+            model = models[int(choice) - 1]["id"]
+        elif choice:
+            # A pin the shortlist never mentioned still has to work: the menu is a picker,
+            # not the set of models that exist (config/providers.model_is_listed).
+            model = choice
+
+    entry = lookup(provider, model) if model else None
+    efforts = list((entry or {}).get("efforts") or ())
+    same_model = same_provider and model == previous_model
+    previous_effort = previous.get("effort") if same_model else None
+    if not efforts:
+        # Nothing to ask. A pin the catalog does not list keeps the effort stored for that
+        # same model (the router passes it on as configured, core/prompt/router.py), as a
+        # --no-input install does; a listed model without efforts takes none.
+        return provider, model, previous_effort if model and entry is None else None
+    keep = f"keep {previous_effort}" if previous_effort else "provider default"
+    if entry.get("effort_in_id"):
+        keep = "keep the model as given"
+    for index, name in enumerate(efforts, start=1):
+        print(f"    {index}) {name}")
+    choice = _ask(f"  effort [1-{len(efforts)}, blank = {keep}]: ")
+    effort = (
+        efforts[int(choice) - 1]
+        if choice.isdigit() and 1 <= int(choice) <= len(efforts)
+        else (choice if choice in efforts else previous_effort)
     )
-    if not choice:
-        return provider, None
-    if choice.isdigit() and 1 <= int(choice) <= len(models):
-        return provider, models[int(choice) - 1]["id"]
-    # A pin the shortlist never mentioned still has to work: the menu is a picker, not
-    # the set of models that exist (config/providers.model_is_listed).
-    return provider, choice
+    if entry.get("effort_in_id"):
+        # agy: the effort names a variant of the model, written into the id.
+        return provider, (compose_model_id(model, effort) if effort else model), None
+    return provider, model, effort
 
 
 _LEGACY_RETIRED: set = set()
@@ -259,7 +356,7 @@ def seed_name(host: str | None = None) -> str:
 
 def _seed_second_agent_config(
     plan, apply: bool, provider: str | None = None, model: str | None = None,
-    host: str | None = None,
+    host: str | None = None, asked: tuple | None = None,
 ) -> None:
     """Rebuild config/second_agent.seed.<host>.json, the template `init` copies into a
     project initialised from that host (`exoma init --host <host>`, rendered into each
@@ -276,7 +373,8 @@ def _seed_second_agent_config(
     in order:
       --provider/--model     taken as given;
       the previous seed      the last deliberate choice, re-applied to the new example;
-      a terminal install     asked interactively, with skipping as a valid answer;
+      `asked`                the answer main() collected from a terminal (provider, model,
+                             effort), the previous selection being its default;
       anything else          the example, verbatim.
 
     The old file is retired rather than read: it is exactly the state that went stale.
@@ -331,15 +429,20 @@ def _seed_second_agent_config(
             os.replace(legacy, retired)
 
     route_models: dict = {}
+    effort = None
     # A host seed that does not exist yet starts from the shared seed's selection: the
     # choice made before seeds were per host carries over instead of being asked again.
     previous = _seed_selection(dest) or (_seed_selection(shared) if host else None)
-    if provider is None and previous is not None:
+    if provider is None and asked and asked[0] is not None:
+        provider, model, effort = asked
+        # Per-route picks survive an answer that kept the provider and model.
+        if previous and (previous["provider"], previous["model"]) == (provider, model):
+            route_models = previous["routes"]
+    elif provider is None and previous is not None:
         provider, model, route_models = previous["provider"], previous["model"], previous["routes"]
+        effort = previous.get("effort")
     elif provider is None:
-        if apply and sys.stdin.isatty():
-            provider, model = _prompt_second_agent(host)
-        elif not apply:
+        if not apply:
             plan.add(
                 "create",
                 dest,
@@ -368,10 +471,10 @@ def _seed_second_agent_config(
                 "opencode without a model is refused at call time (model_unset): without "
                 "-m it would answer with whatever model it used last. Pass --model."
             )
-        detail = f"provider={provider}, model={model or 'unset'}"
+        detail = f"provider={provider}, model={model or 'unset'}" + (f", effort={effort}" if effort else "")
         payload = (
             json.dumps(
-                _second_agent_config(template, provider, model, route_models),
+                _second_agent_config(template, provider, model, route_models, effort),
                 indent=JSON_INDENT,
             )
             + "\n"
@@ -391,29 +494,60 @@ _HOST_CHOICES = {"claude": ("claude",), "agy": ("agy",), "codex": ("codex",),
                  "opencode": ("opencode",), "all": HOSTS}
 
 
-def _prompt_hosts() -> tuple[str, ...]:
-    """Ask which main-agent host to install. Only reached when installing from a terminal."""
+_HOST_MENU = ("claude", "agy", "codex", "opencode")
+
+
+def _prompt_hosts(default: tuple[str, ...] = ("claude",)) -> tuple[str, ...]:
+    """Ask which main-agent hosts to install, any combination. Only from a terminal.
+
+    `1,3` picks Claude Code and Codex, `5` all of them; blank keeps `default` (the last
+    install's choice). An answer that names no host also keeps it rather than guessing.
+    """
     print()
-    print("  Which main agent should Exoma install for?")
+    print(f"  Which main agents should Exoma install for? (current: {', '.join(default)})")
     print("    1) claude   (Claude Code: ~/.claude)")
     print(f"    2) agy      (Antigravity CLI: ~/.gemini{'' if agy_host_present() else ', not found on this machine'})")
     print("    3) codex    (Codex CLI: ~/.codex)")
     print("    4) opencode (OpenCode: ~/.config/opencode)")
     print("    5) all      (Claude Code, Agy, Codex, and OpenCode)")
-    choice = _ask("  host [1-5, blank = claude]: ")
-    return {"2": ("agy",), "3": ("codex",), "4": ("opencode",), "5": HOSTS}.get(choice, ("claude",))
+    choice = _ask(f"  hosts [numbers or names, e.g. 1,3; blank = {', '.join(default)}]: ")
+    picked: set[str] = set()
+    for token in re.split(r"[\s,]+", choice.lower()):
+        if token in ("5", "all"):
+            picked.update(HOSTS)
+        elif token.isdigit() and 1 <= int(token) <= len(_HOST_MENU):
+            picked.add(_HOST_MENU[int(token) - 1])
+        elif token in HOSTS:
+            picked.add(token)
+    return tuple(h for h in HOSTS if h in picked) or default
 
 
-def _resolve_hosts(flag: str | None, apply: bool, plan: Plan) -> tuple[str, ...]:
-    """The positional host, else the last install's choice, else the 0.3.0 migration, else
-    asked from a terminal, else Claude — what every install did before the choice."""
+def _ask_yes_no(question: str, default: bool) -> bool:
+    """A y/n question from a terminal; blank keeps `default`."""
+    answer = _ask(f"  {question} [{'Y/n' if default else 'y/N'}]: ").lower()
+    if answer in ("y", "yes", "ya"):
+        return True
+    if answer in ("n", "no", "tidak"):
+        return False
+    return default
+
+
+def _resolve_hosts(
+    flag: str | None, apply: bool, plan: Plan, ask: bool | None = None
+) -> tuple[str, ...]:
+    """The positional host, else asked from a terminal with the last choice as default,
+    else the last install's choice, else the 0.3.0 migration, else Claude — what every
+    install did before the choice. `ask` None keeps the earlier rule: ask only when
+    nothing is stored."""
     if flag:
         return _HOST_CHOICES[flag]
     hosts = _stored_hosts() or _migrated_hosts()
+    if ask is None:
+        ask = apply and sys.stdin.isatty() and not hosts
+    if ask:
+        return _prompt_hosts(hosts or ("claude",))
     if hosts:
         return hosts
-    if apply and sys.stdin.isatty():
-        return _prompt_hosts()
     plan.warn("no host chosen yet: installing for claude; a terminal install asks, or name one: "
               "exoma install <claude|agy|codex|opencode|all>")
     return ("claude",)
@@ -467,9 +601,9 @@ def main() -> int:
         nargs="?",
         choices=sorted(_HOST_CHOICES),
         help="the main-agent host to install for: claude, agy, codex, opencode, or all. "
-        "Without it the last install's choice is kept; with none, a terminal asks and a "
-        "non-interactive run installs claude. A host dropped from the choice has Exoma's "
-        "files taken out of it",
+        "Without it a terminal asks (any combination, the last choice as the default); a "
+        "non-interactive run keeps the last choice, or installs claude when there is none. "
+        "A host dropped from the choice has Exoma's files taken out of it",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="show every change, write nothing"
@@ -519,9 +653,10 @@ def main() -> int:
         "--provider",
         choices=sorted(PROVIDER_BUNDLES),
         help="which second agent each chosen host's seed (second_agent.seed.<host>.json, the "
-        "template that host's new projects copy) should select. Without it each host keeps "
-        "its previous selection; with none, a terminal asks per host from the live model "
-        "catalog and a non-interactive run copies the example",
+        "template that host's new projects copy) should select. Without it a terminal asks "
+        "per host from the live model catalog (provider, model, effort; the previous "
+        "selection as the default); a non-interactive run keeps the previous selection, or "
+        "copies the example when there is none",
     )
     parser.add_argument(
         "--host",
@@ -558,6 +693,13 @@ def main() -> int:
         help="report drift (installed config vs bundle, dist vs manifest, and the "
         "project-scoped files when run from a directory that has a .workflow/)",
     )
+    parser.add_argument(
+        "--no-input",
+        action="store_true",
+        help="ask nothing: keep the stored choices (host, second agent, intent mode, Agy "
+        "permissions) and take the rest from flags; `exoma update` passes it. Without it an "
+        "install from a terminal asks every choice, the current one as the default",
+    )
     args = parser.parse_args()
     _reset_receipt()
     _LEGACY_RETIRED.clear()
@@ -586,6 +728,11 @@ def main() -> int:
     if args.model and not args.provider:
         print("[INSTALL] --model needs --provider: a model id alone names no adapter")
         return 2
+    # From a terminal every choice is asked, the current one as the default; a flag that
+    # states a choice skips its question. Not from a terminal, or --no-input (`exoma
+    # update`): nothing is asked and the stored choices stand.
+    interactive = apply and sys.stdin.isatty() and not args.no_input
+    intent_stated = args.only_command or args.auto_intent
     # No flag = keep whatever the last install chose. An upgrade must not change a
     # deliberate choice just because it was not restated.
     if not args.only_command and not args.auto_intent:
@@ -620,13 +767,17 @@ def main() -> int:
     )
     print(f"  home:   {HOME}")
     print(f"  backup: {backup_root}")
-    # Asked before anything is written, like the provider: an answer cut short by Ctrl+C
-    # leaves nothing half installed.
+    # Asked before anything is written, like the provider: Ctrl+C at any question stops
+    # the install (InstallInterrupted) with nothing written.
     if args.apply:
         plan.warn("--apply is no longer needed: `exoma install` writes by default (--dry-run previews)")
     if args.host_flag:
         plan.warn(f"--host is deprecated: name the host directly, `exoma install {args.host_flag}`")
-    hosts = _resolve_hosts(host_choice, apply, plan)
+    try:
+        hosts, asked = _ask_choices(args, host_choice, apply, plan, interactive, intent_stated)
+    except InstallInterrupted:
+        print("[INSTALL] ABORTED — interrupted at a question. Nothing was written.")
+        return 130
     if "codex" in hosts:
         plan.warn("Codex host hooks must be reviewed and trusted in Codex with /hooks before the host gates run")
     if "opencode" in hosts:
@@ -745,7 +896,9 @@ def main() -> int:
     # belongs to a workspace, so init/upgrade owns it — see
     # core.runtime.upgrade._install_project_boundary. The upgrade call below reaches it.
     for host in hosts:
-        _seed_second_agent_config(plan, apply, args.provider, args.model, host=host)
+        _seed_second_agent_config(
+            plan, apply, args.provider, args.model, host=host, asked=asked.get(host)
+        )
 
     workspace_upgrade_failed = False
     if project_root:

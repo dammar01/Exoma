@@ -611,17 +611,42 @@ def codex_host_hook_path(home: Path | None = None) -> Path:
 def codex_hook_entries(home: Path | None = None) -> dict:
     """The event groups Exoma owns in Codex's user-level hooks.json."""
     template = json.loads((DIST_CONFIG / CODEX_HOST_HOOKS).read_text(encoding="utf-8"))
-    python = '"' + Path(sys.executable).as_posix() + '"'
-    hook = '"' + codex_host_hook_path(home).as_posix() + '"'
-    def render(value):
+    python, hook = Path(sys.executable).as_posix(), codex_host_hook_path(home).as_posix()
+    # Both shells expand inside double quotes (`$name`, backticks; PowerShell also its
+    # backtick escapes), so a path holding either was rewritten before launch. Single
+    # quotes in both: `command` runs under a POSIX shell (`'` written `'\''`),
+    # `commandWindows` under PowerShell (`'` doubled).
+    posix = {"{{PYTHON}}": _sh_quote(python), "{{HOOK}}": _sh_quote(hook)}
+    windows = {"{{PYTHON}}": _ps_quote(python), "{{HOOK}}": _ps_quote(hook)}
+
+    def render(value, quotes=posix):
         if isinstance(value, dict):
-            return {key: render(item) for key, item in value.items()}
+            return {key: render(item, windows if key == "commandWindows" else quotes)
+                    for key, item in value.items()}
         if isinstance(value, list):
-            return [render(item) for item in value]
+            return [render(item, quotes) for item in value]
         if isinstance(value, str):
-            return value.replace("{{PYTHON}}", python).replace("{{HOOK}}", hook)
+            for placeholder, quoted in quotes.items():
+                value = value.replace(placeholder, quoted)
+            return value
         return value
     return render(template["hooks"])
+
+
+def _ps_quote(text: str) -> str:
+    """A PowerShell single-quoted string: nothing inside expands; `'` is written `''`."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _sh_quote(text: str) -> str:
+    """A POSIX single-quoted string: nothing inside expands; `'` is written `'\\''`. Always
+    quoted (unlike shlex.quote), so every generated command has one shape."""
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def _unquote_codex(text: str, key: str) -> str:
+    """The inside of a single-quoted path as the shell running `key` reads it."""
+    return text.replace("''", "'") if key == "commandWindows" else text.replace("'\\''", "'")
 
 
 def codex_hooks_state(dest: Path) -> tuple[dict | None, str | None]:
@@ -639,20 +664,29 @@ def codex_hooks_state(dest: Path) -> tuple[dict | None, str | None]:
     return current, None
 
 
+# `commandWindows` opens with PowerShell's call operator: Codex runs a Windows hook as
+# `[Console]::In.ReadLine() | <command>` under `powershell -Command`, where a leading quoted
+# path is a string expression and the next token a parse error. Pre-release 1.0.0 builds
+# wrote it without `&`, so the optional prefix keeps those entries recognised as Exoma's
+# and replaced. Paths are double-quoted (what those builds wrote in both keys) or
+# single-quoted (now: `'\''` inside under POSIX, `''` under PowerShell).
+_SQ_BODY = r"(?:[^'\r\n]|''|'\\'')+"  # a character, PowerShell's '' or POSIX's '\''
 _CODEX_HOOK_COMMAND = re.compile(
-    r'^\s*"[^"\r\n]+"\s+"(?P<script>[^"\r\n]+)"\s+'
+    r'^\s*(?:&\s*)?(?:"[^"\r\n]+"|\'' + _SQ_BODY + r'\')\s+'
+    r'(?:"(?P<script>[^"\r\n]+)"|\'(?P<sq_script>' + _SQ_BODY + r')\')\s+'
     r'(?P<event>SessionStart|UserPromptSubmit|PreToolUse|Stop)\s*$',
     re.IGNORECASE,
 )
 
 
 def _codex_command_invokes_script(command: object, home: Path | None = None,
-                                  event: str | None = None) -> bool:
+                                  event: str | None = None, key: str = "command") -> bool:
     match = _CODEX_HOOK_COMMAND.fullmatch(command) if isinstance(command, str) else None
     if not match:
         return False
     script = codex_host_hook_path(home).as_posix().casefold()
-    return (match.group("script").replace("\\", "/").casefold() == script
+    named = match.group("script") or _unquote_codex(match.group("sq_script"), key)
+    return (named.replace("\\", "/").casefold() == script
             and (event is None or match.group("event").casefold() == event.casefold()))
 
 
@@ -660,32 +694,46 @@ def _codex_hook_owned(handler: dict, home: Path | None = None, event: str | None
     """Recognize only Exoma's generated command, not a mention of its script path."""
     if not isinstance(handler, dict) or handler.get("type") != "command":
         return False
-    commands = [handler[key] for key in ("command", "commandWindows") if key in handler]
-    if not commands:
+    keys = [key for key in ("command", "commandWindows") if key in handler]
+    if not keys:
         return False
-    return all(_codex_command_invokes_script(command, home, event) for command in commands)
+    return all(_codex_command_invokes_script(handler[key], home, event, key) for key in keys)
 
 
 def codex_hooks_reference_script(current: dict, home: Path | None = None) -> bool:
-    """Keep the script if any surviving hook could still refer to it."""
+    """Keep the script if any surviving hook could still refer to it, under any quoting
+    (a home holding `'` is written `''` or `'\\''` inside the command)."""
     script = codex_host_hook_path(home).as_posix().casefold()
     for groups in current.get("hooks", {}).values():
         for group in groups:
             for handler in group["hooks"]:
-                if isinstance(handler, dict) and any(
-                    script in str(handler.get(key) or "").replace("\\", "/").casefold()
-                    for key in ("command", "commandWindows")
-                ):
-                    return True
+                if not isinstance(handler, dict):
+                    continue
+                for key in ("command", "commandWindows"):
+                    text = str(handler.get(key) or "").replace("\\", "/").casefold()
+                    # Each escaping decoded from the original, never one after the other:
+                    # chaining turned a POSIX path holding `''` into a different path.
+                    # (`'\''` reads `'/''` here, after the `\` -> `/` above.)
+                    candidates = (text, text.replace("'/''", "'"), text.replace("''", "'"))
+                    if any(script in candidate for candidate in candidates):
+                        return True
     return False
 
 
-def codex_hook_events_present(events: object, home: Path | None = None) -> bool:
-    """Check each Exoma event without tying it to the current Python executable."""
+def codex_hook_events_present(events: object, home: Path | None = None, launchable: bool = True) -> bool:
+    """Check each Exoma event without tying it to the current Python executable.
+
+    `launchable` (the default, what doctor and `install --check` ask): every command must
+    also start, so a Windows command without the call operator does not count. False asks
+    only whether Exoma's hooks are registered at all (host recovery): such a command is
+    then still Exoma's, to be repaired rather than withdrawn."""
     if not isinstance(events, dict):
         return False
-    hook = '"' + codex_host_hook_path(home).as_posix().lower() + '"'
+    path = codex_host_hook_path(home).as_posix().lower()
     command_key = "commandWindows" if os.name == "nt" else "command"
+    # Any quoting of the script; on Windows the call operator below is what matters.
+    # Compared after the same `\` -> `/` the command gets below (POSIX's `'\''` included).
+    hooks = tuple(q.replace("\\", "/") for q in (_ps_quote(path), _sh_quote(path), '"' + path + '"'))
     for event in codex_hook_entries(home):
         groups = events.get(event)
         if not isinstance(groups, list):
@@ -700,8 +748,11 @@ def codex_hook_events_present(events: object, home: Path | None = None) -> bool:
             for handler in handlers:
                 if not isinstance(handler, dict) or handler.get("type") != "command":
                     continue
-                if str(handler.get(command_key) or "").replace("\\", "/").lower().strip().endswith(
-                    hook + " " + event.lower()):
+                command = str(handler.get(command_key) or "").replace("\\", "/").lower().strip()
+                # Without the call operator PowerShell cannot launch it (see _CODEX_HOOK_COMMAND).
+                if launchable and command_key == "commandWindows" and not command.startswith("&"):
+                    continue
+                if any(command.endswith(hook + " " + event.lower()) for hook in hooks):
                     found = True
                     break
             if found:

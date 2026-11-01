@@ -84,9 +84,10 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 | Provider config | `provider_config_missing`, `provider_config_invalid`, `model_unset`, `invalid_provider_selection` |
 | Job, session, workspace | `job_already_running`, `job_submit_error`, `worker_capacity`, `runtime_lock`, `session_state_error`, `routing_error`, `recursion_refused`, `workflow_init_error`, `workflow_upgrade_error`, `sweep_git_error`, `budget_exceeded` |
 | Promote and knowledge | `promote_input_missing`, `promote_input_unreadable`, `promote_existing_unreadable`, `promote_not_on_branch`, `promote_not_production_branch`, `promote_write_rejected`, `invalid_knowledge`, `secret_shaped_content`, `ignored_source`, `ignored_destination` |
+| Project tests (`test`) | `test_input_invalid`, `test_not_configured`, `tests_failed` |
 | Other | `unknown` |
 
-`recursion_refused`: the process carries `WORKFLOW_AGENT_ROLE=second_agent` (every provider adapter sets it on its child) and asked for `explore`, `plan`, `analyze`, `verify`, `verify-browser`, `submit`, `await`, `worker`, `plan-record`, `execute-begin` or `execute-end`. Refused in `cli.main` after argument parsing, at `run()` entry, and at `submit()` entry, the one path to a job and a worker spawn (so `exoma check --wait` reclaiming a pending job spawns nothing either), before any session, job or file side effect. The stalled-job probe (`check_stalled_job`, reached from `check --wait`) is a provider call too: for a marked caller the probe of a live worker is skipped and the job keeps waiting, not reaped on the probe's word (a worker whose process is gone is still reaped, which calls no provider); `meta.command` (and `meta.job_command` for `submit`/`await`) names the request, and the exit status follows the usual mapping (1, or 2 for `verify`). Read-only commands (`inspect`, `status`, `result`, `report`, `audit`, ...) stay open, as do local commands outside that list such as `doctor` (which writes its own report). The marker stops inherited recursion when the host and the second agent are the same CLI; it is not a security boundary, since a child that can run commands can unset it ([Security](security.md)).
+`recursion_refused`: the process carries `WORKFLOW_AGENT_ROLE=second_agent` (every provider adapter sets it on its child) and asked for `explore`, `plan`, `analyze`, `verify`, `verify-browser`, `submit`, `await`, `worker`, `plan-record`, `execute-begin`, `execute-end` or `test`. Refused in `cli.main` after argument parsing, at `run()` entry, and at `submit()` entry, the one path to a job and a worker spawn (so `exoma check --wait` reclaiming a pending job spawns nothing either), before any session, job or file side effect. The stalled-job probe (`check_stalled_job`, reached from `check --wait`) is a provider call too: for a marked caller the probe of a live worker is skipped and the job keeps waiting, not reaped on the probe's word (a worker whose process is gone is still reaped, which calls no provider); `meta.command` (and `meta.job_command` for `submit`/`await`) names the request, and the exit status follows the usual mapping (1, or 2 for `verify`). Read-only commands (`inspect`, `status`, `result`, `report`, `audit`, ...) stay open, as do local commands outside that list such as `doctor` (which writes its own report). The marker stops inherited recursion when the host and the second agent are the same CLI; it is not a security boundary, since a child that can run commands can unset it ([Security](security.md)).
 
 `worker_died` with `meta.reason: recovery_exhausted` means automatic recovery has already been used; do not retry automatically (see [Async jobs & recovery](#async-jobs--recovery)).
 
@@ -154,7 +155,8 @@ under the same names, and the last install wins.
 Install the package → run one command → configured.
 
 ```bash
-exoma install                             # install for the last chosen host (a terminal asks the first time)
+exoma install                             # a terminal asks every choice, the current one as default
+exoma install --no-input                  # ask nothing: keep the stored choices
 exoma install --dry-run                   # show every change, write nothing
 exoma install claude                      # Claude Code main agent
 exoma install opencode --provider claude  # OpenCode main agent, Claude Code second agent
@@ -173,7 +175,8 @@ exoma update                              # update package, global config, and c
 
 `exoma update` detects an uv tool installation, otherwise uses pip in the running Python
 environment. It invokes the newly installed Exoma to apply global config, upgrades the
-workspace when cwd or a parent contains `.workflow/`, and checks the resulting install.
+workspace when cwd or a parent contains `.workflow/`, and checks the resulting install. The
+install it runs passes `--no-input`: every stored choice stands.
 If that directory has a missing, unreadable, or malformed `config.json`, update stops before
 changing the package. A later install or check failure reports an incomplete update and names
 any new global install receipt for an explicit rollback; workspace changes are outside it.
@@ -184,7 +187,8 @@ All `exoma install` flags:
 | Argument / flag | Effect | Writes? |
 |---|---|---|
 | `[claude\|agy\|codex\|opencode\|all]` | which main-agent host to install for (`all` installs all four); persisted | yes |
-| (no argument) | install for the stored host choice; a terminal asks when there is none | yes |
+| (no argument) | a terminal asks for the hosts (any combination, the stored choice as default); otherwise the stored choice, else `claude` | yes |
+| `--no-input` | ask nothing, from a terminal too: stored choices stand, flags supply the rest; `exoma update` passes it (see "Choices asked from a terminal") | yes |
 | `--dry-run` | print the plan, write nothing (combines with every install flag below) | no |
 | `--only-command` | command-only mode (see "Intent mode"); persisted, applies to subsequent installs | yes |
 | `--auto-intent` | restore auto-intent mode | yes |
@@ -212,7 +216,8 @@ order: the positional host (or the deprecated `--host`); the choice the last ins
 existed, what it wrote (Claude, plus Agy when `~/.gemini/config/hooks.json` holds the `exoma`
 hook, plus Codex when `~/.codex/hooks.json` registers Exoma's lifecycle hooks, plus OpenCode when
 `~/.config/opencode/plugins/exoma.js` exists — the last two only arise when the mode file was
-lost); a prompt from a terminal; else `claude`, with a warning. The choice is stored
+lost); else `claude`, with a warning. From a terminal (see "Choices asked from a terminal") the
+hosts are asked on every install with the stored choice as the default, and the answer replaces it. The choice is stored
 with the intent mode in `~/.claude/.workflow-install-mode.json` (`hosts`, `agy_permissions`,
 `agy_permissions_opt_out`,
 `agy_permission_rules`), receipted like it. A host dropped from the choice is taken out: its
@@ -319,9 +324,9 @@ Order in which the choice is determined:
 | Condition | What happens |
 |---|---|
 | `--provider NAME` (optional `--model ID`) | used as is, zero questions |
-| a previous seed for this host exists | its old choice is reused on top of the new example |
-| no host seed, a shared 0.x seed exists | the shared seed's choice is carried into the host seed |
-| an install from a terminal, no seed yet | the installer **asks**, per host, for the provider, then the model |
+| an install from a terminal | the installer **asks**, per host, for the provider, the model, then the effort, the previous choice (host seed, else the shared seed) as each step's default |
+| non-interactive, a previous seed for this host exists | its old choice (provider, model, effort, per-route models) is reused on top of the new example |
+| non-interactive, no host seed, a shared 0.x seed exists | the shared seed's choice is carried into the host seed |
 | non-interactive, no seed yet | `second_agent.example.json` is copied as is |
 
 An old `second_agent.json` beside the seed (written once, never refreshed — the source of
@@ -335,10 +340,27 @@ The prompt shows each provider along with whether its CLI is on `PATH` and wheth
 read boundary (codex, agy and claude are marked as trusted providers), then the selected
 provider's models from the live catalog (`core/provider/model_catalog.py`: what the installed
 CLI lists now, newest first, at most 20; the bundled shortlist when the CLI cannot be asked —
-always for claude, whose CLI has no model listing) with the reasoning efforts each accepts. Blank on the provider cancels the selection
-(the example is copied). Blank on the model leaves `default_model` empty — for opencode that is
+always for claude, whose CLI has no model listing) with the reasoning efforts each accepts, then
+those efforts. Blank keeps the previous answer at each step: on the provider with no previous seed
+it cancels the selection (the example is copied); a different provider inherits neither the old
+model nor its effort, and per-route models survive only an answer that keeps provider and model.
+A model the catalog does not list has no effort question; kept unchanged, it keeps its stored
+effort (as `--no-input` does), and another model starts without one.
+A picked effort is written to the seed's `effort`; for agy it names a model variant and is written
+into the model id instead. Blank on the model with no previous one leaves `default_model` empty — for opencode that is
 rejected at call time (`model_unset`), because without `-m` opencode uses the last model
 used on that machine. Model ids outside the catalog are still accepted with a warning.
+
+<a id="detail-install-choices"></a>
+**Choices asked from a terminal.** An install that writes, with stdin a terminal and without
+`--no-input`, asks before anything is written: the hosts; the intent mode
+(unless `--only-command`/`--auto-intent` is given); the browser extra (unless `--with-e2e`; default
+no); the Agy allow rules when `agy` is chosen (unless `--agy-permissions`/`--no-agy-permissions`;
+default the stored choice); `--update-providers` (unless given; default no); then the second agent
+per host (unless `--provider`). Enter keeps the default; end of input (Ctrl+D, Ctrl+Z) answers
+blank. Ctrl+C at any question stops the install with `[INSTALL] ABORTED — interrupted at a
+question. Nothing was written.` and exit status 130, before a receipt or any file is written. A dry
+run, a run without a terminal, and `exoma update` ask nothing.
 
 The model is pinned to `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`, `e2e_spec`);
 `sweep` is left alone. `routes` is edited per key via `_merge_routes` so that per-route `timeout_seconds`
@@ -691,7 +713,17 @@ block coexists with the opencode second-agent block, as for Codex.
 **Codex host.** Install with `exoma install codex`, then review and trust the
 Exoma handlers with `/hooks` in Codex before relying on the gates. `~/.codex/hooks.json` is
 merged: Exoma adds one handler for each of `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
-and `Stop` and preserves other handlers. Its `AGENTS.md` block coexists with the always
+and `Stop` and preserves other handlers. Both commands single-quote their paths, so neither shell
+expands `$` or backticks in them: `command` (POSIX shell) is `'<python>' '<codex-host.py>' <Event>`
+with `'` written `'\''` inside; `commandWindows` opens with PowerShell's call operator,
+`& '<python>' '<codex-host.py>' <Event>`, with `'` doubled inside. On Windows Codex runs a hook as
+`[Console]::In.ReadLine() | <command>` under `powershell -NoProfile -Command`, where a leading
+quoted path without `&` is a parse error. Pre-release builds of this version wrote both commands
+double-quoted and without `&`, so every hook exited 1 on Windows; `--check` and doctor count that
+form as drift, and an install replaces it (Codex then asks for the changed handlers to be trusted
+again in `/hooks`). An install whose host-choice file was lost still recognizes that form as
+Exoma's registration and repairs it instead of withdrawing the Codex host. Uninstall keeps
+`codex-host.py` while any surviving handler names it, under either escaping. Its `AGENTS.md` block coexists with the always
 installed Codex second-agent block. The latter applies only to runtime prompts beginning
 `[WORKFLOW_AGENT]`; the hooks distinguish the delegated process using
 `WORKFLOW_AGENT_ROLE=second_agent`, set by `CodexAdapter` on fresh and resumed calls. Thus
@@ -1012,6 +1044,7 @@ table differ, fix one of them in the same change.
 | `plan-record` | local | yes (path to the plan JSON) | records the session's plan; refuses an unsound `proceed` — see [Plan and execution state](#plan-and-execution-state) |
 | `execute-begin` | local | no | opens an execution: needs a recorded `proceed` plan and the user's `/.execute -y` token |
 | `execute-end` | local | no | closes the execution as `implemented`; verification stays `not_run` until a verify runs |
+| `test` | local | yes (one command line, or a JSON list of up to 5) | runs project tests under the verify allowlist and records each outcome with the tree's content fingerprint, so `/.verify` can reuse a pass — see "Tests already run" under `verify_mode` |
 | `submit` | job | yes | run asynchronously, return `job_id` |
 | `await` | job | yes | submit and then wait for completion |
 | `status` | job | — | requires `--job-id` |
@@ -1088,6 +1121,8 @@ The following keys actually change the Python runtime's (or a shipped hook's) be
 | `commands.verify_mode` | `"delegated"` | `delegated` = full second_agent verification. `syntax` = local parse check only. Unknown values fall back to `delegated` |
 | `commands.verify_test_commands` | `[]` | test command prefixes the runtime may run for `/.verify` (e.g. `["python tests/run.py", "php artisan test"]`). Empty = no tests run; requested tests are reported as not run |
 | `commands.verify_test_timeout_seconds` | `900` | time limit per test command |
+| `commands.verify_reuse_env` | `["WORKFLOW_*", "EXOMA_*", "PYTEST_*", "CI", "NODE_ENV", "APP_ENV"]` | environment variable name patterns hashed into the identity a `run.sh test` pass is reused under |
+| `commands.verify_reuse_files` | `[".env", ".env.*"]` | globs under the project root (inputs Git ignores) hashed into that identity |
 | `policies.fact_relevant_limit` | `3` | maximum facts injected into each prompt, for a role `fact_relevant_limits` does not name. Set explicitly, it also overrides the per-role defaults |
 | `policies.fact_relevant_limits` | `{"exploration": 3, "reasoning": 4}` | per-role fact limit |
 | `policies.fact_min_relevance` | `2.0` | weighted overlap a fact needs to be served: shared identifier 2, shared word 1, path-only token 0.5; EN/ID function words and generic path segments score 0 |
@@ -1414,6 +1449,51 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   `.workflow/config.json`, and write `verify/tests.json` before `.workflow/run`. The reason: when the second agent also ran tests, codex
   ran the whole suite (verify median up to 366 s) while opencode could not
   run a single one and its verify became `incomplete`.
+  **Tests already run.** `run.sh test --session <id> --task '<command>'` (`--task` may be a JSON
+  list, at most 5) runs commands under the same policy (allowlist, no shell, timeout) and appends
+  each non-refused outcome to `sessions/<id>/verify/test-runs.jsonl` with `fingerprint`, the reuse
+  identity (`verify_tests.reuse_identity`): a sha256 over the Git tree id of the working tree's content
+  outside `.workflow/` (`core/evidence/tree_fingerprint.py`: `git add -A` into a copy of the index that
+  keeps its mtime, so Git's racy-entry check still catches a same-size edit, then `git write-tree`;
+  HEAD is not part of it, so a commit that changes no file keeps it; content as Git stores it, so an
+  edit Git's conversions undo, such as LF to CRLF under `text`/`eol` attributes, `core.autocrlf` or a
+  clean filter, keeps it too: list a byte-sensitive input in `verify_reuse_files`), the bytes of
+  `.workflow/config.json`, every environment variable whose name matches
+  `commands.verify_reuse_env` (default `WORKFLOW_*`, `EXOMA_*`, `PYTEST_*`, `CI`, `NODE_ENV`,
+  `APP_ENV`), and every file matching `commands.verify_reuse_files` (globs under the project root,
+  default `.env`, `.env.*`; for inputs Git ignores). Only hashes are stored. The identity is taken
+  before the run and dropped (`null`) when the run itself changed it. When a verify then requests the
+  **exact same command string** and that command's **latest** recorded run `passed` under the
+  identity the project has now, it is not run: its outcome is `passed` with `reused: true`, `ran_at`
+  and `ran_seconds`, its `checks_run` line ends `— reused, not rerun`, and `meta.runtime_tests.reused`
+  counts them. Reuse holds only until a command of that verify actually runs (it may write the
+  tree): every command after it runs too. It still has to be allowlisted now. The key is the command text, so a filtered run
+  (`--only`, `-k`, a test path) never stands in for a full one or the reverse. A failed latest run, any
+  change to the identity's inputs, no Git (`null`), or a record with a line that cannot be read runs it
+  as before. Each `run.sh test` first writes its own marker, `verify/test-runs.<pid>-<token>.pending`
+  (whole: a temporary name, then a rename), naming its process (pid and start identity) and its
+  commands. When the marker cannot be written, nothing runs and the call fails with
+  `session_state_error`. Every command a marker names is withheld from reuse, whether its run is
+  still going or crashed; a marker that cannot be read withholds everything, and so does a record
+  that cannot be written. After appending its outcomes a run removes its own marker and the markers
+  of runs that were already dead before it started and whose commands it has just recorded, never a
+  live run's nor one that appeared while it ran, so concurrent runs cannot clear each other or
+  expose an older pass. A marker that cannot be read and is older than any run can last
+  (5 × `verify_test_timeout_seconds` + 300 s, by its mtime) is retired by the next `run.sh test`
+  before it runs: a `{"barrier": ...}` row is appended first, which drops every earlier row from
+  reuse, then the marker is renamed `*.pending.corrupt`. A newer one keeps withholding everything.
+  An identity that cannot be computed (for example a file name Git or Python cannot encode) makes
+  the run unreusable (`fingerprint: null`), never a crash. "Dead" means proven dead (`osutil.process_state`): a pid
+  the OS cannot answer for (Windows access denied, any other query failure) counts as alive, unlike
+  `osutil.process_alive`, which the job reaper uses and which counts unknown as dead. A run whose record cannot be written leaves its marker
+  and removes the record file; every such failure is reported as `record_error` (in `meta` and the
+  `[TESTS]` note) with `fingerprint: null`. Runs made by verify itself are not
+  recorded. Not covered: installed dependencies and virtualenvs, submodule contents, `PATH` and
+  `PYTHONPATH` (they differ between `run.sh test` and the verify worker), and ignored inputs nobody
+  listed; a project whose tests read such inputs lists them in `verify_reuse_files` or keeps those
+  tests out of `run.sh test`. Output: `[TESTS]` with one line per command; any
+  command that did not pass → `tests_failed`; bad `--task` → `test_input_invalid`; empty allowlist →
+  `test_not_configured`.
 - **`syntax`** — answered locally, without calling OpenCode at all. Checks staged, unstaged, and untracked files, including a repository with no commits: `.py` via in-process `compile()`, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. Python files also require the `pyflakes` name check; if the tool is not available, the result is `incomplete`. A Git discovery failure also yields `incomplete`, not `skipped`.
 
 Everything that cannot be checked is reported as it is, never counted as passing:
@@ -1515,10 +1595,25 @@ Since agent-workflow 3.9.0 the plan → `/.execute -y` → `/.verify` chain is r
 
 | Command | Reads | Writes | Refuses with |
 |---|---|---|---|
-| `plan-record <path>` | the plan JSON at `<path>` | `plan.json` | `plan_invalid`: `decision: proceed` with open questions, `solution_path` below `high`, an empty `files` scope, an option without `minus`, or not exactly one recommended option; `plan_input_missing`, `plan_input_unreadable` |
-| `execute-begin` | `plan.json`, `execute.token` | `execution.json` (`status: active`, `verification: not_run`, `scope` = the plan's `files`); consumes the token | `execute_no_plan`, `execute_plan_not_proceed`, `execute_not_approved` (no `execute.token` younger than 15 minutes) |
-| `execute-end` | `execution.json` | `status: implemented` | `execution_not_active` |
-| `verify` (delegated or syntax) | — | `verification`: `pass`, `fail`, `incomplete`, or `syntax_only` | — |
+| `plan-record <path>` | the plan JSON at `<path>` | `plan.json` (with `base_tree`) | `plan_invalid`: `decision: proceed` with open questions, `solution_path` below `high`, an empty `files` scope, an option without `minus`, or not exactly one recommended option; `plan_input_missing`, `plan_input_unreadable` |
+| `execute-begin` | `plan.json`, `execute.token` | `execution.json` (`status: active`, `verification: not_run`, `scope` = the plan's `files`, `begin_tree`, `changed_since_plan`); consumes the token | `execute_no_plan`, `execute_plan_not_proceed`, `execute_not_approved` (no `execute.token` younger than 15 minutes) |
+| `execute-end` | `execution.json` | `status: implemented`, `end_tree`, `changed_files`, `outside_scope` | `execution_not_active` |
+| `verify` (delegated or syntax) | — | `verification`: `pass`, `fail`, `incomplete`, or `syntax_only`; `changed_since_execute` | — |
+
+**Tree snapshots.** `base_tree`, `begin_tree` and `end_tree` are Git tree ids of the working
+tree outside `.workflow/` (`core/evidence/tree_fingerprint.py`, the same id test reuse uses), taken
+at `plan-record`, `execute-begin` and `execute-end`. Each change list compares two snapshots
+(`git diff-tree`), so it holds only what changed between them, never the uncommitted edits the
+tree already carried: one `{status, path}` per file (`A`, `M`, `D`, `T`; the path relative to the
+project root). `changed_since_plan`: plan to `execute-begin`. `changed_files`: `execute-begin` to
+`execute-end`. `outside_scope`: the `changed_files` paths the plan's `files` do not cover, by the
+`execution-gate` rule (the file, a directory above it, or a glob) — written through any tool,
+Bash included, which the hook never sees. `changed_since_execute`: `execute-end` to a finished
+verify, also put in that verify's `meta` when non-empty. `execute-end`'s `content` names the count
+and the out-of-scope paths. A snapshot that cannot be taken or compared (no Git, or `git gc`
+pruned an unreferenced tree) makes the list `null`: unknown, never "nothing changed". Like test
+reuse, a snapshot sees content as Git stores it, so an edit Git's conversions undo (LF to CRLF in
+a normalized file) is not a change.
 
 `execute.token` and `commit.marker` are written by the `intent-gate-set` hook only for a prompt
 the user wrote: `/.execute -y` (typed or as the expanded slash command) and a prompt asking to

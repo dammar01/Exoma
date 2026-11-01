@@ -1,8 +1,8 @@
 {
   "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} SessionStart", "commandWindows": "{{PYTHON}} {{HOOK}} SessionStart", "timeout": 30}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} UserPromptSubmit", "commandWindows": "{{PYTHON}} {{HOOK}} UserPromptSubmit", "timeout": 30}]}],
-    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} PreToolUse", "commandWindows": "{{PYTHON}} {{HOOK}} PreToolUse", "timeout": 30}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} Stop", "commandWindows": "{{PYTHON}} {{HOOK}} Stop", "timeout": 30}]}]
+    "SessionStart": [{"hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} SessionStart", "commandWindows": "& {{PYTHON}} {{HOOK}} SessionStart", "timeout": 30}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} UserPromptSubmit", "commandWindows": "& {{PYTHON}} {{HOOK}} UserPromptSubmit", "timeout": 30}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} PreToolUse", "commandWindows": "& {{PYTHON}} {{HOOK}} PreToolUse", "timeout": 30}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "{{PYTHON}} {{HOOK}} Stop", "commandWindows": "& {{PYTHON}} {{HOOK}} Stop", "timeout": 30}]}]
   }
 }

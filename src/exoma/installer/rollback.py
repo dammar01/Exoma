@@ -66,7 +66,9 @@ def _migrated_hosts() -> tuple[str, ...] | None:
     current, _refusal = agy_hooks_state(agy_hooks_dest())
     hosts = ("claude", "agy") if current and AGY_HOST_HOOK_NAME in current else ("claude",)
     codex_current, _codex_refusal = codex_hooks_state(codex_hooks_dest())
-    if codex_current and codex_hook_events_present(codex_current.get("hooks")):
+    # Registered at all, not launchable: a pre-release command without the call operator is
+    # still Exoma's, and this install repairs it rather than withdrawing the host.
+    if codex_current and codex_hook_events_present(codex_current.get("hooks"), launchable=False):
         hosts += ("codex",)
     from exoma.installer.base import opencode_home
 

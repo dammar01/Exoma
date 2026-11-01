@@ -19,6 +19,16 @@ writes, and execution becomes a state the hooks can read:
 
 Files live in the session's runtime directory, beside delegated.marker, because the
 hooks that read them are standalone scripts that know that directory and nothing else.
+
+Each step also snapshots the working tree as a Git tree id (core/evidence/tree_fingerprint):
+`base_tree` on the plan, `begin_tree` and `end_tree` on the execution. Comparing two
+snapshots isolates what changed between them from what the tree already carried, so an
+execution on a tree with uncommitted edits still knows which files it changed
+(`changed_files`), which of those fall outside the plan's scope (`outside_scope`, written
+through any tool, Bash included, which the edit hook never sees), what changed between
+the plan and execute-begin (`changed_since_plan`), and, at verify, what changed after
+execute-end (`changed_since_execute`). A snapshot that cannot be taken or compared (no
+Git, a tree `git gc` pruned) is `null`: unknown, never "nothing changed".
 """
 
 from __future__ import annotations
@@ -64,6 +74,47 @@ def _read(path: Path) -> dict | None:
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def _tree(project_root: Path) -> str | None:
+    from exoma.core.evidence.tree_fingerprint import tree_fingerprint
+
+    try:
+        return tree_fingerprint(project_root)
+    except (OSError, ValueError):
+        return None
+
+
+def _changed(project_root: Path, old, new) -> list[dict] | None:
+    from exoma.core.evidence.tree_fingerprint import changed_paths
+
+    try:
+        return changed_paths(project_root, old, new)
+    except (OSError, ValueError):
+        return None
+
+
+def in_scope(relative: str, scope, casefold: bool | None = None) -> bool:
+    """The execution gate's rule (hooks/workflow_policy.in_scope): an entry names the file,
+    a directory above it, or a glob matching it. On Windows (`casefold` defaults to it)
+    both sides are lowercased first, as the gate does, so `SRC/` covers `src/x.py`."""
+    import fnmatch
+    import os
+
+    if casefold is None:
+        casefold = os.name == "nt"
+    if casefold:
+        relative = relative.lower()
+    for entry in scope or []:
+        entry = str(entry).strip().replace("\\", "/")
+        if casefold:
+            entry = entry.lower()
+        if not entry:
+            continue
+        stem = entry.rstrip("/")
+        if relative == stem or relative.startswith(stem + "/") or fnmatch.fnmatch(relative, entry):
+            return True
+    return False
 
 
 def _scope_entry_error(entry) -> str | None:
@@ -160,6 +211,7 @@ def record_plan(project_root: Path, session_id: str, doc) -> dict:
         "plan_id": _plan_id(doc),
         "recorded_at": now_iso(),
         "files": [entry.strip().replace("\\", "/") for entry in doc["files"]],
+        "base_tree": _tree(project_root),
     }
     _write(_runtime_file(project_root, session_id, PLAN_FILE), stored)
     return {"ok": True, "plan_id": stored["plan_id"], "decision": stored["decision"]}
@@ -206,6 +258,7 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
                 + (f" (the last one is {int(age)}s old)" if age is not None and age > 0 else "")
             ),
         }
+    begin_tree = _tree(project_root)
     execution = {
         "plan_id": plan.get("plan_id"),
         "task": plan.get("task"),
@@ -214,6 +267,8 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
         "verification": VERIFICATION_NOT_RUN,
         "started_at": now_iso(),
         "approved_at": token.get("set_at"),
+        "begin_tree": begin_tree,
+        "changed_since_plan": _changed(project_root, plan.get("base_tree"), begin_tree),
     }
     _write(_runtime_file(project_root, session_id, EXECUTION_FILE), execution)
     try:
@@ -228,7 +283,16 @@ def end_execution(project_root: Path, session_id: str) -> dict:
     execution = _read(path)
     if execution is None or execution.get("status") != STATUS_ACTIVE:
         return {"ok": False, "reason": "not_active", "error": "no active execution for this session"}
-    execution.update(status=STATUS_IMPLEMENTED, ended_at=now_iso())
+    end_tree = _tree(project_root)
+    changed = _changed(project_root, execution.get("begin_tree"), end_tree)
+    scope = execution.get("scope") or []
+    execution.update(
+        status=STATUS_IMPLEMENTED,
+        ended_at=now_iso(),
+        end_tree=end_tree,
+        changed_files=changed,
+        outside_scope=None if changed is None else [c["path"] for c in changed if not in_scope(c["path"], scope)],
+    )
     _write(path, execution)
     return {"ok": True, "execution": execution}
 
@@ -255,5 +319,12 @@ def record_verification(project_root: Path, session_id: str, result: dict) -> No
         verdict = meta.get("verdict")
     if not result.get("ok") or verdict not in ("pass", "fail", "incomplete", "syntax_only"):
         verdict = "incomplete"
-    execution.update(verification=verdict, verified_at=now_iso())
+    # Edits after execute-end are not the execution's: name them beside the verdict.
+    changed = (
+        _changed(project_root, execution.get("end_tree"), _tree(project_root))
+        if execution.get("status") == STATUS_IMPLEMENTED else None
+    )
+    execution.update(verification=verdict, verified_at=now_iso(), changed_since_execute=changed)
     _write(path, execution)
+    if changed and isinstance(result.get("meta"), dict):
+        result["meta"]["changed_since_execute"] = changed

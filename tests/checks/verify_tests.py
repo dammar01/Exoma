@@ -653,3 +653,428 @@ def _check_doctor_verify_warnings() -> None:
             else:
                 os.environ[key] = value
         shutil.rmtree(home, ignore_errors=True)
+
+
+def _test_verify_reuses_unchanged_runs() -> None:
+    """A test main_agent ran through `run.sh test` is not run again by /.verify while the
+    tree's content is unchanged; an edit, a failed run or a commit-free change decides."""
+    import subprocess
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} counter.py"])
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    try:
+        subprocess.run([*git, "init", "-q"], check=True, **no_console())
+        (root / ".gitignore").write_text("count.txt\n", encoding="utf-8")
+        # Appends one line per run to an ignored file, so runs are counted without the
+        # counting itself changing the tree; exits with the code in fail.txt when present.
+        (root / "counter.py").write_text(
+            "import pathlib, sys\n"
+            "pathlib.Path('count.txt').open('a').write('x')\n"
+            "f = pathlib.Path('fail.txt')\n"
+            "sys.exit(int(f.read_text()) if f.exists() else 0)\n",
+            encoding="utf-8",
+        )
+        (root / "app.py").write_text("print(1)\n", encoding="utf-8")
+        command = f"{python} counter.py"
+
+        def runs() -> int:
+            path = root / "count.txt"
+            return len(path.read_text(encoding="utf-8")) if path.exists() else 0
+
+        def verify_once():
+            _request(root, {"commands": [command], "reason": "covers the change"})
+            return _verify(root)
+
+        recorded = verify_tests.run_and_record(root, "s1", [command])
+        assert_true(recorded["fingerprint"] and runs() == 1, f"run.sh test runs and records: {recorded}")
+        result, verdict = verify_once()
+        outcome = result["meta"]["runtime_tests"]["outcomes"][0]
+        assert_true(runs() == 1 and outcome.get("reused") and verdict["verdict"] == "pass"
+                    and "reused, not rerun" in result["content"],
+                    f"an unchanged tree reuses the pass and still derives pass: {outcome}\n{result['content']}")
+        assert_true(result["meta"]["runtime_tests"]["reused"] == 1, "the reuse is counted in meta")
+
+        subprocess.run([*git, "add", "-A"], check=True, **no_console())
+        subprocess.run([*git, "commit", "-qm", "tested"], check=True, **no_console())
+        verify_once()
+        assert_true(runs() == 1, "committing the tested content is not an edit: still reused")
+
+        (root / "app.py").write_text("print(2)\n", encoding="utf-8")
+        verify_once()
+        assert_true(runs() == 2, "an edit since the run makes verify run it again")
+        verify_once()
+        assert_true(runs() == 3, "a verify run is not recorded as reusable: only run.sh test is")
+
+        (root / "fail.txt").write_text("1", encoding="utf-8")
+        failed = verify_tests.run_and_record(root, "s1", [command])
+        assert_true(failed["outcomes"][0]["status"] == "failed" and runs() == 4, "a failing run is recorded")
+        (root / "fail.txt").unlink()
+        verify_tests.run_and_record(root, "s1", [command])
+        assert_true(runs() == 5, "re-run after the fix")
+        (root / "fail.txt").write_text("1", encoding="utf-8")
+        (root / "fail.txt").unlink()
+        verify_once()
+        assert_true(runs() == 5, "the latest passing run on this tree is the one reused")
+        (root / "fail.txt").write_text("1", encoding="utf-8")
+        verify_tests.run_and_record(root, "s1", [command])
+        (root / "fail.txt").unlink()
+        verify_tests.run_and_record(root, "s1", [command])
+        (root / "fail.txt").write_text("1", encoding="utf-8")
+        result, _ = verify_once()
+        assert_true(runs() == 8 and not result["meta"]["runtime_tests"]["outcomes"][0].get("reused"),
+                    "another tree (fail.txt added) runs it again, and the failure blocks")
+        (root / "fail.txt").unlink()
+
+        refused = verify_tests.run_and_record(root, "s1", [f"{python} -c pass"])
+        rows = verify_tests.runs_path(root, "s1").read_text(encoding="utf-8")
+        assert_true(refused["outcomes"][0]["status"] == "refused" and "-c pass" not in rows,
+                    "a refused command is not recorded")
+
+        writer = f"{python} counter.py"
+        (root / ".gitignore").write_text("", encoding="utf-8")  # count.txt now part of the tree
+        changed = verify_tests.run_and_record(root, "s1", [writer])
+        assert_true(changed["fingerprint"] is None,
+                    "a run that changes the tree is not reusable: what it proved no longer exists")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # Registered through this suite (`verify-reuse`), so the run.py table stays as it is.
+    _check_verify_reuse_identity()
+
+
+def _test_verify_reuse_needs_git() -> None:
+    """Without Git there is no fingerprint, so nothing is reused and verify runs as before."""
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} -c"])
+    try:
+        recorded = verify_tests.run_and_record(root, "s1", [f"{python} -c pass"])
+        assert_true(recorded["fingerprint"] is None and verify_tests.reusable(root, "s1") == {},
+                    f"no Git, no reuse: {recorded}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _test_run_sh_test_command() -> None:
+    """`run.sh test`: refuses bad input and an empty allowlist by name; a second agent
+    cannot run it."""
+    from exoma import cli
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} -c"])
+    empty = _workspace([])
+    try:
+        for task in (None, "", "[1, 2]", "[broken"):
+            out = cli._test_command(root, "s1", task)
+            assert_true(out["meta"]["error_type"] == "test_input_invalid", f"input {task!r}: {out}")
+        out = cli._test_command(empty, "s1", f"{python} -c pass")
+        assert_true(out["meta"]["error_type"] == "test_not_configured", f"empty allowlist: {out}")
+        out = cli._test_command(root, "s1", json.dumps([f"{python} -c pass", f"{python} -c exit(2)"]))
+        assert_true(not out["ok"] and out["meta"]["error_type"] == "tests_failed"
+                    and [o["status"] for o in out["meta"]["outcomes"]] == ["passed", "failed"],
+                    f"a JSON list runs each; one failure fails the call: {out}")
+        out = cli._test_command(root, "s1", f"{python} -c pass")
+        assert_true(out["ok"] and "[TESTS]" in out["content"], f"a passing run: {out}")
+        assert_true("test" in cli.RECURSION_REFUSED_COMMANDS, "a second agent cannot run project tests")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(empty, ignore_errors=True)
+
+
+def _check_verify_reuse_identity() -> None:
+    """Reuse is keyed by the exact command and by every input the identity covers:
+    config, listed env vars, listed ignored files. A racy same-size edit, a torn record and
+    a record that cannot be written all end the reuse."""
+    import subprocess
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} counter.py"])
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    try:
+        subprocess.run([*git, "init", "-q"], check=True, **no_console())
+        (root / ".gitignore").write_text("count.txt\n.env\nfixtures/\n", encoding="utf-8")
+        (root / "counter.py").write_text(
+            "import pathlib, sys\npathlib.Path('count.txt').open('a').write('x')\n"
+            "if '--edit' in sys.argv:\n    pathlib.Path('app.py').write_text('print(3)\\n')\n",
+            encoding="utf-8")
+        (root / "app.py").write_text("print(1)\n", encoding="utf-8")
+        full, filtered = f"{python} counter.py", f"{python} counter.py --only one"
+
+        def runs() -> int:
+            path = root / "count.txt"
+            return len(path.read_text(encoding="utf-8")) if path.exists() else 0
+
+        def verify(command):
+            _request(root, {"commands": [command], "reason": "covers the change"})
+            result, _ = _verify(root)
+            return result["meta"]["runtime_tests"]["outcomes"][0].get("reused", False)
+
+        def fresh_record(command=full):
+            verify_tests.runs_path(root, "s1").unlink(missing_ok=True)
+            for marker in verify_tests.runs_path(root, "s1").parent.glob("test-runs*.pending"):
+                marker.unlink()
+            verify_tests.run_and_record(root, "s1", [command])
+
+        fresh_record(filtered)
+        assert_true(not verify(full), "a filtered run never stands in for the full command")
+        fresh_record(full)
+        assert_true(not verify(filtered), "nor the full run for a filtered one")
+        assert_true(verify(full), "the same command on unchanged inputs is reused")
+
+        (root / ".env").write_text("A=1\n", encoding="utf-8")
+        assert_true(not verify(full), "a new ignored .env (verify_reuse_files) ends the reuse")
+        fresh_record()
+        (root / ".env").write_text("A=2\n", encoding="utf-8")
+        assert_true(not verify(full), "an edit to the ignored .env ends the reuse")
+        fresh_record()
+        (root / "fixtures").mkdir()
+        (root / "fixtures" / "data.json").write_text("1", encoding="utf-8")
+        assert_true(verify(full), "an ignored file nobody listed is not seen (a documented limit)")
+
+        config_path = workflow_paths(root)["config"]
+        config = read_json_file(config_path)
+        config["commands"]["verify_reuse_files"] = [".env", "fixtures/*"]
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        assert_true(not verify(full), "a change to .workflow/config.json ends the reuse")
+        fresh_record()
+        (root / "fixtures" / "data.json").write_text("2", encoding="utf-8")
+        assert_true(not verify(full), "a listed ignored fixture is part of the identity")
+
+        fresh_record()
+        saved = {k: os.environ.get(k) for k in ("WORKFLOW_E2E_SMOKE", "EXOMA_UNRELATED_X", "SOME_OTHER_VAR")}
+        try:
+            os.environ["SOME_OTHER_VAR"] = "changed"
+            assert_true(verify(full), "a variable outside verify_reuse_env does not end the reuse")
+            os.environ["WORKFLOW_E2E_SMOKE"] = "1"
+            assert_true(not verify(full), "a listed variable (WORKFLOW_*) that changes ends the reuse")
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        fresh_record()
+        record = verify_tests.runs_path(root, "s1")
+        record.write_text(record.read_text(encoding="utf-8") + '{"command": "torn', encoding="utf-8")
+        assert_true(verify_tests.reusable(root, "s1") == {}, "a torn record line trusts no row")
+
+        fresh_record()
+        record.unlink()
+        record.mkdir()  # appending to a directory fails: the run cannot be recorded
+        try:
+            out = verify_tests.run_and_record(root, "s1", [full])
+            assert_true(out["record_error"] and out["fingerprint"] is None,
+                        f"a run that cannot be recorded says it is not reusable: {out}")
+        finally:
+            record.rmdir()
+
+        # A record that cannot be appended to. Injected, not chmod: on POSIX a read-only
+        # file in a writable directory can still be unlinked (and root may append to it),
+        # so a chmod run behaves differently per platform and per user.
+        import contextlib
+        import pathlib
+        from unittest.mock import patch
+
+        @contextlib.contextmanager
+        def unwritable(path, unlink_fails=True):
+            real_open, real_unlink, real_access = pathlib.Path.open, pathlib.Path.unlink, os.access
+            target = pathlib.Path(path)
+
+            def fake_open(self, mode="r", *args, **kwargs):
+                if self == target and any(flag in mode for flag in "aw+"):
+                    raise PermissionError(13, "injected: record not writable", str(self))
+                return real_open(self, mode, *args, **kwargs)
+
+            def fake_unlink(self, missing_ok=False):
+                if unlink_fails and self == target:
+                    raise PermissionError(13, "injected: record not removable", str(self))
+                return real_unlink(self, missing_ok=missing_ok)
+
+            def fake_access(p, mode, *args, **kwargs):
+                if pathlib.Path(p) == target and mode & os.W_OK and target.exists():
+                    return False
+                return real_access(p, mode, *args, **kwargs)
+
+            with patch.object(pathlib.Path, "open", fake_open), \
+                    patch.object(pathlib.Path, "unlink", fake_unlink), \
+                    patch.object(os, "access", fake_access):
+                yield
+
+        def markers():
+            return sorted(record.parent.glob("test-runs*.pending"))
+
+        def own_marker(owner_pid, commands):
+            path = record.parent / f"test-runs.{owner_pid}-test.pending"
+            path.write_text(json.dumps({"pid": owner_pid, "identity": None, "commands": commands}),
+                            encoding="utf-8")
+            return path
+
+        dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                              capture_output=True, text=True, check=True, **no_console())
+        dead_pid = int(dead.stdout.strip())
+
+        # Append AND unlink both fail (Windows read-only): the record keeps its older row.
+        fresh_record()
+        assert_true(verify(full), "baseline: the recorded pass is reused")
+        with unwritable(record):
+            out = verify_tests.run_and_record(root, "s1", [full])
+            assert_true(out["record_error"] and "stale record not removed" in out["record_error"]
+                        and out["fingerprint"] is None and markers() and record.exists(),
+                        f"the failed record leaves the run's marker and reports it: {out}")
+            assert_true(verify_tests.reusable(root, "s1") == {},
+                        "the older pass is not reused while the marker is left")
+            for marker in markers():
+                marker.unlink()
+            assert_true(verify_tests.reusable(root, "s1") == {},
+                        "nor from a record that cannot be written, marker or not")
+
+        # Append fails, unlink succeeds (POSIX read-only file, writable directory).
+        fresh_record()
+        with unwritable(record, unlink_fails=False):
+            out = verify_tests.run_and_record(root, "s1", [full])
+        assert_true(out["record_error"] and out["fingerprint"] is None and markers() and not record.exists(),
+                    f"the record is removed, the marker stays: {out}")
+        assert_true(verify_tests.reusable(root, "s1") == {}, "no record, nothing reused")
+        for marker in markers():
+            marker.unlink()
+
+        # A run that starts after another run's snapshot never has its marker cleared by
+        # that run: the other run's rows are older than whatever it lost.
+        fresh_record()
+        real_run_tests = verify_tests.run_tests
+        late = []
+
+        def run_then_crash_another(*args, **kwargs):
+            outcomes = real_run_tests(*args, **kwargs)
+            late.append(own_marker(dead_pid, [full]))  # started after A's snapshot, died
+            return outcomes
+
+        with patch.object(verify_tests, "run_tests", run_then_crash_another):
+            verify_tests.run_and_record(root, "s1", [full])
+        assert_true(late and late[0].exists() and not verify(full),
+                    "a dead marker that appeared during a run survives that run's cleanup")
+        verify_tests.run_and_record(root, "s1", [full])
+        assert_true(not late[0].exists() and verify(full),
+                    "the next run, which saw it dead before starting, clears it")
+
+        # One request: an uncached command that edits the tree ends reuse for the rest.
+        fresh_record()
+        editor = f"{python} counter.py --edit"
+        _request(root, {"commands": [editor, full], "reason": "covers the change"})
+        before = runs()
+        result, _ = _verify(root)
+        outs = result["meta"]["runtime_tests"]["outcomes"]
+        assert_true(not outs[1].get("reused") and runs() == before + 2,
+                    f"a cached pass after a command that ran is not reused: {outs}")
+        (root / "app.py").write_text("print(1)\n", encoding="utf-8")
+
+        # A crashed run (dead owner) withholds its commands until they are recorded again.
+        fresh_record()
+        fresh_record(filtered)
+        verify_tests.run_and_record(root, "s1", [full])
+        crashed = own_marker(dead_pid, [full])
+        assert_true(not verify(full) and verify(filtered),
+                    "a dead run's marker withholds its own command only")
+        verify_tests.run_and_record(root, "s1", [full])
+        assert_true(not crashed.exists() and verify(full),
+                    "recording that command again clears the dead marker and reuse resumes")
+        both = own_marker(dead_pid, [full, filtered])
+        verify_tests.run_and_record(root, "s1", [full])
+        assert_true(both.exists() and not verify(full),
+                    "a dead marker naming a command not yet re-recorded stays")
+        both.unlink()
+
+        # A live concurrent run is never cleared by another run's success.
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console())
+        try:
+            live = own_marker(sleeper.pid, [full])
+            verify_tests.run_and_record(root, "s1", [full])
+            assert_true(live.exists() and not verify(full),
+                        "another run's success does not clear a live run's marker")
+        finally:
+            sleeper.kill()
+            sleeper.wait()
+        live.unlink()
+
+        # An owner the OS will not answer for is never treated as dead.
+        from exoma.utils import osutil
+
+        assert_true(osutil.process_state(os.getpid()) == "alive"
+                    and osutil.process_state(dead_pid) == "dead", "process_state: alive and dead")
+        if os.name == "nt" and not osutil.process_alive(4) and osutil.process_state(4) == "alive":
+            # PID 4 (System) refuses a normal user's query: exists, access denied.
+            unreadable_owner = own_marker(4, [full])
+            verify_tests.run_and_record(root, "s1", [full])
+            assert_true(unreadable_owner.exists(),
+                        "a marker whose owner answers access denied is not cleared")
+            unreadable_owner.unlink()
+        with patch.object(osutil, "process_state", lambda _pid: "unknown"):
+            unknown = own_marker(dead_pid, [full])
+            verify_tests.run_and_record(root, "s1", [full])
+            assert_true(unknown.exists() and not verify(full),
+                        "an owner whose state is unknown keeps its marker")
+        unknown.unlink()
+
+        junk = record.parent / "test-runs.junk.pending"
+        junk.write_text("not json", encoding="utf-8")
+        assert_true(verify_tests.reusable(root, "s1") == {}, "an unreadable marker withholds everything")
+        verify_tests.run_and_record(root, "s1", [full])
+        assert_true(junk.exists() and verify_tests.reusable(root, "s1") == {},
+                    "a recent torn marker may be a live run's: kept, still withholding")
+        # Older than any run can last: retired behind a barrier row before the run.
+        fresh_record(filtered)
+        junk.write_text("not json", encoding="utf-8")
+        old = time.time() - verify_tests._torn_marker_limit(root) - 60
+        os.utime(junk, (old, old))
+        verify_tests.run_and_record(root, "s1", [full])
+        assert_true(not junk.exists() and junk.with_name(junk.name + ".corrupt").exists(),
+                    "an old torn marker is set aside as .corrupt")
+        assert_true(verify(full) and not verify(filtered),
+                    "rows after the barrier are reused, rows before it are not")
+        junk.with_name(junk.name + ".corrupt").unlink()
+
+        # A file name that is not UTF-8 (POSIX) is hashed, never a crash after the marker.
+        if os.name != "nt":
+            odd = root / "fixtures" / os.fsdecode(b"\xff.json")  # fixtures/* is listed above
+            odd.write_text("x", encoding="utf-8")
+            try:
+                assert_true(verify_tests.reuse_identity(root) is not None,
+                            "a non-UTF-8 listed file name is part of the identity")
+            finally:
+                odd.unlink()
+        with patch.object(verify_tests, "reuse_identity", lambda *_: (_ for _ in ()).throw(UnicodeError("x"))):
+            out = verify_tests.run_and_record(root, "s1", [full])
+        assert_true(out["fingerprint"] is None and out["outcomes"] and not markers(),
+                    f"an identity that cannot be taken records an unreusable run: {out}")
+
+        # No marker, no run.
+        before = runs()
+        with patch.object(verify_tests, "_marker_path", lambda *_: record / "cannot.pending"):
+            out = verify_tests.run_and_record(root, "s1", [full])
+            from exoma import cli
+
+            shown = cli._test_command(root, "s1", full)
+        assert_true(out["outcomes"] == [] and "nothing was run" in out["record_error"] and runs() == before,
+                    f"a marker that cannot be written runs nothing: {out}")
+        assert_true(shown["meta"]["error_type"] == "session_state_error" and "tests not run" in shown["content"],
+                    f"run.sh test reports it as session state: {shown}")
+
+        with unwritable(record):
+            shown = cli._test_command(root, "s1", full)
+        assert_true("could not be recorded" in shown["content"] and shown["meta"]["record_error"],
+                    f"run.sh test names the recording failure: {shown}")
+        for marker in markers():
+            marker.unlink()
+
+        # Racy git: a same-size edit written right after the index must still count.
+        missed = 0
+        for i in range(15):
+            (root / "app.py").write_text("print(1)\n", encoding="utf-8")
+            subprocess.run([*git, "add", "-A"], check=True, **no_console())
+            subprocess.run([*git, "commit", "-qm", str(i), "--allow-empty"], check=True, **no_console())
+            before = verify_tests.reuse_identity(root)
+            (root / "app.py").write_text("print(2)\n", encoding="utf-8")
+            missed += verify_tests.reuse_identity(root) == before
+        assert_true(missed == 0, f"a same-size edit right after the index write is seen: missed {missed}/15")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

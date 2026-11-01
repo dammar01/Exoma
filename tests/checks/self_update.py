@@ -67,6 +67,8 @@ def _test_self_update() -> None:
                     f"package, installer with workspace upgrade, and check run in order: {calls}")
         assert_true(len(calls) == 3,
                     f"update uses the installer's workspace upgrade only once: {calls}")
+        assert_true("--no-input" in calls[1][0] and "--check" in calls[2][0],
+                    f"the fresh installer asks nothing (an update is unattended): {calls}")
         assert_true(all(Path(cwd) == nested for _argv, cwd in calls),
                     f"every update step runs in the resolved workspace cwd: {calls}")
 

@@ -28,6 +28,16 @@ The second agent only reads and traces; the runtime runs the tests. You choose t
 Gate: while the verify marker is active (before `.workflow/run verify`) ONLY these pass: `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
 (may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect), Read of `.workflow/config.json` + this session's tests.json, and Write of that tests.json. Reading src/test file contents → blocked; the file names from the diff are enough.
 No tests.json → verify becomes `incomplete` (gap `tests:`, exit nonzero). An explicit `commands: []` ≠ no tests.json. A failing test → blocking.
+Already ran them with `run.sh test` after the last edit? STILL list them in tests.json, with the EXACT
+same command text: the runtime reuses each recorded pass while its reuse identity is unchanged (Git-visible
+tree content, `.workflow/config.json`, `verify_reuse_env` vars, `verify_reuse_files`), writing
+"... on this same tree (nothing edited since) — reused, not rerun" in `checks_run`, and runs everything
+else. A filtered command (`--only`, `-k`, a test path) is a different string: it never stands in for the
+full suite, nor the reverse. A failed latest run, a changed input, or an unreadable record → it runs again;
+so does every command listed after one that actually ran in this verify (it may have written the tree).
+Relay the reused line as is, and say it was reused, not run now.
+`meta.changed_since_execute` non-empty → files changed after `execute-end`: name them; this verdict covers them
+only as far as the listed tests and the review did.
 tests.json belongs to ONE verify job (the runtime claims it when the job is created). A rerun after a failed verify = a new job → write tests.json again; the old choice is not reused.
 
 ## Protocol (verify_mode=delegated)

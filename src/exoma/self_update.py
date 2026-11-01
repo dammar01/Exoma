@@ -124,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     fresh = [sys.executable, "-m", "exoma"]
-    if not _run_step("global config and current workspace", [*fresh, "install"], cwd):
+    # --no-input: an install from a terminal asks every choice, and an update is not the
+    # place to re-choose them; the stored choices stand.
+    if not _run_step("global config and current workspace", [*fresh, "install", "--no-input"], cwd):
         _report_failed_refresh("install", workspace, receipts_before)
         return 1
     if not _run_step("check", [*fresh, "install", "--check"], cwd):
