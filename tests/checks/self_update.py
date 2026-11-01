@@ -17,7 +17,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 def _test_self_update() -> None:
     with tempfile.TemporaryDirectory(prefix="exoma-update-") as tmp:
-        root = Path(tmp)
+        # update resolves its cwd; Windows runners hand out 8.3 short temp paths that differ.
+        root = Path(tmp).resolve()
         nested = root / "src" / "app"
         nested.mkdir(parents=True)
         (root / ".workflow").mkdir()
@@ -64,8 +65,10 @@ def _test_self_update() -> None:
                     [["-m", "pip", "install"], ["-m", "exoma", "install"],
                      ["-m", "exoma", "install"]],
                     f"package, installer with workspace upgrade, and check run in order: {calls}")
-        assert_true(all(cwd == nested for _argv, cwd in calls)
-                    and len(calls) == 3, "update uses the installer's workspace upgrade only once")
+        assert_true(len(calls) == 3,
+                    f"update uses the installer's workspace upgrade only once: {calls}")
+        assert_true(all(Path(cwd) == nested for _argv, cwd in calls),
+                    f"every update step runs in the resolved workspace cwd: {calls}")
 
         calls.clear()
         def workspace_failure(argv, **kwargs):
