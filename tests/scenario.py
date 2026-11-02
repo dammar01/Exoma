@@ -76,7 +76,7 @@ from tests.checks.verify_gaps import (
     _test_quick_verify_gaps,
     _test_verification_routing,
 )
-from tests.checks.jobs import _test_submit_admission
+from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
     _test_script_drift_path_spelling,
@@ -1353,6 +1353,7 @@ confidence: high — all requested checks ran
         _test_e2e_harness_names_its_model()
         _test_e2e_real_browser_smoke()
         _test_submit_admission()
+        _test_job_store_not_writable()
         _test_workspace_release_guards()
         _test_project_session_isolation()
         _test_init_upgrade_and_session_guard()

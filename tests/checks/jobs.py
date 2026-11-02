@@ -304,3 +304,109 @@ def _test_submit_admission() -> None:
         main.JOB_MANAGER = original_manager
         check.JOB_MANAGER = original_check_manager
         _shutil.rmtree(root, ignore_errors=True)
+
+
+def _test_job_store_not_writable() -> None:
+    """A sandbox that refuses the global job store gets the exact fix, not a shrug (CASE-034).
+
+    Codex as host on a `workspace-write` sandbox could not write the job store under the
+    per-user data directory, and every delegated call ended in `job_submit_error` saying
+    only "check that the job store is writable". Submit and doctor must both name the root
+    to grant and the snippet that grants it.
+    """
+    import contextlib
+
+    from exoma.config import settings
+    from exoma.core.audit.diagnostics import run_doctor
+    from exoma.core.jobs.job_lifecycle import job_store_fix
+    from exoma.core.runtime.state import ensure_workflow_workspace
+
+    # Under the storage directory that directory is the root, never the data directory
+    # above it: the data directory holds `.env`, which a sandbox must not be able to write.
+    fix = job_store_fix(settings.JOB_DIR)
+    assert_true(
+        fix["writable_root"] == str(settings.STORAGE_DIR)
+        and f"writable_roots = ['{settings.STORAGE_DIR}']" in fix["snippet"]
+        and "[sandbox_workspace_write]" in fix["snippet"]
+        and "EXOMA_HOME" in fix["next_action"],
+        f"the storage directory is the root to grant: {fix}",
+    )
+    granted = Path(fix["writable_root"])
+    env_file = settings.DATA_DIR / ".env"
+    assert_true(
+        granted != settings.DATA_DIR and granted not in env_file.parents,
+        f"the granted root must not cover the data directory's .env: {granted}",
+    )
+    assert_true(
+        fix["next_action"].startswith(f"The job store {settings.JOB_DIR} is not writable")
+        and "Grant the host's sandbox write access to" in fix["next_action"]
+        and "(Codex: add" in fix["next_action"],
+        f"the fix names any host's sandbox first, Codex only as the example: {fix['next_action']}",
+    )
+    odd = Path(tempfile.gettempdir()) / "it's jobs"
+    quoted = job_store_fix(odd)["snippet"]
+    assert_true(
+        "writable_roots = [\"" in quoted and "it's jobs" in quoted,
+        f"a path with an apostrophe falls back to a basic TOML string: {quoted!r}",
+    )
+
+    root = Path(tempfile.mkdtemp(prefix="job-store-denied-"))
+    original_manager = main.JOB_MANAGER
+    original_spawn = main._spawn_worker
+    manager = JobManager(root / "jobs", max_global_workers=1)
+
+    @contextlib.contextmanager
+    def denied():
+        raise PermissionError(13, "Permission denied", str(manager.job_dir / ".capacity.guard"))
+        yield  # pragma: no cover
+
+    manager.capacity_guard = denied
+    main.JOB_MANAGER = manager
+    main._spawn_worker = lambda *a, **k: {"ok": True, "content": "worker started", "meta": {}}
+    try:
+        result = main.submit("analyze", "task", "denied-session", str(root), None)
+        meta = result.get("meta", {})
+        assert_true(
+            not result.get("ok")
+            and meta.get("error_type") == "job_submit_error"
+            and meta.get("reason") == "job_store_not_writable"
+            and meta.get("job_store") == str(manager.job_dir)
+            and str(manager.job_dir) in meta.get("next_action", "")
+            and "writable_roots" in meta.get("next_action", "")
+            and "[sandbox_workspace_write]" in meta.get("fix_snippet", ""),
+            f"a denied job store names the root and the snippet: {result}",
+        )
+    finally:
+        main.JOB_MANAGER = original_manager
+        main._spawn_worker = original_spawn
+
+    # Doctor probes the same store. A file where the store's parent should be makes the
+    # probe fail on every OS without changing permissions.
+    blocker = root / "blocker"
+    blocker.write_text("", encoding="utf-8")
+    workspace = root / "project"
+    workspace.mkdir()
+    ensure_workflow_workspace(workspace, os.getenv("AGENT_PATH"))
+    original_job_dir = settings.JOB_DIR
+    settings.JOB_DIR = blocker / "jobs"
+    try:
+        meta = run_doctor(workspace, "does-not-exist", "job-store-denied")["meta"]
+        report = json.loads(Path(meta["doctor_report"]).read_text(encoding="utf-8"))
+        assert_true(
+            report["checks"].get("job_store_writable") is False
+            and any(issue.startswith("job store not writable") for issue in meta["issues"])
+            and any("[sandbox_workspace_write]" in fix_text for fix_text in meta["recommended_fixes"]),
+            f"doctor reports the unwritable job store with the snippet: {meta}",
+        )
+    finally:
+        settings.JOB_DIR = original_job_dir
+
+    meta = run_doctor(workspace, "does-not-exist", "job-store-ok")["meta"]
+    report = json.loads(Path(meta["doctor_report"]).read_text(encoding="utf-8"))
+    assert_true(
+        report["checks"].get("job_store_writable") is True
+        and not any(issue.startswith("job store") for issue in meta["issues"])
+        and not (settings.JOB_DIR / ".doctor-probe").exists(),
+        f"a writable job store passes and leaves no probe behind: {meta['issues']}",
+    )
+    shutil.rmtree(root, ignore_errors=True)

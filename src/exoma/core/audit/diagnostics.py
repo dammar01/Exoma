@@ -217,6 +217,27 @@ def run_doctor(
     if runtime_error:
         issues.append(f"runtime folder not writable: {runtime_error}")
 
+    # The global job store: every delegated submit writes it, from outside the project.
+    # Run inside the host's sandbox, this fails exactly when submit would (CASE-034).
+    from exoma.config.settings import JOB_DIR
+    from exoma.core.jobs.job_lifecycle import job_store_fix
+
+    job_probe = JOB_DIR / ".doctor-probe"
+    job_store_writable, job_store_error = check_writable(job_probe)
+    try:
+        job_probe.unlink()
+    except OSError:
+        pass
+    checks["job_store_writable"] = job_store_writable
+    if job_store_error:
+        fix = job_store_fix(JOB_DIR)
+        issues.append(f"job store not writable: {job_store_error}")
+        recommended_fixes.append(
+            f"Grant the host's sandbox write access to {fix['writable_root']}. For Codex, add to "
+            f"~/.codex/config.toml:\n{fix['snippet']}\nOr start the host with EXOMA_HOME set to "
+            "a directory it can write"
+        )
+
     prompt_writable, prompt_error = check_writable(paths["prompt"])
     checks["prompt_writable"] = prompt_writable
     if prompt_error:

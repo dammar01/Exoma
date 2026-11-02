@@ -119,7 +119,7 @@ from tests.checks.installer import (  # noqa: E402
     _test_installer_text_merging,
     _test_provider_update,
 )
-from tests.checks.jobs import _test_submit_admission  # noqa: E402
+from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
     _test_agy_provider,
@@ -269,6 +269,7 @@ SUITES: dict[str, tuple] = {
     "e2e-metrics": (_test_e2e_metrics, "e2e runs as quality rows: rates per run kind, token join, reproducibility, delegated baseline"),
     "e2e-doctor": (_test_e2e_doctor_readiness, "doctor reports verify-browser readiness from package metadata and probes nothing"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),
+    "job-store": (_test_job_store_not_writable, "an unwritable job store names the sandbox root to grant, in submit and in doctor"),
     "workspace-release": (_test_workspace_release_guards, "lock release guards"),
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
     "init-upgrade": (_test_init_upgrade_and_session_guard, "init/upgrade, the named runner options, the session guard for session-state commands, and an unreadable provider config in doctor"),

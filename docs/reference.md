@@ -743,6 +743,39 @@ agent remains independent of the host hooks, and its read boundary remains unenf
 See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks) for current event
 and tool coverage.
 
+**Codex host on a `workspace-write` sandbox.** Every delegated call writes the global job
+store (`<data dir>/storage/jobs`, see [the workspace layout](#workspace-layout)) and the
+main-session cache beside it from the host's own process. `<data dir>/storage` sits outside the
+project, so a host sandbox that lets only the workspace be written refuses it: each call ends in
+`job_submit_error` before a worker starts (CASE-034, a record in agent-workflow). The
+provider-version and model-catalog caches live in the per-user cache directory
+(`%LOCALAPPDATA%\exoma` on Windows, `$XDG_CACHE_HOME/exoma` or `~/.cache/exoma` elsewhere),
+not under `<data dir>`, and are skipped when their write fails, so they need no grant; the
+data directory's `.env` stays out of the sandbox's reach. Exoma never edits
+`~/.codex/config.toml`; grant the storage directory there, adding it to an existing
+`writable_roots` list when the table is already present:
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ['C:\Users\<you>\AppData\Local\exoma\storage']
+```
+
+Use the storage directory this machine resolves to, not the example path. A TOML literal
+string (single quotes) keeps Windows backslashes as written. The other way out is to start
+the host with `EXOMA_HOME` set to a directory its sandbox can write; it is read once at
+import, so it must already be in the environment of the process that runs `.workflow/run.sh`,
+and it moves only the per-user runtime data (jobs, main-session cache, seeds), not the
+provider caches above or the project's `.workflow/`. A store moved this way is a separate
+store: the machine-wide worker cap counts each store on its own.
+
+When the store is refused, the `job_submit_error` envelope carries
+`meta.reason: job_store_not_writable`, `meta.job_store`, `meta.writable_root` and
+`meta.fix_snippet` (the snippet above with this machine's path), and `next_action` names
+both fixes for any host, with Codex's setting as the example. Doctor probes the same store
+(`checks.job_store_writable`); run inside the host session, it fails exactly when submit
+would: the store is listed in `issues`, so the status is `NOT_READY` and doctor exits 1, and
+`recommended_fixes` carries the snippet.
+
 **Agy's hook contract, as measured** (CASE-029, a draft in agent-workflow). Hooks load from
 `~/.gemini/config/hooks.json` and the workspace's `.agents/hooks.json`. Every payload carries
 `conversationId`, `workspacePaths`, `transcriptPath`, `modelName` and `lastUserInput` (the
@@ -1755,7 +1788,7 @@ exoma --command clean --work-dir /path/to/target-app --pretty
 `%LOCALAPPDATA%\exoma` (Windows), `~/Library/Application Support/exoma` (macOS), or
 `$XDG_DATA_HOME/exoma` / `~/.local/share/exoma` (Linux). It holds `storage/` (jobs, main-session
 cache) and the `config/second_agent.seed*.json` seeds; never anything per project. Jobs an agent-workflow
-checkout recorded in its own `storage/` stay there: they belong to that runtime.
+checkout recorded in its own `storage/` stay there: they belong to that runtime. Every delegated call writes this directory from the host process, so a host sandbox limited to the workspace must be granted its `storage/` ("Codex host on a `workspace-write` sandbox" above).
 
 Mutable state (`state`/`scope`/`cache`/`runtime`/`logs`) lives under `data/sessions/<id>/`, so two main_agents on the same project never overwrite each other. The `.workflow/` root holds only human-edited files plus scripts.
 

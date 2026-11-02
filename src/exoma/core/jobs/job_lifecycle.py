@@ -42,6 +42,36 @@ def _main():
     return cli
 
 
+def job_store_fix(job_dir) -> dict:
+    """How to make the job store writable for a sandboxed host (CASE-034).
+
+    Every delegated submit writes the global job store, which lives under the per-user data
+    directory, outside any project. A host sandbox that only lets the workspace be written
+    (Codex `workspace-write`) refuses it. Exoma never edits the host's own config, so this
+    names the root to grant and the exact snippet instead. The root is the storage
+    directory when the store sits under it: it also holds the main-session cache. The
+    provider-version and model-catalog caches live in the per-user cache directory, not
+    under the data directory, and fail silently, so they need no grant; the data
+    directory's `.env` (a secret source) stays out of the sandbox's reach.
+    """
+    from pathlib import Path
+
+    from exoma.config.settings import STORAGE_DIR
+
+    job_dir = Path(job_dir)
+    root = STORAGE_DIR if job_dir == STORAGE_DIR or STORAGE_DIR in job_dir.parents else job_dir
+    text = str(root)
+    quoted = f"'{text}'" if "'" not in text else '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    snippet = f"[sandbox_workspace_write]\nwritable_roots = [{quoted}]"
+    next_action = (
+        f"The job store {job_dir} is not writable from this process. Grant the host's sandbox "
+        f"write access to {text} (Codex: add {quoted} to `writable_roots` under "
+        "`[sandbox_workspace_write]` in ~/.codex/config.toml), or start the host with "
+        "EXOMA_HOME set to a directory it can write. Then retry."
+    )
+    return {"writable_root": text, "snippet": snippet, "next_action": next_action}
+
+
 def submit(
     command: str,
     task: str,
@@ -206,11 +236,22 @@ def submit(
                         active_job_id=active_id,
                     )
     except OSError as exc:
+        meta = {"command": normalized_command, "error": type(exc).__name__}
+        next_action = "Check that the job store is writable, then retry."
+        if isinstance(exc, PermissionError):
+            fix = job_store_fix(_main().JOB_MANAGER.job_dir)
+            next_action = fix["next_action"]
+            meta.update(
+                reason="job_store_not_writable",
+                job_store=str(_main().JOB_MANAGER.job_dir),
+                writable_root=fix["writable_root"],
+                fix_snippet=fix["snippet"],
+            )
         return make_error(
             "job_submit_error",
             str(exc),
-            next_action="Check that the job store is writable, then retry.",
-            meta={"command": normalized_command, "error": type(exc).__name__},
+            next_action=next_action,
+            meta=meta,
         )
 
     try:
