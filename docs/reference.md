@@ -700,6 +700,58 @@ module (a partial install) exits 0 without acting, like every other state it can
 | End of turn | `Stop`: status guard warns | `Stop`: status guard continues once | `Stop`: status guard warns (`systemMessage`); skipped while `stop_hook_active` | not registered |
 | Graph refresh, task telemetry, statusline | Registered | Not registered | Not registered | Not registered |
 
+### Host profiles and rule labels
+
+One contract source, `hosts/claude/CLAUDE.md`, is rendered for every host; what differs per host
+is data in `src/exoma/config/hosts.py` (`PROFILES`), not a rewrite of Claude's text:
+
+| Profile field | Claude Code | Agy | Codex CLI | OpenCode |
+|---|---|---|---|---|
+| Runner prefix (`{{RUNNER}}`) | `bash` (the Bash tool is Git Bash on Windows) | this machine's bash by full path; on Windows `& '<Git>/bin/bash.exe'` (PowerShell) | as Agy | as Agy |
+| Shell tool (`{{SHELL_TOOL}}`) | the Bash tool | `run_command`, sandbox bypassed | `exec_command` | the `bash` tool |
+| Waiting for the runner (`{{DELEGATED_RUN}}`) | background-task tool, collect the same task ID | Agy backgrounds a long call itself; read that task's output | `exec_command` with a long timeout; wait on the same session | foreground, 600000 ms timeout (no background tool) |
+| Asking the user (`{{ASK_USER}}`) | AskUserQuestion | `ask_question` | the user-input tool, else the reply | the reply |
+| Skill path (`{{SKILL_PATH}}`) | `~/.claude/skills/<name>.md` | `~/.gemini/antigravity-cli/skills/.<name>/SKILL.md` | `~/.codex/skills/exoma-<name>/SKILL.md` | `~/.config/opencode/skills/exoma-<name>/SKILL.md` |
+
+Rendering (`render_contract`): a `<!-- HOST:<a>,<b>:START -->` … `<!-- HOST:<a>,<b>:END -->`
+section keeps its text only for the hosts it names, and the markers never ship; the placeholders
+above take the profile's values. Codex, OpenCode and Agy get the managed block alone, as before.
+The skills are still Claude's text: their `bash '<…>/.workflow/run.sh'` gets the host's runner
+prefix and their skill path the host's, and the host's instruction block maps their tool names.
+
+**One runner call per host.** The installer writes `host-profile.json` beside each host's hook
+scripts (with `workflow_policy.py` and `intent-map.json`, the list `HOOK_DATA_FILES`):
+`{host, runner_prefix, background, read_range_keys}`. The Agy, Codex and OpenCode hooks read it
+for the `[INTENT HINT]`, for the runner call they name in a refusal, and for the bash a runner
+call may start with, so the contract, the hint and the gate spell one call. Without the file (an
+install from before it) a hook falls back to finding Git Bash itself, as before. Claude Code's
+hooks keep the bare `bash`. A PowerShell call operator in front of the quoted bash (`& '<bash>'
+'<root>/.workflow/run.sh' …`) is dropped before the gate judges the words, on Agy, Codex and
+OpenCode alike.
+
+**Read ranges.** A precision read passes on its line span. `read_range_keys` names the host's own
+argument keys: a limit key (`limit`) gives a span; a start and an end line (Agy's `StartLine` /
+`EndLine` are the assumed names) give `end - start + 1`; when both are given the larger span
+counts. An end without a start, an end before the start, a value that is not a whole number in
+ASCII digits (at most 9), or no key at all leaves the span unknown, and the whole file is
+measured, as before.
+
+**Rule labels.** Every rule in the contract carries `<!-- rule:<id> -->`; `src/exoma/config/rules.py`
+holds one entry per id with its level on each host, and the render turns the marker into
+`<!-- rule:<id> | <host>: <level> -->`:
+
+- `enforced` — a hook or the runtime refuses the call on that host;
+- `detected` — recorded and reported after the fact (`execute-end`, the end of a turn), not blocked;
+- `advised` — nothing checks it there.
+
+A level above `advised` names what backs it: the shared-policy function the host's hook files
+call (`hook_symbol`), or a runtime function (`runtime`). `tests/checks/host_profiles.py` fails
+when a marker has no registry entry or an entry no marker, when a level is not backed by a call
+in that host's hook files, or when a non-Claude contract carries Claude-only text
+(`run_in_background`, `AskUserQuestion`, `~/.claude/skills`, an unrendered placeholder or HOST
+marker). Shell and script writes are `detected` on every host: no hook sees them, and
+`execute-end` lists every changed file outside the plan's `files` in `meta.outside_scope`.
+
 **OpenCode host.** Install with `exoma install opencode`, then restart OpenCode: it loads plugins
 at startup. `~/.config/opencode/plugins/exoma.js` is a shim (OpenCode plugin API v1, 1.19) that
 hands each event to `~/.config/opencode/exoma/hooks/opencode-host.py` as JSON on stdin and acts on
@@ -751,15 +803,28 @@ project, so a host sandbox that lets only the workspace be written refuses it: e
 provider-version and model-catalog caches live in the per-user cache directory
 (`%LOCALAPPDATA%\exoma` on Windows, `$XDG_CACHE_HOME/exoma` or `~/.cache/exoma` elsewhere),
 not under `<data dir>`, and are skipped when their write fails, so they need no grant; the
-data directory's `.env` stays out of the sandbox's reach. Exoma never edits
-`~/.codex/config.toml`; grant the storage directory there, adding it to an existing
-`writable_roots` list when the table is already present:
+data directory's `.env` stays out of the sandbox's reach. An install whose hosts include `codex`
+writes the grant into `~/.codex/config.toml` as a block between `# EXOMA-CODEX-GRANT:START` and
+`# EXOMA-CODEX-GRANT:END` comments, appended to the file or replaced in place:
 
 ```toml
+# EXOMA-CODEX-GRANT:START — managed by Exoma: lets Codex's workspace-write sandbox write the job store
 [sandbox_workspace_write]
 writable_roots = ['C:\Users\<you>\AppData\Local\exoma\storage']
+# EXOMA-CODEX-GRANT:END
 ```
 
+The file is never parsed and rewritten (the runtime is stdlib-only and Python 3.10 has no TOML
+writer). When the user already keeps a `[sandbox_workspace_write]` table (or a dotted or inline
+key for it), a second table of that name would make the file invalid TOML, so the install leaves
+the file alone and prints the snippet: add the storage directory to that table's `writable_roots`
+yourself. A table of the user's added later, beside Exoma's block, is the same conflict: the next
+install takes the block out (the user's table governs) and prints the snippet. Grant markers that
+do not pair up (a hand edit) leave the file untouched and the install refused for it. On Python
+3.11+ the result is parsed before it is written, and an install that would leave invalid TOML is
+refused. `--check` reports the block missing or stale, and reports a conflict or unpaired markers
+as drift (the user's table alone is not drift); `--uninstall` and dropping the `codex` host take the block out and keep the rest of the
+file. Keys added below the block by hand belong to that table in TOML: add them above it.
 Use the storage directory this machine resolves to, not the example path. A TOML literal
 string (single quotes) keeps Windows backslashes as written. The other way out is to start
 the host with `EXOMA_HOME` set to a directory its sandbox can write; it is read once at
@@ -965,6 +1030,13 @@ Bash tool, on all OSes:
 ```bash
 bash '/path/to/target-app/.workflow/run.sh' explore --session '<MAIN_SESSION_ID>' --task 'find the auth entry point'
 ```
+
+That is Claude Code's spelling. Agy, Codex and OpenCode run commands through PowerShell on
+Windows, so there the call starts with this machine's Git Bash by full path behind the call
+operator (`& 'C:/Program Files/Git/bin/bash.exe' '/path/to/target-app/.workflow/run.sh' …`);
+each host's rendered contract and `host-profile.json` carry the exact prefix
+([Host profiles and rule labels](#host-profiles-and-rule-labels)). `& '<…>/run.sh'` without the
+bash hands the script to Windows, which opens it in a new window and returns nothing.
 
 `run.sh <command> [--session <id>] [--task <text> | --task-file <path>]`. Each value is wrapped
 in single quotes: that is the form the pre-flight gate lets through, and its content is literal

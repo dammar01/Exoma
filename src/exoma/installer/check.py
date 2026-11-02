@@ -17,6 +17,7 @@ from exoma.installer.base import (
     AGY_HOST_INSTRUCTIONS,
     AGY_DOCTOR_FRAGMENT,
     AGY_HOST_PERMISSIONS,
+    CODEX_CONFIG_KEY,
     CODEX_HOST_HOOKS,
     CODEX_HOST_INSTRUCTIONS,
     DIST_CONFIG,
@@ -34,6 +35,9 @@ from exoma.installer.base import (
     agy_hooks_state,
     agy_permission_rules,
     agy_settings_dest,
+    codex_config_dest,
+    codex_grant_state,
+    codex_grant_text,
     codex_hook_events_present,
     codex_hooks_dest,
     codex_hooks_state,
@@ -326,6 +330,18 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             installed_missing.append(CODEX_HOST_HOOKS)
         elif not codex_hook_events_present(codex_current.get("hooks")):
             installed_drift.append(CODEX_HOST_HOOKS)
+        # The job store grant (installer/base.py `_install_codex_grant`). A table of the user's
+        # own is theirs: an install would not touch it either, so it is not drift.
+        config = codex_config_dest()
+        config_text = _read_text_lenient(config) if config.is_file() else ""
+        grant = codex_grant_state(config_text)
+        if grant == "absent":
+            installed_missing.append(f"{CODEX_CONFIG_KEY} (job store grant)")
+        elif grant in ("conflict", "broken") or (
+                grant == "managed" and codex_grant_text(config_text) != config_text):
+            # conflict: Exoma's block beside a table of the user's (invalid TOML, an install
+            # takes the block out); broken: grant markers that do not pair up.
+            installed_drift.append(f"{CODEX_CONFIG_KEY} (job store grant)")
 
     settings_dest = HOME / ".claude" / "settings.json"
     if settings_src.exists() and "claude" in hosts:

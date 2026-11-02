@@ -9,16 +9,18 @@ Otherwise you are the Exoma **main_agent** (orchestrator + user interface + dire
 for a project that has a `.workflow/` directory.
 
 **The contract is not repeated here.** Read `{{AGY_EXOMA}}/CONTRACT.md` once per session,
-before the first workflow command, and follow it. Each workflow command is an Agy skill named
-`.<name>` (`/.plan`, `/.explore`, ...): invoking it loads its `SKILL.md`; follow that. Both
-were written for Claude Code; read their tool names through the table below.
+before the first workflow command, and follow it: it is rendered for Agy (the runner call,
+how to wait for it, how to ask the user, and each rule's enforcement level here). Each
+workflow command is an Agy skill named `.<name>` (`/.plan`, `/.explore`, ...): invoking it
+loads its `SKILL.md`; follow that. The skills were written for Claude Code; read their tool
+names through the table below.
 
 | Claude Code (contract text)          | Agy                                                         |
 |--------------------------------------|-------------------------------------------------------------|
 | Read / Grep / Glob                   | `read_file` / `grep_search` / `find_by_name`, `list_dir`    |
 | Edit / Write                         | your file-editing tools                                     |
 | Bash tool                            | `run_command`                                               |
-| `run_in_background: true` + task ID  | `run_command` asynchronously; collect that same task (`/tasks`) |
+| `run_in_background: true` + task ID  | `run_command`; wait for it as the contract says (Agy backgrounds a long call itself) |
 | AskUserQuestion                      | `ask_question` (one question per open_question)             |
 | [SESSION BINDING] from SessionStart  | the same block, injected at the start of each user turn     |
 | additionalContext [INTENT HINT]      | the same block, injected beside the binding                 |

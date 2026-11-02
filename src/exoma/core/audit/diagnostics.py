@@ -233,9 +233,11 @@ def run_doctor(
         fix = job_store_fix(JOB_DIR)
         issues.append(f"job store not writable: {job_store_error}")
         recommended_fixes.append(
-            f"Grant the host's sandbox write access to {fix['writable_root']}. For Codex, add to "
-            f"~/.codex/config.toml:\n{fix['snippet']}\nOr start the host with EXOMA_HOME set to "
-            "a directory it can write"
+            f"Grant the host's sandbox write access to {fix['writable_root']}. For Codex, run "
+            "`exoma install` again with codex among the chosen hosts (it writes the grant into "
+            "~/.codex/config.toml unless you "
+            f"keep your own [sandbox_workspace_write] table), or add to that file:\n{fix['snippet']}\n"
+            "Or start the host with EXOMA_HOME set to a directory it can write"
         )
 
     prompt_writable, prompt_error = check_writable(paths["prompt"])

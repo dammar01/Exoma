@@ -24,6 +24,8 @@ from pathlib import Path
 
 from exoma.installer.base import (
     AGY_HOOKS_PREFIX,
+    CODEX_CONFIG_KEY,
+    CODEX_GRANT_MARKERS,
     CODEX_HOOKS_PREFIX,
     CODEX_HOST_HOOKS,
     CODEX_HOST_INSTRUCTIONS,
@@ -52,9 +54,12 @@ from exoma.installer.base import (
     _record,
     _targets,
     agy_hooks_dest,
+    codex_config_dest,
+    codex_grant_state,
     codex_hooks_reference_script,
     codex_hooks_dest,
     codex_hooks_state,
+    strip_codex_grant,
     strip_codex_hooks,
 )
 from exoma.installer.settings import _hook_script_ids
@@ -298,6 +303,29 @@ def _uninstall_codex_hooks(plan: Plan, apply: bool, backup_root: Path) -> bool:
     return not script_still_used
 
 
+def _uninstall_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
+    """Take Exoma's job-store grant block out of ~/.codex/config.toml; the rest stays."""
+    dest = codex_config_dest()
+    if not dest.is_file():
+        return
+    text = _read_text_lenient(dest)
+    if codex_grant_state(text) != "managed" and CODEX_GRANT_MARKERS[0] not in text:
+        return
+    remaining = strip_codex_grant(text)
+    if remaining == text:
+        plan.warn(f"{dest}: the Exoma grant markers do not pair up — left as is; remove the block by hand")
+        return
+    if not remaining.strip():
+        _remove_receipted(dest, CODEX_CONFIG_KEY, plan, apply, backup_root, "held only Exoma's job store grant")
+        return
+    pre_sha256 = _file_sha256(dest)
+    saved = _backup(dest, backup_root, plan, apply, f"uninstall/{CODEX_CONFIG_KEY}")
+    plan.add("merge", dest, "removed Exoma's job store grant, kept your settings")
+    if apply:
+        dest.write_text(remaining, encoding="utf-8")
+        _record("merge", dest, f"uninstall/{CODEX_CONFIG_KEY}", saved, pre_sha256)
+
+
 LEGACY_AGY_INSTRUCTIONS = "providers/agy/AGENTS.md"
 
 
@@ -344,6 +372,7 @@ def withdraw_host(
         return _uninstall_settings(plan, apply, backup_root), agy_rules
     if host == "codex":
         _uninstall_text(HOME / ".codex" / "AGENTS.md", CODEX_HOST_INSTRUCTIONS, plan, apply, backup_root)
+        _uninstall_codex_grant(plan, apply, backup_root)
         return _uninstall_codex_hooks(plan, apply, backup_root), agy_rules
     if host == "opencode":
         # Nothing merged but the block: the plugin is a whole file OpenCode finds by itself,
@@ -378,6 +407,7 @@ def run_uninstall(apply: bool) -> int:
     settings_clean = _uninstall_settings(plan, apply, backup_root)
     agy_clean = _uninstall_agy_hooks(plan, apply, backup_root)
     codex_clean = _uninstall_codex_hooks(plan, apply, backup_root)
+    _uninstall_codex_grant(plan, apply, backup_root)
     opencode_clean = _opencode_plugin_removable(plan)
     # Read before the mode file goes below: it names the rules Exoma added.
     from exoma.installer.rollback import _stored_agy_permissions

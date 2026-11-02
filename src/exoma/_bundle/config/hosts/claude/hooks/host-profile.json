@@ -1,0 +1,4 @@
+{
+  "host": "{{HOST}}",
+  "note": "Placeholder: an install writes this file from exoma/config/hosts.py hook_profile() for the host it lands in."
+}

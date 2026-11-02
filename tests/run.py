@@ -53,6 +53,15 @@ from tests.checks.prompt import (  # noqa: E402
     _test_unknown_role_is_refused,
     _test_verify_branch_carries_routing_contract,
 )
+from tests.checks.host_profiles import (  # noqa: E402
+    _test_agy_precision_read_slice,
+    _test_codex_grant,
+    _test_contract_renders_per_host,
+    _test_host_sections_whitespace,
+    _test_read_limit_from_host_keys,
+    _test_rule_registry_parity,
+    _test_runner_call_single_source,
+)
 from tests.checks.bundle_sync import (  # noqa: E402
     _test_bundle_registry_bijection,
     _test_every_shipped_hook_is_a_launcher_and_its_module,
@@ -326,6 +335,13 @@ SUITES: dict[str, tuple] = {
     "codex-host-install": (_test_codex_host_install, "Codex host and provider blocks coexist; install and uninstall preserve user text and hooks"),
     "opencode-host": (_test_opencode_host_contract, "OpenCode hooks bind on the first prompt, gate tools through the shared policy, and skip second-agent processes"),
     "opencode-host-install": (_test_opencode_host_install, "OpenCode host installs beside its provider block, passes --check, and is withdrawn cleanly"),
+    "host-contract-render": (_test_contract_renders_per_host, "one contract source rendered per host: no Claude-only text, placeholder or HOST marker outside Claude's"),
+    "host-sections": (_test_host_sections_whitespace, "HOST sections, block and inline, kept or dropped, leave no joined words, blank lines or indentation"),
+    "host-rule-parity": (_test_rule_registry_parity, "every contract rule is registered, labelled once per host, and its level is backed by a hook call or the runtime"),
+    "host-runner-call": (_test_runner_call_single_source, "contract, [INTENT HINT] and refusal name one runner call per host, from host-profile.json"),
+    "host-read-limit": (_test_read_limit_from_host_keys, "a read's line span comes from the host's own argument names"),
+    "agy-precision-slice": (_test_agy_precision_read_slice, "an Agy slice of a long file passes as a precision read"),
+    "codex-grant": (_test_codex_grant, "the install writes the Codex job store grant, keeps a user's own table, and uninstall takes only its block"),
     "claude-second-agent": (_test_claude_second_agent, "Claude second agent runs with read tools only, no settings or MCP, over stdin"),
     "per-host-seed": (_test_per_host_seed, "each host keeps its own provider seed and init copies the one of the host that ran it"),
     "session-export": (_test_session_export, "session export bundles one session, redacted, with its stream rows and review"),

@@ -639,6 +639,121 @@ def load_intent_map(hook_dir):
     return read_json(os.path.join(hook_dir or "", "intent-map.json"))
 
 
+# --- host profile: the runner call and the read range, one source per host ---------------
+#
+# host-profile.json beside the hooks is written at install from exoma/config/hosts.py, so
+# the contract, the [INTENT HINT] and a refusal name the same runner call. Without it (an
+# install from before the file), the old discovery below still answers.
+
+
+def load_host_profile(hook_dir):
+    return read_json(os.path.join(hook_dir or "", "host-profile.json")) or {}
+
+
+def find_bash():
+    """The bash the runner must start under, restated from exoma.utils.osutil.find_bash (a
+    hook runs without the package): `bash` on PATH, or on Windows Git Bash beside `git` —
+    there a bare `bash` can be WSL's, which cannot read the Windows paths the runner takes."""
+    import shutil
+    if os.name != "nt":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if not git:
+        return None
+    parent = os.path.dirname(os.path.abspath(git))
+    while True:
+        for candidate in (os.path.join(parent, "bin", "bash.exe"),
+                          os.path.join(parent, "usr", "bin", "bash.exe")):
+            if os.path.isfile(candidate):
+                return candidate
+        up = os.path.dirname(parent)
+        if up == parent:
+            return None
+        parent = up
+
+
+def runner_prefix(profile=None):
+    """What the runner call starts with: the profile's, else this machine's bash as
+    exoma.config.hosts.runner_prefix spells it for a PowerShell host."""
+    value = (profile or {}).get("runner_prefix")
+    if isinstance(value, str) and value.strip():
+        return value
+    found = find_bash()
+    if not found:
+        return "bash"
+    path = found.replace("\\", "/")
+    return "& '%s'" % path if os.name == "nt" else "'%s'" % path
+
+
+def runner_command(root, profile=None):
+    """The runner call up to its command, for a hint or a refusal."""
+    return "%s '%s/.workflow/run.sh'" % (runner_prefix(profile), root.replace("\\", "/"))
+
+
+def is_bash(word, profile=None):
+    """A bash the runner call may start with: the one the profile names or this machine's,
+    or `bash` off Windows (on Windows a bare `bash` can be WSL's)."""
+    if os.name != "nt" and word == "bash":
+        return True
+    word = word.replace("\\", "/")
+    named = runner_prefix(profile)
+    m = re.fullmatch(r"(?:&\s*)?'([^']+)'", named.strip())
+    if m and norm(word) == norm(m.group(1)):
+        return True
+    found = find_bash()
+    return bool(found) and norm(word) == norm(found.replace("\\", "/"))
+
+
+_ASCII_INT = re.compile(r"[0-9]{1,9}")
+
+
+def _int_arg(value):
+    # A whole number of lines, or None. ASCII digits only (`"²".isdigit()` is true and
+    # `int("²")` raises, which a hook answers by failing open), at most 9 of them; a float
+    # counts when it is whole (`50.0`).
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str) and _ASCII_INT.fullmatch(value.strip()):
+        return int(value.strip())
+    return None
+
+
+_DEFAULT_RANGE_KEYS = {"limit": ["limit"], "start": ["offset"], "end": []}
+
+
+def read_limit(args, profile=None):
+    """A read's line span from the host's own argument names, or None when unknown.
+
+    A limit key gives a span; a start and an end line give end - start + 1. When both are
+    given, the larger span counts (`limit=5` beside `EndLine=5000` is not a 5-line read). A
+    start alone (read to the end of the file), an end before the start, or nothing at all
+    leaves it unknown, and the gate then measures the whole file."""
+    keys = (profile or {}).get("read_range_keys") or _DEFAULT_RANGE_KEYS
+    args = args if isinstance(args, dict) else {}
+
+    def first(names):
+        for name in names or ():
+            value = _int_arg(args.get(name))
+            if value is not None:
+                return value
+        return None
+
+    spans = []
+    limit = first(keys.get("limit"))
+    if limit is not None:
+        spans.append(limit)
+    start, end = first(keys.get("start")), first(keys.get("end"))
+    if end is not None:
+        if start is None or end < start:
+            return None
+        spans.append(end - start + 1)
+    return max(spans) if spans else None
+
+
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -686,13 +801,16 @@ def set_delegated_marker(resolved, rt_dir, provenance):
             pass
 
 
-def intent_hint(hinted, root, main_id):
+def intent_hint(hinted, root, main_id, runner=None):
+    """`runner`: the host's runner call up to its command (runner_command); Claude Code's
+    bare `bash` when not given."""
+    runner = runner or "bash '%s/.workflow/run.sh'" % root.replace("\\", "/")
     return (
         "[INTENT HINT] This prompt resembles /.%s under the workflow NL map. If it "
-        "is that request, delegate first: bash '%s/.workflow/run.sh' %s --session '%s' --task '<task>'. "
+        "is that request, delegate first: %s %s --session '%s' --task '<task>'. "
         "If it is a question or a remark, answer it. Nothing is blocked: the gate "
         "arms only on an explicit /.%s."
-    ) % (hinted, root.replace("\\", "/"), hinted, main_id, hinted)
+    ) % (hinted, runner, hinted, main_id, hinted)
 
 
 def session_binding(main_id, root, source, reused):

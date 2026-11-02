@@ -42,13 +42,27 @@ def _main():
     return cli
 
 
+def _within(path, root) -> bool:
+    """Whether `path` is `root` or lies under it, compared as the OS resolves both."""
+    from pathlib import Path
+
+    try:
+        full = Path(os.path.normcase(os.path.abspath(path)))
+        base = Path(os.path.normcase(os.path.abspath(root)))
+        return full == base or base in full.parents
+    except (TypeError, ValueError):
+        return False
+
+
 def job_store_fix(job_dir) -> dict:
     """How to make the job store writable for a sandboxed host (CASE-034).
 
     Every delegated submit writes the global job store, which lives under the per-user data
     directory, outside any project. A host sandbox that only lets the workspace be written
-    (Codex `workspace-write`) refuses it. Exoma never edits the host's own config, so this
-    names the root to grant and the exact snippet instead. The root is the storage
+    (Codex `workspace-write`) refuses it. An install whose hosts include codex writes this grant
+    as a managed block in ~/.codex/config.toml (installer/base.py `_install_codex_grant`) unless
+    the user already keeps that table; this names the root and the exact snippet for that
+    case and for any other host. The root is the storage
     directory when the store sits under it: it also holds the main-session cache. The
     provider-version and model-catalog caches live in the per-user cache directory, not
     under the data directory, and fail silently, so they need no grant; the data
@@ -65,9 +79,10 @@ def job_store_fix(job_dir) -> dict:
     snippet = f"[sandbox_workspace_write]\nwritable_roots = [{quoted}]"
     next_action = (
         f"The job store {job_dir} is not writable from this process. Grant the host's sandbox "
-        f"write access to {text} (Codex: add {quoted} to `writable_roots` under "
-        "`[sandbox_workspace_write]` in ~/.codex/config.toml), or start the host with "
-        "EXOMA_HOME set to a directory it can write. Then retry."
+        f"write access to {text} (Codex: run `exoma install` again with codex among the chosen hosts, "
+        f"which writes the grant, or add {quoted} to `writable_roots` under `[sandbox_workspace_write]` in "
+        "~/.codex/config.toml yourself), or start the host with EXOMA_HOME set to a directory it "
+        "can write. Then retry."
     )
     return {"writable_root": text, "snippet": snippet, "next_action": next_action}
 
@@ -236,17 +251,25 @@ def submit(
                         active_job_id=active_id,
                     )
     except OSError as exc:
-        meta = {"command": normalized_command, "error": type(exc).__name__}
-        next_action = "Check that the job store is writable, then retry."
-        if isinstance(exc, PermissionError):
-            fix = job_store_fix(_main().JOB_MANAGER.job_dir)
-            next_action = fix["next_action"]
+        # A write refused inside the job store (or the storage root it sits in), whatever the
+        # error's type: a host sandbox raises PermissionError on one platform and a plain
+        # OSError (EACCES, EPERM, EROFS, a Windows access error) on another, and only the first
+        # used to get the fix. An error that names a path outside the store (the project's
+        # verify request, say) is not the store's: it is reported as that path's.
+        fix = job_store_fix(_main().JOB_MANAGER.job_dir)
+        path = getattr(exc, "filename", None)
+        meta = {"command": normalized_command, "error": type(exc).__name__, "path": path}
+        if path is None or _within(path, fix["writable_root"]) or _within(path, _main().JOB_MANAGER.job_dir):
             meta.update(
                 reason="job_store_not_writable",
                 job_store=str(_main().JOB_MANAGER.job_dir),
                 writable_root=fix["writable_root"],
                 fix_snippet=fix["snippet"],
             )
+            next_action = fix["next_action"]
+        else:
+            meta["reason"] = "write_refused"
+            next_action = f"Exoma could not write {path} ({exc.strerror or exc}). Make it writable, then retry."
         return make_error(
             "job_submit_error",
             str(exc),

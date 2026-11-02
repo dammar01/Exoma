@@ -13,6 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from exoma.config import hosts as host_profiles
 from exoma.config.bundle_keys import host_dir, provider_dir
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.config.settings import BUNDLE_CONFIG_DIR, BUNDLE_DIR, BUNDLE_MANIFEST
@@ -74,8 +75,9 @@ OPENCODE_SKILLS_PREFIX = f"{OPENCODE_HOST}/skills/"
 AGY_SKILLS_PREFIX = "hosts/agy/skills/"
 AGY_DOCTOR_SKILL = f"{AGY_SKILLS_PREFIX}doctor/SKILL.md"
 AGY_DOCTOR_FRAGMENT = "hosts/agy/doctor.agy.md"
-# What agy-host.py needs beside it: the policy it imports and the intent map it loads.
-AGY_HOOK_FILES = ("agy-host.py", "workflow_policy.py", "intent-map.json")
+# What agy-host.py needs beside it: the policy it imports, the intent map and the host
+# profile it loads (config/hosts.py HOOK_DATA_FILES, the same list Codex and OpenCode take).
+AGY_HOOK_FILES = ("agy-host.py", *host_profiles.HOOK_DATA_FILES)
 
 MARKERS = {
     CLAUDE_INSTRUCTIONS: ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
@@ -461,20 +463,29 @@ def bundle_key(source: Path) -> str:
 
 
 def runner_prefix() -> str:
-    """How an Agy session starts bash for the runner. Agy runs commands through PowerShell
-    on Windows, where a bare `bash` can be WSL's (it cannot read E:/ paths) and a quoted
-    path is only run with `&`; elsewhere the quoted path runs as it is."""
-    from exoma.utils import osutil
-
-    found = osutil.find_bash()
-    if not found:
-        return "bash"
-    path = Path(found).as_posix()
-    return f"& '{path}'" if osutil.IS_WINDOWS else f"'{path}'"
+    """How an Agy, Codex or OpenCode session starts bash for the runner on this machine
+    (config/hosts.py `runner_prefix`): those hosts run commands through PowerShell on
+    Windows, where a bare `bash` can be WSL's (it cannot read E:/ paths) and a quoted path is
+    only run with `&`; elsewhere the quoted path runs as it is."""
+    return host_profiles.runner_prefix("agy")
 
 
-# `bash '<anything>/.workflow/run.sh'` as the Claude text writes the runner call.
+# `bash '<anything>/.workflow/run.sh'` as a Claude skill writes the runner call. The contract
+# names it through {{RUNNER}}; the skills keep Claude's spelling and get the host's prefix here.
 _BARE_RUNNER = re.compile(r"\bbash (?='[^'\n]*\.workflow/(?:run|check|inspect)\.sh')")
+
+
+def _host_contract(text: str, host: str) -> str:
+    """The shared contract as `host` reads it: the managed block alone (a non-Claude host
+    gets no Claude header), rendered through the host's profile."""
+    text = _managed_block(text, *MARKERS[CLAUDE_INSTRUCTIONS]) or text
+    return host_profiles.render_contract(text, host)
+
+
+def _host_skill(text: str, host: str) -> str:
+    """A Claude skill's runner call and skill path, as `host` spells them."""
+    text = _BARE_RUNNER.sub(host_profiles.runner_prefix(host) + " ", text)
+    return text.replace("~/.claude/skills/<name>.md", host_profiles.PROFILES[host].skill_path)
 
 
 def _skill_md(text: str, name: str) -> str:
@@ -492,13 +503,12 @@ def _agy_text(text: str, key: str) -> str:
     """Claude-host text made fit for Agy: the runner call through runner_prefix(), the
     contract as its managed block alone, a skill with Agy's frontmatter."""
     prefix = runner_prefix()
-    text = text.replace("{{RUNNER}}", prefix).replace("{{AGY_EXOMA}}", agy_exoma_dir().as_posix())
     if key == AGY_CONTRACT:
-        text = _managed_block(text, *MARKERS[CLAUDE_INSTRUCTIONS]) or text
-    if key == AGY_CONTRACT or key.startswith(AGY_SKILLS_PREFIX):
-        text = _BARE_RUNNER.sub(prefix + " ", text)
+        return _host_contract(text, "agy")
+    text = text.replace("{{RUNNER}}", prefix).replace("{{AGY_EXOMA}}", agy_exoma_dir().as_posix())
+    if key.startswith(AGY_SKILLS_PREFIX):
         # Where a skill is read: Agy's own skill, not the Claude copy.
-        text = text.replace("~/.claude/skills/<name>.md", "~/.gemini/antigravity-cli/skills/.<name>/SKILL.md")
+        text = _host_skill(text, "agy")
     if key == AGY_DOCTOR_SKILL:
         # The Agy /.doctor adds what only an Agy session can observe (skills, hooks, the
         # runner's permission and sandbox), so the Claude /.doctor never carries it.
@@ -512,11 +522,9 @@ def _agy_text(text: str, key: str) -> str:
 def _codex_text(text: str, key: str) -> str:
     """Render shared Claude workflow text as a Codex contract or native skill."""
     if key == CODEX_CONTRACT:
-        text = _managed_block(text, *MARKERS[CLAUDE_INSTRUCTIONS]) or text
-    if key == CODEX_CONTRACT or key.startswith(CODEX_SKILLS_PREFIX):
-        text = _BARE_RUNNER.sub(runner_prefix() + " ", text)
-        text = text.replace("~/.claude/skills/<name>.md", "~/.codex/skills/exoma-<name>/SKILL.md")
+        return _host_contract(text, "codex")
     if key.startswith(CODEX_SKILLS_PREFIX):
+        text = _host_skill(text, "codex")
         name = key[len(CODEX_SKILLS_PREFIX):].split("/", 1)[0]
         text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
         text = text.replace("---\n\n", "---\n\nCodex host: `$exoma-<command>` invokes this workflow. "
@@ -540,11 +548,9 @@ def _opencode_text(text: str, key: str) -> str:
         return (text.replace("{{PYTHON_JSON}}", json.dumps(Path(sys.executable).as_posix()))
                 .replace("{{HOOK_JSON}}", json.dumps(opencode_host_hook_path().as_posix())))
     if key == OPENCODE_CONTRACT:
-        text = _managed_block(text, *MARKERS[CLAUDE_INSTRUCTIONS]) or text
-    if key == OPENCODE_CONTRACT or key.startswith(OPENCODE_SKILLS_PREFIX):
-        text = _BARE_RUNNER.sub(runner_prefix() + " ", text)
-        text = text.replace("~/.claude/skills/<name>.md", "~/.config/opencode/skills/exoma-<name>/SKILL.md")
+        return _host_contract(text, "opencode")
     if key.startswith(OPENCODE_SKILLS_PREFIX):
+        text = _host_skill(text, "opencode")
         name = key[len(OPENCODE_SKILLS_PREFIX):].split("/", 1)[0]
         text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
         text = text.replace("---\n\n", "---\n\nOpenCode host: the `" + name + "` skill is this workflow command. "
@@ -555,11 +561,17 @@ def _opencode_text(text: str, key: str) -> str:
 def _render_text(src: Path, key: str, project_root: Path | None, only_command: bool = False) -> str:
     """The text an install writes for `key` from `src`. One function for the install and
     for --check, so the check compares against exactly what an install would write."""
+    host = key.split("/", 2)[1] if key.startswith("hosts/") else "claude"
+    if key.endswith("/hooks/" + host_profiles.HOST_PROFILE_FILE) and host in host_profiles.PROFILES:
+        # What this host's hooks read: written from the profile, not copied from the source.
+        return host_profiles.hook_profile_text(host)
     text = _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
     # The host a skill is installed for, so /.init can name it (`exoma init --host`).
-    text = text.replace("{{HOST}}", key.split("/", 2)[1] if key.startswith("hosts/") else "claude")
+    text = text.replace("{{HOST}}", host)
     if key in (CLAUDE_INSTRUCTIONS, AGY_CONTRACT, CODEX_CONTRACT, OPENCODE_CONTRACT):
         text = _apply_intent_mode(text, only_command)
+    if key == CLAUDE_INSTRUCTIONS:
+        text = host_profiles.render_contract(text, "claude")
     if key.startswith(AGY_HOST + "/"):
         text = _agy_text(text, key)
     if key.startswith(CODEX_HOST + "/"):
@@ -809,6 +821,140 @@ def _install_codex_hooks(dest: Path, plan: Plan, apply: bool, backup_root: Path)
         _record("merge" if saved else "create", dest, CODEX_HOST_HOOKS, saved, pre_sha256)
 
 
+# The Codex sandbox grant for the job store (CASE-034): every delegated submit writes the
+# global job store, outside any project, and Codex's `workspace-write` sandbox refuses that.
+# The install writes the grant as a comment-delimited block in ~/.codex/config.toml. The
+# runtime is stdlib-only and Python 3.10 has no TOML writer, so the file is never parsed and
+# rewritten: the block is appended or replaced as text, and a table of the user's own
+# (`[sandbox_workspace_write]`, or a dotted/inline key for it) is never touched — a second
+# table of that name would make the file invalid TOML. Then the snippet is printed instead.
+CODEX_CONFIG_KEY = f"{CODEX_HOST}/config.toml"
+CODEX_GRANT_MARKERS = ("# EXOMA-CODEX-GRANT:START", "# EXOMA-CODEX-GRANT:END")
+_CODEX_GRANT_BLOCK = re.compile(
+    r"^# EXOMA-CODEX-GRANT:START[^\n]*\n.*?^# EXOMA-CODEX-GRANT:END[^\n]*(?:\n|\Z)", re.MULTILINE | re.DOTALL
+)
+_CODEX_USER_TABLE = re.compile(
+    r"^[ \t]*(?:\[[ \t]*sandbox_workspace_write[ \t]*\]|sandbox_workspace_write[ \t]*[.=])", re.MULTILINE
+)
+
+
+def codex_config_dest() -> Path:
+    return HOME / ".codex" / "config.toml"
+
+
+def codex_grant_fix() -> dict:
+    """The job store root to grant and its TOML snippet (core/jobs/job_lifecycle.job_store_fix)."""
+    from exoma.config.settings import JOB_DIR
+    from exoma.core.jobs.job_lifecycle import job_store_fix
+
+    return job_store_fix(JOB_DIR)
+
+
+_CODEX_GRANT_START = re.compile(r"^# EXOMA-CODEX-GRANT:START", re.MULTILINE)
+_CODEX_GRANT_END = re.compile(r"^# EXOMA-CODEX-GRANT:END", re.MULTILINE)
+
+
+def codex_grant_state(text: str) -> str:
+    """Where the file stands with the grant:
+    - `managed`: Exoma's block, and no table of the user's;
+    - `absent`: neither;
+    - `user_table`: the user keeps their own sandbox_workspace_write table (never touched);
+    - `conflict`: both, which is two definitions of one table, invalid TOML: the block goes;
+    - `broken`: the grant markers do not pair up (a hand edit): nothing is touched."""
+    text = text or ""
+    starts, ends = len(_CODEX_GRANT_START.findall(text)), len(_CODEX_GRANT_END.findall(text))
+    block = _CODEX_GRANT_BLOCK.search(text)
+    if starts != ends or starts > 1 or (starts and not block):
+        return "broken"
+    user = bool(_CODEX_USER_TABLE.search(_CODEX_GRANT_BLOCK.sub("", text)))
+    if user:
+        return "conflict" if block else "user_table"
+    return "managed" if block else "absent"
+
+
+def codex_grant_block() -> str:
+    start, end = CODEX_GRANT_MARKERS
+    return (f"{start} — managed by Exoma: lets Codex's workspace-write sandbox write the job store\n"
+            f"{codex_grant_fix()['snippet']}\n{end}\n")
+
+
+def codex_grant_text(text: str) -> str | None:
+    """What the file should hold: Exoma's grant block in place; without it when the user's
+    own table appeared beside it (two tables of one name are invalid TOML, and the user's
+    governs); None when the file is not Exoma's to change (the user's table alone, or
+    grant markers that do not pair up)."""
+    text = text or ""
+    state = codex_grant_state(text)
+    if state in ("user_table", "broken"):
+        return None
+    if state == "conflict":
+        return strip_codex_grant(text)
+    block = codex_grant_block()
+    if _CODEX_GRANT_BLOCK.search(text):
+        return _CODEX_GRANT_BLOCK.sub(lambda _m: block, text, count=1)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + ("\n" if text.strip() else "") + block
+
+
+def strip_codex_grant(text: str) -> str:
+    """`text` without Exoma's grant block (and the blank line the install put before it)."""
+    return re.sub(r"\n?" + _CODEX_GRANT_BLOCK.pattern, "", text or "", count=1, flags=re.MULTILINE | re.DOTALL)
+
+
+def _toml_valid(text: str) -> bool:
+    """Whether `text` parses as TOML, where a parser exists (3.11+); assumed so on 3.10."""
+    try:
+        import tomllib
+    except ImportError:
+        return True
+    try:
+        tomllib.loads(text)
+        return True
+    except Exception:
+        return False
+
+
+def _install_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
+    dest = codex_config_dest()
+    exists = dest.exists()
+    existing = _read_text_lenient(dest) if exists else ""
+    state = codex_grant_state(existing)
+    snippet = codex_grant_fix()["snippet"]
+    if state == "broken":
+        plan.add("refused", dest, "the Exoma grant markers do not pair up")
+        plan.warn(f"{dest}: the # EXOMA-CODEX-GRANT:START / END lines do not pair up — keep one pair "
+                  f"(or delete both with the lines between them), then install again")
+        return
+    if state == "user_table":
+        plan.add("unchanged", dest, "your own [sandbox_workspace_write] table")
+        plan.warn(f"{dest}: your [sandbox_workspace_write] table is kept as it is; for delegated "
+                  f"calls from Codex, its writable_roots needs the job store:\n{snippet}")
+        return
+    if state == "conflict":
+        plan.warn(f"{dest}: you added your own [sandbox_workspace_write] table beside Exoma's grant — "
+                  f"two tables of one name are invalid TOML, so Exoma's block is taken out and yours "
+                  f"governs; its writable_roots needs the job store:\n{snippet}")
+    merged = codex_grant_text(existing)
+    if merged == existing:
+        plan.add("unchanged", dest, "job store grant")
+        return
+    if state != "conflict" and not _toml_valid(merged):
+        plan.add("refused", dest, "the grant would not leave valid TOML")
+        plan.warn(f"{dest}: not valid TOML with the job store grant — fix the file, then install again, "
+                  f"or add this yourself:\n{codex_grant_fix()['snippet']}")
+        return
+    pre_sha256 = _file_sha256(dest)
+    saved = _backup(dest, backup_root, plan, apply, CODEX_CONFIG_KEY) if exists else None
+    plan.add("merge" if exists else "create", dest,
+             "removed Exoma's grant: your table governs" if state == "conflict"
+             else "Codex sandbox grant for the job store")
+    if apply:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(merged, encoding="utf-8")
+        _record("merge" if exists else "create", dest, CODEX_CONFIG_KEY, saved, pre_sha256)
+
+
 def agy_hooks_state(dest: Path) -> tuple[dict | None, tuple[str, str] | None]:
     """(the parsed hooks.json, None) when Exoma's hook can go into it — `{}` for a file not
     there yet — else (None, (plan detail, warning)).
@@ -984,6 +1130,7 @@ def _install_text(
 ) -> None:
     if key == CODEX_HOST_HOOKS:
         _install_codex_hooks(dest, plan, apply, backup_root)
+        _install_codex_grant(plan, apply, backup_root)
         return
     if key == CODEX_HOST_INSTRUCTIONS:
         _current, problem = codex_hooks_state(codex_hooks_dest())
@@ -1085,9 +1232,9 @@ def _codex_targets() -> list[tuple[Path, Path, str]]:
         (codex / "AGENTS.md", dest / "AGENTS.md", CODEX_HOST_INSTRUCTIONS),
         (claude / "CLAUDE.md", dest / "exoma" / "CONTRACT.md", CODEX_CONTRACT),
         (codex / "codex-host.py", dest / "exoma" / "hooks" / "codex-host.py", CODEX_HOOKS_PREFIX + "codex-host.py"),
-        (claude / "hooks" / "workflow_policy.py", dest / "exoma" / "hooks" / "workflow_policy.py", CODEX_HOOKS_PREFIX + "workflow_policy.py"),
-        (claude / "hooks" / "intent-map.json", dest / "exoma" / "hooks" / "intent-map.json", CODEX_HOOKS_PREFIX + "intent-map.json"),
     ]
+    mapping += [(claude / "hooks" / name, dest / "exoma" / "hooks" / name, CODEX_HOOKS_PREFIX + name)
+                for name in host_profiles.HOOK_DATA_FILES]
     for source in sorted((claude / "skills").glob("*.md")):
         name = "exoma-" + source.stem
         mapping.append((source, dest / "skills" / name / "SKILL.md", f"{CODEX_SKILLS_PREFIX}{name}/SKILL.md"))
@@ -1105,9 +1252,9 @@ def _opencode_targets() -> list[tuple[Path, Path, str]]:
         (opencode / "AGENTS.md", dest / "AGENTS.md", OPENCODE_HOST_INSTRUCTIONS),
         (claude / "CLAUDE.md", dest / "exoma" / "CONTRACT.md", OPENCODE_CONTRACT),
         (opencode / "opencode-host.py", hooks / "opencode-host.py", OPENCODE_HOOKS_PREFIX + "opencode-host.py"),
-        (claude / "hooks" / "workflow_policy.py", hooks / "workflow_policy.py", OPENCODE_HOOKS_PREFIX + "workflow_policy.py"),
-        (claude / "hooks" / "intent-map.json", hooks / "intent-map.json", OPENCODE_HOOKS_PREFIX + "intent-map.json"),
     ]
+    mapping += [(claude / "hooks" / name, hooks / name, OPENCODE_HOOKS_PREFIX + name)
+                for name in host_profiles.HOOK_DATA_FILES]
     for source in sorted((claude / "skills").glob("*.md")):
         name = "exoma-" + source.stem
         mapping.append((source, dest / "skills" / name / "SKILL.md", f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"))

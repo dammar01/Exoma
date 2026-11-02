@@ -185,6 +185,15 @@ from tests.checks.agy_host import (
     _test_agy_host_uninstall,
 )
 from tests.checks.codex_host import _test_codex_host_contract, _test_codex_host_install
+from tests.checks.host_profiles import (
+    _test_agy_precision_read_slice,
+    _test_codex_grant,
+    _test_contract_renders_per_host,
+    _test_host_sections_whitespace,
+    _test_read_limit_from_host_keys,
+    _test_rule_registry_parity,
+    _test_runner_call_single_source,
+)
 from tests.checks.self_update import _test_self_update
 from tests.checks.v1_surfaces import (
     _test_claude_second_agent,
@@ -262,6 +271,13 @@ def run_tests() -> None:
     _test_self_update()
     _test_opencode_host_contract()
     _test_opencode_host_install()
+    _test_contract_renders_per_host()
+    _test_host_sections_whitespace()
+    _test_rule_registry_parity()
+    _test_runner_call_single_source()
+    _test_read_limit_from_host_keys()
+    _test_agy_precision_read_slice()
+    _test_codex_grant()
     _test_claude_second_agent()
     _test_per_host_seed()
     _test_session_export()
@@ -338,16 +354,11 @@ def run_tests() -> None:
             "full evidence protocol in AGENTS.md" in prompt,
             "evidence prompt must anchor the full protocol (graphify-first) to AGENTS.md",
         )
-        claude_contract = (
-            REPO_ROOT
-            / "src"
-            / "exoma"
-            / "_bundle"
-            / "config"
-            / "hosts"
-            / "claude"
-            / "CLAUDE.md"
-        ).read_text(encoding="utf-8")
+        # The contract as an install writes it for Claude: its mechanics come from the host
+        # profile (config/hosts.py), not from the shared source text.
+        from exoma.installer.base import CLAUDE_INSTRUCTIONS, DIST_CONFIG, _render_text
+
+        claude_contract = _render_text(DIST_CONFIG / CLAUDE_INSTRUCTIONS, CLAUDE_INSTRUCTIONS, None)
         assert_true(
             "run_in_background: true" in claude_contract,
             "Claude delegated runner must use the background-task tool mode",

@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from exoma.config.bundle_keys import HOSTS_DIR, host_dir, provider_dir
+from exoma.config.hosts import HOOK_DATA_FILES
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.core.workspace.workspace_paths import read_json_file
 
@@ -322,7 +323,16 @@ def _bundle_integrity(
             if project_root:
                 expected = expected.replace("{{PROJECT_ROOT}}", str(project_root))
             if rel == f"{host_dir('claude')}/CLAUDE.md":
-                expected = _select_intent_section(expected, only_command)
+                # The contract is rendered for the host at install (config/hosts.py:
+                # host sections, placeholders, rule labels): compare against the
+                # installer's own render, the one `install --check` uses.
+                try:
+                    from exoma.installer.base import _render_text
+
+                    root = Path(project_root) if project_root else None
+                    expected = _render_text(source, rel, root, only_command)
+                except Exception:
+                    expected = _select_intent_section(expected, only_command)
             want = _marker_block(expected, start, end)
             got = _marker_block(text, start, end)
             if got is None:
@@ -369,7 +379,7 @@ def _bundle_integrity(
 # What each host's install leaves, by host. File presence only: whether the host CLI LOADS
 # them is something only a session in that host can observe (the Agy `/.doctor` skill asks
 # the model to look).
-_AGY_HOOK_FILES = ("agy-host.py", "workflow_policy.py", "intent-map.json")
+_AGY_HOOK_FILES = ("agy-host.py", *HOOK_DATA_FILES)
 
 
 def _has_block(path: Path, start: str) -> bool:

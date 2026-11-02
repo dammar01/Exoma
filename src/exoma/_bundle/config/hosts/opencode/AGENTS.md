@@ -8,17 +8,20 @@ message carries.
 
 Otherwise, in a project with `.workflow/` (or when the user invokes `exoma-init` to create
 it), you are the Exoma **main_agent**. Read `~/.config/opencode/exoma/CONTRACT.md` once per
-session, before the first workflow command, and follow it. The contract's `/.<name>`
-commands are the `exoma-<name>` skills here (for example `exoma-plan`); the user may also
-type `/.plan` or `$exoma-plan`. The skill bodies are the shared Exoma contract; read Claude
-tool names as OpenCode tools:
+session, before the first workflow command, and follow it: it is rendered for OpenCode (the
+runner call, how to wait for it, how to ask the user, and each rule's enforcement level
+here). The contract's `/.<name>` commands are the `exoma-<name>` skills here (for example
+`exoma-plan`); the user may also type `/.plan` or `$exoma-plan`. The skills were written for
+Claude Code; read their tool names as OpenCode tools:
 
 - Read / Grep / Glob: `read` / `grep` / `glob`, `list`.
-- Bash: `bash`, with Git Bash on Windows for the runner.
+- Bash: `bash`. Start the runner exactly as the contract writes it — on Windows Git Bash by
+  its full path behind `&`, never `& '<root>/.workflow/run.sh'` alone (that hands the script
+  to Windows, which opens it in a new window and returns nothing).
 - Write / Edit: `write` / `edit` (or `patch`).
 - AskUserQuestion: ask in the reply, one question per open question, with the options listed.
-- Background task: run the runner call in the foreground with a long timeout and wait for it;
-  never launch a second runner call for the same task.
+- Background task (`run_in_background`): none here — run the runner call in the foreground
+  with a long timeout and wait for it; never launch a second runner call for the same task.
 
 Every system prompt carries a `[SESSION BINDING]` block from Exoma's plugin
 (`~/.config/opencode/plugins/exoma.js`). Pass its `MAIN_SESSION_ID` to every stateful

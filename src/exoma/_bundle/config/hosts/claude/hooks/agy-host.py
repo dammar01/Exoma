@@ -179,51 +179,30 @@ def pre_invocation(payload, cid, prompt):
         resolved = wp.explicit_command(text, mp.get("prefix_regex"))
         hinted = None if resolved else wp.nl_command(text, mp)
         if hinted:
-            lines.append(wp.intent_hint(hinted, root, main_id))
+            lines.append(wp.intent_hint(hinted, root, main_id, wp.runner_command(root, host_profile())))
         wp.set_delegated_marker(resolved, rt, {**provenance, "prompt_excerpt": prompt[:160]})
     else:
         wp.set_delegated_marker(None, rt, provenance)
     return {"injectSteps": [{"ephemeralMessage": "\n\n".join(lines)}]}
 
 
-def find_bash():
-    """The bash the runner must start under, restated from exoma.utils.osutil.find_bash (this
-    hook runs without the package): `bash` on PATH, or on Windows Git Bash beside `git` —
-    there a bare `bash` can be WSL's, which cannot read the Windows paths the runner takes."""
-    import shutil
-    if os.name != "nt":
-        return shutil.which("bash")
-    git = shutil.which("git")
-    if not git:
-        return None
-    parent = os.path.dirname(os.path.abspath(git))
-    while True:
-        for candidate in (os.path.join(parent, "bin", "bash.exe"),
-                          os.path.join(parent, "usr", "bin", "bash.exe")):
-            if os.path.isfile(candidate):
-                return candidate
-        up = os.path.dirname(parent)
-        if up == parent:
-            return None
-        parent = up
+def host_profile():
+    """host-profile.json beside this hook (written at install from exoma/config/hosts.py)."""
+    import workflow_policy as wp
+    return wp.load_host_profile(HERE)
 
 
 def runner_prefix():
-    """The runner's bash as the host instructions spell it (installer.base.runner_prefix)."""
-    found = find_bash()
-    if not found:
-        return "bash"
-    path = found.replace("\\", "/")
-    return "& '%s'" % path if os.name == "nt" else "'%s'" % path
+    """The runner's bash as the contract spells it: the host profile's, one source for the
+    contract, the hint and a refusal (workflow_policy.runner_prefix)."""
+    import workflow_policy as wp
+    return wp.runner_prefix(host_profile())
 
 
 def _is_bash(word):
-    """A bash this runner may start under: the one find_bash names, or `bash` off Windows."""
+    """A bash this runner may start under: the profile's, this machine's, or `bash` off Windows."""
     import workflow_policy as wp
-    if os.name != "nt" and word == "bash":
-        return True
-    found = find_bash()
-    return bool(found) and wp.norm(word.replace("\\", "/")) == wp.norm(found.replace("\\", "/"))
+    return wp.is_bash(word, host_profile())
 
 
 def shell_command(command):
@@ -281,7 +260,8 @@ def pre_tool_use(payload, cid):
     target = first_arg(args, PATH_KEYS)
     command = first_arg(args, COMMAND_KEYS)
     marker_path = os.path.join(rt, "delegated.marker")
-    runner = "%s '%s/.workflow/run.sh'" % (runner_prefix(), root.replace("\\", "/"))
+    profile = host_profile()
+    runner = wp.runner_command(root, profile)
 
     refusal = None
     # The runner scripts are never written by hand, marker or not (workflow_policy,
@@ -300,7 +280,9 @@ def pre_tool_use(payload, cid):
             "rt_dir": rt,
             "is_bash": _is_bash,
             "host_read": host_read,
-            "limit": None,
+            # Agy's line range under its own argument names (host-profile.json); unknown
+            # names leave it None and the whole file is measured, as before.
+            "limit": wp.read_limit(args, profile),
         }
         rule = wp.preflight_refusal(kind, target, shell_command(command), marker, ctx)
         if rule:

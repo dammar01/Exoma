@@ -73,6 +73,11 @@ def _test_codex_host_contract():
         small.write_text("x = 1\n", encoding="utf-8")
         large = root / "large.py"
         large.write_text("x = 1\n" * 300, encoding="utf-8")
+        # `"²".isdigit()` is true and int("²") raises: the hook used to crash and fail open.
+        odd_count = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "exec_command",
+                                                  "tool_input": {"cmd": f"Get-Content -TotalCount ² '{large.as_posix()}'"}})
+        assert_true(odd_count.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    f"a non-ASCII line count is not a precision read, and the gate holds: {odd_count}")
         for number in (1, 2):
             read_command = (f"Get-Content '{small.as_posix()}'" if number == 1
                             else f"sed -n '150,170p' '{large.as_posix()}'")

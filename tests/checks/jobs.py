@@ -340,7 +340,8 @@ def _test_job_store_not_writable() -> None:
     assert_true(
         fix["next_action"].startswith(f"The job store {settings.JOB_DIR} is not writable")
         and "Grant the host's sandbox write access to" in fix["next_action"]
-        and "(Codex: add" in fix["next_action"],
+        and "(Codex: run `exoma install` again with codex" in fix["next_action"]
+        and "`writable_roots`" in fix["next_action"],
         f"the fix names any host's sandbox first, Codex only as the example: {fix['next_action']}",
     )
     odd = Path(tempfile.gettempdir()) / "it's jobs"
@@ -355,26 +356,56 @@ def _test_job_store_not_writable() -> None:
     original_spawn = main._spawn_worker
     manager = JobManager(root / "jobs", max_global_workers=1)
 
-    @contextlib.contextmanager
-    def denied():
-        raise PermissionError(13, "Permission denied", str(manager.job_dir / ".capacity.guard"))
-        yield  # pragma: no cover
-
-    manager.capacity_guard = denied
+    # A sandbox refusal is a PermissionError on one platform and a plain OSError (EROFS,
+    # EACCES, a Windows access error) on another; both get the fix. The generic "check that
+    # the job store is writable" a Codex user saw came from the second kind.
+    refusals = (
+        PermissionError(13, "Permission denied", str(manager.job_dir / ".capacity.guard")),
+        OSError(30, "Read-only file system", str(manager.job_dir / ".capacity.guard")),
+    )
     main.JOB_MANAGER = manager
     main._spawn_worker = lambda *a, **k: {"ok": True, "content": "worker started", "meta": {}}
     try:
+        for refusal in refusals:
+            @contextlib.contextmanager
+            def denied(exc=refusal):
+                raise exc
+                yield  # pragma: no cover
+
+            manager.capacity_guard = denied
+            result = main.submit("analyze", "task", "denied-session", str(root), None)
+            meta = result.get("meta", {})
+            assert_true(
+                not result.get("ok")
+                and meta.get("error_type") == "job_submit_error"
+                and meta.get("reason") == "job_store_not_writable"
+                and meta.get("error") == type(refusal).__name__
+                and meta.get("job_store") == str(manager.job_dir)
+                and str(manager.job_dir) in meta.get("next_action", "")
+                and "writable_roots" in meta.get("next_action", "")
+                and "Check that the job store is writable" not in meta.get("next_action", "")
+                and "[sandbox_workspace_write]" in meta.get("fix_snippet", ""),
+                f"a denied job store ({type(refusal).__name__}) names the root and the snippet: {result}",
+            )
+
+        # A refusal naming a path outside the store is that path's, not the store's: no
+        # sandbox-grant advice for a write the grant would not fix.
+        elsewhere = root / "project" / ".workflow" / "data" / "verify" / "tests.json"
+
+        @contextlib.contextmanager
+        def denied_elsewhere():
+            raise PermissionError(13, "Permission denied", str(elsewhere))
+            yield  # pragma: no cover
+
+        manager.capacity_guard = denied_elsewhere
         result = main.submit("analyze", "task", "denied-session", str(root), None)
         meta = result.get("meta", {})
         assert_true(
             not result.get("ok")
-            and meta.get("error_type") == "job_submit_error"
-            and meta.get("reason") == "job_store_not_writable"
-            and meta.get("job_store") == str(manager.job_dir)
-            and str(manager.job_dir) in meta.get("next_action", "")
-            and "writable_roots" in meta.get("next_action", "")
-            and "[sandbox_workspace_write]" in meta.get("fix_snippet", ""),
-            f"a denied job store names the root and the snippet: {result}",
+            and meta.get("reason") == "write_refused"
+            and str(elsewhere) in meta.get("next_action", "")
+            and "writable_roots" not in meta.get("next_action", ""),
+            f"a refused write outside the job store names that path, not the grant: {result}",
         )
     finally:
         main.JOB_MANAGER = original_manager

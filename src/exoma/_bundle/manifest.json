@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "53362cc911c22c13ff4c24473aa340c792d46635ce8a9b5525c96b786cdb5849",
-      "bytes": 36808,
+      "sha256": "f05d6cdb769577a624be34afa1850d6b6fc4e03dc600afa2aecd3ca2a4deea20",
+      "bytes": 38586,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -252,8 +252,8 @@
     },
     {
       "path": "hosts/claude/hooks/agy-host.py",
-      "sha256": "36a096459082beccce556e4deedd290d01d3360c07059ac877cee20787e2675a",
-      "bytes": 17235,
+      "sha256": "f8bb7dcc4a3603d015c388aa775f7059225575aa10a8e5fd0ee8a8a8b0cd9ea2",
+      "bytes": 16657,
       "merge": "replace",
       "component": "runtime"
     },
@@ -282,6 +282,13 @@
       "path": "hosts/claude/hooks/graph-refresh.sh",
       "sha256": "e5d3030face0f521d8288b4de52c6148155852c0d069cac4ad0c241582f28784",
       "bytes": 1570,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "hosts/claude/hooks/host-profile.json",
+      "sha256": "849b3649153805255fb88a47cf2036ed50b221ef9b4cccbbbab8706d8b189aec",
+      "bytes": 147,
       "merge": "replace",
       "component": "runtime"
     },
@@ -385,8 +392,8 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "4da436e5975386b68aa5d2b3ffe04e4a9a72a8b9ba8add7dccf7029398708cae",
-      "bytes": 33697,
+      "sha256": "9372e5f1886bf6edeca2992fe06165fa98bbf0c52882a6aa40364ac4745b8740",
+      "bytes": 38180,
       "merge": "replace",
       "component": "runtime"
     },
@@ -462,8 +469,8 @@
     },
     {
       "path": "hosts/agy/GEMINI.md",
-      "sha256": "29a9bc70a95eb89d3c8d664c762cbeb2652ae9ed2caf5166973162193cb1d5e0",
-      "bytes": 3983,
+      "sha256": "32e999ec30cb9ebda83882be2cfa741ea2a9f4e83d7b9340126daa329d01767f",
+      "bytes": 4133,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -490,8 +497,8 @@
     },
     {
       "path": "hosts/codex/AGENTS.md",
-      "sha256": "71bfd7a14d988fda83e413d3d0e901a9ad69402e01e2424b5cf09581740b70fa",
-      "bytes": 1546,
+      "sha256": "198c5609e5df01f7d4e37984a2f1803a799459b6ef9a77df56f212ce410f51e4",
+      "bytes": 1715,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -504,15 +511,15 @@
     },
     {
       "path": "hosts/codex/codex-host.py",
-      "sha256": "1f834e71f21987317dda07171c5fe84ba66ba63380fc0f31fabd1e8453318897",
-      "bytes": 10963,
+      "sha256": "3727d64cde4ecba9c8a06c0f2566e96e734b229c6f231e448c03ac8fa8dbfec6",
+      "bytes": 11066,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "hosts/opencode/AGENTS.md",
-      "sha256": "c3ec3c429def445a38051a1d9b2c1d541a982dbe8dbc923391a435fc943985d8",
-      "bytes": 1746,
+      "sha256": "da786b5684be93294bd48eef5e18b4fc6df59e16856aca06643e35438b9946ee",
+      "bytes": 2099,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -525,8 +532,8 @@
     },
     {
       "path": "hosts/opencode/opencode-host.py",
-      "sha256": "dfe0c4a6e043ddfb81403c778d02afdcc7d1b126cbd552dfdfdbcaff2375cec6",
-      "bytes": 10217,
+      "sha256": "ef30904283af180269af8766bda61b4e8e9603d239fcc9ee4c5189ec33b3d861",
+      "bytes": 10213,
       "merge": "replace",
       "component": "runtime"
     },
