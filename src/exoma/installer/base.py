@@ -109,7 +109,9 @@ class Plan:
         self.actions.append((verb, str(target), detail))
 
     def warn(self, message: str) -> None:
-        self.warnings.append(message)
+        # One second-agent answer seeds every host, and each seed would repeat its warning.
+        if message not in self.warnings:
+            self.warnings.append(message)
 
 
 # What a writing install actually did, written next to the backups so --rollback does not have to

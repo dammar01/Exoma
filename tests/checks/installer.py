@@ -843,6 +843,43 @@ def _test_installer_seed_prompt_answers() -> None:
         else:
             raise AssertionError("Ctrl+C at a question raises InstallInterrupted")
 
+    _check_second_agent_asked_once()
+
+
+def _check_second_agent_asked_once() -> None:
+    """Several hosts get one second-agent question, and its answer seeds every one of them;
+    a warning the seeds share is reported once."""
+    hosts = ("claude", "codex", "opencode")
+    args = SimpleNamespace(only_command=False, with_e2e=True, agy_permissions=True,
+                           update_providers=True, provider=None, model=None)
+    with _seed_repo("3\n1\n\n") as (install_mod, dest):
+        real_prompt = install_mod._prompt_second_agent
+        calls = []
+
+        def counted(host=None, previous=None):
+            calls.append(host)
+            return real_prompt(host, previous)
+
+        with patch.object(install_mod, "_resolve_hosts", lambda *a, **k: hosts), \
+                patch.object(install_mod, "_prompt_second_agent", counted):
+            chosen, asked = install_mod._ask_choices(args, None, True, Plan(), True, True)
+        assert_true(len(calls) == 1 and calls[0] == "claude/codex/opencode",
+                    f"one question for every chosen host: {calls}")
+        answers = {asked.get(host) for host in chosen}
+        assert_true(len(answers) == 1 and next(iter(answers))[0] == "codex",
+                    f"every host gets the same answer: {asked}")
+
+        plan = Plan()
+        for host in chosen:
+            install_mod._seed_second_agent_config(plan, True, None, None, host=host, asked=asked[host])
+        seeded = {host: json.loads((install_mod.SEED_DIR / install_mod.seed_name(host)).read_text(encoding="utf-8"))
+                  for host in chosen}
+        assert_true({(s["provider"], s["default_model"]) for s in seeded.values()}
+                    == {(answers.pop()[0], seeded["claude"]["default_model"])},
+                    f"each host's seed holds that answer: {seeded}")
+        assert_true(len(plan.warnings) == len(set(plan.warnings)),
+                    f"a warning the seeds share is reported once: {plan.warnings}")
+
 
 def _test_installer_asks_every_choice() -> None:
     """From a terminal the host picker takes any combination and keeps the last choice on

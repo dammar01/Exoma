@@ -16,12 +16,12 @@ side. Dropping one later takes Exoma's files back out of it
 
 After installing for OpenCode, restart it: it loads Exoma's plugin only when it starts.
 
-## Choose the second agent, per host
+## Choose the second agent
 
-For each host you install, the installer asks which second agent it should delegate to, and
-lists the models that agent's CLI offers right now. Each host keeps its own answer, so Claude
-Code can delegate to Codex while OpenCode delegates to Claude Code. A project takes the answer
-of the host that ran `/.init` in it; `/.provider` changes it for one project later.
+The installer asks once which second agent to delegate to, and lists the models that agent's
+CLI offers right now. The answer applies to every host you install. A project starts from it
+when `/.init` runs; `/.provider` changes it for one project later, for example to let one
+project delegate to Claude Code while the rest use Codex.
 
 If unsure, choose opencode: it is the only second agent that cannot read the project's secret
 files. Codex, Agy and Claude Code can read every file in the project; Claude Code and Codex

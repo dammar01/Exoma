@@ -312,8 +312,10 @@ data directory, outside any repository. The installer **rebuilds each on every i
 `.workflow/second_agent.json`: each host's `/.init` passes `exoma init --host <host>`
 (rendered into the skill at install), and `adapters/install/opencode_install._copy_provider_config`
 takes, first that exists, `second_agent.seed.<host>.json`, the shared `second_agent.seed.json`
-(written by 0.x installs, still honoured), then the example. So Claude Code and OpenCode on one
-machine can delegate to different second agents. The runtime itself never reads it: a project
+(written by 0.x installs, still honoured), then the example. An install from a terminal asks
+once and writes that one choice into every chosen host's seed; seeds that already differ keep
+their own choice only on a non-interactive install. One project changes its second agent with
+`/.provider`, which writes its `.workflow/second_agent.json`. The runtime itself never reads it: a project
 without `.workflow/second_agent.json` is rejected with `provider_config_missing`, a broken file is rejected with
 `provider_config_invalid`. There is no longer a silent fallback to machine-level config.
 
@@ -324,7 +326,7 @@ Order in which the choice is determined:
 | Condition | What happens |
 |---|---|
 | `--provider NAME` (optional `--model ID`) | used as is, zero questions |
-| an install from a terminal | the installer **asks**, per host, for the provider, the model, then the effort, the previous choice (host seed, else the shared seed) as each step's default |
+| an install from a terminal | the installer **asks once**, for every chosen host, for the provider, the model, then the effort, the first chosen host's previous choice (its seed, else the shared seed) as each step's default; the answer is written into each host's seed, and a note says so when an answer was given and those seeds held a different provider or model |
 | non-interactive, a previous seed for this host exists | its old choice (provider, model, effort, per-route models) is reused on top of the new example |
 | non-interactive, no host seed, a shared 0.x seed exists | the shared seed's choice is carried into the host seed |
 | non-interactive, no seed yet | `second_agent.example.json` is copied as is |
@@ -356,8 +358,8 @@ used on that machine. Model ids outside the catalog are still accepted with a wa
 `--no-input`, asks before anything is written: the hosts; the intent mode
 (unless `--only-command`/`--auto-intent` is given); the browser extra (unless `--with-e2e`; default
 no); the Agy allow rules when `agy` is chosen (unless `--agy-permissions`/`--no-agy-permissions`;
-default the stored choice); `--update-providers` (unless given; default no); then the second agent
-per host (unless `--provider`). Enter keeps the default; end of input (Ctrl+D, Ctrl+Z) answers
+default the stored choice); `--update-providers` (unless given; default no); then the second agent,
+once for every chosen host (unless `--provider`). Enter keeps the default; end of input (Ctrl+D, Ctrl+Z) answers
 blank. Ctrl+C at any question stops the install with `[INSTALL] ABORTED — interrupted at a
 question. Nothing was written.` and exit status 130, before a receipt or any file is written. A dry
 run, a run without a terminal, and `exoma update` ask nothing.

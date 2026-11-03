@@ -69,8 +69,9 @@ An install writes; `--dry-run` previews it. Then pick how the workflow switches 
 | The workflow as the default way of working: plain requests are routed to commands | `exoma install <host> --auto-intent` |
 | Your own setup untouched until you type a `/.<command>` | `exoma install <host> --only-command` |
 
-On a terminal the installer asks, for each host, which secondary agent to use and lists the
-models that agent's CLI offers now; `--provider`/`--model` skip the question. If unsure, choose
+On a terminal the installer asks once which secondary agent every chosen host should use and
+lists the models that agent's CLI offers now; `--provider`/`--model` skip the question. One
+project can switch later with `/.provider`. If unsure, choose
 opencode, the only provider whose read-only boundary is enforced. The host, the mode and each
 host's second agent are remembered for later upgrades; run the other flag to switch. The browser
 extra for `/.verify-browser` is installed only with `--with-e2e`.

@@ -209,8 +209,9 @@ def _ask(prompt: str) -> str:
 
 def _ask_choices(args, host_choice, apply: bool, plan, interactive: bool, intent_stated) -> tuple:
     """The hosts, then (from a terminal) every remaining choice a flag did not state:
-    `(hosts, asked)`, `asked` mapping a host to its second-agent answer. Each answer is
-    written back onto `args`. Raises InstallInterrupted on Ctrl+C, before any write."""
+    `(hosts, asked)`, `asked` mapping each host to the one second-agent answer given for
+    all of them. Each answer is written back onto `args`. Raises InstallInterrupted on
+    Ctrl+C, before any write."""
     hosts = _resolve_hosts(host_choice, apply, plan, ask=interactive)
     asked: dict = {}
     if not interactive:
@@ -237,25 +238,33 @@ def _ask_choices(args, host_choice, apply: bool, plan, interactive: bool, intent
         args.update_providers = _ask_yes_no(
             "bring provider CLIs to their tested stable_version (npm-global only)?", False
         )
-    if args.provider is None:
+    if args.provider is None and hosts:
         from exoma.core.workspace.workspace_paths import PROVIDER_SEED_NAME
 
+        # Asked once, for every chosen host, as --provider already does. The default is the
+        # first host's seed (else the shared one); a project that needs another second agent
+        # changes it with /.provider.
+        shared = _seed_selection(SEED_DIR / PROVIDER_SEED_NAME)
+        current = {host: _seed_selection(SEED_DIR / seed_name(host)) or shared for host in hosts}
+        previous = current[hosts[0]]
+        answer = _prompt_second_agent("/".join(hosts), previous)
+        # (None, None, None) changes no seed, so there is nothing to say about replacing.
+        # A host with no seed had no second agent to differ from: only existing seeds count.
+        picks = {(sel["provider"], sel["model"]) for sel in current.values() if sel}
+        if answer[0] is not None and len(picks) > 1:
+            print(f"  {', '.join(hosts)} had different second agents; this answer is written to all of them.")
         for host in hosts:
-            previous = _seed_selection(SEED_DIR / seed_name(host)) or _seed_selection(
-                SEED_DIR / PROVIDER_SEED_NAME
-            )
-            print()
-            print(f"  [{host}]")
-            asked[host] = _prompt_second_agent(host, previous)
+            asked[host] = answer
     return hosts, asked
 
 
 def _prompt_second_agent(
     host: str | None = None, previous: dict | None = None
 ) -> tuple[str | None, str | None, str | None]:
-    """Ask which second agent `host` should use: (provider, model, effort).
+    """Ask which second agent `host` should use: (provider, model, effort). `host` is a
+    label only: install asks once for every chosen host and passes them joined by `/`.
 
-    Asked on every install from a terminal, with `previous` (the host's current seed
+    Asked on every install from a terminal, with `previous` (the first host's current seed
     selection) as the default at each step, so Enter keeps it. (None, None, None) means
     "no choice": the seed keeps its previous selection, or the example when there is none.
 
@@ -654,8 +663,9 @@ def main() -> int:
         choices=sorted(PROVIDER_BUNDLES),
         help="which second agent each chosen host's seed (second_agent.seed.<host>.json, the "
         "template that host's new projects copy) should select. Without it a terminal asks "
-        "per host from the live model catalog (provider, model, effort; the previous "
-        "selection as the default); a non-interactive run keeps the previous selection, or "
+        "once for every chosen host from the live model catalog (provider, model, effort; the "
+        "first host's previous selection as the default); a non-interactive run keeps each "
+        "host's previous selection, or "
         "copies the example when there is none",
     )
     parser.add_argument(
