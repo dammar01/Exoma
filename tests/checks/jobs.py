@@ -258,6 +258,9 @@ def _test_submit_admission() -> None:
 
         calls.clear()
         main._spawn_worker = complete_spawn
+        # The deadline only bounds a failure: a passing run returns as soon as the stubbed
+        # spawn completes the job. 1 s was eaten on a slow Windows CI runner by the resumed
+        # submits' file guards and fsyncs alone, failing with the job still pending.
         recovered = main.await_job(
             "analyze",
             "orphan",
@@ -265,7 +268,7 @@ def _test_submit_admission() -> None:
             str(root),
             None,
             poll_interval=0.01,
-            poll_timeout=1,
+            poll_timeout=30,
         )
         assert_true(
             recovered.get("ok")
@@ -273,7 +276,8 @@ def _test_submit_admission() -> None:
             and claim_calls >= 2
             and calls == [orphan["job_id"]]
             and (manager.get_job(orphan["job_id"]) or {}).get("recovery_attempt") == 0,
-            f"await must reclaim an orphaned pre-spawn reservation after grace: {recovered}",
+            f"await must reclaim an orphaned pre-spawn reservation after grace: {recovered}; "
+            f"claim_calls={claim_calls} spawns={calls} job={manager.get_job(orphan['job_id'])}",
         )
         manager.claim_recovery = original_claim  # type: ignore[method-assign]
 
@@ -291,12 +295,13 @@ def _test_submit_admission() -> None:
         manager._save(stale)
         calls.clear()
         attached_status = check._wait_for_status(
-            attach_orphan["job_id"], poll_interval=0.01, poll_timeout=1
+            attach_orphan["job_id"], poll_interval=0.01, poll_timeout=30
         )
         assert_true(
             attached_status.get("status") == "completed"
             and calls == [attach_orphan["job_id"]],
-            f"check --wait must reclaim an orphaned pre-spawn reservation: {attached_status}",
+            f"check --wait must reclaim an orphaned pre-spawn reservation: {attached_status}; "
+            f"spawns={calls} job={manager.get_job(attach_orphan['job_id'])}",
         )
     finally:
         release.set()

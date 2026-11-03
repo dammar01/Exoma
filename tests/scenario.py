@@ -661,7 +661,9 @@ def run_tests() -> None:
 
         waiter = threading.Thread(target=complete_later)
         waiter.start()
-        wait_ok, wait_payload = check._wait_for_result(wait_job["job_id"], 0.05, 2)
+        # Returns on completion (~0.1 s); the deadline only bounds a failure, so a slow
+        # runner gets room. The timeout case below must stay short: it asserts the timeout.
+        wait_ok, wait_payload = check._wait_for_result(wait_job["job_id"], 0.05, 30)
         waiter.join()
         assert_true(wait_ok, "wait loop must eventually return completed result")
         assert_true(wait_payload == "waited output", "wait loop must return cleaned output only on success")

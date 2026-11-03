@@ -64,16 +64,41 @@ def _test_opencode_host_contract() -> None:
         assert_true(_opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)},
                                    role="second_agent") == {},
                     "a second-agent process never gets the main contract")
+        # An empty or unreadable contract is no contract: the agent is told where to read it,
+        # rather than handed an empty block it would take as the whole rule set.
+        contract.write_text("  \n", encoding="utf-8")
+        blank = _opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)})
+        assert_true("Read ~/.config/opencode/exoma/CONTRACT.md" in blank.get("context", "")
+                    and "do not read" not in blank["context"],
+                    "an empty contract falls back to the read instruction")
+        contract.unlink()
+        contract.mkdir()
+        try:
+            unreadable = _opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)})
+        finally:
+            contract.rmdir()
+        assert_true("Read ~/.config/opencode/exoma/CONTRACT.md" in unreadable.get("context", "")
+                    and main_id in unreadable["context"],
+                    "an unreadable contract falls back to the read instruction, the binding intact")
 
         # An OpenCode command expands to `$exoma-<name> <args>` + the skill instruction; that
         # prompt arms the gate as a typed command would.
         sid_cmd = "ses_command"
-        _opencode_hook(home, "UserPromptSubmit", {"session_id": sid_cmd, "cwd": str(project),
-                                                  "prompt": "$exoma-analyze why is X slow\n\nLoad the `exoma-analyze` "
-                                                            "skill with the skill tool and follow it exactly."})
+        bound_cmd = _opencode_hook(home, "UserPromptSubmit", {
+            "session_id": sid_cmd, "cwd": str(project),
+            "prompt": "$exoma-analyze why is X slow\n\nLoad the `exoma-analyze` "
+                      "skill with the skill tool and follow it exactly."})
         armed = _opencode_hook(home, "PreToolUse", {"session_id": sid_cmd, "cwd": str(project), "tool_name": "grep",
                                                     "tool_input": {"pattern": "X"}})
         assert_true("deny" in armed, "an expanded /exoma-analyze command arms the gate: %s" % armed)
+        # `/exoma-execute -y` expands the same way, and its `-y` is the user's approval.
+        main_cmd = bound_cmd["context"].split("MAIN_SESSION_ID=")[1].split()[0]
+        _opencode_hook(home, "UserPromptSubmit", {
+            "session_id": sid_cmd, "cwd": str(project),
+            "prompt": "$exoma-execute -y\n\nLoad the `exoma-execute` skill with the skill tool and "
+                      "follow it exactly, with the arguments above."})
+        token = project / ".workflow" / "data" / "sessions" / main_cmd / "runtime" / "execute.token"
+        assert_true(token.is_file(), "an expanded /exoma-execute -y records the execute approval")
         outside = _opencode_hook(home, "UserPromptSubmit", {"session_id": "ses_x", "cwd": str(Path(tmp)), "prompt": "hi"})
         assert_true(outside == {}, "a directory without .workflow/ is left alone")
 
@@ -140,6 +165,30 @@ def _test_opencode_host_install() -> None:
                                  text=True, capture_output=True, timeout=60, **no_console())
         assert_true(checked.returncode == 0, "opencode install passes --check: " + checked.stdout[-800:])
 
+        # doctor sees a complete OpenCode host, and names a missing command file.
+        from exoma.core.audit.bundle_integrity import _host_status
+
+        status = _host_status(home)
+        assert_true("opencode" in status["chosen"] and status["hosts"]["opencode"]["missing"] == [],
+                    f"doctor recognizes a complete OpenCode host: {status}")
+        doctor_command = oc / "commands" / "exoma-doctor.md"
+        saved_doctor = doctor_command.read_text(encoding="utf-8")
+        doctor_command.unlink()
+        missing = _host_status(home)["hosts"]["opencode"]["missing"]
+        doctor_command.write_text(saved_doctor, encoding="utf-8")
+        assert_true("~/.config/opencode/commands/exoma-doctor.md" in missing,
+                    f"doctor names a missing OpenCode command file: {missing}")
+
+        # --check reports an edited command file as drift, by its bundle key.
+        plan_command = oc / "commands" / "exoma-plan.md"
+        saved_plan = plan_command.read_text(encoding="utf-8")
+        plan_command.write_text(saved_plan + "\nlocal edit\n", encoding="utf-8")
+        drifted = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
+                                 text=True, capture_output=True, timeout=60, **no_console())
+        plan_command.write_text(saved_plan, encoding="utf-8")
+        assert_true(drifted.returncode != 0 and "DRIFTED hosts/opencode/commands/exoma-plan.md" in drifted.stdout,
+                    "--check reports an edited OpenCode command: " + drifted.stdout[-800:])
+
         # Dropping the host takes Exoma's OpenCode files back out, the provider block stays.
         subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--provider", "codex"], cwd=home,
                        env=env, text=True, capture_output=True, timeout=120, **no_console())
@@ -149,6 +198,21 @@ def _test_opencode_host_install() -> None:
         agents = (oc / "AGENTS.md").read_text(encoding="utf-8")
         assert_true("EXOMA-OPENCODE-HOST" not in agents and "WORKFLOW-SECOND-AGENT" in agents,
                     "withdrawing the OpenCode host keeps the provider block")
+
+        # --uninstall takes the OpenCode host out whole: commands, plugin and block.
+        reinstalled = subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"],
+                                     cwd=home, env=env, text=True, capture_output=True, timeout=120, **no_console())
+        assert_true(reinstalled.returncode == 0 and (oc / "commands" / "exoma-plan.md").is_file(),
+                    "the OpenCode host installs again: " + reinstalled.stdout[-600:])
+        removed = subprocess.run([sys.executable, "-m", "exoma.install", "--uninstall", "--apply"], cwd=home,
+                                 env=env, text=True, capture_output=True, timeout=120, **no_console())
+        left = sorted(p.name for p in (oc / "commands").glob("exoma-*.md")) if (oc / "commands").is_dir() else []
+        assert_true(removed.returncode == 0 and not left,
+                    f"--uninstall removes the OpenCode commands: left={left} " + removed.stdout[-600:])
+        assert_true(not (oc / "plugins" / "exoma.js").exists(), "--uninstall removes the OpenCode plugin")
+        agents_md = oc / "AGENTS.md"
+        assert_true(not agents_md.exists() or "EXOMA-OPENCODE-HOST" not in agents_md.read_text(encoding="utf-8"),
+                    "--uninstall cuts the OpenCode host block")
 
         # An edited plugin survives the prune, and then the hook it calls must survive too.
         subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"], cwd=home,

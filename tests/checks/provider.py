@@ -1932,7 +1932,8 @@ def _assert_codex_provider() -> None:
             "openrouter/some/model", str(socket_root),
         )
         assert_true(
-            not opencode_denied["ok"] and opencode_denied["meta"].get("error_type") == "network_denied",
+            not opencode_denied["ok"] and opencode_denied["meta"].get("error_type") == "network_denied"
+            and "require_escalated" in opencode_denied["meta"].get("next_action", ""),
             f"opencode: a refused socket is network_denied, not a path refusal: {stderr!r} -> {opencode_denied['meta']}",
         )
     path_denied = _SocketDeniedOpenCode("Error: EACCES: permission denied, open 'C:/x/.env'").run(
