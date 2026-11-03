@@ -3,8 +3,8 @@ name: exoma-second-agent
 description: "Exoma's read-only second agent: gathers evidence for a [WORKFLOW_AGENT] call from the Exoma runtime. Selected per call with --agent; not for interactive use."
 ---
 
-<!-- WORKFLOW-SECOND-AGENT:START — v1.0.0, do not edit manually -->
-# Agy Second Agent — v1.0.0
+<!-- WORKFLOW-SECOND-AGENT:START — v1.0.0b1, do not edit manually -->
+# Agy Second Agent — v1.0.0b1
 
 ## Scope
 This block applies ONLY when the request's instructions — inline, or in the file attached

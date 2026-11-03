@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v1.0.0, do not edit manually -->
-# Codex Second Agent — v1.0.0
+<!-- WORKFLOW-SECOND-AGENT:START — v1.0.0b1, do not edit manually -->
+# Codex Second Agent — v1.0.0b1
 
 ## Scope
 This block applies ONLY when the request's instructions — inline, or in the file attached

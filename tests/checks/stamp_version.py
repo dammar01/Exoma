@@ -31,6 +31,9 @@ _CASES = (
     ("dirilis sebagai 3.6.0.", ["3.6.0"]),
     ("| 3.5.3 | notes |", ["3.5.3"]),
     ("pin 1.2.3-rc1", ["1.2.3"]),
+    ("uv tool install exoma==1.0.0b1", ["1.0.0b1"]),
+    ("1.0.0rc2 before 1.0.0, then 2.0.0a10", ["1.0.0rc2", "1.0.0", "2.0.0a10"]),
+    ("[![version](https://img.shields.io/badge/version-1.0.0b1-informational)]", ["1.0.0b1"]),
     ("base_url: `http://localhost:8000` | `http://127.0.0.1:8000`", []),
     ("loopback 10.10.10.10", []),
     ("http://192.168.0.1:8080/login", []),
@@ -44,6 +47,16 @@ def _test_stamp_version_reads_versions_not_addresses() -> None:
     for text, expected in _CASES:
         found = stamp_version._SEMVER.findall(text)
         assert_true(found == expected, f"_SEMVER on {text!r}: expected {expected}, got {found}")
+
+    # A bump rewrites with `_SEMVER.sub(TOOL_VERSION, line)`: re-stamping a pre-release must
+    # replace the whole version, not append a second suffix (`1.0.0b1b1`).
+    for line, version, expected in (
+        ("# Exoma v1.0.0b1", "1.0.0b1", "# Exoma v1.0.0b1"),
+        ("# Exoma v1.0.0", "1.0.0b1", "# Exoma v1.0.0b1"),
+        ("# Exoma v1.0.0b1", "1.0.0", "# Exoma v1.0.0"),
+    ):
+        stamped = stamp_version._SEMVER.sub(version, line)
+        assert_true(stamped == expected, f"stamping {version} onto {line!r} gave {stamped!r}")
 
     buffer = io.StringIO()
     original_argv = sys.argv

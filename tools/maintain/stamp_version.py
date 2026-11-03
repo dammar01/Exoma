@@ -124,7 +124,10 @@ EXEMPT: dict[str, tuple[str, ...]] = {
 # unbounded `\d+\.\d+\.\d+` read `127.0.0.1` in a shipped skill as version "127.0.0" and
 # failed `--check`; a lookahead for `.digit` alone still let the last group backtrack, so
 # `10.10.10.10` matched as "10.10.1". An IPv4 address is nobody's version.
-_SEMVER = re.compile(r"(?<![\d.])\d+\.\d+\.\d+(?!\.?\d)")
+# A PEP 440 pre-release suffix (`1.0.0b1`, `1.0.0rc2`) belongs to the version: without it a
+# re-stamp of `1.0.0b1` replaced only `1.0.0` and wrote `1.0.0b1b1`. A hyphenated suffix
+# (`1.2.3-rc1`) is not PEP 440, and stays outside the match.
+_SEMVER = re.compile(r"(?<![\d.])\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?!\.?\d)")
 
 
 def _restamp(text: str, anchors: tuple[str, ...]) -> tuple[str, int]:
