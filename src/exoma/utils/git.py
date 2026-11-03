@@ -1,7 +1,7 @@
 """The git queries the promote flow needs, in one place.
 
 Three call sites already shell out to git independently — core/graph/graph_meta.py
-(`rev-parse HEAD`), core/evidence/quick_verify.py (`_git_lines`), and
+(`rev-parse HEAD`), core/evidence/quick_verify.py (`_git_fields`), and
 core/audit/diagnostics.py (`git_run`). This module deliberately does NOT absorb them
 yet: rewriting three verified paths to introduce a helper buys no user-visible
 behaviour and hands back a real regression surface. It owns the queries promote

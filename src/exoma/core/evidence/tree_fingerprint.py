@@ -50,15 +50,16 @@ def _git(root: Path, args: list[str], env: dict | None = None) -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def _flagged(root: Path, env: dict) -> list[str] | None:
-    """Paths of the index entries marked assume-unchanged or skip-worktree, or None when
-    the index cannot be listed. `ls-files -v` tags each entry: lowercase is
-    assume-unchanged, `S` skip-worktree, `s` both."""
-    # Read as bytes: text mode's universal newlines would turn a `\r` in a name into `\n`,
-    # and update-index would then be handed a path that does not exist.
+def _git_bytes(root: Path, args: list[str], env: dict | None = None) -> bytes | None:
+    """Git's stdout as raw bytes, for output that carries path names.
+
+    Text mode decodes in the locale's code page (cp1252 on most Windows machines) while Git
+    writes names as UTF-8, so `café.txt` came back as `cafÃ©.txt`; its universal newlines
+    also turn a `\\r` in a name into `\\n`. Each name is decoded with `os.fsdecode` instead,
+    the encoding the file system API takes back."""
     try:
         done = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-v", "-z"],
+            ["git", "-C", str(root), *args],
             capture_output=True,
             timeout=GIT_TIMEOUT_S,
             check=False,
@@ -67,10 +68,18 @@ def _flagged(root: Path, env: dict) -> list[str] | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if done.returncode != 0:
+    return done.stdout if done.returncode == 0 else None
+
+
+def _flagged(root: Path, env: dict) -> list[str] | None:
+    """Paths of the index entries marked assume-unchanged or skip-worktree, or None when
+    the index cannot be listed. `ls-files -v` tags each entry: lowercase is
+    assume-unchanged, `S` skip-worktree, `s` both."""
+    out = _git_bytes(root, ["ls-files", "-v", "-z"], env)
+    if out is None:
         return None
     return [
-        os.fsdecode(entry[2:]) for entry in done.stdout.split(b"\0")
+        os.fsdecode(entry[2:]) for entry in out.split(b"\0")
         if len(entry) > 2 and entry[1:2] == b" " and (entry[:1].islower() or entry[:1] == b"S")
     ]
 
@@ -154,14 +163,17 @@ def changed_paths(project_root, old: str | None, new: str | None) -> list[dict] 
         return None
     if old == new:
         return []
-    # -z: names unquoted, NUL-separated (`<status>\0<path>\0` per file).
-    out = _git(Path(project_root), ["diff-tree", "-r", "-z", "--no-renames", "--relative",
-                                    "--name-status", old, new])
+    # -z: names unquoted, NUL-separated (`<status>\0<path>\0` per file), read as bytes so a
+    # non-ASCII name survives (_git_bytes). A name that does not decode raises ValueError:
+    # the caller (execution._changed) reports that as unknown, never as a wrong path.
+    out = _git_bytes(Path(project_root), ["diff-tree", "-r", "-z", "--no-renames", "--relative",
+                                          "--name-status", old, new])
     if out is None:
         return None
-    fields = out.split("\0")
+    fields = out.split(b"\0")
     changed = []
     for status, path in zip(fields[0::2], fields[1::2]):
-        if status.strip() and path:
-            changed.append({"status": status.strip()[:1], "path": path})
+        status = status.strip()
+        if status and path:
+            changed.append({"status": status[:1].decode("ascii"), "path": os.fsdecode(path)})
     return changed

@@ -96,6 +96,45 @@ def _check_scope_width() -> None:
         shutil.rmtree(repo, ignore_errors=True)
 
 
+def _check_non_ascii_changed_files() -> None:
+    """Changed-file discovery and its line stats name a non-ASCII file as the file system
+    spells it. Without `-z` Git quoted it (`"caf\\303\\251.py"`), and text mode decoded the
+    rest in the locale's code page: the file was named by a path that does not exist."""
+    import unicodedata
+
+    from exoma.core.evidence import quick_verify
+
+    repo = Path(tempfile.mkdtemp(prefix="quick-verify-utf8-"))
+    git = ["git", "-c", "user.email=t@example.test", "-c", "user.name=t"]
+    try:
+        main.subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console())
+        (repo / "dir ü").mkdir()
+        (repo / "dir ü" / "tracked é.py").write_text("one\n", encoding="utf-8")
+        (repo / "old.py").write_text("a\nb\nc\nd\n", encoding="utf-8")
+        main.subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, **no_console())
+        committed = main.subprocess.run(
+            [*git, "commit", "-q", "-m", "base"], cwd=repo, capture_output=True, **no_console())
+        assert_true(committed.returncode == 0, "non-ASCII quick verify commit failed")
+        (repo / "dir ü" / "tracked é.py").write_text("one\ntwo\n", encoding="utf-8")  # +1
+        (repo / "café.py").write_text("x = 1\n", encoding="utf-8")  # untracked, +1
+        main.subprocess.run(["git", "mv", "old.py", "naïve.py"], cwd=repo, capture_output=True, **no_console())
+
+        nfc = lambda name: unicodedata.normalize("NFC", name)  # noqa: E731
+        files = sorted(nfc(rel) for rel in quick_verify.changed_files(repo))
+        assert_true(files == ["café.py", "dir ü/tracked é.py", "naïve.py", "old.py"]
+                    or files == ["café.py", "dir ü/tracked é.py", "naïve.py"],
+                    f"non-ASCII names are discovered unquoted: {files}")
+        for rel in files:
+            if rel != "old.py":
+                assert_true((repo / rel).is_file(), f"a discovered name is a real file: {rel!r}")
+        stats = {nfc(rel): counts for rel, counts in quick_verify.changed_file_stats(repo).items()}
+        assert_true(stats.get("dir ü/tracked é.py") == (1, 0) and stats.get("café.py") == (1, 0)
+                    and "naïve.py" in stats and not any("=>" in rel for rel in stats),
+                    f"numstat keys a non-ASCII or renamed file by its current name: {stats}")
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
+
+
 def _test_quick_verify_gaps() -> None:
     """Unavailable, deleted, and name-check failures cannot produce a pass verdict."""
     import shutil as _shutil
@@ -103,6 +142,7 @@ def _test_quick_verify_gaps() -> None:
     from exoma.core.evidence import quick_verify
 
     _check_scope_width()
+    _check_non_ascii_changed_files()
 
     root = Path(tempfile.mkdtemp(prefix="quick-verify-"))
     original_discover = quick_verify._discover_changed_files

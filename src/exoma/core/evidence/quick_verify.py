@@ -8,6 +8,7 @@ Anything it cannot check is reported as `not_checked` / `skipped`, never as a pa
 a silent gap here would be exactly the false-safety signal this command exists to avoid.
 """
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,7 +27,7 @@ _IGNORED_PARTS = {"__pycache__", "node_modules", ".git", "vendor", ".venv", "ven
 def _path_arg(rel: str) -> str:
     """A git-reported path as a checker argument that cannot be read as an option.
 
-    File names come from `git diff --name-only`, so a file named `--eval=...` or `-r x`
+    File names come from `git diff --name-only -z`, so a file named `--eval=...` or `-r x`
     reached the checker's argv as a flag. Anchoring every path at `./` makes it a path to
     node, php and pyflakes alike; `--` would do it for some of them and not others.
     """
@@ -69,24 +70,46 @@ def _run(argv: list[str], project_root: Path) -> tuple[int, str]:
     return proc.returncode, output.strip()
 
 
-def _git_lines(argv: list[str], project_root: Path) -> tuple[list[str], str | None]:
-    code, output = _run(argv, project_root)
-    if code != 0:
-        detail = output or f"git exited {code}"
-        return [], f"{' '.join(argv)}: {detail[:300]}"
-    return [line.strip() for line in output.splitlines() if line.strip()], None
+def _git_fields(argv: list[str], project_root: Path) -> tuple[list[str], str | None]:
+    """The NUL-separated fields of a `-z` git command, each decoded with `os.fsdecode`.
+
+    Without `-z` Git quotes a non-ASCII name (`"caf\\303\\251.txt"`), and text mode decodes
+    the rest in the locale's code page while Git writes UTF-8: either way the name no
+    longer named a file, and the file went unchecked. Read as bytes, a name arrives as
+    the file system spells it."""
+    label = " ".join(argv)
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=project_root,
+            capture_output=True,
+            timeout=FILE_TIMEOUT_SECONDS,
+            check=False,
+            **osutil.hidden_run_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        return [], f"{label}: timeout after {FILE_TIMEOUT_SECONDS}s"
+    except OSError as exc:
+        return [], f"{label}: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stdout + proc.stderr).decode("utf-8", errors="replace").strip()
+        return [], f"{label}: {(detail or f'git exited {proc.returncode}')[:300]}"
+    try:
+        return [os.fsdecode(field) for field in proc.stdout.split(b"\0") if field], None
+    except ValueError as exc:  # a name the file system encoding cannot spell
+        return [], f"{label}: {exc}"
 
 
 def _discover_changed_files(project_root: Path) -> tuple[list[str], list[str]]:
     commands = (
-        ["git", "diff", "--name-only", "--"],
-        ["git", "diff", "--cached", "--name-only", "--"],
-        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["git", "diff", "--name-only", "-z", "--"],
+        ["git", "diff", "--cached", "--name-only", "-z", "--"],
+        ["git", "ls-files", "-z", "--others", "--exclude-standard"],
     )
     discovered: list[str] = []
     errors: list[str] = []
     for argv in commands:
-        lines, error = _git_lines(argv, project_root)
+        lines, error = _git_fields(argv, project_root)
         if error:
             errors.append(error)
         discovered.extend(lines)
@@ -142,12 +165,22 @@ def changed_file_stats(project_root: Path) -> dict[str, tuple[int, int]]:
     worktree means no measurement, never a wrong one.
     """
     stats: dict[str, tuple[int, int]] = {}
-    lines, _error = _git_lines(["git", "diff", "--numstat", "HEAD", "--"], project_root)
-    for row in lines:
-        parts = row.split("\t")
+    # -z, so a name keys the same as in `changed_files` (_git_fields). A row is
+    # `<added>\t<deleted>\t<path>`; a rename leaves the path empty and its source and
+    # destination follow as the next two fields, the destination being the file now.
+    fields, _error = _git_fields(["git", "diff", "--numstat", "-z", "HEAD", "--"], project_root)
+    at = 0
+    while at < len(fields):
+        parts = fields[at].split("\t", 2)  # -z leaves a tab in a name unquoted
+        at += 1
         if len(parts) < 3:
             continue
-        added, deleted, rel = parts[0], parts[1], parts[-1]
+        added, deleted, rel = parts[0], parts[1], parts[2]
+        if not rel:
+            if at + 1 >= len(fields):
+                break
+            rel = fields[at + 1]
+            at += 2
         if _IGNORED_PARTS & set(Path(rel).parts):
             continue
         stats[rel] = (
@@ -155,8 +188,8 @@ def changed_file_stats(project_root: Path) -> dict[str, tuple[int, int]]:
             int(deleted) if deleted.isdigit() else 0,
         )
 
-    untracked, _ = _git_lines(
-        ["git", "ls-files", "--others", "--exclude-standard"], project_root
+    untracked, _ = _git_fields(
+        ["git", "ls-files", "-z", "--others", "--exclude-standard"], project_root
     )
     for rel in untracked:
         if rel in stats or _IGNORED_PARTS & set(Path(rel).parts):

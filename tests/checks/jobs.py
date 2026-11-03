@@ -407,6 +407,30 @@ def _test_job_store_not_writable() -> None:
             and "writable_roots" not in meta.get("next_action", ""),
             f"a refused write outside the job store names that path, not the grant: {result}",
         )
+
+        # `write`/`fsync` raise without a filename. A permission errno is still the store's
+        # refusal; a full disk or an I/O error is not, and a sandbox grant would not fix it.
+        for unnamed, reason in (
+            (PermissionError(13, "Permission denied"), "job_store_not_writable"),
+            (OSError(28, "No space left on device"), "job_store_write_failed"),
+            (OSError(5, "Input/output error"), "job_store_write_failed"),
+        ):
+            @contextlib.contextmanager
+            def failing(exc=unnamed):
+                raise exc
+                yield  # pragma: no cover
+
+            manager.capacity_guard = failing
+            result = main.submit("analyze", "task", "denied-session", str(root), None)
+            meta = result.get("meta", {})
+            granted = "writable_roots" in meta.get("next_action", "") or "fix_snippet" in meta
+            assert_true(
+                not result.get("ok")
+                and meta.get("reason") == reason
+                and meta.get("job_store") == str(manager.job_dir)
+                and granted == (reason == "job_store_not_writable"),
+                f"a filename-less errno {unnamed.errno} reads as {reason}: {result}",
+            )
     finally:
         main.JOB_MANAGER = original_manager
         main._spawn_worker = original_spawn
@@ -426,8 +450,9 @@ def _test_job_store_not_writable() -> None:
         assert_true(
             report["checks"].get("job_store_writable") is False
             and any(issue.startswith("job store not writable") for issue in meta["issues"])
-            and any("[sandbox_workspace_write]" in fix_text for fix_text in meta["recommended_fixes"]),
-            f"doctor reports the unwritable job store with the snippet: {meta}",
+            and any("[sandbox_workspace_write]" in fix_text and "exoma install --check" in fix_text
+                    for fix_text in meta["recommended_fixes"]),
+            f"doctor reports the unwritable job store with the snippet and the grant check: {meta}",
         )
     finally:
         settings.JOB_DIR = original_job_dir

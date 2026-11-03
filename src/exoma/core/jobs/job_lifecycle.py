@@ -7,6 +7,7 @@ monkeypatching of `main.*` keeps working. Importing them by value would bind the
 pre-patch objects and make tests assert against something nothing else uses.
 """
 
+import errno
 import os
 import sys
 import time
@@ -40,6 +41,11 @@ def _main():
     from exoma import cli
 
     return cli
+
+
+# The errnos a sandbox or a read-only mount refuses a write with. A Windows access error
+# arrives as PermissionError (winerror 5 maps to EACCES), checked by type as well.
+_REFUSAL_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
 
 
 def _within(path, root) -> bool:
@@ -256,17 +262,29 @@ def submit(
         # OSError (EACCES, EPERM, EROFS, a Windows access error) on another, and only the first
         # used to get the fix. An error that names a path outside the store (the project's
         # verify request, say) is not the store's: it is reported as that path's.
-        fix = job_store_fix(_main().JOB_MANAGER.job_dir)
+        # Only a permission errno is a refusal a sandbox grant fixes. `write`, `fsync` and
+        # `fdopen` raise without a filename, so a full disk or an I/O error in the store
+        # (ENOSPC, EIO) used to arrive here with grant advice that could not help.
+        job_dir = _main().JOB_MANAGER.job_dir
+        fix = job_store_fix(job_dir)
         path = getattr(exc, "filename", None)
         meta = {"command": normalized_command, "error": type(exc).__name__, "path": path}
-        if path is None or _within(path, fix["writable_root"]) or _within(path, _main().JOB_MANAGER.job_dir):
+        in_store = path is None or _within(path, fix["writable_root"]) or _within(path, job_dir)
+        refused = isinstance(exc, PermissionError) or exc.errno in _REFUSAL_ERRNOS
+        if in_store and refused:
             meta.update(
                 reason="job_store_not_writable",
-                job_store=str(_main().JOB_MANAGER.job_dir),
+                job_store=str(job_dir),
                 writable_root=fix["writable_root"],
                 fix_snippet=fix["snippet"],
             )
             next_action = fix["next_action"]
+        elif in_store:
+            meta.update(reason="job_store_write_failed", job_store=str(job_dir), errno=exc.errno)
+            next_action = (
+                f"Exoma could not write the job store {job_dir} ({exc.strerror or exc}). "
+                "This is not a permission refusal: check free disk space and the device, then retry."
+            )
         else:
             meta["reason"] = "write_refused"
             next_action = f"Exoma could not write {path} ({exc.strerror or exc}). Make it writable, then retry."

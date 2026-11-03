@@ -237,6 +237,8 @@ def run_doctor(
             "`exoma install` again with codex among the chosen hosts (it writes the grant into "
             "~/.codex/config.toml unless you "
             f"keep your own [sandbox_workspace_write] table), or add to that file:\n{fix['snippet']}\n"
+            "`exoma install --check` reports whether the grant Exoma wrote is missing or drifted; "
+            "doctor only probes the store. "
             "Or start the host with EXOMA_HOME set to a directory it can write"
         )
 

@@ -140,6 +140,7 @@ def _execution_tracks_its_own_edits() -> None:
     that already carried uncommitted edits, flag those outside the scope (whatever tool
     wrote them), and name edits made after execute-end at verify. No Git: unknown."""
     import subprocess
+    import unicodedata
 
     from tests.checks.support import no_console
 
@@ -166,12 +167,14 @@ def _execution_tracks_its_own_edits() -> None:
 
         (root / "src" / "x.py").write_text("x = 2\n", encoding="utf-8")
         (root / "src" / "new.py").write_text("n = 1\n", encoding="utf-8")
+        (root / "src" / "café.py").write_text("c = 1\n", encoding="utf-8")  # non-ASCII, in scope
         (root / "outside.py").write_text("o = 1\n", encoding="utf-8")  # as a Bash write would
         ended = execution.end_execution(root, session)["execution"]
-        changed = {c["path"]: c["status"] for c in ended["changed_files"]}
-        assert_true(changed == {"src/x.py": "M", "src/new.py": "A", "outside.py": "A"},
+        changed = {unicodedata.normalize("NFC", c["path"]): c["status"] for c in ended["changed_files"]}
+        assert_true(changed == {"src/x.py": "M", "src/new.py": "A", "src/café.py": "A", "outside.py": "A"},
                     f"only the execution's own edits, not the tree's earlier ones: {changed}")
-        assert_true(ended["outside_scope"] == ["outside.py"], f"outside the scope is flagged: {ended}")
+        assert_true(ended["outside_scope"] == ["outside.py"],
+                    f"outside the scope is flagged, a non-ASCII name inside it is not: {ended}")
         assert_true(execution.in_scope("src/x.py", ["SRC/"], casefold=True)
                     and not execution.in_scope("src/x.py", ["SRC/"], casefold=False),
                     "scope case: ignored where the gate ignores it (Windows), kept elsewhere")

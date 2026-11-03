@@ -836,10 +836,16 @@ store: the machine-wide worker cap counts each store on its own.
 When the store is refused, the `job_submit_error` envelope carries
 `meta.reason: job_store_not_writable`, `meta.job_store`, `meta.writable_root` and
 `meta.fix_snippet` (the snippet above with this machine's path), and `next_action` names
-both fixes for any host, with Codex's setting as the example. Doctor probes the same store
+both fixes for any host, with Codex's setting as the example. Only a permission refusal reads
+this way: a `PermissionError`, or `EACCES`, `EPERM` or `EROFS`, raised on a path inside the
+store or with no path at all. Any other error in the store (a full disk, an I/O error)
+carries `meta.reason: job_store_write_failed`, `meta.job_store` and `meta.errno`, with no
+grant advice, since a grant would not fix it. Doctor probes the same store
 (`checks.job_store_writable`); run inside the host session, it fails exactly when submit
 would: the store is listed in `issues`, so the status is `NOT_READY` and doctor exits 1, and
-`recommended_fixes` carries the snippet.
+`recommended_fixes` carries the snippet. Doctor does not read the grant itself: whether the
+block Exoma wrote is missing or drifted is reported by `exoma install --check`, which the
+fix names.
 
 **Agy's hook contract, as measured** (CASE-029, a draft in agent-workflow). Hooks load from
 `~/.gemini/config/hooks.json` and the workspace's `.agents/hooks.json`. Every payload carries

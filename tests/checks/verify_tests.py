@@ -1419,6 +1419,19 @@ def _check_tree_fingerprint_edge_cases() -> None:
             after = tf.tree_fingerprint(root)
             assert_true(after is not None and after != before,
                         f"an edit to a flagged CR-named file is seen: {before} -> {after}")
+        # Git writes names as UTF-8; read in the locale's code page (cp1252 on Windows) a
+        # new `café.txt` came back as `cafÃ©.txt`, a path the execution scope never matched.
+        import unicodedata
+
+        before = tf.tree_fingerprint(root)
+        (root / "café.txt").write_text("1", encoding="utf-8")
+        (root / "naïve").mkdir()
+        (root / "naïve" / "ü.py").write_text("u = 1\n", encoding="utf-8")
+        after = tf.tree_fingerprint(root)
+        changed = tf.changed_paths(root, before, after) or []
+        named = sorted((c["status"], unicodedata.normalize("NFC", c["path"])) for c in changed)
+        assert_true(named == [("A", "café.txt"), ("A", "naïve/ü.py")],
+                    f"non-ASCII names come back as the file system spells them: {changed}")
         real_git = tf._git
 
         def rm_fails(root_, args, env=None):
