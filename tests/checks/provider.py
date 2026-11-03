@@ -1831,6 +1831,119 @@ def _assert_codex_provider() -> None:
         f"sandbox words only in the agent's stdout are not a sandbox refusal: {unrelated['meta'].get('error_type')}",
     )
 
+    # The OS refusing codex a socket (Windows WSAEACCES, os error 10013) — a main host's
+    # sandbox with network off. Its text carries "forbidden", which used to land on
+    # permission_denied and its useless "grant read access to the path".
+    class _SocketDeniedCodex(_NoSessionCodex):
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)
+            return {
+                **outcome,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": (
+                    "ERROR: stream disconnected before completion: error sending request: "
+                    "An attempt was made to access a socket in a way forbidden by its access "
+                    "permissions. (os error 10013)"
+                ),
+            }
+
+    socket_denied = _SocketDeniedCodex(command="codex").run("task", {}, None, None)
+    assert_true(
+        not socket_denied["ok"]
+        and socket_denied["meta"]["error_type"] == "network_denied"
+        and "require_escalated" in socket_denied["meta"]["next_action"],
+        f"os error 10013 is a network refusal, not a path one: {socket_denied['meta'].get('error_type')}",
+    )
+
+    # The same refusal wrapped in stream/retry wording is still the refusal, not a transient.
+    class _SocketDeniedInStreamCodex(_NoSessionCodex):
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)
+            return {
+                **outcome,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": (
+                    "ERROR: stream error: error sending request for url "
+                    "(https://api.openai.com/v1/responses): connection closed; retrying 5/5. "
+                    "An attempt was made to access a socket in a way forbidden by its access "
+                    "permissions. (os error 10013)"
+                ),
+            }
+
+    in_stream = _SocketDeniedInStreamCodex(command="codex").run("task", {}, None, None)
+    assert_true(
+        in_stream["meta"]["error_type"] == "network_denied",
+        f"10013 inside stream wording is still network_denied: {in_stream['meta'].get('error_type')}",
+    )
+
+    class _SocketWordsInStdoutCodex(_NoSessionCodex):
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)
+            return {
+                **outcome,
+                "returncode": 1,
+                "stdout": '{"type":"item.completed","item":{"aggregated_output":"docs: os error 10013"}}',
+                "stderr": "ERROR codex_core: turn aborted",
+            }
+
+    socket_in_stdout = _SocketWordsInStdoutCodex(command="codex").run("task", {}, None, None)
+    assert_true(
+        not socket_in_stdout["ok"] and socket_in_stdout["meta"]["error_type"] != "network_denied",
+        f"socket words only in the agent's stdout are not a network refusal: {socket_in_stdout['meta'].get('error_type')}",
+    )
+
+    # opencode (Node) reports the same WSAEACCES as `connect EACCES <addr>`: "eacces" is a
+    # permission sign too, and the socket check has to come first.
+    from exoma.adapters.providers.opencode_adapter import OpenCodeAdapter
+
+    class _SocketDeniedOpenCode(OpenCodeAdapter):
+        def __init__(self, stderr: str) -> None:
+            super().__init__(command="opencode", timeout_seconds=5)
+            self._stderr = stderr
+
+        def _resolve_command(self) -> str:
+            return "C:/tools/opencode.exe"
+
+        def init_session(self, model=None, work_dir=None, workflow_session_id=None):
+            return "ses_socket", {"provider_session_id": "ses_socket", "returncode": 0}
+
+        def _popen_capture(self, args, env, cwd, timeout, phase):
+            return {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": self._stderr,
+                "timed_out": False,
+                "duration_seconds": 0.01,
+                "idle_seconds": 0.0,
+                "pid": 1,
+                "kill": None,
+            }
+
+    socket_root = Path(tempfile.mkdtemp(prefix="provider-socket-"))
+    for stderr in (
+        "Error: connect EACCES 104.18.32.47:443",
+        "stream error: socket hang up; connect EACCES 104.18.32.47:443",
+        "An attempt was made to access a socket in a way forbidden by its access permissions. (os error 10013)",
+    ):
+        opencode_denied = _SocketDeniedOpenCode(stderr).run(
+            "task", {"session_id": "sid-socket", "provider_session_id": None},
+            "openrouter/some/model", str(socket_root),
+        )
+        assert_true(
+            not opencode_denied["ok"] and opencode_denied["meta"].get("error_type") == "network_denied",
+            f"opencode: a refused socket is network_denied, not a path refusal: {stderr!r} -> {opencode_denied['meta']}",
+        )
+    path_denied = _SocketDeniedOpenCode("Error: EACCES: permission denied, open 'C:/x/.env'").run(
+        "task", {"session_id": "sid-socket", "provider_session_id": None},
+        "openrouter/some/model", str(socket_root),
+    )
+    assert_true(
+        path_denied["meta"].get("error_type") == "permission_denied",
+        f"opencode: a refused path stays permission_denied: {path_denied['meta']}",
+    )
+
     _check_version_cache(versions_module)
 
     # Provider releases against the bundle's stable_version (core/provider/versions.py):

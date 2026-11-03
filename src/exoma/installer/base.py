@@ -72,6 +72,10 @@ OPENCODE_PLUGIN = f"{OPENCODE_HOST}/exoma.js"
 OPENCODE_CONTRACT = f"{OPENCODE_HOST}/exoma/CONTRACT.md"
 OPENCODE_HOOKS_PREFIX = f"{OPENCODE_HOST}/exoma/hooks/"
 OPENCODE_SKILLS_PREFIX = f"{OPENCODE_HOST}/skills/"
+# OpenCode's own custom commands (~/.config/opencode/commands/<name>.md, typed `/<name>`): one
+# `exoma-<name>` command per Claude `/.<name>` command, each running the skill of that name.
+# Codex has no such files — its skills are its commands (`$exoma-<name>`, `/skills`).
+OPENCODE_COMMANDS_PREFIX = f"{OPENCODE_HOST}/commands/"
 AGY_SKILLS_PREFIX = "hosts/agy/skills/"
 AGY_DOCTOR_SKILL = f"{AGY_SKILLS_PREFIX}doctor/SKILL.md"
 AGY_DOCTOR_FRAGMENT = "hosts/agy/doctor.agy.md"
@@ -556,8 +560,32 @@ def _opencode_text(text: str, key: str) -> str:
         name = key[len(OPENCODE_SKILLS_PREFIX):].split("/", 1)[0]
         text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
         text = text.replace("---\n\n", "---\n\nOpenCode host: the `" + name + "` skill is this workflow command. "
-                            "Read ~/.config/opencode/exoma/CONTRACT.md and use OpenCode tool names.\n\n", 1)
+                            "Follow the Exoma contract Exoma's plugin puts in your system prompt (read "
+                            "~/.config/opencode/exoma/CONTRACT.md only when it is not there) and use OpenCode "
+                            "tool names.\n\n", 1)
+    if key.startswith(OPENCODE_COMMANDS_PREFIX):
+        text = _opencode_command(text, key[len(OPENCODE_COMMANDS_PREFIX):].removesuffix(".md"))
     return text
+
+
+def _opencode_command(text: str, name: str) -> str:
+    """A Claude `/.<name>` command as OpenCode's `/exoma-<name>`.
+
+    The body opens with `$exoma-<name>` and the arguments: OpenCode sends the expanded
+    template as the prompt, and the plugin's hook reads `$exoma-<name>` at its start as the
+    command itself (arming a delegated gate, recording `-y`) exactly as if the user typed it.
+    The skill is loaded through the skill tool, not read from its path, which lies outside the
+    project and would ask for `external_directory` access."""
+    description = ""
+    for line in text.splitlines()[:6]:
+        if line.startswith("description:"):
+            description = line.partition(":")[2].strip().strip('"')
+            break
+    return (
+        f"---\ndescription: {json.dumps(description or name, ensure_ascii=False)}\n---\n"
+        f"${name} $ARGUMENTS\n\n"
+        f"Load the `{name}` skill with the skill tool and follow it exactly, with the arguments above.\n"
+    )
 
 
 def _render_text(src: Path, key: str, project_root: Path | None, only_command: bool = False) -> str:
@@ -1260,6 +1288,13 @@ def _opencode_targets() -> list[tuple[Path, Path, str]]:
     for source in sorted((claude / "skills").glob("*.md")):
         name = "exoma-" + source.stem
         mapping.append((source, dest / "skills" / name / "SKILL.md", f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"))
+    skills = {source.stem for source in (claude / "skills").glob("*.md")}
+    for source in sorted((claude / "commands").glob(".*.md")):
+        stem = source.name[1:-len(".md")]
+        if stem not in skills:
+            continue  # a command with no skill behind it would run nothing
+        name = "exoma-" + stem
+        mapping.append((source, dest / "commands" / f"{name}.md", f"{OPENCODE_COMMANDS_PREFIX}{name}.md"))
     # Last: the plugin is what switches the gates on, so it lands after what it calls.
     mapping.append((opencode / "exoma.js", dest / "plugins" / "exoma.js", OPENCODE_PLUGIN))
     return mapping

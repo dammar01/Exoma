@@ -93,6 +93,24 @@ _EVENT_TYPES = frozenset(
 # grow the in-memory buffer without limit. The tail is kept (evidence blocks live at the end).
 MAX_CAPTURE_CHARS = 4_000_000
 
+# The OS refusing a socket, not a path: Windows WSAEACCES (os error 10013), which Node
+# reports as `connect EACCES <addr>`. Checked before every other sign: the permission signs
+# match the same text on "eacces"/"forbidden" and advise a path grant that cannot help.
+_SOCKET_DENIED_SIGNS = (
+    "os error 10013",
+    "wsaeacces",
+    "forbidden by its access permissions",
+    "connect eacces",
+)
+
+_NETWORK_DENIED_NEXT_ACTION = (
+    "The OS refused opencode a network socket (os error 10013 / connect EACCES); nothing was "
+    "read. The usual cause is the MAIN host's sandbox with network off, inherited by the "
+    "runner and the provider it starts (Codex as main agent: its workspace-write sandbox). "
+    "Rerun the same runner command with escalated sandbox permissions (Codex: "
+    "sandbox_permissions require_escalated); otherwise check a firewall or proxy."
+)
+
 # Substrings that signal opencode refused a path rather than a real crash.
 _PERMISSION_SIGNS = (
     "permission denied",
@@ -1058,6 +1076,15 @@ class OpenCodeAdapter:
         if outcome["returncode"] != 0:
             err_tail = _error_tail(meta["stderr"])
             tail_low = err_tail.lower()
+            # First: a refused socket names its cause outright, while the same stderr can also
+            # carry stream or rate words that would file it as a transient.
+            if any(sign in tail_low for sign in _SOCKET_DENIED_SIGNS):
+                return make_error(
+                    "network_denied",
+                    cleaned or "opencode was refused a network socket",
+                    next_action=_NETWORK_DENIED_NEXT_ACTION,
+                    meta=meta,
+                )
             if _is_rate_limited(err_tail):
                 return make_error(
                     "rate_limited",

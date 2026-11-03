@@ -100,9 +100,14 @@ PROFILES: dict[str, HostProfile] = {
         background="blocking",
         delegated_run=(
             "Run it with `exec_command` and a long timeout (10 minutes): the runner blocks until it prints "
-            "its JSON. If the session yields before that, wait on that same `exec_command` session; never "
-            "start a second runner call for the same task, and never read `.workflow/data` by hand while it "
-            "runs."
+            "its JSON. Request it with `sandbox_permissions: \"require_escalated\"`, a one-line "
+            "`justification`, and a `prefix_rule` matching the runner call exactly as you run it (its bash "
+            "path, then this project's `.workflow/run.sh`) so the user approves the runner once: the second "
+            "agent it starts needs the network, which your sandbox "
+            "denies (os error 10013, `network_denied`), and it keeps its own read-only sandbox. Escalate "
+            "only the runner call. If the session yields before it returns, wait on that same `exec_command` "
+            "session; never start a second runner call for the same task, and never read `.workflow/data` "
+            "by hand while it runs."
         ),
         ask_user=(
             "Renderer = the user-input tool when Codex offers one, otherwise ask in the reply: one question "

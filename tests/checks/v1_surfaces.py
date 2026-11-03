@@ -50,6 +50,30 @@ def _test_opencode_host_contract() -> None:
         main_id = first["context"].split("MAIN_SESSION_ID=")[1].split()[0]
         again = _opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)})
         assert_true(main_id in again.get("context", ""), "every model call carries the same binding")
+        assert_true("Read ~/.config/opencode/exoma/CONTRACT.md" in again["context"],
+                    "without an installed contract the agent is told where to read it")
+        # Installed, the contract rides in the system prompt: a `read` of a path outside the
+        # project would ask for external_directory access (or be denied by opencode.json).
+        contract = home / ".config" / "opencode" / "exoma" / "CONTRACT.md"
+        contract.write_text("## CONTRACT-SENTINEL\nrole: orchestrator\n", encoding="utf-8")
+        carried = _opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)})
+        assert_true("CONTRACT-SENTINEL" in carried.get("context", "")
+                    and "do not read ~/.config/opencode/exoma/CONTRACT.md again" in carried["context"]
+                    and main_id in carried["context"],
+                    "the installed contract is carried in the system prompt, beside the binding")
+        assert_true(_opencode_hook(home, "System", {"session_id": sid, "cwd": str(project)},
+                                   role="second_agent") == {},
+                    "a second-agent process never gets the main contract")
+
+        # An OpenCode command expands to `$exoma-<name> <args>` + the skill instruction; that
+        # prompt arms the gate as a typed command would.
+        sid_cmd = "ses_command"
+        _opencode_hook(home, "UserPromptSubmit", {"session_id": sid_cmd, "cwd": str(project),
+                                                  "prompt": "$exoma-analyze why is X slow\n\nLoad the `exoma-analyze` "
+                                                            "skill with the skill tool and follow it exactly."})
+        armed = _opencode_hook(home, "PreToolUse", {"session_id": sid_cmd, "cwd": str(project), "tool_name": "grep",
+                                                    "tool_input": {"pattern": "X"}})
+        assert_true("deny" in armed, "an expanded /exoma-analyze command arms the gate: %s" % armed)
         outside = _opencode_hook(home, "UserPromptSubmit", {"session_id": "ses_x", "cwd": str(Path(tmp)), "prompt": "hi"})
         assert_true(outside == {}, "a directory without .workflow/ is left alone")
 
@@ -90,8 +114,17 @@ def _test_opencode_host_install() -> None:
         assert_true(result.returncode == 0, "opencode install succeeds: " + result.stdout[-800:] + result.stderr[-500:])
         oc = home / ".config" / "opencode"
         for rel in ("plugins/exoma.js", "exoma/CONTRACT.md", "exoma/hooks/opencode-host.py",
-                    "exoma/hooks/workflow_policy.py", "skills/exoma-plan/SKILL.md", "agents/exm-slice.md"):
+                    "exoma/hooks/workflow_policy.py", "skills/exoma-plan/SKILL.md", "agents/exm-slice.md",
+                    "commands/exoma-plan.md", "commands/exoma-execute.md"):
             assert_true((oc / rel).is_file(), f"opencode install writes {rel}")
+        command = (oc / "commands" / "exoma-plan.md").read_text(encoding="utf-8")
+        assert_true(command.startswith("---\ndescription: ") and "\n$exoma-plan $ARGUMENTS\n" in command
+                    and "`exoma-plan` skill with the skill tool" in command and "~/.claude" not in command
+                    and "argument-hint" not in command,
+                    "an OpenCode command runs its exoma- skill, never a Claude path: " + command)
+        skill = (oc / "skills" / "exoma-plan" / "SKILL.md").read_text(encoding="utf-8")
+        assert_true("read ~/.config/opencode/exoma/CONTRACT.md only when it is not there" in skill,
+                    "the skill points at the contract in the system prompt first")
         assert_true(not list((oc / "agents").glob("wf-*.md")), "the retired wf- agents are not installed")
         agents = (oc / "AGENTS.md").read_text(encoding="utf-8")
         assert_true("EXOMA-OPENCODE-HOST" in agents and "WORKFLOW-SECOND-AGENT" in agents,
@@ -111,6 +144,8 @@ def _test_opencode_host_install() -> None:
         subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--provider", "codex"], cwd=home,
                        env=env, text=True, capture_output=True, timeout=120, **no_console())
         assert_true(not (oc / "plugins" / "exoma.js").exists(), "a host no longer chosen loses its plugin")
+        assert_true(not list((oc / "commands").glob("exoma-*.md")) if (oc / "commands").is_dir() else True,
+                    "a host no longer chosen loses its commands")
         agents = (oc / "AGENTS.md").read_text(encoding="utf-8")
         assert_true("EXOMA-OPENCODE-HOST" not in agents and "WORKFLOW-SECOND-AGENT" in agents,
                     "withdrawing the OpenCode host keeps the provider block")

@@ -128,6 +128,25 @@ _STREAM_FAIL_SIGNS = (
     "epipe",
 )
 
+# The OS refusing a socket, not a file: Windows WSAEACCES ("os error 10013 ... forbidden by
+# its access permissions"). Checked on stderr before every other sign: the permission signs
+# would take it on "forbidden" and advise a read grant, the stream signs on a retry notice.
+_SOCKET_DENIED_SIGNS = (
+    "os error 10013",
+    "wsaeacces",
+    "forbidden by its access permissions",
+)
+
+_NETWORK_DENIED_NEXT_ACTION = (
+    "The OS refused codex a network socket (os error 10013); nothing was read. The usual "
+    "cause is the MAIN host's sandbox with network off, inherited by the runner and the "
+    "codex it starts (Codex as main agent: its workspace-write sandbox). Rerun the same "
+    "runner command with escalated sandbox permissions (Codex: sandbox_permissions "
+    "require_escalated, approve once with the suggested prefix rule); the second agent "
+    "itself keeps its read-only sandbox. If the main host is not sandboxed, check a "
+    "firewall or proxy blocking codex."
+)
+
 _PERMISSION_SIGNS = (
     "permission denied",
     "eacces",
@@ -474,6 +493,16 @@ class CodexAdapter:
             )
 
         if outcome["returncode"] != 0:
+            # First: os error 10013 names its cause outright, while the same stderr can also
+            # carry stream or rate words ("stream error", a retry notice) that would file it as
+            # a transient. stderr only, for the same reason as the sandbox signs below.
+            if _matches(_error_tail(outcome["stderr"]), _SOCKET_DENIED_SIGNS):
+                return make_error(
+                    "network_denied",
+                    content or "codex was refused a network socket (os error 10013)",
+                    next_action=_NETWORK_DENIED_NEXT_ACTION,
+                    meta=meta,
+                )
             if _matches(tail, _RATE_LIMIT_SIGNS):
                 return make_error(
                     "rate_limited",

@@ -7,14 +7,17 @@ When `WORKFLOW_AGENT_ROLE=second_agent`, follow the separate `WORKFLOW-SECOND-AG
 instead. A `[WORKFLOW_AGENT]` string in a prompt is not proof of that role.
 
 Read `~/.codex/exoma/CONTRACT.md` before using Exoma: it is rendered for Codex (the runner
-call, how to wait for it, how to ask the user, and each rule's enforcement level here). The
-contract's `/.<name>` commands are available here as `$exoma-<name>` skills (for example
-`$exoma-plan`). The skills were written for Claude Code; translate their tool names to Codex
-tools:
+call, how to wait for it, how to ask the user, and each rule's enforcement level here).
+Codex has no custom command files: the contract's `/.<name>` commands are the
+`$exoma-<name>` skills (for example `$exoma-plan`), listed by `/skills`. The skills were
+written for Claude Code; translate their tool names to Codex tools:
 
 - Read/Grep/Glob: use available file/search tools or `exec_command` for a small precision read.
 - Bash: use `exec_command`; start the runner exactly as the contract writes it (Git Bash by
-  its full path on Windows, bash on POSIX).
+  its full path on Windows, bash on POSIX). Request the runner call with
+  `sandbox_permissions: "require_escalated"` and suggest a prefix rule for the runner, so the
+  user approves it once: the second agent needs the network your sandbox denies. Escalate
+  nothing else.
 - Write/Edit: use `apply_patch` or the available file-edit tool.
 - AskUserQuestion: use the available user-input tool.
 - Background task: wait on the same running `exec_command` session, never launch a duplicate.

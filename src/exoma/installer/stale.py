@@ -50,12 +50,13 @@ def managed_prefixes() -> tuple[str, ...]:
     # The Agy host's skills and hook scripts too: a host the user stops choosing leaves its
     # files out of the current targets, and this prune is what takes them away.
     from exoma.installer.base import (
-        CODEX_CONTRACT, CODEX_HOOKS_PREFIX, OPENCODE_CONTRACT, OPENCODE_HOOKS_PREFIX, OPENCODE_PLUGIN,
+        CODEX_CONTRACT, CODEX_HOOKS_PREFIX, OPENCODE_COMMANDS_PREFIX, OPENCODE_CONTRACT,
+        OPENCODE_HOOKS_PREFIX, OPENCODE_PLUGIN,
     )
     prefixes = [f"{CLAUDE_HOST}/skills/", f"{CLAUDE_HOST}/commands/", CLAUDE_HOOKS_PREFIX,
                 AGY_SKILLS_PREFIX, AGY_HOOKS_PREFIX, CODEX_CONTRACT, CODEX_HOOKS_PREFIX,
                 CODEX_SKILLS_PREFIX, OPENCODE_CONTRACT, OPENCODE_HOOKS_PREFIX, OPENCODE_SKILLS_PREFIX,
-                OPENCODE_PLUGIN]
+                OPENCODE_COMMANDS_PREFIX, OPENCODE_PLUGIN]
     for name, bundle in PROVIDER_BUNDLES.items():
         if bundle.get("agents_dir"):
             prefixes.append(f"{provider_dir(name)}/{bundle['agents_dir']}/")

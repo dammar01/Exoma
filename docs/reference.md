@@ -78,7 +78,7 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 
 | Group | `error_type` |
 |---|---|
-| Provider and worker | `timeout`, `worker_died`, `worker_crashed`, `worker_stalled`, `job_expired`, `rate_limited`, `streaming_failed`, `sandbox_unavailable`, `second_agent_unavailable`, `command_not_found`, `permission_denied` |
+| Provider and worker | `timeout`, `worker_died`, `worker_crashed`, `worker_stalled`, `job_expired`, `rate_limited`, `streaming_failed`, `sandbox_unavailable`, `network_denied`, `second_agent_unavailable`, `command_not_found`, `permission_denied` |
 | second_agent output | `empty_output`, `invalid_evidence`, `session_capture_failed`, `task_truncated`, `fact_ingest_failed` |
 | Prompt and command line | `prompt_too_long`, `unsafe_command_line` |
 | Provider config | `provider_config_missing`, `provider_config_invalid`, `model_unset`, `invalid_provider_selection` |
@@ -92,6 +92,8 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 `worker_died` with `meta.reason: recovery_exhausted` means automatic recovery has already been used; do not retry automatically (see [Async jobs & recovery](#async-jobs--recovery)).
 
 `sandbox_unavailable` with `meta.reason: resume_sandbox_failed` means the codex Windows sandbox rejects a **resumed** thread; a new thread is known to work (see "Codex on Windows" in [`.workflow/second_agent.json`](#workflowsecond_agentjson)).
+
+`network_denied`: the OS refused the provider a network socket — Windows WSAEACCES, `os error 10013` (codex), or `connect EACCES <address>` (opencode, Node). Classified from stderr only, before `permission_denied`, whose signs (`forbidden`, `eacces`) the same text also carries. The usual cause is a main host's sandbox with network off, which the runner and the provider it starts inherit: Codex as main agent on its `workspace-write` sandbox (see "Codex host" in [Hosts](#hosts)). `next_action` names the escalated runner call; the second agent keeps its own sandbox.
 
 ---
 
@@ -693,8 +695,8 @@ module (a partial install) exits 0 without acting, like every other state it can
 
 | Capability | Claude Code | Agy (as calibrated, CASE-029) | Codex CLI | OpenCode |
 |---|---|---|---|---|
-| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, pointing to its rendered `CONTRACT.md` | `~/.codex/AGENTS.md` block `EXOMA-CODEX-HOST`, pointing to `~/.codex/exoma/CONTRACT.md`; separate from the Codex provider block | `~/.config/opencode/AGENTS.md` block `EXOMA-OPENCODE-HOST`, pointing to `~/.config/opencode/exoma/CONTRACT.md`; separate from the opencode provider block |
-| Commands | skills + slash commands | `/.<name>` skills | `$exoma-<name>` skills under `~/.codex/skills/` | `exoma-<name>` skills under `~/.config/opencode/skills/`; `/.<name>` and `$exoma-<name>` in a prompt map to workflow commands |
+| Instructions | `~/.claude/CLAUDE.md` block | `~/.gemini/GEMINI.md` block `EXOMA-HOST`, pointing to its rendered `CONTRACT.md` | `~/.codex/AGENTS.md` block `EXOMA-CODEX-HOST`, pointing to `~/.codex/exoma/CONTRACT.md`; separate from the Codex provider block | `~/.config/opencode/AGENTS.md` block `EXOMA-OPENCODE-HOST`; the rendered `~/.config/opencode/exoma/CONTRACT.md` is carried in the system prompt by the plugin (no `read` call); separate from the opencode provider block |
+| Commands | skills + slash commands | `/.<name>` skills | `$exoma-<name>` skills under `~/.codex/skills/`, listed by `/skills` (Codex has no custom command files) | `/exoma-<name>` commands under `~/.config/opencode/commands/`, each running the `exoma-<name>` skill under `~/.config/opencode/skills/`; `/.<name>` and `$exoma-<name>` in a prompt map to workflow commands |
 | Prompt routing | `UserPromptSubmit` | `PreInvocation`, `invocationNum` 0 | `UserPromptSubmit`; explicit skill mentions map to workflow commands | plugin `chat.message` |
 | Context injection | `additionalContext` | `PreInvocation` ephemeral message | `SessionStart` and `UserPromptSubmit` additional context | plugin `experimental.chat.system.transform`, on every model call |
 | Tool gate | `PreToolUse`, exit 2 blocks | `PreToolUse`, `decision: deny` | `PreToolUse`, `permissionDecision: deny`; requires hook trust | plugin `tool.execute.before` throws |
@@ -711,7 +713,7 @@ is data in `src/exoma/config/hosts.py` (`PROFILES`), not a rewrite of Claude's t
 |---|---|---|---|---|
 | Runner prefix (`{{RUNNER}}`) | `bash` (the Bash tool is Git Bash on Windows) | this machine's bash by full path; on Windows `& '<Git>/bin/bash.exe'` (PowerShell) | as Agy | as Agy |
 | Shell tool (`{{SHELL_TOOL}}`) | the Bash tool | `run_command`, sandbox bypassed | `exec_command` | the `bash` tool |
-| Waiting for the runner (`{{DELEGATED_RUN}}`) | background-task tool, collect the same task ID | Agy backgrounds a long call itself; read that task's output | `exec_command` with a long timeout; wait on the same session | foreground, 600000 ms timeout (no background tool) |
+| Waiting for the runner (`{{DELEGATED_RUN}}`) | background-task tool, collect the same task ID | Agy backgrounds a long call itself; read that task's output | `exec_command` with a long timeout, requested with `sandbox_permissions: "require_escalated"` and a runner prefix rule; wait on the same session | foreground, 600000 ms timeout (no background tool) |
 | Asking the user (`{{ASK_USER}}`) | AskUserQuestion | `ask_question` | the user-input tool, else the reply | the reply |
 | Skill path (`{{SKILL_PATH}}`) | `~/.claude/skills/<name>.md` | `~/.gemini/antigravity-cli/skills/.<name>/SKILL.md` | `~/.codex/skills/exoma-<name>/SKILL.md` | `~/.config/opencode/skills/exoma-<name>/SKILL.md` |
 
@@ -760,7 +762,16 @@ hands each event to `~/.config/opencode/exoma/hooks/opencode-host.py` as JSON on
 the JSON it prints; the decisions are `workflow_policy`'s, as for every host. It does nothing in a
 process started with `WORKFLOW_AGENT_ROLE=second_agent`, and fails open (a hook that cannot run
 answers nothing). OpenCode exposes no session-start hook, so the first prompt of a session in a
-project with `.workflow/` binds it; the binding is re-injected on every model call. The status
+project with `.workflow/` binds it; the binding is re-injected on every model call, followed by
+the rendered `~/.config/opencode/exoma/CONTRACT.md`, which the hook reads itself. The agent never
+reads the contract with a tool: that path lies outside the project, so a `read` would ask for
+`external_directory` access (and an initialised project's `opencode.json` denies it); only when the
+file cannot be read does the binding tell the agent to read it. The second agent never gets the
+contract (the plugin and the hook skip that role). The install also writes one
+`~/.config/opencode/commands/exoma-<name>.md` per Claude `/.<name>` command: typed `/exoma-<name>`,
+it expands to `$exoma-<name> <arguments>` and an instruction to load the `exoma-<name>` skill with
+the skill tool, so the hook reads the command at the prompt's start (arming a gate, recording
+`-y`) as if it were typed. The status
 guard is not registered: OpenCode offers no end-of-turn hook a plugin can answer. Its `AGENTS.md`
 block coexists with the opencode second-agent block, as for Codex.
 
@@ -796,6 +807,19 @@ workflow guardrail, not an OS security boundary. Codex's write sandbox for the s
 agent remains independent of the host hooks, and its read boundary remains unenforceable.
 See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks) for current event
 and tool coverage.
+
+**Codex host: the runner call is escalated.** A Codex `workspace-write` sandbox has network off,
+and every process the runner starts inherits it: the second agent's connection to its model is
+refused (`os error 10013` on Windows, classified `network_denied`). The host block and the
+contract (`{{DELEGATED_RUN}}`) therefore tell the agent to request the runner call with
+`sandbox_permissions: "require_escalated"`, a `justification`, and a prefix rule for
+`<bash> <root>/.workflow/run.sh`, so the user approves it once per rule; no other call of the
+session is escalated. Everything the runner starts runs outside the sandbox with it: the second
+agent, the project tests `test` and `/.verify` run (only commands under
+`commands.verify_test_commands`, the user's own allowlist), and a `verify-browser` run. This needs an approval policy that lets Codex ask (`on-request`); with `never` the
+call stays sandboxed and fails with `network_denied`. The second agent keeps its own
+`--sandbox read-only` and `approval_policy="never"`. Exoma does not write `network_access` into
+`~/.codex/config.toml`: that would open the network to every shell command of the main session.
 
 **Codex host on a `workspace-write` sandbox.** Every delegated call writes the global job
 store (`<data dir>/storage/jobs`, see [the workspace layout](#workspace-layout)) and the

@@ -84,12 +84,34 @@ def _bind(session_id, cwd):
     return entry, False
 
 
-def _binding_text(entry, reused):
+def _contract_text():
+    """The rendered contract, read here rather than by the agent.
+
+    A `read` tool call on ~/.config/opencode/exoma/CONTRACT.md sits outside the project, so
+    OpenCode asks for it under `external_directory` (and refuses it outright where the
+    project's opencode.json denies that). Carried in the system prompt, it costs no tool call
+    and no prompt; the second agent never gets it (the plugin and `handle` skip that role)."""
+    try:
+        text = (_home() / "exoma" / "CONTRACT.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return text.strip() or None
+
+
+def _binding_text(entry, reused, contract=None):
     text = wp.session_binding(entry["main_session_id"], entry["cwd"], "opencode", reused)
-    text += ("\n[EXOMA OPENCODE HOST] Read ~/.config/opencode/exoma/CONTRACT.md before workflow work. "
-             "Use the exoma-<command> skills; the contract's /. names refer to those skills here.")
+    if contract:
+        text += ("\n[EXOMA OPENCODE HOST] The Exoma contract follows; do not read "
+                 "~/.config/opencode/exoma/CONTRACT.md again. Use the /exoma-<command> commands "
+                 "or exoma-<command> skills; the contract's /. names refer to those here.")
+    else:
+        text += ("\n[EXOMA OPENCODE HOST] Read ~/.config/opencode/exoma/CONTRACT.md before workflow work. "
+                 "Use the /exoma-<command> commands or exoma-<command> skills; the contract's /. names "
+                 "refer to those here.")
     if entry.get("hint"):
         text += "\n" + entry["hint"]
+    if contract:
+        text += "\n\n" + contract
     return text
 
 
@@ -139,7 +161,7 @@ def user_prompt_submit(payload):
 
 def system(payload):
     entry = _bound(payload.get("session_id"))
-    return {"context": _binding_text(entry, True)} if entry else {}
+    return {"context": _binding_text(entry, True, _contract_text())} if entry else {}
 
 
 def _profile():

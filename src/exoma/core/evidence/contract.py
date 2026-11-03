@@ -49,6 +49,11 @@ ERROR_TYPES = {
     # CASE-015). Nothing ran; the remedy is on the provider's side, and `unknown` hid it
     # behind "inspect the logs and rerun".
     "sandbox_unavailable",
+    # The OS refused the provider a socket (Windows WSAEACCES, os error 10013): most often a
+    # main host's own sandbox with network off, inherited by the runner and the provider it
+    # starts. Its text ("forbidden by its access permissions") used to land on
+    # permission_denied, whose "grant read access to the path" fixes nothing here.
+    "network_denied",
     "second_agent_unavailable",  # probe in a FRESH session could not get an answer either
     "job_expired",  # ran past the hard runtime ceiling (OOM backstop)
     "task_truncated",  # the instruction lost too much to trust the answer to it

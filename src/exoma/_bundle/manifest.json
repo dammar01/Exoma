@@ -497,8 +497,8 @@
     },
     {
       "path": "hosts/codex/AGENTS.md",
-      "sha256": "198c5609e5df01f7d4e37984a2f1803a799459b6ef9a77df56f212ce410f51e4",
-      "bytes": 1715,
+      "sha256": "26b9eea94fc97326391615bff485ff0426c3d2b77e4d8e22ca5dfa58d9bd36ba",
+      "bytes": 1986,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -518,8 +518,8 @@
     },
     {
       "path": "hosts/opencode/AGENTS.md",
-      "sha256": "da786b5684be93294bd48eef5e18b4fc6df59e16856aca06643e35438b9946ee",
-      "bytes": 2099,
+      "sha256": "a8ace9f70e598f843850e0fd3fc068d3433f1c9d15ed1e0b35fca203f5eadf31",
+      "bytes": 2213,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -532,8 +532,8 @@
     },
     {
       "path": "hosts/opencode/opencode-host.py",
-      "sha256": "ef30904283af180269af8766bda61b4e8e9603d239fcc9ee4c5189ec33b3d861",
-      "bytes": 10213,
+      "sha256": "df042afdb09da0e87bec3dceb2d10b8b7b8f95c208c1cb5110d53a537d586d21",
+      "bytes": 11289,
       "merge": "replace",
       "component": "runtime"
     },

@@ -311,6 +311,15 @@ def _test_codex_host_install():
                         "reinstalling Codex hooks is idempotent")
             assert_true((codex / "skills" / "exoma-plan" / "SKILL.md").read_text(encoding="utf-8").startswith("---\nname: exoma-plan"),
                         "Codex skill has native frontmatter")
+            # Codex has no command files: its skills are the commands, and the host block says so.
+            assert_true(not (codex / "prompts").exists() and not (codex / "commands").exists(),
+                        "no Codex command directory is written")
+            assert_true("`$exoma-<name>` skills" in agents and "/skills" in agents
+                        and "require_escalated" in agents,
+                        "the Codex host block names $exoma- skills and the escalated runner call")
+            contract = (codex / "exoma" / "CONTRACT.md").read_text(encoding="utf-8")
+            assert_true("require_escalated" in contract,
+                        "the Codex contract asks for the runner call escalated (network for the second agent)")
             from exoma.core.audit.bundle_integrity import _host_status
             mode = home / ".claude" / ".workflow-install-mode.json"
             mode.parent.mkdir(parents=True)

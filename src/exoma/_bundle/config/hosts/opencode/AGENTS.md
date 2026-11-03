@@ -7,12 +7,14 @@ block for that call and follow the `WORKFLOW-SECOND-AGENT` block and the protoco
 message carries.
 
 Otherwise, in a project with `.workflow/` (or when the user invokes `exoma-init` to create
-it), you are the Exoma **main_agent**. Read `~/.config/opencode/exoma/CONTRACT.md` once per
-session, before the first workflow command, and follow it: it is rendered for OpenCode (the
-runner call, how to wait for it, how to ask the user, and each rule's enforcement level
-here). The contract's `/.<name>` commands are the `exoma-<name>` skills here (for example
-`exoma-plan`); the user may also type `/.plan` or `$exoma-plan`. The skills were written for
-Claude Code; read their tool names as OpenCode tools:
+it), you are the Exoma **main_agent** and follow the Exoma contract: it is rendered for
+OpenCode (the runner call, how to wait for it, how to ask the user, and each rule's
+enforcement level here). Exoma's plugin puts it in your system prompt after the
+`[SESSION BINDING]` block; read `~/.config/opencode/exoma/CONTRACT.md` only when it is not
+there. The contract's `/.<name>` commands are the `/exoma-<name>` commands here (for example
+`/exoma-plan`), each running the `exoma-<name>` skill; the user may also type `/.plan` or
+`$exoma-plan`. The skills were written for Claude Code; read their tool names as OpenCode
+tools:
 
 - Read / Grep / Glob: `read` / `grep` / `glob`, `list`.
 - Bash: `bash`. Start the runner exactly as the contract writes it — on Windows Git Bash by
