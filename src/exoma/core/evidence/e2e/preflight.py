@@ -349,7 +349,9 @@ def playwright_available() -> tuple[bool, str]:
     except (ImportError, ValueError):
         spec = None
     if spec is None:
-        return False, "python package 'playwright' is not installed (pip install playwright)"
+        # The installer picks pip, `pipx inject` or `uv pip` for the environment Exoma runs
+        # in; a bare `pip install` would land in whatever pip PATH holds.
+        return False, "python package 'playwright' is not installed (exoma install --with-e2e)"
     return True, "playwright importable"
 
 
@@ -366,7 +368,7 @@ def browser_available(browser: str) -> tuple[bool, str]:
                 return False, f"browser '{browser}' is not a Playwright browser type"
             path = getattr(kind, "executable_path", None)
             if path and not Path(str(path)).exists():
-                return False, f"{browser} binary missing at {path} (playwright install {browser})"
+                return False, f"{browser} binary missing at {path} ({sys.executable} -m playwright install {browser})"
     except Exception as exc:  # any driver failure is a provisioning failure here
         return False, f"{type(exc).__name__}: {exc}"
     return True, f"{browser} provisioned"

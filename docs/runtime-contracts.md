@@ -786,8 +786,10 @@ attempted and recovered, first-error and remaining-category distributions, and d
 carried a literal credential.
 
 Dependency policy: Playwright is an optional extra (`exoma[e2e]`), pinned in the bundled
-`requirements-e2e.txt` and installed by `exoma install --with-e2e` (pip, then
-`python -m playwright install chromium`). The runtime stays stdlib-only;
+`requirements-e2e.txt` and installed by `exoma install --with-e2e` (through the manager of
+Exoma's environment — `uv pip install --python`, `pipx inject`, or pip — then
+`python -m playwright install chromium`; a failed step exits the install 1, see
+[installer details](reference.md#installer-details)). The runtime stays stdlib-only;
 `core/evidence/e2e/preflight.py` and `browser.py` import it inside the call, under an
 `ImportError` guard, and `tests/checks/deps.py` permits exactly that shape in exactly that
 package. `/.doctor` reports `e2e_readiness` from package metadata only (installed and

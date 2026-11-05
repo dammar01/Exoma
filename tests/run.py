@@ -117,6 +117,7 @@ from tests.checks.installer import (  # noqa: E402
     _test_installer_check_reports_second_agent_default,
     _test_installer_drift_check,
     _test_installer_e2e_deps_are_opt_in,
+    _test_install_method_detection,
     _test_installer_rollback_receipt,
     _test_installer_seed_is_non_interactive_without_a_tty,
     _test_installer_seed_prompt_answers,
@@ -153,6 +154,8 @@ from tests.checks.hook_contract import (  # noqa: E402
 )
 from tests.checks.agy_host import (  # noqa: E402
     _test_agy_host_contract,
+    _test_agy_host_falls_back_to_a_plain_interpreter,
+    _test_doctor_reports_a_refused_agy_host_once,
     _test_agy_host_install_all_or_nothing,
     _test_agy_host_install_merges,
     _test_agy_host_selection,
@@ -175,6 +178,7 @@ from tests.checks.same_provider import (  # noqa: E402
     _test_same_provider_export_picks_the_host,
 )
 from tests.checks.os_resolvers import (  # noqa: E402
+    _test_doctor_python_check_follows_the_launchers,
     _test_entry_points_refuse_an_old_python,
     _test_find_bash_and_os_locations,
     _test_find_python_runs_each_candidate,
@@ -319,7 +323,8 @@ SUITES: dict[str, tuple] = {
     "installer-seed-boundary": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider is named as one while it is chosen, with no opt-in variable"),
     "provider-update": (_test_provider_update, "DEC-057: --update-providers pins npm-global CLIs to stable_version only, verified, failures named"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
-    "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
+    "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra through the env's own manager (pip, pipx inject, uv pip) and its browser; a failed step fails the install; nothing without it"),
+    "install-method": (_test_install_method_detection, "the install method is the env Exoma runs in: uv tool first, then a pipx env, then pip; unknown without any"),
     "metrics-contract": (_test_metrics_contract, "every benchmark metric has an ID, version and method, is documented, and its producers stamp provenance"),
     "verify-runtime-tests": (_test_verify_runtime_tests, "tests main_agent chose run only under the allowlist, without a shell, and decide the verdict beside the review"),
     "verify-reuse": (_test_verify_reuses_unchanged_runs, "verify reuses a run.sh test pass while the tree content is unchanged; an edit or failure runs it again"),
@@ -349,6 +354,8 @@ SUITES: dict[str, tuple] = {
     "recursion-guard": (_test_recursion_guard, "a second_agent process cannot delegate, queue or run a job, or change execution state: recursion_refused before any side effect"),
     "same-provider-isolation": (_test_same_provider_child_isolation, "every adapter marks its child second_agent; Claude-on-Claude loads no host settings; the OpenCode plugin checks the marker"),
     "same-provider-export": (_test_same_provider_export_picks_the_host, "with host and child on the same CLI, session export picks the host transcript"),
+    "agy-host-python-fallback": (_test_agy_host_falls_back_to_a_plain_interpreter, "a spaced env python (pipx on macOS) gives the Agy hook its plain-path base interpreter; all candidates unsafe is still refused, with how to drop the host"),
+    "agy-doctor-refused": (_test_doctor_reports_a_refused_agy_host_once, "doctor reports a chosen Agy host whose hook is refused as one finding with the deselect command, not two missing files"),
     "agy-host-install-whole": (_test_agy_host_install_all_or_nothing, "the Agy instructions and hook install together or not at all; a refused hook takes out an earlier instructions block"),
     "agy-host-uninstall": (_test_agy_host_uninstall, "uninstall takes only the `exoma` hook out of hooks.json, keeps the user's hooks, and receipts the change for --rollback"),
     "agy-host-install": (_test_agy_host_install_merges, "the installer merges only the `exoma` hook name into hooks.json and only the EXOMA-HOST block into GEMINI.md"),
@@ -358,6 +365,7 @@ SUITES: dict[str, tuple] = {
     "hook-python-resolver": (_test_hook_launchers_resolve_python, "a hook launcher picks python3, python or `py -3` by running it, skips a Store alias or an old one, and fails open with none"),
     "python-guard": (_test_entry_points_refuse_an_old_python, "main.py, install.py and check.py refuse a Python older than osutil.MIN_PYTHON with a message, before any project import"),
     "os-resolvers": (_test_find_python_runs_each_candidate, "find_python tries python3, python, `py -3` by running each and returns only one new enough"),
+    "doctor-python": (_test_doctor_python_check_follows_the_launchers, "doctor's python check follows the launchers: python.path, then python3/python/py -3 by running them; a missing `python` alias is not an issue"),
     "os-locations": (_test_find_bash_and_os_locations, "find_bash is Git Bash on Windows; cache dir, env location and command splitting follow the OS"),
     "gate-k5-fixtures": (_test_gate_k5_fixtures, "the single-tokeniser gate decides each K5 case as recorded (the #4 field cases included)"),
     "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),

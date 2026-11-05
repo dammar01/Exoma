@@ -171,8 +171,70 @@ def _test_self_update() -> None:
             else:
                 raise AssertionError("explicit uv cannot update a different Exoma installation")
 
+        # pipx (the usual Linux/macOS route past PEP 668): recognised by its metadata file
+        # in the environment, not by a pipx on PATH.
+        pipx_env = root / "pipx" / "venvs" / "exoma"
+        pipx_env.mkdir(parents=True)
+        (pipx_env / "pipx_metadata.json").write_text("{}", encoding="utf-8")
+        with patch.object(self_update, "_uv_tool", return_value=None), \
+             patch.object(self_update.shutil, "which", return_value="/bin/pipx"), \
+             patch.object(self_update.sys, "prefix", str(pipx_env)):
+            assert_true(self_update._package_command("auto") == ("pipx", ["/bin/pipx", "upgrade", "exoma"]),
+                        "a pipx install updates through pipx")
+            assert_true(self_update._package_command("pipx")[0] == "pipx", "explicit pipx is accepted in a pipx env")
+        with patch.object(self_update, "_uv_tool", return_value=None), \
+             patch.object(self_update.shutil, "which", return_value=None), \
+             patch.object(self_update.sys, "prefix", str(pipx_env)):
+            try:
+                self_update._package_command("auto")
+            except ValueError as exc:
+                assert_true("pipx is not on PATH" in str(exc), f"a pipx env without pipx says so: {exc}")
+            else:
+                raise AssertionError("a pipx env without pipx on PATH must not fall back to pip")
+        with patch.object(self_update, "_uv_tool", return_value=None), \
+             patch.object(self_update.shutil, "which", return_value="/bin/pipx"), \
+             patch.object(self_update.sys, "prefix", str(root / "other-python")):
+            assert_true(self_update._package_command("auto")[0] == "pip",
+                        "pipx on PATH does not make a plain environment pipx")
+            try:
+                self_update._package_command("pipx")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("explicit pipx cannot update an Exoma outside pipx")
+
+        # PEP 668: pip refuses a distribution-managed Python; the update names pipx and uv.
+        # pip's output is not captured (it prints as it runs); the marker file decides.
+        for managed, named in ((True, True), (False, False)):
+            errors = io.StringIO()
+            with patch.object(self_update, "_externally_managed", return_value=managed), \
+                 patch.object(self_update.subprocess, "run", return_value=subprocess.CompletedProcess(
+                     ["pip"], 1)) as pip_run, \
+                 redirect_stderr(errors):
+                assert_true(not self_update._run_step("package", [sys.executable, "-m", "pip"], root, pip=True),
+                            "a failed pip step fails")
+            assert_true("stderr" not in pip_run.call_args.kwargs and "capture_output" not in pip_run.call_args.kwargs,
+                        "pip's output is left on the terminal, live")
+            hinted = "pipx install exoma" in errors.getvalue() and "uv tool install exoma" in errors.getvalue()
+            assert_true(hinted == named,
+                        f"the pipx and uv routes are named exactly when the env is externally managed ({managed}): "
+                        f"{errors.getvalue()}")
+
+        # The marker: EXTERNALLY-MANAGED in the stdlib directory, outside a venv only.
+        stdlib = root / "stdlib"
+        stdlib.mkdir()
+        (stdlib / "EXTERNALLY-MANAGED").write_text("[externally-managed]\n", encoding="utf-8")
+        with patch.object(self_update.sysconfig, "get_path", return_value=str(stdlib)), \
+             patch.object(self_update.sys, "prefix", "/usr"), \
+             patch.object(self_update.sys, "base_prefix", "/usr"):
+            assert_true(self_update._externally_managed(), "the marker outside a venv is externally managed")
+        with patch.object(self_update.sysconfig, "get_path", return_value=str(stdlib)), \
+             patch.object(self_update.sys, "prefix", "/home/u/venv"), \
+             patch.object(self_update.sys, "base_prefix", "/usr"):
+            assert_true(not self_update._externally_managed(), "a venv over that Python is not")
+
     for spelling in (("update", "--help"), ("--command", "update", "--help")):
         result = subprocess.run([sys.executable, str(REPO / "main.py"), *spelling],
                                 capture_output=True, text=True, timeout=15, **no_console())
-        assert_true(result.returncode == 0 and "--manager" in result.stdout,
-                    f"public CLI routes {spelling} to update help")
+        assert_true(result.returncode == 0 and "--manager" in result.stdout and "pipx" in result.stdout,
+                    f"public CLI routes {spelling} to update help, pipx among the managers")

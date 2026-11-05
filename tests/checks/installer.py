@@ -966,8 +966,11 @@ def _test_installer_e2e_deps_are_opt_in() -> None:
         return SimpleNamespace(returncode=code, stdout="", stderr="simulated failure" if code else "")
 
     original_root, original_subprocess = settings_mod.E2E_REQUIREMENTS_FILE, settings_mod.subprocess
+    original_detect = settings_mod._detect_method
     settings_mod.E2E_REQUIREMENTS_FILE = root / "requirements-e2e.txt"
     settings_mod.subprocess = SimpleNamespace(run=fake_run)
+    method = ["pip", None]
+    settings_mod._detect_method = lambda: tuple(method)
     requirements = root / "requirements-e2e.txt"
     pip = [sys.executable, "-m", "pip", "install", "-r", str(requirements)]
     browser = [sys.executable, "-m", "playwright", "install", "chromium"]
@@ -975,7 +978,7 @@ def _test_installer_e2e_deps_are_opt_in() -> None:
         requirements.write_text("playwright==1.60.0\n", encoding="utf-8")
 
         plan = Plan()
-        settings_mod._install_deps(plan, True)
+        assert_true(settings_mod._install_deps(plan, True) is None, "no flag, no failure")
         assert_true(calls == [] and plan.actions == [], f"no flag, no extra: {calls} {plan.actions}")
 
         plan = Plan()
@@ -988,30 +991,119 @@ def _test_installer_e2e_deps_are_opt_in() -> None:
         )
 
         plan = Plan()
-        settings_mod._install_deps(plan, True, True)
-        assert_true(calls == [pip, browser] and not plan.warnings, f"apply runs pip then the browser, same interpreter: {calls}")
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [pip, browser] and not plan.warnings and failure is None,
+                    f"apply runs pip then the browser, same interpreter: {calls}")
 
         calls.clear()
         failing = {"pip"}
         plan = Plan()
-        settings_mod._install_deps(plan, True, True)
+        failure = settings_mod._install_deps(plan, True, True)
         assert_true(calls == [pip], f"a failed pip install skips the browser download: {calls}")
         assert_true(any("download skipped" in w for w in plan.warnings), f"and says so: {plan.warnings}")
+        assert_true(failure and "simulated failure" in failure and "-m pip install playwright==1.60.0" in failure,
+                    f"and returns the failure with the command that fixes it (the install exits 1): {failure}")
 
         calls.clear()
         failing = {"playwright"}
         plan = Plan()
-        settings_mod._install_deps(plan, True, True)
-        assert_true(calls == [pip, browser] and any("playwright install chromium failed" in w for w in plan.warnings), "a failed browser install is a warning")
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [pip, browser] and any("playwright install chromium failed" in w for w in plan.warnings),
+                    "a failed browser install is reported")
+        assert_true(failure and "playwright install chromium failed" in failure, f"and fails the install: {failure}")
 
+        # Field report: uv and pipx environments carry no pip, so `python -m pip` failed with
+        # `No module named pip`. The package goes in through the manager that built the env.
+        failing = set()
+        calls.clear()
+        method[:] = ["uv", "/bin/uv"]
+        plan = Plan()
+        failure = settings_mod._install_deps(plan, True, True)
+        uv_pip = ["/bin/uv", "pip", "install", "--python", sys.executable, "-r", str(requirements)]
+        assert_true(calls == [uv_pip, browser] and failure is None, f"a uv tool install adds playwright with uv pip: {calls}")
+        assert_true(any("uv tool install --reinstall --with playwright==1.60.0 exoma" in w for w in plan.warnings),
+                    f"and names the command that keeps it across uv tool upgrade: {plan.warnings}")
+
+        calls.clear()
+        method[:] = ["pipx", "/bin/pipx"]
+        plan = Plan()
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [["/bin/pipx", "inject", "exoma", "playwright==1.60.0"], browser] and failure is None,
+                    f"a pipx install injects playwright into Exoma's venv: {calls}")
+
+        calls.clear()
+        method[:] = ["pipx", None]
+        plan = Plan()
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [] and failure and "pipx is not on PATH" in failure and "pipx inject exoma" in failure,
+                    f"a pipx env without pipx on PATH fails with the command to run: {failure}")
+
+        calls.clear()
+        method[:] = ["unknown", None]
+        plan = Plan()
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [] and failure and "ensurepip" in failure,
+                    f"no pip, uv tool or pipx env fails with a way out: {failure}")
+
+        # A dry run reports what would fail without failing (the install exits 0).
+        plan = Plan()
+        failure = settings_mod._install_deps(plan, False, True)
+        assert_true(calls == [] and failure is None
+                    and any("would fail" in w and "ensurepip" in w for w in plan.warnings),
+                    f"a dry run warns that the install would fail, and does not fail: {failure} {plan.warnings}")
+        assert_true(not any(t.endswith("playwright install chromium") for v, t, _ in plan.actions if v == "run"),
+                    f"and plans no browser download behind a package that cannot install: {plan.actions}")
+
+        # An empty pin file asks for nothing: a warning, not a failure.
+        method[:] = ["pip", None]
+        requirements.write_text("# nothing pinned\n", encoding="utf-8")
+        plan = Plan()
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [] and failure is None and plan.warnings,
+                    f"an empty requirements file installs nothing and does not fail: {failure}")
+        requirements.write_text("playwright==1.60.0\n", encoding="utf-8")
+
+        method[:] = ["pip", None]
         calls.clear()
         requirements.unlink()
         plan = Plan()
-        settings_mod._install_deps(plan, True, True)
-        assert_true(calls == [] and any("missing" in w for w in plan.warnings), "a checkout without the file installs nothing and warns")
+        failure = settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [] and any("missing" in w for w in plan.warnings) and failure,
+                    "a checkout without the file installs nothing and fails")
     finally:
         settings_mod.E2E_REQUIREMENTS_FILE = original_root
         settings_mod.subprocess = original_subprocess
+        settings_mod._detect_method = original_detect
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _test_install_method_detection() -> None:
+    """method.detect names the manager of the environment Exoma runs in, nothing else."""
+    from unittest.mock import patch
+
+    from exoma.installer import method as install_method
+
+    root = Path(tempfile.mkdtemp(prefix="aw-inst-method-"))
+    try:
+        pipx_env = root / "pipx" / "venvs" / "exoma"
+        pipx_env.mkdir(parents=True)
+        (pipx_env / install_method.PIPX_METADATA).write_text("{}", encoding="utf-8")
+        plain_env = root / "plain"
+        plain_env.mkdir()
+        with patch.object(install_method, "uv_tool", return_value=None), \
+             patch.object(install_method.shutil, "which", return_value="/bin/pipx"):
+            with patch.object(install_method.sys, "prefix", str(pipx_env)):
+                assert_true(install_method.detect() == ("pipx", "/bin/pipx"), "a pipx env is pipx")
+            with patch.object(install_method.sys, "prefix", str(plain_env)), \
+                 patch.object(install_method, "has_pip", return_value=True):
+                assert_true(install_method.detect() == ("pip", None), "pipx on PATH does not make a plain env pipx")
+            with patch.object(install_method.sys, "prefix", str(plain_env)), \
+                 patch.object(install_method, "has_pip", return_value=False):
+                assert_true(install_method.detect() == ("unknown", None), "no pip and no manager is unknown")
+        with patch.object(install_method, "uv_tool", return_value="/bin/uv"), \
+             patch.object(install_method.sys, "prefix", str(pipx_env)):
+            assert_true(install_method.detect() == ("uv", "/bin/uv"), "uv answers first")
+    finally:
         shutil.rmtree(root, ignore_errors=True)
 
 

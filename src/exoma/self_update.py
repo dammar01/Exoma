@@ -5,8 +5,10 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
+from exoma.installer import method as install_method
 from exoma.utils.osutil import agent_home, hidden_run_kwargs
 
 
@@ -20,19 +22,21 @@ def _workspace_root(cwd: Path) -> Path | None:
     return incomplete
 
 
-def _uv_tool() -> str | None:
-    uv = shutil.which("uv")
-    if not uv:
-        return None
+_uv_tool = install_method.uv_tool
+
+def _externally_managed() -> bool:
+    """Whether pip would refuse this environment as distribution-managed (PEP 668).
+
+    The marker is an `EXTERNALLY-MANAGED` file in the stdlib directory, and it applies only
+    outside a virtual environment. Read from the file rather than from pip's stderr, so pip
+    keeps printing to the terminal as it runs.
+    """
+    if sys.prefix != sys.base_prefix:
+        return False
     try:
-        result = subprocess.run([uv, "tool", "dir"], capture_output=True, text=True,
-                                **hidden_run_kwargs())
-    except OSError:
-        return None
-    if result.returncode or not result.stdout.strip():
-        return None
-    tools_dir = Path(result.stdout.strip()).resolve()
-    return uv if Path(sys.prefix).resolve() == (tools_dir / "exoma").resolve() else None
+        return (Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED").is_file()
+    except (OSError, KeyError, TypeError):
+        return False
 
 
 def _package_command(manager: str) -> tuple[str, list[str]]:
@@ -41,10 +45,19 @@ def _package_command(manager: str) -> tuple[str, list[str]]:
         raise ValueError("this Exoma interpreter is not in the uv tool directory; choose its actual package manager")
     if uv:
         return "uv", [uv, "tool", "upgrade", "exoma"]
+    pipx_env = install_method.pipx_venv() if manager in ("auto", "pipx") else False
+    if manager == "pipx" and not pipx_env:
+        raise ValueError("this Exoma interpreter is not in a pipx environment; choose its actual package manager")
+    if pipx_env:
+        pipx = shutil.which("pipx")
+        if not pipx:
+            raise ValueError("this Exoma was installed with pipx, but pipx is not on PATH; "
+                             "run `pipx upgrade exoma` where pipx is available")
+        return "pipx", [pipx, "upgrade", "exoma"]
     return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", "exoma"]
 
 
-def _run_step(label: str, argv: list[str], cwd: Path) -> bool:
+def _run_step(label: str, argv: list[str], cwd: Path, *, pip: bool = False) -> bool:
     print(f"[UPDATE] {label}: {' '.join(argv)}", flush=True)
     try:
         result = subprocess.run(argv, cwd=cwd, **hidden_run_kwargs())
@@ -53,6 +66,10 @@ def _run_step(label: str, argv: list[str], cwd: Path) -> bool:
         return False
     if result.returncode:
         print(f"[UPDATE] {label} failed (exit {result.returncode}); later steps skipped", file=sys.stderr)
+        if pip and _externally_managed():
+            print("[UPDATE] this Python is managed by the OS (PEP 668), so pip may not change it. "
+                  "Install Exoma with pipx (`pipx install exoma`) or uv (`uv tool install exoma`) "
+                  "instead; `exoma update` then upgrades through that manager.", file=sys.stderr)
         return False
     return True
 
@@ -83,8 +100,9 @@ def _report_failed_refresh(stage: str, workspace: Path | None, before: set[str])
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="exoma update", description="Update Exoma and refresh its installed config and current workspace")
-    parser.add_argument("--manager", choices=("auto", "uv", "pip"), default="auto",
-                        help="package manager for this Exoma installation (default: detect uv tool, otherwise pip)")
+    parser.add_argument("--manager", choices=("auto", "uv", "pipx", "pip"), default="auto",
+                        help="package manager for this Exoma installation "
+                             "(default: detect uv tool, then pipx, otherwise pip)")
     args = parser.parse_args(argv)
     cwd = Path.cwd().resolve()
     workspace = _workspace_root(cwd)
@@ -120,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[UPDATE] manager: {manager}; workspace: {workspace or 'none'}", flush=True)
     receipts_before = _receipt_names()
-    if not _run_step("package", package, cwd):
+    if not _run_step("package", package, cwd, pip=manager == "pip"):
         return 1
 
     fresh = [sys.executable, "-m", "exoma"]

@@ -10,8 +10,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from exoma.utils import osutil
+from exoma.installer import method as install_method
 from exoma.config.providers import (
     bundle_for,
     provider_config_path,
@@ -615,63 +617,114 @@ E2E_REQUIREMENTS = E2E_REQUIREMENTS_FILE.name
 E2E_BROWSER = "chromium"
 
 
-def _pip_install(plan: Plan, apply: bool, requirements: Path, empty_detail: str) -> str:
-    """One `pip install -r`. Returns "empty", "planned", "installed", or "failed"."""
-    body = [
+def _detect_method() -> tuple[str, str | None]:
+    # One indirection so tests choose the install method without a real uv or pipx.
+    return install_method.detect()
+
+
+def _requirement_lines(requirements: Path) -> list[str]:
+    return [
         line.strip()
         for line in requirements.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def _pip_install(plan: Plan, apply: bool, requirements: Path, empty_detail: str) -> tuple[str, str | None]:
+    """Install `requirements` into this interpreter's environment through the manager that
+    built it: pip, `pipx inject`, or `uv pip install --python`.
+
+    Returns (outcome, failure): outcome is "empty", "planned", "unavailable" (a dry run with
+    no usable package command), "installed", or "failed"; failure is the one-line reason
+    with the command that fixes it, only when "failed".
+    """
+    body = _requirement_lines(requirements)
     if not body:
         plan.add("skip", "pip install", empty_detail)
-        return "empty"
-    plan.add("run", f"pip install -r {requirements}", f"{len(body)} package(s)")
+        return "empty", None
+    method, tool = _detect_method()
+    argv = install_method.add_command(method, tool, requirements, body)
+    manual = install_method.manual_command(method, body)
+    if argv is None:
+        reason = (
+            f"this Exoma runs under {method} without a usable package command "
+            f"({'pipx is not on PATH' if method == 'pipx' else 'no pip, uv tool or pipx environment'})"
+        )
+        plan.add("skip", f"install {' '.join(body)}", reason)
+        failure = f"{reason}; run: {manual}"
+        if not apply:
+            # A dry run reports what the install would do; only the install itself fails.
+            plan.warn(f"--with-e2e: an install would fail — {failure}")
+            return "unavailable", None
+        plan.warn(f"--with-e2e: {failure}")
+        return "failed", failure
+    plan.add("run", f"{method} install -r {requirements}", f"{len(body)} package(s): {' '.join(body)}")
     if not apply:
-        return "planned"
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
-        capture_output=True,
-        text=True,
-    )
+        return "planned", None
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, **osutil.hidden_run_kwargs())
+    except OSError as exc:
+        result = SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
     if result.returncode != 0:
-        plan.warn(f"pip install failed: {result.stderr.strip()[-300:]}")
-        return "failed"
-    return "installed"
+        detail = (result.stderr or result.stdout or "").strip()[-300:]
+        failure = f"{method} install of {' '.join(body)} failed: {detail}; run: {manual}"
+        plan.warn(f"--with-e2e: {failure}")
+        return "failed", failure
+    if method == "uv":
+        # uv pip writes into the tool environment but not into uv's record of the tool.
+        plan.warn(
+            f"--with-e2e: {' '.join(body)} was added with uv pip; to keep it across "
+            f"`uv tool upgrade exoma`, run: {manual}"
+        )
+    return "installed", None
 
 
-def _install_deps(plan: Plan, apply: bool, with_e2e: bool = False) -> None:
-    # The runtime has no dependencies: `pip install exoma` already installed everything
-    # it needs. Only the optional browser extra is installed here.
+def _install_deps(plan: Plan, apply: bool, with_e2e: bool = False) -> str | None:
+    """The opt-in extras. Returns the failure line when a requested step failed, else None.
+
+    The runtime has no dependencies: installing exoma already installed everything it
+    needs. Only the optional browser extra is installed here.
+    """
     if with_e2e:
-        _install_e2e_deps(plan, apply)
+        return _install_e2e_deps(plan, apply)
+    return None
 
 
-def _install_e2e_deps(plan: Plan, apply: bool) -> None:
+def _install_e2e_deps(plan: Plan, apply: bool) -> str | None:
     """--with-e2e: the optional Playwright package, then the browser it drives.
 
     Opt-in because only /.verify-browser uses it and the browser is a large download; the
     runtime itself stays stdlib-only. The browser step runs through the same interpreter
-    pip installed into, so `playwright` resolves to the package just installed.
+    the package went into, so `playwright` resolves to the package just installed.
+    A failed step is returned, not only warned: the install exits nonzero on it.
     """
     requirements = E2E_REQUIREMENTS_FILE
     if not requirements.exists():
-        plan.warn(f"--with-e2e: {E2E_REQUIREMENTS} is missing from the package; nothing installed")
-        return
-    outcome = _pip_install(plan, apply, requirements, f"{E2E_REQUIREMENTS} declares no packages")
-    if outcome in ("empty", "failed"):
+        failure = f"{E2E_REQUIREMENTS} is missing from the package; nothing installed"
+        plan.warn(f"--with-e2e: {failure}")
+        return failure
+    outcome, failure = _pip_install(plan, apply, requirements, f"{E2E_REQUIREMENTS} declares no packages")
+    if outcome in ("empty", "failed", "unavailable"):
         plan.warn(f"--with-e2e: {E2E_BROWSER} download skipped because the playwright package is not installed")
-        return
+        # An empty pin file asks for nothing, so nothing failed; only a failed step does.
+        return failure
     plan.add(
         "run",
         f"python -m playwright install {E2E_BROWSER}",
         "browser for /.verify-browser (large download, needs network)",
     )
     if apply:
-        result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", E2E_BROWSER],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", E2E_BROWSER],
+                capture_output=True,
+                text=True,
+                **osutil.hidden_run_kwargs(),  # Windows: no console flash
+            )
+        except OSError as exc:
+            result = SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()[-300:]
             plan.warn(f"playwright install {E2E_BROWSER} failed: {detail}")
+            return f"playwright install {E2E_BROWSER} failed: {detail}; run: {sys.executable} -m playwright install {E2E_BROWSER}"
+    return None

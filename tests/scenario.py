@@ -111,6 +111,7 @@ from tests.checks.installer import (
     _test_provider_update,
     _test_installer_drift_check,
     _test_installer_e2e_deps_are_opt_in,
+    _test_install_method_detection,
     _test_installer_rollback_receipt,
     _test_installer_seed_is_non_interactive_without_a_tty,
     _test_installer_seed_prompt_answers,
@@ -177,7 +178,9 @@ from tests.checks.hook_contract import (
 )
 from tests.checks.agy_host import (
     _test_agy_host_contract,
+    _test_agy_host_falls_back_to_a_plain_interpreter,
     _test_agy_host_install_all_or_nothing,
+    _test_doctor_reports_a_refused_agy_host_once,
     _test_agy_host_install_merges,
     _test_agy_host_selection,
     _test_bundle_layout_and_agy_agent,
@@ -209,6 +212,7 @@ from tests.checks.same_provider import (
     _test_same_provider_export_picks_the_host,
 )
 from tests.checks.os_resolvers import (
+    _test_doctor_python_check_follows_the_launchers,
     _test_entry_points_refuse_an_old_python,
     _test_find_bash_and_os_locations,
     _test_find_python_runs_each_candidate,
@@ -262,6 +266,8 @@ def run_tests() -> None:
     _test_agy_host_contract()
     _test_agy_host_install_merges()
     _test_agy_host_install_all_or_nothing()
+    _test_agy_host_falls_back_to_a_plain_interpreter()
+    _test_doctor_reports_a_refused_agy_host_once()
     _test_agy_host_selection()
     _test_bundle_layout_and_agy_agent()
     _test_agy_permissions_and_doctor()
@@ -288,6 +294,7 @@ def run_tests() -> None:
     _test_gate_k5_fixtures()
     _test_entry_points_refuse_an_old_python()
     _test_find_python_runs_each_candidate()
+    _test_doctor_python_check_follows_the_launchers()
     _test_find_bash_and_os_locations()
     _test_verify_runtime_tests()
     _test_verify_reuses_unchanged_runs()
@@ -1389,6 +1396,7 @@ confidence: high — all requested checks ran
         _test_installer_check_reports_second_agent_default()
         _test_provider_update()
         _test_installer_e2e_deps_are_opt_in()
+        _test_install_method_detection()
         _test_runtime_is_stdlib_only()
         _test_every_spawn_hides_its_console()
         _test_telemetry_metrics()

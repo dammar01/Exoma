@@ -175,14 +175,21 @@ exoma install --uninstall --apply         # remove, with a receipt (can be rolle
 exoma update                              # update package, global config, and current workspace
 ```
 
-`exoma update` detects an uv tool installation, otherwise uses pip in the running Python
-environment. It invokes the newly installed Exoma to apply global config, upgrades the
+`exoma update` detects the manager of the environment Exoma runs in: a uv tool installation
+(`uv tool upgrade exoma`), then a pipx environment, recognised by the `pipx_metadata.json` pipx
+writes into it (`pipx upgrade exoma`; refused with a message when pipx is not on PATH), otherwise
+pip in the running Python environment. A uv or pipx on PATH that did not build this environment
+changes nothing. pip's output goes to the terminal as it runs. When the pip step fails on an
+externally managed Python (PEP 668: an `EXTERNALLY-MANAGED` file in the stdlib directory, outside
+a virtual environment — Debian, Ubuntu, Homebrew), the update names `pipx install exoma` and `uv tool install exoma`
+as the routes that work. It invokes the newly installed Exoma to apply global config, upgrades the
 workspace when cwd or a parent contains `.workflow/`, and checks the resulting install. The
 install it runs passes `--no-input`: every stored choice stands.
 If that directory has a missing, unreadable, or malformed `config.json`, update stops before
 changing the package. A later install or check failure reports an incomplete update and names
 any new global install receipt for an explicit rollback; workspace changes are outside it.
-Use `--manager uv` or `--manager pip` to select the package manager explicitly.
+Use `--manager uv`, `--manager pipx` or `--manager pip` to select the package manager
+explicitly; `uv` and `pipx` are refused when this environment is not theirs.
 
 All `exoma install` flags:
 
@@ -196,11 +203,29 @@ All `exoma install` flags:
 | `--auto-intent` | restore auto-intent mode | yes |
 | `--no-agy-permissions` / `--agy-permissions` | the Agy allow rules are added whenever the `agy` host is chosen; `--no-agy-permissions` removes them and is persisted, `--agy-permissions` undoes that (see "Hosts") | yes |
 | `--provider NAME` / `--model ID` | second agent choice for every chosen host's seed (`--model` requires `--provider`) | yes |
-| `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser`; never installed without it | yes |
+| `--with-e2e` | also install the Playwright + Chromium extra for `/.verify-browser`; never installed without it. The package goes in through the manager of the environment Exoma runs in (see "Browser extra"); a failed step exits 1 | yes |
 | `--update-providers` | bring each provider CLI to its `stable_version`, global npm installs only (see "Provider releases") | yes |
 | `--check` | drift report for the bundle, the global install, and the project when cwd has `.workflow/` | no |
 | `--rollback [ID]` | undo one install/uninstall from its receipt (default: latest) | with `--apply` |
 | `--uninstall` | remove what the workflow installed (see "Uninstall") | with `--apply` |
+
+**Browser extra.** `--with-e2e` installs the pinned `requirements-e2e.txt` into the
+environment Exoma runs in, through the manager that built it, detected as `exoma update` does:
+
+| Environment | Package step | Kept across upgrades |
+|---|---|---|
+| uv tool | `uv pip install --python <exoma python> -r requirements-e2e.txt` | not by `uv tool upgrade`; the report names `uv tool install --reinstall --with <pin> exoma` |
+| pipx | `pipx inject exoma <pin>` | yes, pipx records injected packages |
+| pip | `<exoma python> -m pip install -r requirements-e2e.txt` | yes |
+
+uv and pipx environments need not carry pip, so `python -m pip` is never assumed there. The
+browser step (`<exoma python> -m playwright install chromium`) follows the package. Either step
+failing, a pipx environment without `pipx` on PATH, or an environment with none of the three, is
+reported as `e2e: failed — <reason>; run: <command>` in the install report and makes the install
+exit 1 after it; the other install steps are still applied. A `--dry-run` reports a missing
+package command as a warning (`an install would fail — …`), plans no browser download, and
+exits 0. A `requirements-e2e.txt` that pins nothing installs nothing, with a warning, and is not
+a failure; one missing from the package is.
 
 Since 1.0 an install writes by default. `--apply` is still accepted on an install, with a notice
 that it is no longer needed; it keeps its meaning for `--rollback` and `--uninstall`, which preview
@@ -476,6 +501,10 @@ file is reported. Without it, a Claude Code that cannot find Git Bash by itself 
 `claude -p` started from PowerShell) runs the hook commands through PowerShell, where the quoted
 `"<bash>" "<script>"` pair is a parse error and every PreToolUse hook blocks its tool.
 The installer writes `~/.claude/hooks/python.path` (its own interpreter) beside the launchers.
+A launcher runs that pinned interpreter, else the first of `python3`, `python`, `py -3` on PATH
+that runs as Python 3.10 or newer. `/.doctor`'s `python_callable` check asks the same question
+in the same order, so a machine with `python3` and no `python` alias is ready; it reports
+`python not callable (<what was tried>)` only when the launchers would find nothing either.
 A hook receives its payload on stdin, read as UTF-8 bytes whatever the console code page is,
 and `workflow_hooks.py` hands it to the hook module in memory: there is no size limit (the
 environment variable it used before failed past 32767 characters on Windows, so every large
@@ -934,16 +963,37 @@ the runner call rewritten to the host's bash, then the skill unchanged; `.doctor
 `hosts/agy/doctor.agy.md`, see "Probe"). The
 contract, hook scripts and skills are rendered from the `hosts/claude/` sources at install time, so
 the bundle ships them once. The hook command is
-`<install interpreter> <home>/.gemini/antigravity-cli/exoma/hooks/agy-host.py <Event>`, unquoted; when either path
-holds a space or a `cmd.exe` metacharacter (`& % ^ | < > ( ) "`) the hooks are refused with a
-warning instead, as is a `hooks.json` that cannot be read, is not valid JSON, or whose root is not an object
+`<interpreter> <home>/.gemini/antigravity-cli/exoma/hooks/agy-host.py <Event>`, unquoted. The
+interpreter is the first of these whose path holds no space and no `cmd.exe` metacharacter
+(`& % ^ | < > ( ) "`): the install interpreter, its resolved link target, the base interpreter
+of its environment, then `python3`/`python`/`py -3` from PATH (run and at least 3.10). The
+wrapper is stdlib-only, so a base interpreter runs it as well as the environment's own; this is
+what lets pipx on macOS, under `~/Library/Application Support/pipx`, install the hook. When
+none qualifies, or the home itself holds such a character, the hooks are refused with a warning
+(the install report then adds `to drop the Agy host from this choice: <command>` for the hosts
+chosen, see the doctor fix below), as is a
+`hooks.json` that cannot be read, is not valid JSON, or whose root is not an object
 (the file is left as it is). The two files install together or not at all: the refusal is
 decided before `GEMINI.md` is written, and a refused install writes neither — it also cuts an
 `EXOMA-HOST` block an earlier install left, backed up and receipted, since instructions with no
 hook enforcing them are a half install (unpaired markers are left alone and reported). `--check`
 stamps every Agy source in the bundle on every machine, and for an install that chose `agy`
 compares the installed block and files, reports a missing or drifted `exoma` entry in
-`hooks.json`, and prints `agy host: NOT INSTALLABLE` with the reason when the hook would be refused.
+`hooks.json`, and prints `agy host: NOT INSTALLABLE` with the reason when the hook would be refused,
+followed by `agy host: to drop it from this choice — <command>`.
+`/.doctor` gives the same answer: a chosen `agy` host whose hook is refused is one issue,
+`host agy: not installable on this machine — <reason>`, with the fix "install from an
+interpreter on a plain path, or drop the host". The command, the same in all three places (one
+helper, from the stored choice): `exoma install <host>` when one other host is
+kept; the interactive host prompt naming the hosts to choose when several are (a
+non-interactive run keeps the stored choice, agy included); and, when agy
+was the only host, switching host (`exoma install <claude|codex|opencode>`) or
+`exoma install --uninstall --apply` — never a host added on the user's behalf. The `GEMINI.md`
+and `hooks.json` the refusal leaves out are not also reported missing or as bundle drift; an
+`EXOMA-HOST` block an earlier install left in `GEMINI.md`, or markers there that do not pair up,
+is, as `host agy: drift — leftover …` (one test shared with `--check`), with the fix that the
+next `exoma install` takes it out; a `GEMINI.md` that cannot be read counts as no leftover in
+both, never a traceback. The refusal is judged for the home doctor reports on.
 
 **Permission rules.** Agy asks before every command unless a rule allows it, and its sandbox
 refuses writes outside the workspace. Whenever the `agy` host is chosen (`agy` or `all`), the

@@ -254,12 +254,18 @@ def _bundle_integrity(
     only_command = _installed_intent_mode()
     result["intent_mode"] = "command_only" if only_command else "auto_intent"
     hosts = _installed_hosts()
+    # A refused Agy hook leaves GEMINI.md out too (both or neither, installer/check.py);
+    # their absence is the refusal doctor reports under the host, not two missing files.
+    agy_refused = "agy" in hosts and _agy_refusal() is not None
     for entry in files:
         rel = entry.get("path")
         # A host the install did not choose has nothing installed to compare.
         parts = rel.split("/")
         if parts[0] == HOSTS_DIR and len(parts) > 1 and parts[1] not in hosts:
             result["skipped"].append({"path": rel, "reason": "host_not_chosen"})
+            continue
+        if agy_refused and rel in _AGY_REFUSED_KEYS:
+            result["skipped"].append({"path": rel, "reason": "host_refused"})
             continue
         # A fragment rendered into another installed file has no copy of its own.
         if rel in _RENDERED_INTO_ANOTHER_FILE:
@@ -389,6 +395,27 @@ def _has_block(path: Path, start: str) -> bool:
         return False
 
 
+# The two Agy files the installer writes together or not at all (installer/base.py).
+_AGY_REFUSED_KEYS = ("hosts/agy/GEMINI.md", "hosts/agy/hooks.template.json")
+_AGY_REFUSED_MISSING = ("~/.gemini/GEMINI.md", "~/.gemini/config/hooks.json")
+
+
+def _agy_refusal(dest: Path | None = None, home: Path | None = None) -> str | None:
+    """Why the installer would not put Exoma's Agy hook in on this machine, else None.
+
+    Asked of the installer itself (agy_hooks_refusal), so doctor and `exoma install --check`
+    give one answer: a spaced interpreter with no plain fallback, a spaced home, or a
+    hooks.json that is not Exoma's to rewrite.
+    """
+    from exoma.installer.base import agy_hooks_dest, agy_hooks_refusal
+
+    try:
+        refusal = agy_hooks_refusal(dest or agy_hooks_dest(), home)
+    except (OSError, ValueError):
+        return None
+    return refusal[1] if refusal else None
+
+
 def _host_status(home: Path | None = None) -> dict:
     """`{chosen, hosts: {<host>: {missing: [...], ...}}}` for the hosts the last install chose.
 
@@ -470,6 +497,20 @@ def _host_status(home: Path | None = None) -> dict:
             if not isinstance(allow, list) or any(rule not in allow for rule in agy_permission_rules()):
                 missing.append("~/.gemini/antigravity-cli/settings.json (permission rules)")
         result["hosts"]["agy"] = {"missing": missing, "permissions": "on" if permissions else "off"}
+        refusal = _agy_refusal(gemini / "config" / "hooks.json", home)
+        if refusal:
+            result["hosts"]["agy"]["missing"] = [
+                m for m in missing if not m.startswith(_AGY_REFUSED_MISSING)
+            ]
+            result["hosts"]["agy"]["refused"] = refusal
+            # What `exoma install --check` reports as drift (installer/check.py): an earlier
+            # install's block that the next install takes out, since no hook enforces it.
+            # Same test as --check (one helper): a whole block, or markers that do not pair
+            # up (an END alone, a START alone, more of one than the other).
+            from exoma.installer.base import agy_leftover_block
+
+            if agy_leftover_block(gemini / "GEMINI.md"):
+                result["hosts"]["agy"]["leftover_block"] = "~/.gemini/GEMINI.md (EXOMA-HOST block)"
     if "codex" in chosen:
         from exoma.installer.base import codex_hook_events_present
 

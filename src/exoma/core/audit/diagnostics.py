@@ -54,18 +54,41 @@ def check_writable(path: Path) -> tuple[bool, str | None]:
 
 
 def python_callable() -> tuple[bool, str]:
+    """Whether the hooks and the generated scripts find an interpreter, the way they look.
+
+    Same order as the launchers (execution-gate.sh and its siblings): the pinned
+    python.path first, then `python3`, `python`, `py -3` from PATH, each run and required
+    to be at least MIN_PYTHON. A missing `python` alias is not a failure while `python3`
+    runs; a Windows Store alias that opens the Store instead of running is.
+    """
+    pinned = osutil.pinned_python()
+    argv = [pinned] if pinned else osutil.find_python()
+    if not argv:
+        names = ", ".join(" ".join(c) for c in osutil._PYTHON_CANDIDATES)
+        return False, (
+            f"no {osutil.pinned_python_path()} and none of {names} runs as "
+            f"Python >= {osutil.MIN_PYTHON[0]}.{osutil.MIN_PYTHON[1]}"
+        )
     try:
         completed = subprocess.run(
-            [shutil.which("python") or "python", "--version"],
+            [*argv, "--version"],
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
             **osutil.hidden_run_kwargs(),  # Windows: no console flash on readiness probe
         )
-    except OSError as exc:
-        return False, str(exc)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"{' '.join(argv)}: {exc}"
     output = (completed.stdout or completed.stderr or "").strip()
-    return completed.returncode == 0, output
+    return completed.returncode == 0, f"{' '.join(argv)}: {output}"
+
+
+def deselect_hint(host: str, chosen) -> str:
+    # One helper for doctor, the install report and --check (installer/base.py).
+    from exoma.installer.base import deselect_hint as _hint
+
+    return _hint(host, chosen)
 
 
 def _free_tier_models(config: dict) -> list[tuple[str, str]]:
@@ -455,8 +478,11 @@ def run_doctor(
     python_ok, python_output = python_callable()
     checks["python_callable"] = {"ok": python_ok, "output": python_output}
     if not python_ok:
-        issues.append("python not callable")
-        recommended_fixes.append("Ensure python is installed and available in PATH")
+        issues.append(f"python not callable ({python_output})")
+        recommended_fixes.append(
+            "Install Python 3.10+ as python3 (or python / py -3 on Windows) on PATH, "
+            "or re-run `exoma install` to pin the interpreter Exoma runs under"
+        )
 
     provider_ok, provider_output = provider_callable(provider_command)
     checks["provider_callable"] = {"ok": provider_ok, "output": provider_output}
@@ -903,6 +929,21 @@ def run_doctor(
     hosts = _host_status()
     checks["hosts"] = hosts
     for host, state in hosts["hosts"].items():
+        if state.get("refused"):
+            # A chosen host that cannot be installed on this machine: one issue naming
+            # why, and the two ways out. Re-running the same install cannot change it.
+            issues.append(f"host {host}: not installable on this machine — {state['refused']}")
+            recommended_fixes.append(
+                f"Install Exoma from an interpreter on a plain path, or drop the {host} host: "
+                f"{deselect_hint(host, hosts['chosen'])}"
+            )
+            if state.get("leftover_block"):
+                # The same drift `exoma install --check` reports for this file.
+                issues.append(f"host {host}: drift — leftover {state['leftover_block']}")
+                recommended_fixes.append(
+                    f"{state['leftover_block']} is an instructions block with no hook enforcing it; "
+                    "the next `exoma install` takes it out (backed up, receipted for --rollback)"
+                )
         if state["missing"]:
             issues.append(f"host {host}: missing {', '.join(state['missing'][:5])}")
             recommended_fixes.append(f"Re-run `exoma install {host}` to restore the {host} host's files")

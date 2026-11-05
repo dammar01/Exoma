@@ -630,12 +630,51 @@ def agy_hook_entry(src: Path) -> dict:
     """The `exoma` hook definition this install writes into ~/.gemini/config/hooks.json."""
     template = json.loads(src.read_text(encoding="utf-8"))
     return _agy_hook_value(
-        template[AGY_HOST_HOOK_NAME], Path(sys.executable).as_posix(), HOME.as_posix()
+        template[AGY_HOST_HOOK_NAME], agy_hook_python() or Path(sys.executable).as_posix(), HOME.as_posix()
     )
 
 
 # A space splits the unquoted command; the rest are cmd.exe operators or expansions.
 _AGY_UNSAFE_PATH_CHARS = ' &%^|<>()"'
+
+
+def _agy_safe(path: str) -> bool:
+    return not any(ch in path for ch in _AGY_UNSAFE_PATH_CHARS)
+
+
+def _agy_python_candidates():
+    """Interpreters an Agy hook may name, most faithful first.
+
+    The wrapper (agy-host.py and its siblings) is stdlib-only and imports nothing from the
+    Exoma environment, so any interpreter at MIN_PYTHON or newer runs it. That is what lets
+    a pipx or uv tool environment under a spaced home — pipx on macOS defaults to
+    ~/Library/Application Support/pipx — still get a hook: the environment's python is a
+    link to, or a copy of, a base interpreter that usually sits on a plain path.
+    A generator: the PATH probe below runs interpreters, so it is reached only when every
+    earlier candidate is unsafe.
+    """
+    yield [sys.executable]
+    try:
+        yield [str(Path(sys.executable).resolve())]
+    except OSError:
+        pass
+    base = getattr(sys, "_base_executable", None)
+    if base:
+        yield [base]
+    from exoma.utils.osutil import find_python
+
+    found = find_python()
+    if found:
+        yield found
+
+
+def agy_hook_python() -> str | None:
+    """The interpreter an Agy hook command carries unquoted, or None when none is safe."""
+    for argv in _agy_python_candidates():
+        posix = [Path(argv[0]).as_posix(), *argv[1:]]
+        if all(_agy_safe(part) for part in posix):
+            return " ".join(posix)
+    return None
 
 
 def agy_hooks_dest() -> Path:
@@ -985,7 +1024,7 @@ def _install_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
         _record("merge" if exists else "create", dest, CODEX_CONFIG_KEY, saved, pre_sha256)
 
 
-def agy_hooks_state(dest: Path) -> tuple[dict | None, tuple[str, str] | None]:
+def agy_hooks_state(dest: Path, home: Path | None = None) -> tuple[dict | None, tuple[str, str] | None]:
     """(the parsed hooks.json, None) when Exoma's hook can go into it — `{}` for a file not
     there yet — else (None, (plan detail, warning)).
 
@@ -998,14 +1037,20 @@ def agy_hooks_state(dest: Path) -> tuple[dict | None, tuple[str, str] | None]:
     call. A hooks.json that is not a JSON object is refused too: it is the user's file, and
     replacing it with one holding only `exoma` would discard what was there. Asked before
     either Agy file is written, so GEMINI.md never lands without the hook that enforces it.
+    `home` is the home the hook command would name (default: the install's HOME); doctor
+    passes the one it is reporting on.
     """
-    paths = (Path(sys.executable).as_posix(), HOME.as_posix())
-    if any(ch in path for path in paths for ch in _AGY_UNSAFE_PATH_CHARS):
+    python, home_path = agy_hook_python(), Path(home or HOME).as_posix()
+    if python is None or not _agy_safe(home_path):
+        where = (f"the home ({home_path})" if python else
+                 f"the interpreter ({Path(sys.executable).as_posix()}) and every fallback "
+                 "(its resolved target, the base interpreter, python3/python/py -3 on PATH)")
         return None, (
             "a path an Agy hook command cannot carry unquoted",
-            f"the Agy host hooks were not installed — the interpreter ({paths[0]}) or "
-            f"the home ({paths[1]}) holds a space or one of {_AGY_UNSAFE_PATH_CHARS.strip()}, "
-            "and Agy runs hook commands unquoted. Install from an interpreter on a plain path.",
+            f"the Agy host hooks were not installed — {where} holds a space or one of "
+            f"{_AGY_UNSAFE_PATH_CHARS.strip()}, and Agy runs hook commands unquoted. Install "
+            "from an interpreter on a plain path, or drop the Agy host: the install report, "
+            "`exoma install --check` and `/.doctor` name the command for the hosts you chose.",
         )
     if not dest.exists():
         return {}, None
@@ -1025,9 +1070,46 @@ def agy_hooks_state(dest: Path) -> tuple[dict | None, tuple[str, str] | None]:
     return current, None
 
 
-def agy_hooks_refusal(dest: Path) -> tuple[str, str] | None:
+def agy_hooks_refusal(dest: Path, home: Path | None = None) -> tuple[str, str] | None:
     """(plan detail, warning) when Exoma's hook cannot go into Agy's hooks.json, else None."""
-    return agy_hooks_state(dest)[1]
+    return agy_hooks_state(dest, home)[1]
+
+
+def deselect_hint(host: str, chosen) -> str:
+    """A command that drops `host` and keeps the rest of the choice, as `exoma install` parses it.
+
+    The positional host takes one name (or `all`), so only a single kept host has a
+    one-line form; any other combination is chosen at the host prompt, which only an
+    interactive terminal shows (a non-interactive run keeps the stored choice). With no
+    other host chosen there is nothing to keep: switch host or uninstall, never a host
+    added on the user's behalf. Used wherever the choice is known: doctor, the install
+    report, `exoma install --check`.
+    """
+    keep = [h for h in chosen if h != host]
+    if not keep:
+        others = "|".join(h for h in ("claude", "agy", "codex", "opencode") if h != host)
+        return (f"switch host with `exoma install <{others}>`, or remove Exoma with "
+                "`exoma install --uninstall --apply`")
+    if len(keep) == 1:
+        return f"`exoma install {keep[0]}`"
+    return (f"run `exoma install` in an interactive terminal (in Claude Code: `! exoma install`) "
+            f"and choose {', '.join(keep)} without {host}; a non-interactive run keeps the "
+            "stored choice")
+
+
+def agy_leftover_block(gemini_md: Path) -> bool:
+    """Whether GEMINI.md holds Exoma's EXOMA-HOST block, or markers of it that do not pair up.
+
+    Under a refused hook that is what the next install takes out (or reports), so `--check`
+    calls it drift and doctor reports it: one test for both. A file that cannot be read is
+    no leftover here, never a traceback; the refusal itself is still reported.
+    """
+    start, end = MARKERS[AGY_HOST_INSTRUCTIONS]
+    try:
+        text = _read_text_lenient(gemini_md) if gemini_md.is_file() else ""
+    except OSError:
+        return False
+    return bool(_managed_block(text, start, end) or _marker_problem(text, start, end))
 
 
 # The hooks.json state the GEMINI.md decision was made on, handed to the hook merge that

@@ -33,7 +33,9 @@ from exoma.installer.base import (
     agy_hook_entry,
     agy_hooks_dest,
     agy_hooks_state,
+    agy_leftover_block,
     agy_permission_rules,
+    deselect_hint,
     agy_settings_dest,
     codex_config_dest,
     codex_grant_state,
@@ -305,10 +307,9 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         gemini_md = HOME / ".gemini" / "GEMINI.md"
         if agy_refusal:
             # An install now would take out a block an earlier one left (a half install), or
-            # warn about markers that do not pair up and so cannot be taken out.
-            start, end = MARKERS[AGY_HOST_INSTRUCTIONS]
-            text = _read_text_lenient(gemini_md) if gemini_md.is_file() else ""
-            if _managed_block(text, start, end) or _marker_problem(text, start, end):
+            # warn about markers that do not pair up and so cannot be taken out. The same
+            # test doctor applies; an unreadable file is no leftover, not a traceback.
+            if agy_leftover_block(gemini_md):
                 installed_drift.append(AGY_HOST_INSTRUCTIONS)
         else:
             installed_hook = agy_current.get(AGY_HOST_HOOK_NAME)
@@ -437,6 +438,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         print(f"  project scope: SKIPPED — {project_scope_note}")
     if agy_refusal:
         print(f"  agy host: NOT INSTALLABLE — {agy_refusal[1]}")
+        print(f"  agy host: to drop it from this choice — {deselect_hint('agy', hosts)}")
 
     # Reported beside the drift list rather than inside it. This file has no shipped
     # counterpart to drift FROM, and its absence is not a fault: init falls back to

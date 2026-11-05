@@ -262,8 +262,7 @@ def _test_agy_host_install_merges() -> None:
         finally:
             base.HOME = original_home
         merged = json.loads(dest.read_text(encoding="utf-8"))
-        paths = (Path(sys.executable).as_posix(), Path(tmp).as_posix())
-        if any(ch in p for p in paths for ch in base._AGY_UNSAFE_PATH_CHARS):
+        if base.agy_hook_python() is None or not base._agy_safe(Path(tmp).as_posix()):
             assert_true("exoma" not in merged and plan.warnings, "an unsafe path is refused, not installed")
             return
         assert_true(merged.get("mine") == {"Stop": [{"command": "echo hi"}]}, f"the user's hook name stays: {merged}")
@@ -294,23 +293,185 @@ def _test_agy_host_install_merges() -> None:
     assert_true(again == merged and how == "replaced managed block", "a second install replaces only its block")
 
 
-def _install_agy_targets(home: Path, interpreter: str, apply: bool = True):
+def _install_agy_targets(home: Path, interpreter: str, apply: bool = True,
+                         fallbacks: tuple[str, ...] = ()):
     """Run the install over the two Agy targets, in _targets() order, as `interpreter` would.
-    Returns the plan and the receipt entries the run recorded."""
+    Returns the plan and the receipt entries the run recorded.
+
+    The interpreter fallbacks (resolved target, base interpreter, PATH) are this machine's
+    unless named: `fallbacks` replaces them, so a test decides whether one is safe."""
     from exoma.installer import base
 
     plan = base.Plan()
-    saved = (base.HOME, sys.executable)
+    saved = (base.HOME, sys.executable, base._agy_python_candidates)
     base.HOME, sys.executable = home, interpreter
+    base._agy_python_candidates = lambda: iter([[interpreter], *([f] for f in fallbacks)])
     try:
         for src, dest, key in base._targets():
             if key in (base.AGY_HOST_INSTRUCTIONS, base.AGY_HOST_HOOKS):
                 base._install_text(src, dest, key, plan, apply, home / "backup", None)
         receipt = list(base._RECEIPT)
     finally:
-        base.HOME, sys.executable = saved
+        base.HOME, sys.executable, base._agy_python_candidates = saved
         base._reset_receipt()
     return plan, receipt
+
+
+def _test_agy_host_falls_back_to_a_plain_interpreter() -> None:
+    """A spaced environment python (pipx on macOS: ~/Library/Application Support/pipx) hands
+    the hook a plain-path interpreter instead of a refusal; the wrapper is stdlib-only."""
+    from exoma.installer import base
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-fallback-") as tmp:
+        home = Path(tmp)
+        if not base._agy_safe(home.as_posix()):
+            return
+        hooks = home / ".gemini" / "config" / "hooks.json"
+        hooks.parent.mkdir(parents=True)
+        spaced = (home / "Library" / "Application Support" / "pipx" / "venvs" / "exoma" / "bin" / "python").as_posix()
+        plain_base = (home / "opt" / "python3.12" / "bin" / "python3.12").as_posix()
+
+        plan, _receipt = _install_agy_targets(home, spaced, fallbacks=(plain_base,))
+        assert_true(not any(verb == "refused" for verb, _t, _d in plan.actions),
+                    f"a safe fallback is not refused: {plan.actions}")
+        command = json.loads(hooks.read_text(encoding="utf-8"))["exoma"]["PreToolUse"][0]["hooks"][0]["command"]
+        assert_true(command.startswith(plain_base + " ") and "Application Support" not in command,
+                    f"the hook names the plain interpreter, unquoted: {command}")
+
+        hooks.unlink()
+        plan, _receipt = _install_agy_targets(home, spaced, fallbacks=("C:/Program Files/Python312/python.exe",))
+        assert_true(not hooks.exists() and any(verb == "refused" for verb, _t, _d in plan.actions),
+                    "with every candidate unsafe the hook is still refused")
+        assert_true(any("name the command for the hosts you chose" in w and "<claude|codex|opencode>" not in w
+                        for w in plan.warnings),
+                    f"the generic refusal points to where the exact command is named, no placeholder: {plan.warnings}")
+
+    # Where the choice is known, the exact command is named: the install report and --check.
+    repo = Path(__file__).resolve().parents[2] / "src" / "exoma"
+    install_src = (repo / "install.py").read_text(encoding="utf-8")
+    check_src = (repo / "installer" / "check.py").read_text(encoding="utf-8")
+    assert_true("deselect_hint('agy', hosts)" in install_src and "deselect_hint('agy', hosts)" in check_src,
+                "the install report and --check name the drop command for the stored hosts")
+
+    # The PATH probe runs interpreters: it is reached only when every earlier candidate fails.
+    saved = (sys.executable, base._agy_python_candidates)
+    probed = []
+    try:
+        sys.executable = (Path(tempfile.gettempdir()) / "plain" / "python").as_posix()
+        if base._agy_safe(sys.executable):
+            from exoma.utils import osutil
+            real_find = osutil.find_python
+            osutil.find_python = lambda *a, **k: probed.append(1) or None
+            try:
+                assert_true(base.agy_hook_python() == sys.executable and not probed,
+                            "a safe sys.executable is used without probing PATH")
+            finally:
+                osutil.find_python = real_find
+    finally:
+        sys.executable, base._agy_python_candidates = saved
+
+
+def _test_doctor_reports_a_refused_agy_host_once() -> None:
+    """A chosen Agy host whose hook the installer refuses is one finding (the refusal), not
+    GEMINI.md and hooks.json missing plus "re-run install", which cannot change it."""
+    from exoma.core.audit import bundle_integrity
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-doctor-") as tmp:
+        home = Path(tmp)
+        (home / ".claude").mkdir()
+        (home / ".claude" / ".workflow-install-mode.json").write_text(
+            json.dumps({"hosts": ["claude", "agy"]}), encoding="utf-8")
+        real = bundle_integrity._agy_refusal
+        seen_home = []
+        try:
+            def refused(dest=None, home_=None):
+                seen_home.append(home_)
+                return "the interpreter holds a space"
+
+            bundle_integrity._agy_refusal = refused
+            status = bundle_integrity._host_status(home)
+            agy = status["hosts"]["agy"]
+            assert_true(agy.get("refused") == "the interpreter holds a space", f"the refusal is reported: {agy}")
+            assert_true(seen_home == [home], f"the refusal is asked about the home being reported on: {seen_home}")
+            assert_true(not any(m.startswith(("~/.gemini/GEMINI.md", "~/.gemini/config/hooks.json"))
+                                for m in agy["missing"]),
+                        f"the two files a refusal leaves out are not also missing: {agy['missing']}")
+            assert_true(any("CONTRACT.md" in m for m in agy["missing"]),
+                        f"files the refusal does not explain are still reported: {agy['missing']}")
+            assert_true("leftover_block" not in agy, "no GEMINI.md, no leftover block")
+
+            # A block an earlier install left, with no hook enforcing it: --check calls it
+            # drift (installer/check.py), and so does doctor.
+            gemini_md = home / ".gemini" / "GEMINI.md"
+            gemini_md.parent.mkdir(parents=True)
+            gemini_md.write_text("notes\n<!-- EXOMA-HOST:START -->\nold\n<!-- EXOMA-HOST:END -->\n", encoding="utf-8")
+            agy = bundle_integrity._host_status(home)["hosts"]["agy"]
+            assert_true(agy.get("leftover_block", "").startswith("~/.gemini/GEMINI.md"),
+                        f"a leftover EXOMA-HOST block under a refused hook is reported: {agy}")
+            # Markers that do not pair up are drift to --check too (installer/check.py).
+            for half in ("notes\n<!-- EXOMA-HOST:END -->\n",
+                         "notes\n<!-- EXOMA-HOST:START -->\norphan half\n",
+                         "<!-- EXOMA-HOST:START -->\na\n<!-- EXOMA-HOST:END -->\n<!-- EXOMA-HOST:END -->\n"):
+                gemini_md.write_text(half, encoding="utf-8")
+                agy = bundle_integrity._host_status(home)["hosts"]["agy"]
+                assert_true("leftover_block" in agy, f"unpaired markers are a leftover too: {half!r} {agy}")
+            gemini_md.write_text("only the user's notes\n", encoding="utf-8")
+            agy = bundle_integrity._host_status(home)["hosts"]["agy"]
+            assert_true("leftover_block" not in agy, f"a GEMINI.md without Exoma markers is no leftover: {agy}")
+            gemini_md.unlink()
+
+            bundle_integrity._agy_refusal = lambda dest=None, home_=None: None
+            agy = bundle_integrity._host_status(home)["hosts"]["agy"]
+            assert_true("refused" not in agy and any(m.startswith("~/.gemini/GEMINI.md") for m in agy["missing"]),
+                        f"without a refusal a missing GEMINI.md is missing: {agy}")
+        finally:
+            bundle_integrity._agy_refusal = real
+
+    # One leftover test for doctor and --check; an unreadable GEMINI.md is no leftover and
+    # no traceback (`exoma install --check` used to raise on it under a refused hook).
+    from exoma.installer import base
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-leftover-") as tmp:
+        gemini_md = Path(tmp) / "GEMINI.md"
+        assert_true(not base.agy_leftover_block(gemini_md), "no file, no leftover")
+        gemini_md.write_text("<!-- EXOMA-HOST:START -->\nx\n<!-- EXOMA-HOST:END -->\n", encoding="utf-8")
+        assert_true(base.agy_leftover_block(gemini_md), "a whole block is a leftover")
+        real_read = base._read_text_lenient
+        try:
+            def unreadable(path):
+                raise PermissionError(13, "denied", str(path))
+
+            base._read_text_lenient = unreadable
+            assert_true(not base.agy_leftover_block(gemini_md), "an unreadable GEMINI.md is no leftover, not raised")
+        finally:
+            base._read_text_lenient = real_read
+    check_src = (Path(__file__).resolve().parents[2] / "src" / "exoma" / "installer" / "check.py").read_text(encoding="utf-8")
+    assert_true("agy_leftover_block(gemini_md)" in check_src, "--check uses the same leftover test as doctor")
+
+    # The real refusal answers for the home it is given, not the install's own HOME.
+    with tempfile.TemporaryDirectory(prefix="exoma agy spaced home-") as spaced:
+        refusal = bundle_integrity._agy_refusal(Path(spaced) / ".gemini" / "config" / "hooks.json", Path(spaced))
+        assert_true(refusal is not None, f"a spaced home passed in is refused: {refusal}")
+
+    from exoma.core.audit.diagnostics import deselect_hint
+    from exoma.installer.base import deselect_hint as installer_hint
+
+    for chosen in (["claude", "agy"], ["agy"], ["claude", "agy", "codex"]):
+        assert_true(deselect_hint("agy", chosen) == installer_hint("agy", chosen),
+                    f"doctor and the installer share one hint: {chosen}")
+    assert_true(installer_hint("agy", ("claude", "agy")) == "`exoma install claude`",
+                "the stored choice (a tuple) works as well as a list")
+    assert_true(deselect_hint("agy", ["claude", "agy"]) == "`exoma install claude`",
+                "one kept host is a one-line command")
+    alone = deselect_hint("agy", ["agy"])
+    assert_true("`exoma install <claude|codex|opencode>`" in alone and "--uninstall --apply" in alone
+                and "`exoma install claude`" not in alone,
+                f"agy alone: switch host or uninstall, never a host added for the user: {alone}")
+    multi = deselect_hint("agy", ["claude", "agy", "codex"])
+    assert_true("exoma install claude codex" not in multi and "interactive terminal" in multi
+                and "! exoma install" in multi and "claude, codex" in multi
+                and "non-interactive run keeps the stored choice" in multi,
+                f"several kept hosts go to the interactive prompt (the positional takes one host): {multi}")
 
 
 def _test_agy_host_install_all_or_nothing() -> None:

@@ -846,7 +846,10 @@ def main() -> int:
             },
         )
 
-    _install_deps(plan, apply, args.with_e2e)
+    # A requested extra that did not install fails the install (exit 1) after the report,
+    # like a workspace upgrade: /.verify-browser would otherwise stop on playwright_missing
+    # behind an install that said nothing was wrong.
+    e2e_failure = _install_deps(plan, apply, args.with_e2e)
 
     targets = _targets(hosts)
     for source, dest, key in targets:
@@ -933,6 +936,14 @@ def main() -> int:
                 plan.warn(f"workspace not upgraded: {exc}")
                 workspace_upgrade_failed = True
 
+    if "agy" in hosts:
+        # The refusal itself is generic (its callers do not all know the choice); here the
+        # choice is known, so the report names the exact command that drops Agy from it.
+        from exoma.installer.base import agy_hooks_dest, agy_hooks_refusal, deselect_hint
+
+        if agy_hooks_refusal(agy_hooks_dest()):
+            plan.warn(f"to drop the Agy host from this choice: {deselect_hint('agy', hosts)}")
+
     _store_install_mode(
         args.only_command, hosts, agy_permissions, owned_rules, agy_opt_out, plan, apply, backup_root
     )
@@ -966,6 +977,9 @@ def main() -> int:
             print(f"    ! {warning}")
     else:
         print("  warnings: none")
+    if args.with_e2e:
+        print(f"  e2e: failed — {e2e_failure}" if e2e_failure else
+              ("  e2e: installed" if apply else "  e2e: planned"))
 
 
     if "agy" in hosts:
@@ -977,7 +991,7 @@ def main() -> int:
     if not apply:
         print()
         print("  DRY RUN — nothing was written. Re-run without --dry-run to install.")
-    return 1 if workspace_upgrade_failed else 0
+    return 1 if workspace_upgrade_failed or e2e_failure else 0
 
 
 if __name__ == "__main__":

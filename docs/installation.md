@@ -33,7 +33,7 @@ it again. Every installer flag, target file and hook is listed in the
 | Requirement | Required | Notes |
 | --- | --- | --- |
 | **Python 3.10+** | Yes | The runtime needs no third-party packages. An older Python is refused with a message naming the version found. Optional browser verification uses Playwright (the `e2e` extra) |
-| **uv** or **pip** | Yes | To install the `exoma` package. `uv tool install` keeps it in its own environment |
+| **uv**, **pipx**, or **pip** | Yes | To install the `exoma` package. `uv tool install` and `pipx install` keep it in its own environment; on Linux and macOS prefer one of them, since a distribution-managed Python refuses `pip install` (PEP 668) |
 | **A secondary-agent CLI** | Yes | `codex` (reference setup), `opencode` (default with a stricter read boundary), `agy`, or `claude` (Claude Code), on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
 | **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
 | **bash** | Yes | Hooks and the `.workflow/` runner are bash scripts on every OS. On Windows that is Git Bash, from Git for Windows; the installer finds it next to `git.exe` and refuses to install without it |
@@ -48,12 +48,23 @@ second-agent choices are independent; Codex or Agy can also serve in either role
 ### 1. Install the package
 
 ```bash
-uv tool install exoma          # or: pip install exoma
+uv tool install exoma          # or: pipx install exoma   (or: pip install exoma)
 exoma --version
 ```
 
-`exoma` is the CLI; `python -m exoma` is the same entry point. For `/.verify-browser`, add the
-browser extra: `uv tool install "exoma[e2e]"` (or `pip install "exoma[e2e]"`).
+`exoma` is the CLI; `python -m exoma` is the same entry point.
+
+On Linux and macOS, use uv or pipx. The Python that Debian, Ubuntu, or Homebrew ship is
+"externally managed" (PEP 668): `pip install exoma` into it fails with
+`externally-managed-environment`, and so would `exoma update` on such an install. pipx and uv
+each give Exoma its own environment, and `exoma update` upgrades through whichever of them
+built it. pip remains fine inside a virtual environment you manage yourself.
+
+For `/.verify-browser`, run `exoma install --with-e2e` (next step). It adds the pinned
+Playwright through the manager of Exoma's environment (`uv pip`, `pipx inject`, or pip) and
+downloads Chromium, and exits nonzero with the command to run when either step fails. With uv,
+`uv tool install "exoma[e2e]"` (or `uv tool install --reinstall --with playwright==<pin> exoma`)
+keeps Playwright across `uv tool upgrade`; with pipx, `pipx inject` already does.
 
 ### 2. Install for your host
 
@@ -130,9 +141,11 @@ exoma update
 ```
 
 This updates the installed package with `uv tool upgrade exoma` when the running Exoma is
-an uv tool, or `python -m pip install --upgrade exoma` in its current Python environment
-otherwise. `--manager pip` or `--manager uv` selects a manager explicitly; `uv` is accepted
-only when the running Exoma belongs to that uv tool installation. The command then runs
+an uv tool, `pipx upgrade exoma` when it runs from a pipx environment, or
+`python -m pip install --upgrade exoma` in its current Python environment otherwise.
+`--manager uv`, `--manager pipx` or `--manager pip` selects a manager explicitly; `uv` and
+`pipx` are accepted only when the running Exoma belongs to that installation. When pip refuses
+an externally managed Python (PEP 668), the update stops and points to pipx or uv. The command then runs
 the **new** Exoma process to refresh the global host configuration. If cwd is inside a
 project with `.workflow/`, it upgrades that workspace too. It runs `exoma install --check`
 last and returns a nonzero status when any step fails. Without `.workflow/`, no workspace

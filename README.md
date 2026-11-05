@@ -193,7 +193,7 @@ requests.
 ## Quick start
 
 ```bash
-uv tool install exoma            # or: pip install exoma
+uv tool install exoma            # or: pipx install exoma  (pip install exoma inside a venv)
 exoma install --dry-run          # optional: read what it will change first
 exoma install                    # asks the host and its second agent, then installs
 ```

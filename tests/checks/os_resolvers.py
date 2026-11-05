@@ -83,6 +83,36 @@ def _test_find_python_runs_each_candidate() -> None:
     assert_true(version is not None and version >= osutil.MIN_PYTHON, f"find_python's choice runs and is new enough: {found} {version}")
 
 
+def _test_doctor_python_check_follows_the_launchers() -> None:
+    """doctor's python check asks what the hooks ask: the pin, then python3/python/py -3.
+
+    Field report: a clean install on macOS had no `python` alias, so doctor's old
+    `shutil.which("python")` probe failed and reported NOT_READY while every launcher
+    found python3 and ran.
+    """
+    from exoma.core.audit import diagnostics
+
+    real_pinned, real_find = osutil.pinned_python, osutil.find_python
+    try:
+        osutil.pinned_python = lambda home=None: None
+        osutil.find_python = lambda min_version=osutil.MIN_PYTHON: [sys.executable]
+        ok, output = diagnostics.python_callable()
+        assert_true(ok, f"python3 alone (no `python` alias) passes doctor's check: {output}")
+        assert_true(sys.executable in output, f"the output names the interpreter it ran: {output}")
+
+        osutil.pinned_python = lambda home=None: sys.executable
+        osutil.find_python = lambda min_version=osutil.MIN_PYTHON: None
+        ok, output = diagnostics.python_callable()
+        assert_true(ok, f"the pinned interpreter passes with nothing usable on PATH: {output}")
+
+        osutil.pinned_python = lambda home=None: None
+        ok, output = diagnostics.python_callable()
+        assert_true(not ok, "no pin and no runnable candidate fails")
+        assert_true("python3" in output and "py -3" in output, f"the failure names what was tried: {output}")
+    finally:
+        osutil.pinned_python, osutil.find_python = real_pinned, real_find
+
+
 def _test_find_bash_and_os_locations() -> None:
     bash = osutil.find_bash()
     if osutil.IS_WINDOWS:
