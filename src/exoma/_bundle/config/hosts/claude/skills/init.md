@@ -25,7 +25,7 @@ init is a SCAFFOLD, not an update: an EXISTING config.json and second_agent.json
 ## Output
 [INIT]
 bootstrap: exoma <version> (<exoma | python -m exoma>)
-generated: run/inspect/check.sh + config.json (v1.0.0b1, python + package_root abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
+generated: run/inspect/check.sh + config.json (v1.0.0, python + package_root abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
 upgrade_needed: <meta.upgrade_needed> (true → name the versions from meta.versions + offer /.upgrade)
 status: READY
