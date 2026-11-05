@@ -272,6 +272,92 @@ def runner_file(candidate, root):
         return True
 
 
+# The files that switch the pre-flight gate off or reset its bookkeeping: the local-mode
+# flag (session runtime dir for Claude Code, .workflow/ for the other hosts), the marker
+# and the precision-read counter. They are the user's switch. An agent that writes one turns
+# its own gate off: a Write of local_mode.flag used to pass while the gate was armed (writes
+# pass the pre-flight gate), and every later call then skipped the gate for the session.
+ESCAPE_FILES = ("local_mode.flag", "delegated.marker", "delegated.reads")
+
+
+def escape_file(candidate, root):
+    # True when a file write lands on an escape file anywhere under <root>/.workflow, any
+    # session's included. Same spellings as runner_file: an NTFS stream suffix is cut off,
+    # links are followed, an unresolvable 8.3 name counts. Unsure -> True.
+    if not candidate.strip():
+        return False
+    try:
+        if os.name == "nt" and len(candidate) > 2 and ":" in candidate[2:]:
+            candidate = candidate[: candidate.index(":", 2)]
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(root, candidate)
+        full = os.path.realpath(candidate).rstrip("\\/")
+        names = {n.lower() for n in ESCAPE_FILES} if os.name == "nt" else set(ESCAPE_FILES)
+        name = os.path.basename(full)
+        if (name.lower() if os.name == "nt" else name) not in names:
+            return False
+        wf = os.path.normcase(os.path.realpath(os.path.join(root, ".workflow")))
+        if os.path.normcase(full).startswith(wf + os.sep):
+            return True
+        return "~" in full
+    except Exception:
+        return True
+
+
+def escape_write_message(tool, target):
+    return (
+        "'%s' targets a pre-flight escape file: %s\n"
+        "WORKFLOW_LOCAL_MODE=1, local_mode.flag and deleting delegated.marker are the user's own "
+        "switch for a false positive; an agent never writes them, armed or not.\n"
+        "Blocked by a false positive? Stop and tell the user which call was refused; the user "
+        "decides whether to turn the gate off."
+    ) % (tool, target)
+
+
+# A gate that should have held but let a call through: an escape in use while a delegation
+# is armed, or a delegated command the user named that could not arm. Allowing stays the
+# rule (fail-open never wedges a session); this only makes it visible to /.doctor.
+GATE_SKIPS_FILE = "gate-skips.jsonl"
+GATE_SKIPS_MAX_BYTES = 256 * 1024
+
+
+def log_gate_skip(log_dir, hook, reason, root=None, key=None):
+    """Append one line to <log_dir>/gate-skips.jsonl; never the path or command.
+
+    `key` names the occurrence (the marker's set_at): a row with the same reason, root and
+    key already near the end of the file is not written again, so an escape held for a
+    whole delegation costs one line, not one per tool call. Never raises.
+    """
+    if not log_dir:
+        return
+    path = os.path.join(log_dir, GATE_SKIPS_FILE)
+    row = {"at": _now(), "hook": hook, "reason": reason, "root": root, "key": key}
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        if os.path.isfile(path):
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                f.seek(max(0, size - 8192))
+                tail = f.read().decode("utf-8", "replace").splitlines()
+            for line in reversed(tail[-20:]):
+                try:
+                    last = json.loads(line)
+                except ValueError:
+                    continue
+                if (last.get("reason"), last.get("root"), last.get("key")) == (reason, root, key):
+                    return
+            if size > GATE_SKIPS_MAX_BYTES:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.read().splitlines()
+                keep = lines[len(lines) // 2:]
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("".join(l + "\n" for l in keep))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass  # recording a skip must never change what the gate decides
+
+
 def msys_path(path):
     # Git Bash spells E:\x as /e/x (or /cygdrive/e/x); read it the way that shell does.
     m = re.fullmatch(r"/(?:cygdrive/)?([A-Za-z])(/.*)?", path) if os.name == "nt" else None
@@ -482,12 +568,16 @@ def preflight_refusal(kind, target, command, marker, ctx):
       is_bash(word)        a bash the host's runner call may start with;
       host_read(path)      what the host may always read (skills, contract, task output);
       limit                a read's line limit, None when the host gives none.
-    Rules: "runner_write", "preflight", "preflight_quota" (the precision reads are used).
+    Rules: "runner_write", "escape_write", "preflight", "preflight_quota" (the precision
+    reads are used). The host adapters refuse runner and escape writes before this, marker or
+    not; they are repeated here so an adapter that reaches this first still refuses them.
     """
     root, home, rt_dir = ctx["root"], ctx["home"], ctx["rt_dir"]
     cmd = str((marker or {}).get("command") or "?")
     if kind == "write":
-        return "runner_write" if runner_file(target or "", root) else None
+        if runner_file(target or "", root):
+            return "runner_write"
+        return "escape_write" if escape_file(target or "", root) else None
     if kind == "shell":
         command = command or ""
         cd = _CD_THEN.fullmatch(command)

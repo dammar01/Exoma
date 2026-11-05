@@ -270,9 +270,16 @@ def pre_tool_use(payload, cid):
         refusal = ("runner_write", (
             "%s targets a runner script: %s. The runner is never rewritten by hand; "
             "/.upgrade regenerates it." % (tool, target)))
+    # The escape files are the user's switch: an agent writing one turns its own gate off.
+    if refusal is None and is_write and wp.escape_file(target, root):
+        refusal = ("escape_write", wp.escape_write_message(tool, target))
     marker = wp.read_json(marker_path)
-    if refusal is None and kind and marker and os.environ.get("WORKFLOW_LOCAL_MODE") != "1" and not os.path.isfile(
-            os.path.join(root, ".workflow", "local_mode.flag")):
+    env_local = os.environ.get("WORKFLOW_LOCAL_MODE") == "1"
+    flag_local = os.path.isfile(os.path.join(root, ".workflow", "local_mode.flag"))
+    if marker and (env_local or flag_local):
+        wp.log_gate_skip(rt, "agy-host", "env_local_mode" if env_local else "local_mode_flag",
+                         root=root, key=str(marker.get("set_at") or ""))
+    if refusal is None and kind and marker and not env_local and not flag_local:
         cmd = marker.get("command") or "?"
         ctx = {
             "root": root,
@@ -290,7 +297,8 @@ def pre_tool_use(payload, cid):
                 "/.%s is a delegated command: the next step is the runner, not %s.\n"
                 "%s"
                 "Run: %s %s --session '%s' --task '<task>'  (sandbox bypassed: on Windows the sandbox stops Git Bash)\n"
-                "Escape: WORKFLOW_LOCAL_MODE=1, .workflow/local_mode.flag, or delete %s."
+                "False positive? Stop and tell the user which call was refused. The escapes are "
+                "the user's: WORKFLOW_LOCAL_MODE=1, .workflow/local_mode.flag, or deleting %s."
             ) % (cmd, tool,
                  ("The %d precision reads this delegation allows are used.\n" % wp.PRECISION_READS_PER_MARKER)
                  if rule == "preflight_quota" else "",

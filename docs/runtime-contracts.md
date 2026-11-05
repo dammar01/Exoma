@@ -77,7 +77,20 @@ how to dispatch; `~` and `/c/...` spellings resolved first), a background task's
 `<temp>/claude.../tasks/<id>.output`, or is a precision read: a project file outside `.workflow/`, at
 most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
 `runtime/delegated.reads` keyed to the marker's `set_at`. Writes pass (the execution gate
-judges them), except a write of the runner scripts, which is refused marker or not. The decision
+judges them), except a write of the runner scripts or of an escape file (`local_mode.flag`,
+`delegated.marker`, `delegated.reads` anywhere under `.workflow/`), which is refused marker or
+not, and under either escape on every host: `WORKFLOW_LOCAL_MODE=1` and `local_mode.flag` lift
+the pre-flight block, never these two refusals. The escapes are the user's switch, and an agent
+that wrote `local_mode.flag` used to turn its own gate off for the rest of the session. A
+session the hooks cannot resolve (no registry entry) gets no gate at all, these refusals
+included. An escape in use while a marker is armed, and a
+delegated command the user named that could not arm (no session binding, logged to
+`~/.claude/gate-skips.jsonl` for projects with a `.workflow/`), append one line to
+`gate-skips.jsonl` (`at`, `hook`, `reason`, `root`, `key` = the marker's `set_at`; never the
+path or command), once per marker; `doctor` reports them as `checks.gate_skips`. A shell
+write of an escape file while the gate is not armed is not refused — no hook parses shell
+writes — and shows up only through that log once a later delegation is skipped. What the gate
+does and does not guarantee is stated once, in [security.md, "Residual risks"](security.md#residual-risks-limitations). The decision
 is one function, `workflow_policy.preflight_refusal`; under Agy the wrapper `agy-host.py` calls the
 same function with Agy's tools mapped onto its kinds and Agy's skill directories as what it may
 always read ([reference, "Hosts"](reference.md#hosts)). That enforcement lives in the agent host, not in this runtime,

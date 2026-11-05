@@ -66,7 +66,7 @@ Writing credential values into the request, the task, or a scenario is FORBIDDEN
 Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' verify-browser --session '<MAIN_SESSION_ID>' --task '<task>'
 `run_in_background: true`, collect the result of the same task ID. <task> ≤3000 chars, holding: the flow + expected claims, base_url, the credential key names (`${E2E_USER}`...), side effects allowed or not, the changed files when known. Do NOT paste code.
 Result `meta.phase=draft`, `content` = [E2E DRAFT], details in `meta.e2e.draft` + the file `draft.json` in the same folder.
-- ok:false (stage 1 failed) → HARD GATE [PROXY FAILED] as for any delegated command. Do NOT quietly invent a scenario yourself.
+- ok:false (stage 1 failed) → STOP rule [PROXY FAILED] as for any delegated command. Do NOT quietly invent a scenario yourself.
 - status `blocked` → preflight failed (playwright_missing | browser_missing | base_url_unreachable | spec_invalid URL policy). Report + fix, STOP.
 - status `invalid` → show `errors` + `meta.e2e.diagnosis` (`first_error`, `categories`, `repair`) — report those categories, not a guessed cause; offer: fix the scenario together (main_agent edits the JSON per the errors) | redo the draft with a clearer task | cancel.
 - status `ready` → STEP 4.

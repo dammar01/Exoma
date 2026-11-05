@@ -13,6 +13,7 @@ from exoma.core.evidence.fact_store import (
     _line_hash,
     _read_lines,
     current_anchor_line,
+    resolve_project_file,
 )
 from exoma.core.workspace.workspace_paths import (
     _safe_component,
@@ -239,8 +240,11 @@ def scan_anchors(project_root: Path, content: str) -> dict:
         else:
             certified += 1
         if len(anchors) < MAX_ANCHORS_PER_ARTIFACT:
+            # Stored as the path it resolved to: a reuse check must re-read the same file
+            # the certification read, not re-run the short-citation fallback later.
+            stored = (resolve_project_file(project_root, file) or file) if h else file
             anchors.append(
-                {"file": file, "line": line, "hash": h, "certified": h is not None}
+                {"file": stored, "line": line, "hash": h, "certified": h is not None}
             )
         else:
             complete = False  # cited but not stored: a later reuse could not re-check it

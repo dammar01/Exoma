@@ -9,7 +9,7 @@ argument-hint: <task>
 Reuse LAST_EXPLORE_RESULT when it is in context. Otherwise 1-call:
   Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' plan --session '<MAIN_SESSION_ID>' --task '<task>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation).
-- FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:
+- FAILED (ok:false | invalid_evidence | content is a menu/refusal) → STOP rule (yours to hold, no hook blocks it):
   STOP → "[PROXY FAILED] <reason>. Continue the plan via /.local or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.
 - [LOCAL_MODE]=true → skip the run, use the /.local flow as evidence.
 - The proxy is scope-bounded to the files you name. Cross-system concerns (balances, UX, perf, security) are NOT seen by the proxy unless you inject them into the task. Inject them explicitly OR mark them not_investigated. Connecting them is your job, not the proxy's.

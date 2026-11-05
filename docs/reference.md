@@ -65,7 +65,7 @@ Every result has the shape `{ok, content, meta}`. Other fields are conditional:
 | `meta.task_cap`, `meta.task_cap_source` | every delegated call | effective task length limit. `task_cap_source`: `transport` (computed from the remaining argv command-line space), `floor` (scaffolding nearly fills the command line; minimum value), `policy` (opt-in `EXOMA_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; stdin/file transport, or argv outside Windows) |
 | `meta.task_truncated` | task cut by the cap | signal to shorten the instruction, not to split the call |
 | `meta.content_mode`, `meta.content_full_chars` | `EXOMA_SLIM_CONTENT` is active, content is long, and the artifact exists on disk | `content_mode: "ref_only"`: `content` is only a preview; the full text is at `evidence_ref.artifact_path` |
-| `meta.claims[].ref_status` | exploration/reasoning results with grounded claims | one status per ref: `certified`, `unverified` (a `file:line` this project cannot open; also raises a `claim_ref_unverified` contract warning), `not_a_file` |
+| `meta.claims[].ref_status` | exploration/reasoning results with grounded claims | one status per ref: `certified`, `unverified` (a `file:line` this project cannot open; also raises a `claim_ref_unverified` contract warning). A citation is read from the project root; a relative one that does not resolve there is matched by path suffix against the project's files (dependency, build, cache and `.workflow/` directories excluded; no index past 20000 files) and certifies only when exactly one file ends with it on a path-component boundary, ignoring case on Windows (the stored path keeps the on-disk spelling). Absolute paths and `..` get no fallback, `not_a_file` |
 | `meta.uncertified_anchors` | a citation failed to certify | up to 10 `file:line` refs that did not hash to a line in this project |
 | `meta.scope_warnings` | `scope_not_covered` lists non-capping gaps | `[{category, detail}]` for `live_state`, `external`, `out_of_scope` bullets. Only `in_scope_unreachable` and untagged bullets cap confidence at `medium` |
 | `meta.facts` | exploration/reasoning calls | fact lifecycle counts: `candidates`, `injected`, `rejected_stale`, `rejected_irrelevant`, `ingested`, `ingest_rejected_anchor`, `ingest_rejected_length` |
@@ -570,6 +570,8 @@ sends (the field is `prompt`). As a result the runtime gate was never active and
 prompt layer worked. Since that fix, in auto-intent mode `intent-gate-check`
 actually blocks gather tools after a prompt that names a delegated command until
 `.workflow/run` is called; the escape is still `WORKFLOW_LOCAL_MODE=1` or `local_mode.flag`.
+Either lifts the gather block only: a Write of the runner scripts or of an escape file is
+refused under both, on every host.
 
 Only a command the user named arms the gate: the prefix typed at the start of the prompt
 (`/.analyze ...`, `prefix_regex` in `intent-map.json`) or the slash-command payload
@@ -744,7 +746,10 @@ measured, as before.
 holds one entry per id with its level on each host, and the render turns the marker into
 `<!-- rule:<id> | <host>: <level> -->`:
 
-- `enforced` — a hook or the runtime refuses the call on that host;
+- `enforced` — a hook or the runtime refuses the call on that host. A hook-backed rule holds
+  only while its hook can resolve the session (and, for the pre-flight gate, only while a
+  marker is armed); the hooks fail open otherwise, so `enforced` names what refuses an
+  armed, bound call, not a guarantee for every call;
 - `detected` — recorded and reported after the fact (`execute-end`, the end of a turn), not blocked;
 - `advised` — nothing checks it there.
 
@@ -1141,7 +1146,7 @@ section "Contracts the runtime cannot enforce".
 | Contract | Content | Enforcer | Source |
 |---|---|---|---|
 | Intent mode | One of two, chosen by the installer. `AUTO-INTENT`: natural language is mapped to a command and announced with one `[INTENT]` line without waiting for an answer. `COMMAND-ONLY`: commands run only via the `/.` prefix; no prefix = ordinary conversation, may suggest one line and then stop | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; see [Intent mode](#intent-mode) |
-| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `src/exoma/_bundle/config/hosts/claude/hooks/intent-map.json` |
+| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open; writes of the runner scripts and of the escape files refused always; an escape in use while armed, or a delegated command the user named that could not arm, logged to `gate-skips.jsonl` and reported by `doctor`) | `CLAUDE.md`, "Pre-flight gate"; `src/exoma/_bundle/config/hosts/claude/hooks/intent-map.json` |
 | Output contract | Explore and `sweep`/`doctor` = RELAY the runtime result as is. Plan/analyze = SYNTHESIS by main_agent: three-part confidence (`problem_understanding`, `root_cause`, `solution_path`), per-claim attribution, `open_questions` kept separate from `uncertainty`. Required fields are still shown even when empty, with the reason | main_agent | `CLAUDE.md`, "Output Contract" and "Plan/analysis output" |
 | `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
 | New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` |
@@ -1162,7 +1167,7 @@ table differ, fix one of them in the same change.
 |---|---|---|---|
 | `init` | local | — | scaffold `.workflow/`; regenerate runner scripts |
 | `upgrade` | local | — | migrate the `.workflow/data/` layout, refresh the workspace, override-only config, preserve sessions |
-| `doctor` | local | — | readiness check, writes `reports/doctor.json`; a provider config it may not read (a sandboxed host denies the home directory) is an issue, `provider config unreadable: <path>`, listed in `checks.mcp_second_agent.unreadable`, never a crash |
+| `doctor` | local | — | readiness check, writes `reports/doctor.json`; recent pre-flight gate skips (the last 7 days of every session's `runtime/gate-skips.jsonl`, plus this project's rows in `~/.claude/gate-skips.jsonl`) are listed in `checks.gate_skips` with a recommended fix, never as an issue; a provider config it may not read (a sandboxed host denies the home directory) is an issue, `provider config unreadable: <path>`, listed in `checks.mcp_second_agent.unreadable`, never a crash |
 | `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays), old sessions |
 | `inspect` | local | — | list jobs for the current session |
 | `provider` | local | — | read/change the second_agent provider and reasoning effort; picker with no arguments, direct with `<provider> <model> [effort] [routes]` |
@@ -1733,7 +1738,8 @@ writes on a new and a resumed session, both on Windows.
 1. explicitly tagged `[config]`/`[pattern]`/`[invariant]` by second_agent, or
 2. reported independently by ≥ `fact_recurrence_threshold` **other** sessions.
 
-Every `file:line` the claim cites must resolve; one that does not refuses the whole claim. The
+Every `file:line` the claim cites must resolve (a short path through the unique-suffix match
+above, stored under the path it resolved to); one that does not refuses the whole claim. The
 first anchor is stored in `file`/`line`/`anchor_hash`, any further ones in `anchors[]`, and a fact
 is served only while all of them can still be placed. Claims longer than `fact_max_claim_chars`
 are refused.
@@ -1879,6 +1885,7 @@ exoma --command clean --work-dir /path/to/target-app --pretty
       │  ├─ prompt.meta.json
       │  ├─ response.last.md
       │  ├─ gate-blocks.jsonl   # execution-gate refusals, appended by the hook
+      │  ├─ gate-skips.jsonl    # pre-flight escapes used while armed, once per marker
       │  └─ lock
       ├─ logs/<prompt_id>/
       │  ├─ prompt.md

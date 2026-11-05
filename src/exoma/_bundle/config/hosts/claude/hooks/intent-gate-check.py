@@ -5,8 +5,9 @@
 # The decision is workflow_policy.preflight_refusal, shared with the Agy host wrapper; this
 # hook maps Claude Code's tools onto its kinds and keeps the exit-2 contract:
 #   Write/Edit/MultiEdit/NotebookEdit -> write: passes, except a write of the runner scripts
-#     themselves. That one is refused whether or not a marker is pending: the runner is the
-#     one command the gate lets through, so rewriting it would make that an arbitrary command.
+#     themselves or of an escape file (local_mode.flag, delegated.marker, delegated.reads).
+#     Both are refused whether or not a marker is pending: the runner is the one command the
+#     gate lets through, and an escape file is the user's switch that turns the gate off.
 #   Bash/PowerShell -> shell: one tokeniser for both, one plain call `[bash] <root>/.workflow/
 #     {run,check,inspect}.sh ...` whose every word is bare or '...' (single quotes: literal in
 #     both shells), so `$`, backtick, ; | & < > and newline pass only inside single quotes. A
@@ -20,7 +21,9 @@
 #     (Get-Content) of a skill or task output passes like its Read; `~` or /c/... spellings
 #     of a path are read the way the shell reads them.
 #   anything else (Grep, Glob, mcp__*) -> other: blocked while armed.
-# Escapes: WORKFLOW_LOCAL_MODE=1 / local_mode.flag. Marker/session absent -> allow (fail-open).
+# Escapes (the user's, never the agent's): WORKFLOW_LOCAL_MODE=1 / local_mode.flag. An escape
+# in use while a marker is armed is recorded once per marker in runtime/gate-skips.jsonl.
+# Marker/session absent -> allow (fail-open).
 # exit 2 = block ; every other path exits 0. Exit code flows from python (no trailing exit).
 import os, sys, json, re, datetime, tempfile
 
@@ -120,8 +123,17 @@ def runner_write_message(cmd, tool_name, target, main_id, local_flag, marker):
         "[PRE-FLIGHT GATE] '%s' targets a runner script: %s\n"
         "The runner is the one command the pre-flight gate lets through, so it is never rewritten by hand.\n"
         "Do this instead: run bash .workflow/run.sh %s --session '%s' as shipped; /.upgrade regenerates it.\n"
-        "False positive? Escapes: export WORKFLOW_LOCAL_MODE=1, create %s, or delete %s.\n"
-    ) % (tool_name, target, cmd, main_id, local_flag, marker)
+        "%s\n"
+    ) % (tool_name, target, cmd, main_id, user_escapes(local_flag, marker))
+
+
+def user_escapes(local_flag, marker):
+    # Addressed to the user through the agent: the escapes turn the gate off, so the agent
+    # reports the refusal instead of using one.
+    return (
+        "False positive? Stop and tell the user which call was refused. The escapes are the user's: "
+        "WORKFLOW_LOCAL_MODE=1, creating %s, or deleting %s." % (local_flag, marker)
+    )
 
 
 try:
@@ -135,9 +147,9 @@ try:
     if not claude_sid:
         sys.exit(0)
 
-    # global env escape
-    if os.environ.get("WORKFLOW_LOCAL_MODE") == "1":
-        sys.exit(0)
+    # The user's environment escape. Checked after the session is resolved, so a use while a
+    # delegation is armed is recorded; with nothing resolvable it still allows at once.
+    env_local = os.environ.get("WORKFLOW_LOCAL_MODE") == "1"
 
     home = os.path.expanduser("~")
     registry_path = os.path.join(home, ".claude", "session_registry.json")
@@ -163,15 +175,35 @@ try:
     kind = kind_of(tool_name)
     target = str(ti.get("file_path") or ti.get("notebook_path") or "")
 
+    def armed_key():
+        try:
+            with open(marker, "r", encoding="utf-8") as f:
+                return str((json.load(f) or {}).get("set_at") or "")
+        except Exception:
+            return ""
+
     # The runner scripts are never written by hand, marker or not: a runner rewritten outside
-    # a delegation would pass the gate on the next one as an arbitrary command.
+    # a delegation would pass the gate on the next one as an arbitrary command. The escape
+    # files likewise: an agent that writes local_mode.flag turns its own gate off. Neither
+    # escape lifts these two refusals, on this host as on agy, codex and opencode.
     if kind == "write" and wp.runner_file(target, root):
         sys.stderr.write(runner_write_message("<command>", tool_name, target, main_id, local_flag, marker))
         sys.exit(2)
+    if kind == "write" and wp.escape_file(target, root):
+        sys.stderr.write("[PRE-FLIGHT GATE] " + wp.escape_write_message(tool_name, target) + "\n")
+        sys.exit(2)
 
-    if os.path.isfile(local_flag):
+    if env_local:
+        # The environment escape lifts the pre-flight block only; its use under an armed
+        # marker is written down.
+        if os.path.isfile(marker):
+            wp.log_gate_skip(runtime_dir, "intent-gate-check", "env_local_mode", root=root, key=armed_key())
         sys.exit(0)
+
     if not os.path.isfile(marker):
+        sys.exit(0)
+    if os.path.isfile(local_flag):
+        wp.log_gate_skip(runtime_dir, "intent-gate-check", "local_mode_flag", root=root, key=armed_key())
         sys.exit(0)
 
     cmd = "?"
@@ -209,14 +241,14 @@ try:
         "Do this instead: bash .workflow/run.sh %s --session '%s' --task '<task>'\n"
         "Single quotes, so $ ; | & < > and brackets in the task are text; no apostrophe inside.\n"
         "That routes evidence to second_agent AND clears this gate.\n"
-        "False positive? Escapes: export WORKFLOW_LOCAL_MODE=1, create %s, or delete %s."
+        "%s"
     ) % (
         cmd, tool_name, what,
         ("The %d precision reads this delegation allows are used.\n" % wp.PRECISION_READS_PER_MARKER)
         if rule == "preflight_quota"
         else ("A precision read passes: a project file, at most %d lines (`limit`, or a file that short), %d per delegation.\n"
               % (wp.PRECISION_READ_LINES, wp.PRECISION_READS_PER_MARKER)) if kind == "read" else "",
-        cmd, main_id, local_flag, marker,
+        cmd, main_id, user_escapes(local_flag, marker),
     )
     sys.stderr.write(reason + "\n")
     sys.exit(2)

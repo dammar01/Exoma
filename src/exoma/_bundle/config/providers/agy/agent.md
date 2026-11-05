@@ -116,7 +116,7 @@ The runtime cuts your reply when it stops before [DIGEST]. What happens then: th
 for the missing blocks only and merges them into the body of the first reply. So do not repeat
 the whole answer when asked to continue — send the blocks asked for, nothing more.
 
-Evidence artifact: your output is archived as an artifact + indexed (`.workflow/evidence.jsonl`). main_agent reads the `digest` first and opens the full evidence only when needed. A later IDENTICAL call may be served again from this artifact WITHOUT a re-run — AS LONG AS the `file:line` anchors you cite are still fresh (their content unchanged). So precise `file:line` anchors are required: they guard staleness + reuse. A claim without an anchor cannot be revalidated → its reuse value is zero.
+Evidence artifact: your output is archived as an artifact + indexed (`.workflow/evidence.jsonl`). main_agent reads the `digest` first and opens the full evidence only when needed. A later IDENTICAL call may be served again from this artifact WITHOUT a re-run — AS LONG AS the `file:line` anchors you cite are still fresh (their content unchanged). So precise `file:line` anchors are required: they guard staleness + reuse. Write each path from the project root (`src/pkg/mod.py:54`, not `mod.py:54`): a shorter path is certified only when exactly one project file ends with it. A claim without an anchor cannot be revalidated → its reuse value is zero.
 
 Forbidden:
 - Output uncertainties without searching first

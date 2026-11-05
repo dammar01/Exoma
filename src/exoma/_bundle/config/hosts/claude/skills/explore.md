@@ -11,7 +11,7 @@ Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' explore --session '<MAI
 - Blocks until done. Returns JSON {ok, content, meta, digest}.
 - Do not invent commands, do not use check.sh, do not call `exoma` directly.
 - No .workflow yet / run script missing → /.init first.
-- FAILED (ok:false | invalid_evidence | content is a menu/refusal, no [EVIDENCE]/[DIGEST]) → HARD GATE:
+- FAILED (ok:false | invalid_evidence | content is a menu/refusal, no [EVIDENCE]/[DIGEST]) → STOP rule (yours to hold, no hook blocks it):
   STOP → output "[PROXY FAILED] <reason>. Continue with /.local? (yes/no)" → WAIT for the user. Do NOT auto-fallback.
 
 ## Output (RELAY mode)

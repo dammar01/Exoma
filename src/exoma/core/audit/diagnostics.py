@@ -117,6 +117,64 @@ _LEGACY_ROOT_ITEMS = frozenset(
 )
 
 
+GATE_SKIPS_FILE = "gate-skips.jsonl"
+# How far back /.doctor reports gate skips. A week covers the sessions a user still
+# remembers; older rows describe a setup that has likely changed since. Not measured.
+GATE_SKIP_WINDOW_DAYS = 7
+
+
+def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
+    """Recent pre-flight gate skips for this project, or None when there are none.
+
+    Read from every session's runtime/gate-skips.jsonl and, for the delegations that could
+    not arm (no session binding, so no session dir), from ~/.claude/gate-skips.jsonl rows
+    whose root is this project. Unreadable rows are skipped; this never raises.
+    """
+    import json as _json
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=GATE_SKIP_WINDOW_DAYS)
+    own_root = os.path.normcase(os.path.abspath(str(project_root)))
+    files: list[tuple[Path, bool]] = []
+    sessions = Path(data_dir) / "sessions"
+    try:
+        files += [(p, False) for p in sessions.glob(f"*/runtime/{GATE_SKIPS_FILE}")]
+    except OSError:
+        pass
+    files.append((Path(os.path.expanduser("~")) / ".claude" / GATE_SKIPS_FILE, True))
+    by_reason: dict[str, int] = {}
+    latest = None
+    for path, shared in files:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = _json.loads(line)
+                at = datetime.fromisoformat(str(row.get("at")))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            if at < cutoff:
+                continue
+            if shared:
+                root = row.get("root")
+                if not root or os.path.normcase(os.path.abspath(str(root))) != own_root:
+                    continue
+            reason = str(row.get("reason") or "unknown")
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+            if latest is None or at > latest:
+                latest = at
+    if not by_reason:
+        return None
+    return {
+        "count": sum(by_reason.values()),
+        "by_reason": by_reason,
+        "latest": latest.isoformat() if latest else None,
+    }
+
+
 def run_doctor(
     project_root: Path, provider_command: str, session_id: str | None = None
 ) -> dict:
@@ -783,6 +841,19 @@ def run_doctor(
                 recommended_fixes.append(
                     f"Re-run a delegated command; if it keeps failing, {provider_command} session capture is failing (check its output for a session id)"
                 )
+
+    # Pre-flight gate skips: an escape in use while a delegation was armed, or a delegated
+    # command the user named that could not arm. Fail-open is the design, so these are not
+    # issues; they are named so a gate that was off does not look like a gate that held.
+    skips = _gate_skips(project_root, paths["data_dir"])
+    checks["gate_skips"] = skips or "none"
+    if skips:
+        reasons = ", ".join(f"{k} x{v}" for k, v in sorted(skips["by_reason"].items()))
+        recommended_fixes.append(
+            f"Pre-flight gate let {skips['count']} delegation(s) through in the last "
+            f"{GATE_SKIP_WINDOW_DAYS} days ({reasons}); if you did not set the escape, check "
+            "local_mode.flag / WORKFLOW_LOCAL_MODE and the session binding (gate-skips.jsonl)"
+        )
 
     # Release integrity: the installed bundle must match the package's _bundle/manifest.json
     # exactly, the manifest must not be older than its sources, and required hooks must be

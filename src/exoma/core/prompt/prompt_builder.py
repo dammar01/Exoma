@@ -382,6 +382,7 @@ def build_prompt(
                 "[CONSTRAINTS — full evidence protocol in AGENTS.md; anchors only here]",
                 "- read-only evidence; grounded claims need file:line; unproven numbers/deps → `assumptions`; DB/MCP findings → `external`",
                 "- you are the PRIMARY worker: do the exploration yourself, trace reverse deps into `dependents`, state `scope_covered` vs `scope_not_covered`",
+                ANCHOR_PATH_RULE,
                 *(_e2e_spec_constraints() if command == "e2e_spec" else []),
                 "",
                 "[TASK]",
@@ -425,6 +426,7 @@ def build_prompt(
                 "[CONSTRAINTS — severity definitions in AGENTS.md 'Verify Routing'; the routing table itself is inline below]",
                 "- report only: no file writes, no user questions (main_agent's domain)",
                 "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion",
+                ANCHOR_PATH_RULE,
                 "- tag EVERY finding on its FIRST line: `severity: <critical|high|medium|low> | origin: <introduced|regression|pre_existing|unknown> | scope_relation: <in_scope|out_of_scope>` — a finding whose opening line lacks all three is rejected",
                 "- ROUTE BY TAGS, never by severity alone: introduced|regression + critical|high => blocking_findings; unknown + critical|high => blocking_findings (fail closed, until evidence moves it off `unknown`); pre_existing + critical|high => escalations; introduced|regression + out_of_scope + medium|low => escalations; everything else => notes",
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
@@ -467,6 +469,7 @@ def build_prompt(
                 "[CONSTRAINTS — sweep = blast-radius EVIDENCE gathering, not judgement]",
                 "- read-only; no file writes, no user questions (main_agent's domain)",
                 "- for EACH changed file/symbol above: grep the symbol project-wide → list who CONSUMES/CALLS it = blast radius; cover breadth, do NOT stop at the first hit",
+                ANCHOR_PATH_RULE,
                 "- flag risk files (config, auth, payment, schema, migration, env, secret) — they amplify blast radius",
                 "- DB-touching change + read-only DB MCP available → inspect affected table/column, put under `external`; never call write/exec tools",
                 "- gather evidence only; main_agent judges severity. State what you could NOT reach in `scope_not_covered`",
@@ -507,6 +510,16 @@ def build_prompt(
 SCOPE_GAP_LINE = (
     "- [in_scope_unreachable|live_state|external|out_of_scope] "
     "<requested-but-unreachable or cross-system surface not inspected> | none"
+)
+
+
+# Anchors are certified by reading the cited path from the project root. A citation
+# relative to some other base (`cli.py:54` for `src/exoma/cli.py`) resolves only when
+# exactly one project file ends with it, so the rule is stated where every route asks for
+# a file:line — see `fact_store.resolve_project_file`.
+ANCHOR_PATH_RULE = (
+    "- every file:line names the path from the project root (`src/pkg/mod.py:54`, not "
+    "`mod.py:54`); a shorter path is certified only when exactly one project file ends with it"
 )
 
 

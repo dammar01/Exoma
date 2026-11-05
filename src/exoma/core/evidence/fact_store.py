@@ -10,7 +10,9 @@ Raw per-run logs keep everything; this store keeps only the durable/recurring su
 """
 import hashlib
 import json
+import os
 import re
+import time
 from pathlib import Path
 
 from exoma.core.runtime.config_defaults import default_policies
@@ -382,23 +384,119 @@ def _line_hash(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
 
 
-def _read_lines(project_root: Path, file: str | None) -> list[str] | None:
-    """Lines of a project-relative file, or None if it cannot be read as one.
+# Directories a short citation is never resolved into: dependencies, build output, caches
+# and Exoma's own workspace. A citation that only exists in there is not project evidence.
+_INDEX_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", ".workflow", "node_modules", "vendor", "__pycache__",
+    ".venv", "venv", "env", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "dist", "build", "target", ".next", "coverage", "graphify-out",
+})
+# Past this many files the index is not built and short citations stay unverified: walking
+# a monorepo once per scan would cost more than the certification is worth. Not measured;
+# this repository has a few hundred files.
+_INDEX_MAX_FILES = 20000
+# How long one built index answers for a root. A scan or an ingest finishes well inside
+# this; the bound is what keeps a long-lived process from resolving against a stale tree.
+_INDEX_TTL_SECONDS = 5.0
+_INDEX_CACHE: dict[str, tuple[float, dict[str, list[str]] | None]] = {}
+# The index's clock, a module attribute so a test can move it past the TTL.
+_clock = time.monotonic
 
-    The containment check is the reason this is not just `read_text`: `file` arrives from a
-    stored fact, and a fact claiming `../../etc/passwd` must not turn into a read outside
-    the project root.
+
+def _project_file_index(root: Path) -> dict[str, list[str]] | None:
+    """Lowercased basename -> every root-relative posix path carrying it (on-disk case),
+    or None when too large. Keyed lowercase so one index serves both the exact and the
+    Windows case-folded lookup."""
+    key = os.path.normcase(str(root))
+    cached = _INDEX_CACHE.get(key)
+    now = _clock()
+    if cached is not None and now - cached[0] <= _INDEX_TTL_SECONDS:
+        return cached[1]
+    index: dict[str, list[str]] | None = {}
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _INDEX_SKIP_DIRS]
+        rel_dir = os.path.relpath(dirpath, root).replace("\\", "/")
+        for name in filenames:
+            count += 1
+            if count > _INDEX_MAX_FILES:
+                index = None
+                break
+            rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+            index.setdefault(name.lower(), []).append(rel)
+        if index is None:
+            break
+    _INDEX_CACHE[key] = (now, index)
+    return index
+
+
+def resolve_project_file(
+    project_root: Path, file: str | None, casefold: bool | None = None
+) -> str | None:
+    """The root-relative posix path a citation names, or None when it names none.
+
+    A citation is first read as written, relative to the project root. A proxy often cites
+    a path relative to some other base (`cli.py:54` for `src/exoma/cli.py`), and that used
+    to count as an uncertified anchor, which capped the confidence of a run whose every
+    claim was right. So a relative citation that does not resolve directly falls back to a
+    path-suffix match over the project's files, accepted only when EXACTLY ONE file ends
+    with it on a component boundary. Two candidates (`check.py` at the root and under
+    `src/exoma/`) leave it unresolved: picking one would certify a line nobody checked.
+    Absolute paths and `..` segments get no fallback.
+
+    On Windows (`casefold` defaults to it) the suffix match ignores case, as the execution
+    scope does (`core.runtime.execution.in_scope`): `CLI.py` names `src/exoma/cli.py`, and
+    two files differing only in case are two candidates, so neither is picked. The path
+    returned is always the on-disk spelling.
     """
     if not file:
         return None
+    if casefold is None:
+        casefold = os.name == "nt"
     try:
         root = Path(project_root).resolve()
         path = (root / file).resolve()
     except (OSError, ValueError):
         return None
-    if path != root and root not in path.parents:
+    if (path == root or root in path.parents) and path.is_file():
+        return path.relative_to(root).as_posix()
+    cited = str(file).replace("\\", "/")
+    while cited.startswith("./"):
+        cited = cited[2:]
+    if not cited or os.path.isabs(cited) or ":" in cited or ".." in cited.split("/"):
         return None
-    if not path.is_file():
+    index = _project_file_index(root)
+    if not index:
+        return None
+    want = cited.lower() if casefold else cited
+    candidates = [
+        rel for rel in index.get(cited.rsplit("/", 1)[-1].lower(), [])
+        if (have := rel.lower() if casefold else rel) == want or have.endswith("/" + want)
+    ]
+    if len(candidates) != 1:
+        return None
+    try:
+        found = (root / candidates[0]).resolve()
+    except (OSError, ValueError):
+        return None
+    if root not in found.parents or not found.is_file():
+        return None
+    return candidates[0]
+
+
+def _read_lines(project_root: Path, file: str | None) -> list[str] | None:
+    """Lines of a project file, or None if it cannot be read as one.
+
+    The containment check is the reason this is not just `read_text`: `file` arrives from a
+    stored fact, and a fact claiming `../../etc/passwd` must not turn into a read outside
+    the project root. `resolve_project_file` decides which file a citation names.
+    """
+    rel = resolve_project_file(project_root, file)
+    if rel is None:
+        return None
+    try:
+        path = (Path(project_root).resolve() / rel).resolve()
+    except (OSError, ValueError):
         return None
     try:
         return path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -682,6 +780,9 @@ def ingest(
             if not refs:
                 counts["rejected_anchor"] += 1
                 return
+            # Stored under the path the citation resolved to, so `cli.py:54` and
+            # `src/exoma/cli.py:54` are one file for dedupe and staleness, not two.
+            refs = [(resolve_project_file(project_root, f) or f, n) for f, n in refs]
             hashes = [_anchor_hash(project_root, f, n) for f, n in refs]
             if any(h is None for h in hashes):
                 # ingest-time verify: any anchor gone/invalid → skip stale-at-birth

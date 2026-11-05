@@ -581,6 +581,140 @@ def _test_intent_gate_runner_tamper() -> None:
                         "with no marker other writes pass")
         finally:
             gate.close()
+    _check_escape_files_are_the_users()
+    _check_gate_skips_are_recorded()
+    _check_unarmed_delegation_is_recorded()
+
+
+def _check_unarmed_delegation_is_recorded() -> None:
+    """A delegated command the user named that cannot arm is recorded; anything else is not."""
+    for label, command in _runners():
+        gate = _ArmedGate(label, command)
+        try:
+            log = gate.home / ".claude" / "gate-skips.jsonl"
+
+            def submit(prompt: str, sid: str = "c9", cwd: Path | None = None) -> None:
+                payload = json.dumps({"session_id": sid, "cwd": str(cwd or gate.project),
+                                      "hook_event_name": "UserPromptSubmit", "prompt": prompt})
+                done = subprocess.run(command, input=payload, text=True, capture_output=True, timeout=60,
+                                      env={**gate.env, "CLAUDE_HOOK_RAW": payload, "HOOK_DIR": str(HOOKS)},
+                                      **no_console())
+                assert_true(done.returncode == 0, f"[{label}] the prompt is never blocked: {done.stderr}")
+
+            submit("pertanyaan biasa saja")
+            submit("/.explore peta modul", cwd=gate.base / "no-workflow")
+            assert_true(not log.exists(), f"[{label}] no delegated command, or no Exoma project: nothing recorded")
+            submit("/.explore peta modul")
+            submit("/.explore peta modul")
+            rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+            assert_true(
+                [(r["reason"], r["root"]) for r in rows] == [("session_not_bound", str(gate.project))],
+                f"[{label}] an unbound session that named /.explore is recorded once: {rows}",
+            )
+        finally:
+            gate.close()
+
+
+def _check_escape_files_are_the_users() -> None:
+    """An agent cannot turn its own gate off by writing an escape file, armed or not.
+
+    Writes pass the pre-flight gate, and local_mode.flag was checked before the marker, so a
+    Write of runtime/local_mode.flag while armed switched the gate off for the session.
+    """
+    for label, command in _flavours():
+        gate = _ArmedGate(label, command)
+        try:
+            wf = gate.project / ".workflow"
+            other_rt = wf / "data" / "sessions" / "m2" / "runtime"
+            escapes = [
+                ("Write", {"file_path": str(gate.runtime / "local_mode.flag"), "content": ""}),
+                ("Write", {"file_path": str(wf / "local_mode.flag"), "content": ""}),
+                ("Write", {"file_path": str(gate.runtime / "delegated.reads"), "content": "{}"}),
+                ("Edit", {"file_path": str(gate.runtime / "delegated.marker"), "old_string": "a", "new_string": "b"}),
+                ("Write", {"file_path": str(other_rt / "local_mode.flag"), "content": ""}),
+                ("Write", {"file_path": ".workflow/data/sessions/m1/runtime/local_mode.flag", "content": ""}),
+            ]
+            gate.arm("plan", set_at="k1")
+            for tool, tool_input in escapes:
+                gate.expect(tool, tool_input, 2, "an escape file is refused while armed")
+            gate.disarm()
+            for tool, tool_input in escapes:
+                gate.expect(tool, tool_input, 2, "an escape file is refused with no marker too")
+            gate.expect("Write", {"file_path": str(gate.runtime / "plan.input.json"), "content": "{}"}, 0,
+                        "other runtime files (the plan input) still pass")
+            gate.expect("Write", {"file_path": str(gate.project / "notes" / "local_mode.flag.md"), "content": "x"}, 0,
+                        "a file that only shares the name's prefix passes")
+            assert_true(not (gate.runtime / "local_mode.flag").exists(), f"[{label}] nothing wrote the flag")
+        finally:
+            gate.close()
+
+
+def _check_gate_skips_are_recorded() -> None:
+    """An escape used while armed is written down once per marker, and doctor reports it."""
+    from exoma.core.audit import diagnostics
+
+    for label, command in _flavours():
+        gate = _ArmedGate(label, command)
+        try:
+            skips = gate.runtime / "gate-skips.jsonl"
+            (gate.runtime / "local_mode.flag").write_text("", encoding="utf-8")  # the user's own escape
+            gate.arm("plan", set_at="k1")
+            gate.expect("Grep", {"pattern": "x"}, 0, "the user's flag still lets a gather through")
+            gate.expect("Glob", {"pattern": "*"}, 0, "and again")
+            rows = [json.loads(line) for line in skips.read_text(encoding="utf-8").splitlines()]
+            assert_true(
+                [(r["reason"], r["key"]) for r in rows] == [("local_mode_flag", "k1")],
+                f"[{label}] one row per marker, not one per call: {rows}",
+            )
+            gate.arm("plan", set_at="k2")
+            gate.expect("Grep", {"pattern": "x"}, 0, "a new delegation under the flag")
+            rows = [json.loads(line) for line in skips.read_text(encoding="utf-8").splitlines()]
+            assert_true([r["key"] for r in rows] == ["k1", "k2"], f"[{label}] a new marker is a new row: {rows}")
+            assert_true(all("pattern" not in json.dumps(r) for r in rows), f"[{label}] no tool input is recorded")
+
+            (gate.runtime / "local_mode.flag").unlink()
+            gate.disarm()
+            gate.expect("Grep", {"pattern": "x"}, 0, "no marker, no flag: nothing to record")
+            gate.env["WORKFLOW_LOCAL_MODE"] = "1"
+            gate.arm("plan", set_at="k3")
+            gate.expect("Grep", {"pattern": "x"}, 0, "the environment escape still allows")
+            wf = gate.project / ".workflow"
+            gate.expect("Write", {"file_path": str(wf / "run.sh"), "content": "x"}, 2,
+                        "the environment escape does not lift the runner refusal")
+            gate.expect("Write", {"file_path": str(gate.runtime / "local_mode.flag"), "content": ""}, 2,
+                        "nor the escape-file refusal")
+            gate.disarm()
+            gate.expect("Write", {"file_path": str(wf / "run.sh"), "content": "x"}, 2,
+                        "unarmed under the environment escape, the runner is still refused")
+            gate.arm("plan", set_at="k3")
+            gate.env.pop("WORKFLOW_LOCAL_MODE")
+            rows = [json.loads(line) for line in skips.read_text(encoding="utf-8").splitlines()]
+            assert_true(rows[-1]["reason"] == "env_local_mode" and len(rows) == 3,
+                        f"[{label}] the environment escape is recorded too: {rows}")
+
+            saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE")}
+            os.environ["HOME"] = os.environ["USERPROFILE"] = str(gate.home)
+            try:
+                (gate.home / ".claude" / "gate-skips.jsonl").write_text(
+                    json.dumps({"at": rows[0]["at"], "reason": "session_not_bound", "root": str(gate.project)}) + "\n"
+                    + json.dumps({"at": rows[0]["at"], "reason": "session_not_bound", "root": str(gate.foreign)}) + "\n"
+                    + json.dumps({"at": "2001-01-01T00:00:00+00:00", "reason": "old", "root": str(gate.project)}) + "\n",
+                    encoding="utf-8",
+                )
+                found = diagnostics._gate_skips(gate.project, gate.project / ".workflow" / "data")
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+            assert_true(
+                found is not None and found["count"] == 4
+                and found["by_reason"] == {"local_mode_flag": 2, "env_local_mode": 1, "session_not_bound": 1},
+                f"[{label}] doctor counts this project's recent skips only: {found}",
+            )
+        finally:
+            gate.close()
 
 
 def _test_intent_gate_non_ascii_root() -> None:

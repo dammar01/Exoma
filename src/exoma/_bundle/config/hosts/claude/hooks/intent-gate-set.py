@@ -7,6 +7,8 @@
 # (consumed by `exoma --command execute-begin`) and commit.marker for a turn that asks
 # to commit (read by execution-gate.py).
 # MAIN_SESSION_ID resolved from $HOME/.claude/session_registry.json. Never blocks (exit 0).
+# A delegated command the user named that cannot arm (no session binding) is recorded in
+# ~/.claude/gate-skips.jsonl for /.doctor; the prompt still goes through.
 import os, sys, json, datetime
 
 # Approvals, intent classification and the marker live in workflow_policy.py beside this
@@ -15,8 +17,8 @@ import os, sys, json, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from workflow_policy import (  # noqa: E402
-        explicit_command, intent_hint, is_second_agent_turn, load_intent_map, nl_command, record_approvals,
-        runtime_dir as _runtime_dir, set_delegated_marker, user_text, without_reminders,
+        explicit_command, intent_hint, is_second_agent_turn, load_intent_map, log_gate_skip, nl_command,
+        record_approvals, runtime_dir as _runtime_dir, set_delegated_marker, user_text, without_reminders,
     )
 except Exception:
     # A partial install without the shared helper: arm nothing, never block the prompt.
@@ -93,6 +95,27 @@ def not_user_prompt(payload, prompt, host_sources=_HOST_SOURCES):
     return text.startswith(_HOST_OPENINGS)
 
 
+def note_unarmed(reason, payload, prompt, cwd, home):
+    """Record a delegated command the user named in an Exoma project that could not arm.
+
+    Only then: a project without .workflow/, or a prompt that names no delegated command,
+    has nothing the gate would have held, and logging those would bury the real case.
+    """
+    try:
+        root = str(cwd or "")
+        if not root or not os.path.isdir(os.path.join(root, ".workflow")):
+            return
+        if not_user_prompt(payload, prompt):
+            return
+        mp = load_intent_map(globals().get("HOOK_DIR") or os.environ.get("HOOK_DIR", ""))
+        if not isinstance(mp, dict) or not explicit_command(user_text(prompt), mp.get("prefix_regex")):
+            return
+        log_gate_skip(os.path.join(home, ".claude"), "intent-gate-set", reason, root=root,
+                      key=str(payload.get("prompt_id") or ""))
+    except Exception:
+        pass
+
+
 try:
     raw = globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
@@ -103,21 +126,25 @@ try:
     prompt = str(payload.get("prompt") or payload.get("user_prompt") or "")
     claude_sid = payload.get("session_id")
     cwd = payload.get("cwd")
+    home = os.path.expanduser("~")
     if not claude_sid:
+        note_unarmed("no_session_id", payload, prompt, cwd, home)
         sys.exit(0)
 
-    home = os.path.expanduser("~")
     registry_path = os.path.join(home, ".claude", "session_registry.json")
     if not os.path.isfile(registry_path):
+        note_unarmed("no_session_registry", payload, prompt, cwd, home)
         sys.exit(0)
     with open(registry_path, "r", encoding="utf-8") as f:
         reg = json.load(f) or {}
     entry = reg.get(claude_sid)
     if not entry:
+        note_unarmed("session_not_bound", payload, prompt, cwd, home)
         sys.exit(0)
     main_id = str(entry.get("main_session_id") or "")
     root = str(entry.get("cwd") or "") or str(cwd or "")
     if not main_id or not root:
+        note_unarmed("session_not_bound", payload, prompt, cwd, home)
         sys.exit(0)
 
     # A background task's completion or a subagent's hand-back reaches this hook as a prompt,
@@ -170,4 +197,8 @@ try:
 except SystemExit:
     raise
 except Exception:
+    try:
+        note_unarmed("hook_error", payload, prompt, payload.get("cwd"), os.path.expanduser("~"))
+    except Exception:
+        pass
     sys.exit(0)

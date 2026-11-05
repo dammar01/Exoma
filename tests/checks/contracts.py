@@ -13,7 +13,9 @@ zero one, and a reuse hit being recorded at all.
 
 from exoma.core.workspace.workspace_paths import data_dir
 import json
+import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -31,7 +33,7 @@ from exoma.core.provider.executor import Executor
 from exoma.core.prompt.router import Router
 from exoma.core.evidence.runtime_io import write_usage_record
 from exoma.core.runtime.state import ensure_workflow_workspace
-from tests.checks.support import assert_true
+from tests.checks.support import assert_true, no_console
 
 
 def _round_trips() -> None:
@@ -673,6 +675,152 @@ def _anchor_scan_reads_past_the_stored_prefix() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _short_citations_resolve_only_when_unique() -> None:
+    """`cli.py:54` for `src/pkg/cli.py` is certified; a basename two files share is not.
+
+    Every citation used to be read from the project root only, so a proxy that wrote paths
+    relative to the package capped a run whose every claim was right.
+    """
+    from exoma.core.evidence import evidence_store, fact_store
+
+    root = Path(tempfile.mkdtemp(prefix="anchor-suffix-"))
+    try:
+        (root / "src" / "pkg" / "installer").mkdir(parents=True)
+        (root / "node_modules" / "dep").mkdir(parents=True)
+        body = "\n".join(f"line_{i} = {i}" for i in range(1, 80)) + "\n"
+        (root / "src" / "pkg" / "cli.py").write_text(body, encoding="utf-8")
+        (root / "check.py").write_text(body, encoding="utf-8")
+        (root / "src" / "pkg" / "check.py").write_text(body, encoding="utf-8")
+        (root / "src" / "pkg" / "installer" / "base.py").write_text(body, encoding="utf-8")
+        (root / "node_modules" / "dep" / "only_here.py").write_text(body, encoding="utf-8")
+        (root / ".github").mkdir()
+        (root / ".github" / "ci.yml").write_text(body, encoding="utf-8")
+        fact_store._INDEX_CACHE.clear()
+
+        resolve = fact_store.resolve_project_file
+        cases = {
+            "cli.py": "src/pkg/cli.py",
+            "pkg/cli.py": "src/pkg/cli.py",
+            "./src/pkg/cli.py": "src/pkg/cli.py",
+            "installer/base.py": "src/pkg/installer/base.py",
+            "check.py": "check.py",
+            "pkg/check.py": "src/pkg/check.py",
+            ".github/ci.yml": ".github/ci.yml",
+            "ci.yml": ".github/ci.yml",
+            "g/cli.py": None,
+            "only_here.py": None,
+            "../cli.py": None,
+            "missing.py": None,
+        }
+        got = {c: resolve(root, c) for c in cases}
+        assert_true(got == cases, f"a citation resolves to exactly the file it names: {got}")
+
+        (root / "src" / "pkg" / "installer" / "check.py").write_text(body, encoding="utf-8")
+        fact_store._INDEX_CACHE.clear()
+        assert_true(
+            resolve(root, "installer/check.py") == "src/pkg/installer/check.py"
+            and resolve(root, "pkg/check.py") == "src/pkg/check.py",
+            "a longer suffix still singles out one file",
+        )
+        (root / "check.py").unlink()
+        fact_store._INDEX_CACHE.clear()
+        assert_true(
+            resolve(root, "check.py") is None,
+            "two files ending in `check.py` leave a bare `check.py` unresolved",
+        )
+
+        scan = evidence_store.scan_anchors(
+            root, "claim [cli.py:3]\nclaim [check.py:4]\nclaim [src/pkg/cli.py:5]"
+        )
+        assert_true(
+            scan["cited"] == 3 and scan["certified"] == 2
+            and scan["uncertified"] == ["check.py:4"]
+            and [a["file"] for a in scan["anchors"]]
+            == ["src/pkg/cli.py", "check.py", "src/pkg/cli.py"],
+            f"a unique short citation certifies and is stored as its resolved path: {scan}",
+        )
+        claims = evidence_store.certify_claim_refs(
+            root, [{"text": "short", "refs": ["cli.py:3", "proof:installer/base.py:2"]}]
+        )
+        assert_true(
+            claims[0]["ref_status"] == ["certified", "certified"],
+            f"claim refs use the same resolution: {claims}",
+        )
+    finally:
+        fact_store._INDEX_CACHE.clear()
+        shutil.rmtree(root, ignore_errors=True)
+    _resolver_edges()
+
+
+def _resolver_edges() -> None:
+    """Case on Windows, the index's TTL and size cap, and a link that leaves the root."""
+    from exoma.core.evidence import fact_store
+
+    base = Path(tempfile.mkdtemp(prefix="anchor-edges-"))
+    root, outside = base / "project", base / "outside"
+    saved_clock, saved_cap = fact_store._clock, fact_store._INDEX_MAX_FILES
+    try:
+        (root / "src" / "pkg").mkdir(parents=True)
+        outside.mkdir()
+        (root / "src" / "pkg" / "cli.py").write_text("x = 1\n", encoding="utf-8")
+        resolve = fact_store.resolve_project_file
+        fact_store._INDEX_CACHE.clear()
+
+        assert_true(
+            resolve(root, "CLI.py", casefold=True) == "src/pkg/cli.py"
+            and resolve(root, "Pkg/CLI.py", casefold=True) == "src/pkg/cli.py",
+            "on Windows a short citation ignores case and returns the on-disk spelling",
+        )
+        assert_true(
+            resolve(root, "CLI.py", casefold=False) is None,
+            "elsewhere the suffix match keeps case",
+        )
+
+        now = [1000.0]
+        fact_store._clock = lambda: now[0]
+        fact_store._INDEX_CACHE.clear()
+        assert_true(resolve(root, "late.py") is None, "a file that does not exist yet")
+        (root / "src" / "pkg" / "late.py").write_text("y = 2\n", encoding="utf-8")
+        now[0] += fact_store._INDEX_TTL_SECONDS / 2
+        assert_true(resolve(root, "late.py") is None, "inside the TTL the built index answers")
+        now[0] += fact_store._INDEX_TTL_SECONDS
+        assert_true(resolve(root, "late.py") == "src/pkg/late.py", "past the TTL the index is rebuilt")
+
+        fact_store._INDEX_MAX_FILES = 1
+        fact_store._INDEX_CACHE.clear()
+        assert_true(
+            resolve(root, "cli.py") is None and resolve(root, "src/pkg/cli.py") == "src/pkg/cli.py",
+            "past the file cap only a direct path resolves",
+        )
+        fact_store._INDEX_MAX_FILES = saved_cap
+
+        (outside / "secret.py").write_text("k = 3\n", encoding="utf-8")
+        link = root / "linked"
+        made = False
+        try:
+            os.symlink(outside, link, target_is_directory=True)
+            made = True
+        except (OSError, NotImplementedError):
+            if os.name == "nt":
+                done = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                    capture_output=True, text=True, **no_console(),
+                )
+                made = done.returncode == 0
+        if made:
+            fact_store._INDEX_CACHE.clear()
+            assert_true(
+                resolve(root, "secret.py") is None and resolve(root, "linked/secret.py") is None,
+                "a file reached through a link that leaves the root never resolves",
+            )
+        else:
+            print("  note: no symlink or junction could be made; the link case is not checked")
+    finally:
+        fact_store._clock, fact_store._INDEX_MAX_FILES = saved_clock, saved_cap
+        fact_store._INDEX_CACHE.clear()
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def _scope_gaps_cap_only_what_the_answer_needed() -> None:
     """Live state and external systems are disclosed, not priced in."""
     from exoma.core.provider.result_prep import _scope_incomplete, scope_gaps, scope_warnings
@@ -706,6 +854,7 @@ def _scope_gaps_cap_only_what_the_answer_needed() -> None:
 
 def _test_workflow_contracts() -> None:
     _anchor_scan_reads_past_the_stored_prefix()
+    _short_citations_resolve_only_when_unique()
     _scope_gaps_cap_only_what_the_answer_needed()
     _confidence_caps_keep_their_reasons()
     _reused_evidence_reports_its_anchor_ratio()

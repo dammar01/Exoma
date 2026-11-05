@@ -101,7 +101,18 @@ These remain open, and nothing on this page should be read as covering them:
   git (where it reports `checked: false`). The guard detects after the fact; it does not
   prevent writes.
 - **Anchor certification proves that a cited line exists, not that the claim about it is
-  true.** Reading the anchor a decision rests on is still the primary agent's job.
+  true.** Reading the anchor a decision rests on is still the primary agent's job. A short
+  citation (`cli.py:54`) certifies against the one project file whose path ends with it; a
+  name two files share stays uncertified.
+- **The pre-flight gate keeps a cooperating agent from drifting; it is not a boundary
+  against an agent that works around it.** While a delegation is armed in a bound session,
+  the hooks refuse gathering tools, and in any bound session they refuse a Write of the
+  runner scripts or of an escape file (`local_mode.flag`, `delegated.marker`,
+  `delegated.reads`). They do not parse shell commands for writes, so a shell command run
+  while the gate is not armed can still create `local_mode.flag`; that, and every escape
+  used while armed, is only recorded in `gate-skips.jsonl` and reported by `doctor`. A
+  session the hooks cannot resolve gets no gate at all (fail-open). See
+  [runtime-contracts.md](runtime-contracts.md) for the exact rules.
 
 For projects holding secrets the second agent must not read, use `opencode`.
 

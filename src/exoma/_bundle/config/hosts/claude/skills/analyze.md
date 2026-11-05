@@ -10,7 +10,7 @@ argument-hint: [--local] <topic>
 Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' analyze --session '<MAIN_SESSION_ID>' --task '<topic>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation). Reuse LAST_EXPLORE_RESULT when relevant.
 The task touches an external library → name the library; the proxy reads the context7 docs first → findings in external (not a guessed API).
-FAILED (ok:false | invalid_evidence | content is a menu/refusal) → HARD GATE:
+FAILED (ok:false | invalid_evidence | content is a menu/refusal) → STOP rule (yours to hold, no hook blocks it):
   STOP → "[PROXY FAILED] <reason>. Continue with /.local? (yes/no)" → WAIT for the user. Do NOT auto-fallback, do NOT reason from garbage.
 --local or [LOCAL_MODE]=true → skip the run, /.local flow (not a silent fallback — an explicit user mode).
 
