@@ -25,14 +25,7 @@ def check_codex_auto_review():
         with patch('exoma.core.provider.versions.read_version', return_value=banner):
             assert_true(codex_policy.cli_supported() is expected,
                         'compatibility requires the complete tested release: ' + banner)
-    try:
-        import tomllib
-    except ImportError:
-        result = codex_policy.merge('', body, True)
-        assert_true(result["status"] == "support-unverified" and result["text"] == '',
-                    "without a real TOML parser no policy is written")
-        _doctor_agrees(body, toml=False)
-        return
+    import tomllib
     samples = [
         '', 'model = "mine"', 'model = "mine"\n',
         '[auto_review]\npolicy = "keep replacement"\n',
@@ -86,17 +79,18 @@ def check_codex_auto_review():
         result = codex_policy.merge(malformed, body, True)
         assert_true(result['error'] and result['text'] == malformed,
                     "invalid, ambiguous or unsupported layouts stay untouched")
-    with patch.object(codex_policy, '_parse', side_effect=ValueError('support-unverified: no parser')):
-        assert_true(codex_policy.merge('', body, True)['status'] == 'support-unverified',
-                    "parser unavailability is distinct from a successful install")
+    with patch.object(codex_policy, '_parse', side_effect=ValueError('unparseable')):
+        failed = codex_policy.merge('model = "user"\n', body, True)
+        assert_true(failed['status'] == 'conflict' and failed['text'] == 'model = "user"\n',
+                    "a parse failure is a conflict that writes nothing, never a successful install")
     _lifecycle(body)
     _missing_template()
     _choice()
-    _doctor_agrees(body, toml=True)
+    _doctor_agrees(body)
     _orchestration()
 
 
-def _doctor_agrees(body, toml):
+def _doctor_agrees(body):
     """Doctor classifies the owned block with the installer's classifier, never by existence."""
     from exoma.core.audit import bundle_integrity
 
@@ -108,23 +102,18 @@ def _doctor_agrees(body, toml):
         (dist / key).write_text(body, encoding='utf-8')
         config = home / '.codex/config.toml'
         config.parent.mkdir()
-        installed = codex_policy.merge('model = "user"\n', body, True)['text'] if toml else ''
+        installed = codex_policy.merge('model = "user"\n', body, True)['text']
         cases = [
             # (config text or None for absent, enabled, expected reason or None for clean)
             (None, False, None),
             ('model = "user"\n', False, None),
+            (installed, True, None),
+            ('model = "user"\n', True, 'missing'),
+            (installed.replace('Routine inspection', 'Changed inspection'), True, 'conflict'),
+            (codex_policy.merge('model = "user"\n', body + '\nOld.', True)['text'], True, 'outdated'),
+            (installed, False, 'removed'),
+            ('[auto_review\n', True, 'conflict'),
         ]
-        if toml:
-            cases += [
-                (installed, True, None),
-                ('model = "user"\n', True, 'missing'),
-                (installed.replace('Routine inspection', 'Changed inspection'), True, 'conflict'),
-                (codex_policy.merge('model = "user"\n', body + '\nOld.', True)['text'], True, 'outdated'),
-                (installed, False, 'removed'),
-                ('[auto_review\n', True, 'conflict'),
-            ]
-        else:
-            cases.append(('model = "user"\n', True, 'support-unverified'))
         for text, enabled, expected in cases:
             if text is None:
                 config.unlink(missing_ok=True)

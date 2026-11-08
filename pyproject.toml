@@ -7,7 +7,7 @@ description = "Evidence-driven problem solving for AI agents: context management
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["ai-agents", "coding-agents", "claude-code", "delegation", "evidence", "context-management", "llm"]
 # The runtime is stdlib-only (tests/checks/deps.py); anything third-party is an extra.
 dependencies = []

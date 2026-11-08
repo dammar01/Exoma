@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
 
 TEMPLATE_KEY = "hosts/codex/auto-review-policy.md"
@@ -22,10 +23,6 @@ _BLOCK = re.compile(re.escape(START) + r" sha256=([0-9a-f]{64}) -->\n(.*?)\n" + 
 
 
 def _parse(text):
-    try:
-        import tomllib
-    except ImportError as exc:
-        raise ValueError("support-unverified: automatic policy merge needs Python 3.11+ tomllib") from exc
     return tomllib.loads(text.lstrip("\ufeff"))
 
 
@@ -227,8 +224,8 @@ def merge(text: str, body: str, enabled: bool) -> dict:
             raise ValueError("unrelated configuration would change")
         return {"text": candidate, "status": status, "error": None}
     except (ValueError, TypeError, KeyError, IndexError) as exc:
-        message = str(exc)
-        return {"text": text, "status": "support-unverified" if message.startswith("support-unverified") else "conflict", "error": message}
+        # tomllib.TOMLDecodeError is a ValueError: invalid TOML is a conflict like any other.
+        return {"text": text, "status": "conflict", "error": str(exc)}
 
 
 def cli_supported() -> bool:

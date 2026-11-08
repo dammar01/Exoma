@@ -63,6 +63,17 @@ def python_callable() -> tuple[bool, str]:
     runs; a Windows Store alias that opens the Store instead of running is.
     """
     pinned = osutil.pinned_python()
+    if pinned:
+        # The launchers take the pin without asking its version, so a pin left behind by an
+        # install under an older Python keeps running there; name it instead of passing it.
+        version = osutil._probe_python([pinned])
+        if version is not None and version < osutil.MIN_PYTHON:
+            minimum = "%d.%d" % osutil.MIN_PYTHON
+            return False, (
+                f"{pinned} pinned in {osutil.pinned_python_path()} is Python {version[0]}.{version[1]}, "
+                f"older than {minimum}: run `exoma install` from a Python >= {minimum} environment, "
+                "then `exoma upgrade` in each workspace"
+            )
     argv = [pinned] if pinned else osutil.find_python()
     if not argv:
         names = ", ".join(" ".join(c) for c in osutil._PYTHON_CANDIDATES)
@@ -490,8 +501,8 @@ def run_doctor(
     if not python_ok:
         issues.append(f"python not callable ({python_output})")
         recommended_fixes.append(
-            "Install Python 3.10+ as python3 (or python / py -3 on Windows) on PATH, "
-            "or re-run `exoma install` to pin the interpreter Exoma runs under"
+            "Install Python %d.%d+ as python3 (or python / py -3 on Windows) on PATH, "
+            "or re-run `exoma install` to pin the interpreter Exoma runs under" % osutil.MIN_PYTHON
         )
 
     provider_ok, provider_output = provider_callable(provider_command)

@@ -12,7 +12,7 @@ agent-workflow (its `runtime` names a checkout's `main.py`) is taken over: those
 removed and the scripts call `<python> -m exoma`.
 
 Every OS (Bash tool): exoma upgrade --work-dir "<work_dir>" --pretty
-<python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.10. Upgrade also removes
+<python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.11. Upgrade also removes
 the old `run.ps1`/`inspect.ps1`/`check.ps1`: the runners are `.sh` only now, on every OS.
 
 Upgrade refuses while delegated jobs are active. On a workspace still on the v3.5.x layout it

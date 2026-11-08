@@ -49,7 +49,8 @@ _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 # absent there exactly like a missing extra, so it takes the same shape: imported only
 # under an ImportError guard, in any shipped file. The rule is judged against the
 # package's floor, not the interpreter running this check — an unguarded `import tomllib`
-# is found on 3.13 too, where the module exists, because it would still crash on 3.10.
+# is found on 3.13 too, where the module exists, because it would still crash on an
+# interpreter at the package floor that lacks it.
 _VERSIONED_STDLIB = {
     "tomllib": (3, 11),
 }

@@ -40,20 +40,37 @@ def _test_entry_points_refuse_an_old_python() -> None:
             first_project_import is None or match.start() < first_project_import.start(),
             f"{name}'s guard runs before the first project import, or an old python never reaches it",
         )
-        # Run the guard as an old interpreter would see it.
-        old = types.SimpleNamespace(version_info=(3, 9, 18), version="3.9.18 (fake)", executable="/old/python3", exit=sys.exit)
+        # Run the guard as the newest refused interpreter would see it: one minor below.
+        below = (osutil.MIN_PYTHON[0], osutil.MIN_PYTHON[1] - 1, 20)
+        found = "%d.%d.%d" % below
+        old = types.SimpleNamespace(version_info=below, version=f"{found} (fake)", executable="/old/python3", exit=sys.exit)
         try:
             exec(compile(match.group(0), name, "exec"), {"sys": old})
         except SystemExit as exc:
             message = str(exc.code)
             assert_true(
-                "3.10 or newer" in message and "3.9.18" in message and "/old/python3" in message,
+                "%d.%d or newer" % osutil.MIN_PYTHON in message and found in message and "/old/python3" in message,
                 f"{name}'s guard names the need, the version found and the interpreter: {message!r}",
             )
+            assert_true("uv tool install" in message, f"{name}'s guard says how to get onto a supported Python: {message!r}")
         else:
-            raise AssertionError(f"{name}'s guard let Python 3.9 through")
+            raise AssertionError(f"{name}'s guard let Python {found} through")
         new = types.SimpleNamespace(version_info=osutil.MIN_PYTHON + (0,), version="", executable="", exit=sys.exit)
         exec(compile(match.group(0), name, "exec"), {"sys": new})
+
+    # The hook launchers repeat the minimum in their PATH probe (they cannot import osutil).
+    probe = re.compile(r"sys\.version_info >= \((\d+), (\d+)\)")
+    launchers = sorted((REPO / "src/exoma/_bundle/config/hosts/claude/hooks").glob("*.sh"))
+    assert_true(len(launchers) >= 8, f"the hook launchers are found: {launchers}")
+    for launcher in launchers:
+        text = launcher.read_text(encoding="utf-8")
+        tuples = {(int(a), int(b)) for a, b in probe.findall(text)}
+        if not tuples:
+            continue
+        assert_true(tuples == {osutil.MIN_PYTHON},
+                    f"{launcher.name}'s probe names osutil.MIN_PYTHON {osutil.MIN_PYTHON}: {tuples}")
+        assert_true(">= %d.%d" % osutil.MIN_PYTHON in text,
+                    f"{launcher.name}'s header names the same minimum as its probe")
 
 
 def _test_find_python_runs_each_candidate() -> None:
@@ -74,6 +91,9 @@ def _test_find_python_runs_each_candidate() -> None:
         assert_true(got == ["/w/py", "-3"], f"an old python3 is skipped for `py -3`: {got}")
         got = scenario({"python3": "/u/python3"}, {"/u/python3": (3, 8)})
         assert_true(got is None, f"no interpreter new enough is None, not the old one: {got}")
+        below = (osutil.MIN_PYTHON[0], osutil.MIN_PYTHON[1] - 1)
+        got = scenario({"python3": "/u/python3", "python": "/u/python"}, {"/u/python3": below, "/u/python": osutil.MIN_PYTHON})
+        assert_true(got == ["/u/python"], f"one minor below MIN_PYTHON is skipped, MIN_PYTHON itself taken: {got}")
     finally:
         osutil.shutil.which, osutil._probe_python = real_which, real_probe
 
@@ -92,8 +112,20 @@ def _test_doctor_python_check_follows_the_launchers() -> None:
     """
     from exoma.core.audit import diagnostics
 
-    real_pinned, real_find = osutil.pinned_python, osutil.find_python
+    real_pinned, real_find, real_probe = osutil.pinned_python, osutil.find_python, osutil._probe_python
     try:
+        # A pin left by an install under an older Python still runs, and the launchers take
+        # it without asking its version: doctor names it and how to repin.
+        osutil.pinned_python = lambda home=None: sys.executable
+        osutil._probe_python = lambda argv: (osutil.MIN_PYTHON[0], osutil.MIN_PYTHON[1] - 1)
+        ok, output = diagnostics.python_callable()
+        assert_true(not ok and "exoma install" in output and "exoma upgrade" in output,
+                    f"a pin older than MIN_PYTHON fails with the repin steps: {output}")
+        osutil._probe_python = lambda argv: osutil.MIN_PYTHON
+        ok, output = diagnostics.python_callable()
+        assert_true(ok, f"a pin at MIN_PYTHON passes: {output}")
+        osutil._probe_python = real_probe
+
         osutil.pinned_python = lambda home=None: None
         osutil.find_python = lambda min_version=osutil.MIN_PYTHON: [sys.executable]
         ok, output = diagnostics.python_callable()
@@ -110,7 +142,7 @@ def _test_doctor_python_check_follows_the_launchers() -> None:
         assert_true(not ok, "no pin and no runnable candidate fails")
         assert_true("python3" in output and "py -3" in output, f"the failure names what was tried: {output}")
     finally:
-        osutil.pinned_python, osutil.find_python = real_pinned, real_find
+        osutil.pinned_python, osutil.find_python, osutil._probe_python = real_pinned, real_find, real_probe
 
 
 def _test_find_bash_and_os_locations() -> None:

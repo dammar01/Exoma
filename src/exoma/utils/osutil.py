@@ -10,11 +10,13 @@ from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
 
-# The oldest Python the code runs on (`X | None` in signatures is evaluated at def time).
+# The oldest Python the code runs on: 3.11, for stdlib `tomllib` (the installer parses
+# Codex's config.toml before it writes it). pyproject's requires-python says the same.
 # main.py, install.py and check.py repeat it inline in their version guard, because a guard
-# that imported this module would fail on the very interpreter it is meant to name;
-# tests/checks/os_resolvers.py keeps the copies equal.
-MIN_PYTHON = (3, 10)
+# that imported this module would fail on the very interpreter it is meant to name, and the
+# hook launchers repeat it in their PATH probe; tests/checks/os_resolvers.py keeps the
+# copies equal.
+MIN_PYTHON = (3, 11)
 
 # PATH names tried for an interpreter, in order. `python3` first: on Linux and macOS it is
 # often the only one; `python` is the usual Windows name; `py -3` is the Windows launcher.

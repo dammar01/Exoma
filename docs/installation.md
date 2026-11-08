@@ -32,7 +32,7 @@ it again. Every installer flag, target file and hook is listed in the
 
 | Requirement | Required | Notes |
 | --- | --- | --- |
-| **Python 3.10+** | Yes | The runtime needs no third-party packages. An older Python is refused with a message naming the version found. Optional browser verification uses Playwright (the `e2e` extra) |
+| **Python 3.11+** | Yes | The runtime needs no third-party packages. An older Python is refused with a message naming the version found and how to reinstall under a supported one. Optional browser verification uses Playwright (the `e2e` extra) |
 | **uv**, **pipx**, or **pip** | Yes | To install the `exoma` package. `uv tool install` and `pipx install` keep it in its own environment; on Linux and macOS prefer one of them, since a distribution-managed Python refuses `pip install` (PEP 668) |
 | **A secondary-agent CLI** | Yes | `codex` (reference setup), `opencode` (default with a stricter read boundary), `agy`, or `claude` (Claude Code), on `PATH`. Each workflow release is tested on one release of each CLI; `/.doctor` names it when yours differs ([provider releases](reference.md#provider-releases)) |
 | **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
@@ -145,7 +145,10 @@ an uv tool, `pipx upgrade exoma` when it runs from a pipx environment, or
 `python -m pip install --upgrade exoma` in its current Python environment otherwise.
 `--manager uv`, `--manager pipx` or `--manager pip` selects a manager explicitly; `uv` and
 `pipx` are accepted only when the running Exoma belongs to that installation. When pip refuses
-an externally managed Python (PEP 668), the update stops and points to pipx or uv. The command then runs
+an externally managed Python (PEP 668), the update stops and points to pipx or uv. The update
+stays in the running Python: under Python 3.10 the package manager cannot install a release
+that requires 3.11+, and what it reports instead depends on the manager. Moving to such a
+release means installing Exoma under Python 3.11+ (see the troubleshooting table below). The command then runs
 the **new** Exoma process to refresh the global host configuration. If cwd is inside a
 project with `.workflow/`, it upgrades that workspace too. It runs `exoma install --check`
 last and returns a nonzero status when any step fails. Without `.workflow/`, no workspace
@@ -200,6 +203,7 @@ behavior you rely on, and the notes say what to set afterwards.
 | Provider not found | The agent CLI is not on `PATH` | Install it, then check `<cli> --version` |
 | Delegated calls fail after a provider update | The provider release broke something | Pin it back to the release `/.doctor` names ([provider releases](reference.md#provider-releases)) |
 | Commands fail after reinstalling Exoma or changing Python | Baked absolute paths are stale | `/.upgrade` in that project |
+| `Exoma needs Python 3.11 or newer`, or `/.doctor` reports a pinned interpreter older than 3.11 | Exoma or its pin is still under Python 3.10 | Install Exoma under Python 3.11+ (e.g. `uv tool install --python 3.11 exoma`), run `exoma install` from it, then `/.upgrade` in each project |
 | `exoma install` refuses a CLAUDE.md or AGENTS.md | Its workflow markers do not pair up | Fix or remove the broken marker lines by hand, then re-run |
 
 More: [troubleshooting](team-guide/troubleshooting.md).

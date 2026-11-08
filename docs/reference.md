@@ -101,7 +101,7 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 
 | Requirement | Notes |
 |---|---|
-| Python 3.10+ | the `X \| None` syntax is used throughout the code. `exoma`, `exoma install` and `exoma check` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks run the interpreter `exoma install` pinned in `~/.claude/hooks/python.path` (the one it ran under and installed the extras into, also named by generated `.workflow/*.sh`); without that file they pick one by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.10 is skipped, and with none of them the hook fails open |
+| Python 3.11+ | stdlib `tomllib`: the installer parses Codex's `config.toml` before it writes it. `exoma`, `exoma install` and `exoma check` reject older Python with a single message (the version and interpreter in use) before any import. The `.sh` hooks run the interpreter `exoma install` pinned in `~/.claude/hooks/python.path` (the one it ran under and installed the extras into, also named by generated `.workflow/*.sh`); without that file they pick one by running it, in order `python3`, `python`, `py -3`; one that does not run (WindowsApps alias) or is older than 3.11 is skipped, and with none of them the hook fails open. The pin is taken without asking its version: after moving to a newer Python, run `exoma install` from it and `/.upgrade` each workspace. `/.doctor` reports a pin older than 3.11; `exoma install --check` does not check the pin |
 | `opencode` on `PATH` | only for delegated commands |
 | `git` on `PATH` | optional; used by `sweep` and the `syntax` verify mode |
 | Runtime dependencies | **zero**; the whole runtime uses the standard library |
@@ -502,9 +502,10 @@ file is reported. Without it, a Claude Code that cannot find Git Bash by itself 
 `"<bash>" "<script>"` pair is a parse error and every PreToolUse hook blocks its tool.
 The installer writes `~/.claude/hooks/python.path` (its own interpreter) beside the launchers.
 A launcher runs that pinned interpreter, else the first of `python3`, `python`, `py -3` on PATH
-that runs as Python 3.10 or newer. `/.doctor`'s `python_callable` check asks the same question
+that runs as Python 3.11 or newer. `/.doctor`'s `python_callable` check asks the same question
 in the same order, so a machine with `python3` and no `python` alias is ready; it reports
-`python not callable (<what was tried>)` only when the launchers would find nothing either.
+`python not callable (<what was tried>)` only when the launchers would find nothing either, or
+when the pin is older than 3.11 (the launchers would still run it), naming the repin steps.
 A hook receives its payload on stdin, read as UTF-8 bytes whatever the console code page is,
 and `workflow_hooks.py` hands it to the hook module in memory: there is no size limit (the
 environment variable it used before failed past 32767 characters on Windows, so every large
@@ -884,14 +885,14 @@ writable_roots = ['C:\Users\<you>\AppData\Local\exoma\storage']
 # EXOMA-CODEX-GRANT:END
 ```
 
-The file is never parsed and rewritten (the runtime is stdlib-only and Python 3.10 has no TOML
-writer). When the user already keeps a `[sandbox_workspace_write]` table (or a dotted or inline
+The file is never parsed and rewritten (the runtime is stdlib-only and the stdlib has no TOML
+writer; `tomllib` only reads). When the user already keeps a `[sandbox_workspace_write]` table (or a dotted or inline
 key for it), a second table of that name would make the file invalid TOML, so the install leaves
 the file alone and prints the snippet: add the storage directory to that table's `writable_roots`
 yourself. A table of the user's added later, beside Exoma's block, is the same conflict: the next
 install takes the block out (the user's table governs) and prints the snippet. Grant markers that
-do not pair up (a hand edit) leave the file untouched and the install refused for it. On Python
-3.11+ the result is parsed before it is written, and an install that would leave invalid TOML is
+do not pair up (a hand edit) leave the file untouched and the install refused for it. The
+result is parsed before it is written, and an install that would leave invalid TOML is
 refused. `--check` reports the block missing or stale, and reports a conflict or unpaired markers
 as drift (the user's table alone is not drift); `--uninstall` and dropping the `codex` host take the block out and keep the rest of the
 file. Keys added below the block by hand belong to that table in TOML: add them above it.
@@ -976,7 +977,7 @@ the bundle ships them once. The hook command is
 `<interpreter> <home>/.gemini/antigravity-cli/exoma/hooks/agy-host.py <Event>`, unquoted. The
 interpreter is the first of these whose path holds no space and no `cmd.exe` metacharacter
 (`& % ^ | < > ( ) "`): the install interpreter, its resolved link target, the base interpreter
-of its environment, then `python3`/`python`/`py -3` from PATH (run and at least 3.10). The
+of its environment, then `python3`/`python`/`py -3` from PATH (run and at least 3.11). The
 wrapper is stdlib-only, so a base interpreter runs it as well as the environment's own; this is
 what lets pipx on macOS, under `~/Library/Application Support/pipx`, install the hook. When
 none qualifies, or the home itself holds such a character, the hooks are refused with a warning
@@ -2163,7 +2164,7 @@ dispatch inputs — defaults `e2e-dispatch` and `self-hosted`.
 
 ### Toolchain and matrix
 
-The full checks matrix uses Python `3.10` and `3.13` via `actions/setup-python` on
+The full checks matrix uses Python `3.11` and `3.13` via `actions/setup-python` on
 `ubuntu-latest`, `windows-latest`, and `macos-latest`, with `fail-fast: false`. Hooks and
 generated runners use Bash on every OS (Git Bash on Windows, checked in the job's first
 step). Each platform runs the default source suite and local E2E checks; process identity,
@@ -2174,11 +2175,11 @@ keeps the atomic-mode and Codex auto-review checks on Linux/macOS with Python `3
 `concurrency: cancel-in-progress` so that a pipeline overtaken on the same ref is cancelled
 instead of being left to finish against a stale commit. Job permissions are locked to `contents: read`.
 
-The `dist` matrix uses Python `3.13` on the same three OSes. It builds the sdist and wheel,
+The `dist` matrix uses Python `3.11` (the package floor) and `3.13` on the same three OSes. It builds the sdist and wheel,
 installs the wheel into a clean venv with home variables and cwd pointed at temporary
 directories, and runs `exoma --version`, `exoma install claude --no-input`, `exoma init`,
 and the generated `inspect.sh`. A second clean venv installs the sdist and checks import,
-bundle presence and version. Only Ubuntu uploads `dist/` as the publish artifact.
+bundle presence and version. Only Ubuntu with Python `3.13` uploads `dist/` as the publish artifact.
 These smoke checks do not run the full source suite against installed artifacts or invoke
 real provider CLIs. `ci.yml` also accepts `workflow_call`.
 
@@ -2212,7 +2213,7 @@ requirements. Global installation state does not establish the effective policy 
 already running chat: profile/project/managed settings may override it. Reload Codex after
 installation and inspect its active settings when determining which policy is in use.
 
-Automatic merge currently requires Python 3.11+ (`tomllib`) and a tested Codex CLI
+Automatic merge requires a tested Codex CLI
 baseline listed in [`installer/codex_policy.py`](../src/exoma/installer/codex_policy.py).
 Other CLI versions are reported as `support-unverified`, not assumed
 unsupported upstream or silently accepted. An effective `CODEX_HOME` different from the

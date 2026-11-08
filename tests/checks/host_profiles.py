@@ -275,12 +275,11 @@ def _test_codex_grant():
     half = user_text + block_start + " — managed by Exoma\n[sandbox_workspace_write]\n"
     assert_true(base.codex_grant_state(half) == "broken" and base.codex_grant_text(half) is None,
                 "a START without its END is not appended to or rewritten")
-    if sys.version_info >= (3, 11):
-        import tomllib
+    import tomllib
 
-        parsed = tomllib.loads(merged)
-        assert_true(parsed["sandbox_workspace_write"]["writable_roots"] == [base.codex_grant_fix()["writable_root"]]
-                    and parsed["model"] == "gpt-6", f"the result is valid TOML: {parsed}")
+    parsed = tomllib.loads(merged)
+    assert_true(parsed["sandbox_workspace_write"]["writable_roots"] == [base.codex_grant_fix()["writable_root"]]
+                and parsed["model"] == "gpt-6", f"the result is valid TOML: {parsed}")
 
     with tempfile.TemporaryDirectory(prefix="exoma-codex-grant-") as tmp:
         home = Path(tmp)

@@ -131,7 +131,7 @@ always read ([reference, "Hosts"](reference.md#hosts)). That enforcement lives i
 and it fails open. The Claude Code hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
 on Windows, named by absolute path in `settings.json`, which also sets
 `env.CLAUDE_CODE_GIT_BASH_PATH`) that runs the Python pinned in `~/.claude/hooks/python.path`
-(else resolves a Python 3.10+ by running it) and execs `workflow_hooks.py <hook>`, which reads
+(else resolves a Python 3.11+ by running it) and execs `workflow_hooks.py <hook>`, which reads
 the payload from stdin as UTF-8 and runs `<hook>.py` with it in memory — never through the
 environment, which Windows caps at 32767 characters per variable; no `.ps1` ships. Agy runs no launcher: its hooks.json names the interpreter and `agy-host.py`
 directly ([reference, "Hosts"](reference.md#hosts)). The full prompt-layer list, with what each contract requires, is in

@@ -6,10 +6,11 @@ import time
 # Before any import that the newer syntax would break: the oldest supported Python is
 # utils/osutil.py MIN_PYTHON, repeated here because importing it would fail on the very
 # interpreter this names.
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 11):
     sys.exit(
-        f"Exoma needs Python 3.10 or newer; this is {sys.version.split()[0]} "
-        f"({sys.executable}). Run it with a newer python."
+        f"Exoma needs Python 3.11 or newer; this is {sys.version.split()[0]} "
+        f"({sys.executable}). Reinstall it under Python 3.11+, e.g. "
+        "`uv tool install --python 3.11 exoma`."
     )
 
 from exoma.config.settings import (  # noqa: E402

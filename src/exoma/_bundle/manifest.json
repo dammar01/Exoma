@@ -63,7 +63,7 @@
     },
     {
       "path": "hosts/claude/skills/init.md",
-      "sha256": "7e87703a026e3c87bca608f145b842f4ea3919dbd76bc1c941b3ce789c547200",
+      "sha256": "0ce3b620dd80e0a00774ae9dca3c5e42fa01459cc2fcebacbcaf0e62ac51731a",
       "bytes": 2557,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -112,7 +112,7 @@
     },
     {
       "path": "hosts/claude/skills/upgrade.md",
-      "sha256": "db8586d54e6ed2f0d960c0813f9f1141b4d87c56504827a158977cb5dd29185e",
+      "sha256": "b5e7c63bcd77d57abe42a06b7b68161bba1c6c22db48c837897318bc7cdee8a4",
       "bytes": 2721,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -266,7 +266,7 @@
     },
     {
       "path": "hosts/claude/hooks/execution-gate.sh",
-      "sha256": "10399d66a8453dbea536777d7ff2112556dfe80ead8a7f3e1d8b5a6785cc8001",
+      "sha256": "99656801a30dcdd904ce7d4686f12c9ccc3e603757baba1f974338973ff33af6",
       "bytes": 1575,
       "merge": "replace",
       "component": "runtime"
@@ -280,7 +280,7 @@
     },
     {
       "path": "hosts/claude/hooks/graph-refresh.sh",
-      "sha256": "e5d3030face0f521d8288b4de52c6148155852c0d069cac4ad0c241582f28784",
+      "sha256": "cc41f00270c17723a5a46a07bd92ae715ed9084dc164c9d0311235d64cd95e40",
       "bytes": 1570,
       "merge": "replace",
       "component": "runtime"
@@ -301,7 +301,7 @@
     },
     {
       "path": "hosts/claude/hooks/intent-gate-check.sh",
-      "sha256": "7092bda322429debed9941666db8feae4567d1a5064e05e5b899d657a5574dab",
+      "sha256": "2434e92f001a15b522e4e142e119b03d660fa1a02b14adebcfe15f72bae72ddf",
       "bytes": 1590,
       "merge": "replace",
       "component": "runtime"
@@ -315,7 +315,7 @@
     },
     {
       "path": "hosts/claude/hooks/intent-gate-set.sh",
-      "sha256": "2106e48119c994570bcccbd05cbd12426a677ba51a5e1238646764424ddd0d30",
+      "sha256": "f4fd797c065ac640608d5d49f14ee428e52b8bc981f337cec24e7bf5e1dcf354",
       "bytes": 1580,
       "merge": "replace",
       "component": "runtime"
@@ -336,7 +336,7 @@
     },
     {
       "path": "hosts/claude/hooks/session-bind.sh",
-      "sha256": "66164b01e5afb1e81e9f62827b2f203fae58331d353f833ee55cd13cb6b78f9e",
+      "sha256": "30bcfe130ab224cecf812af7efae7e7f986ef400dafbf03a55a6af7d052d3778",
       "bytes": 1565,
       "merge": "replace",
       "component": "runtime"
@@ -350,7 +350,7 @@
     },
     {
       "path": "hosts/claude/hooks/status-guard.sh",
-      "sha256": "f170d35afbcd991535111c507a6eb00fd8b3ade37e8604e0b434f795cb8e1b21",
+      "sha256": "5af0b4604ac1d58089870fda858117bf7ec6b8e0d624589e5cf0c0ff71be9645",
       "bytes": 1565,
       "merge": "replace",
       "component": "runtime"
@@ -364,7 +364,7 @@
     },
     {
       "path": "hosts/claude/hooks/task-events.sh",
-      "sha256": "d7ebb8094612dcc23fee14bfbd1a71d0ab1723992acc28cad28b59e847376971",
+      "sha256": "b961543eeab13644b5dde7b6da5710cc157ac720dde33fd920068e89ba97ca34",
       "bytes": 1560,
       "merge": "replace",
       "component": "runtime"
@@ -378,7 +378,7 @@
     },
     {
       "path": "hosts/claude/hooks/workflow-statusline.sh",
-      "sha256": "05c35a3fb7aff130c8a557625b99052ede749315c86556f561ae2174dfc3495b",
+      "sha256": "d187a6926e388557f7ee851ec0164e98db1ca6ba44255b668c258a3f4307ad8e",
       "bytes": 1600,
       "merge": "replace",
       "component": "runtime"

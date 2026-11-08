@@ -35,6 +35,8 @@ installed file has changed since or its receipt is missing; then reinstall the r
 
 ## Working in the checkout
 
+The checkout needs Python 3.11+, the floor in `pyproject.toml` that `uv run` follows.
+
 ```bash
 uv run python tests/run.py                   # the suite; a temporary EXOMA_HOME unless one is already set
 uv run python tools/maintain/stamp_version.py --check

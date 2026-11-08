@@ -896,8 +896,8 @@ def _install_codex_hooks(dest: Path, plan: Plan, apply: bool, backup_root: Path)
 # The Codex sandbox grant for the job store (CASE-034): every delegated submit writes the
 # global job store, outside any project, and Codex's `workspace-write` sandbox refuses that.
 # The install writes the grant as a comment-delimited block in ~/.codex/config.toml. The
-# runtime is stdlib-only and Python 3.10 has no TOML writer, so the file is never parsed and
-# rewritten: the block is appended or replaced as text, and a table of the user's own
+# runtime is stdlib-only and the stdlib has no TOML writer (tomllib only reads), so the file
+# is never parsed and rewritten: the block is appended or replaced as text, and a table of the user's own
 # (`[sandbox_workspace_write]`, or a dotted/inline key for it) is never touched — a second
 # table of that name would make the file invalid TOML. Then the snippet is printed instead.
 CODEX_CONFIG_KEY = f"{CODEX_HOST}/config.toml"
@@ -975,11 +975,8 @@ def strip_codex_grant(text: str) -> str:
 
 
 def _toml_valid(text: str) -> bool:
-    """Whether `text` parses as TOML, where a parser exists (3.11+); assumed so on 3.10."""
-    try:
-        import tomllib
-    except ImportError:
-        return True
+    """Whether `text` parses as TOML."""
+    import tomllib
     try:
         tomllib.loads(text)
         return True
