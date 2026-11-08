@@ -132,7 +132,8 @@ def _test_e2e_spec_contract() -> None:
     for retired in ("testid", "data-testid", "data-e2e"):
         found = validate_scenario(dict(_SCENARIO, steps=[{"id": "s", "action": "click", "selector": {retired: "x"}}]))
         assert_true(any(f"'{retired}' not allowed; use 'e2e'" in e for e in found), f"{retired} is refused with its replacement: {found}")
-    assert_true(e2e_css('a"b\\c') == '[data-e2e="a\\"b\\\\c"]', f"e2e_css escapes quotes and backslashes: {e2e_css('a\"b')}")
+    escaped = e2e_css('a"b\\c')
+    assert_true(escaped == '[data-e2e="a\\"b\\\\c"]', f"e2e_css escapes quotes and backslashes: {escaped}")
     assert_true(SELECTOR_RANK == ("role", "label", "e2e", "text", "css") and "testid" not in SELECTOR_KEYS, "e2e replaces testid in the rank")
 
     # Validation rules, one failing input each.

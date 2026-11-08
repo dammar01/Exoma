@@ -1,5 +1,6 @@
 """Runtime-run tests for /.verify: allowlisted, shell-free, and written into the verdict."""
 
+import errno
 import json
 import os
 import shutil
@@ -1055,15 +1056,28 @@ def _check_verify_reuse_identity() -> None:
                     "rows after the barrier are reused, rows before it are not")
         junk.with_name(junk.name + ".corrupt").unlink()
 
-        # A file name that is not UTF-8 (POSIX) is hashed, never a crash after the marker.
+        # Some POSIX filesystems (including macOS) reject non-UTF-8 names with EILSEQ.
+        # Where supported, both the name and its content must affect the identity.
         if os.name != "nt":
             odd = root / "fixtures" / os.fsdecode(b"\xff.json")  # fixtures/* is listed above
-            odd.write_text("x", encoding="utf-8")
+            before_odd = verify_tests.reuse_identity(root)
             try:
-                assert_true(verify_tests.reuse_identity(root) is not None,
-                            "a non-UTF-8 listed file name is part of the identity")
-            finally:
-                odd.unlink()
+                odd.write_text("x", encoding="utf-8")
+            except OSError as exc:
+                if exc.errno != errno.EILSEQ:
+                    raise
+                print("  verify-reuse: skipped non-UTF-8 filename (filesystem rejects it with EILSEQ)")
+            else:
+                try:
+                    with_odd = verify_tests.reuse_identity(root)
+                    assert_true(with_odd is not None and with_odd != before_odd,
+                                "a non-UTF-8 listed file name is part of the identity")
+                    odd.write_text("y", encoding="utf-8")
+                    changed_odd = verify_tests.reuse_identity(root)
+                    assert_true(changed_odd is not None and changed_odd != with_odd,
+                                "changes to a non-UTF-8 listed file invalidate the identity")
+                finally:
+                    odd.unlink()
         with patch.object(verify_tests, "reuse_identity", lambda *_: (_ for _ in ()).throw(UnicodeError("x"))):
             out = verify_tests.run_and_record(root, "s1", [full])
         assert_true(out["fingerprint"] is None and out["outcomes"] and not markers(),
