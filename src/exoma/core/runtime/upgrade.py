@@ -299,12 +299,17 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
         for path in manager.job_dir.glob("job_*.json"):
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 continue
-            if job.get("status") not in {"pending", "running", "recovering"}:
+            if not isinstance(job, dict):
+                continue
+            status = job.get("status")
+            if not isinstance(status, str) or status not in {"pending", "running", "recovering"}:
                 continue
             work_dir = job.get("work_dir")
-            if work_dir:
+            if work_dir is not None and not isinstance(work_dir, str):
+                continue
+            if work_dir and isinstance(work_dir, str):
                 try:
                     job_root = str(detect_project_root(work_dir).resolve())
                 except (OSError, ValueError):
@@ -313,7 +318,11 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
                     continue
             # A job whose worker is gone is not "active", it is unreaped. Blocking the
             # upgrade on one would make a crashed worker permanently jam the command.
-            if manager.liveness(job) == DEAD:
+            try:
+                liveness = manager.liveness(job)
+            except (OSError, ValueError, TypeError):
+                continue
+            if liveness == DEAD:
                 continue
             out.append(job)
         return out

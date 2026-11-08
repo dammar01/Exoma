@@ -30,10 +30,15 @@ The team lead decides these once, before anyone starts:
 1. **Hosts and providers.** Who uses which main agent and second agent. Install with
    `exoma install <host>` and pick the provider when the installer asks
    ([installation](installation.md)).
-2. **A comparison group (optional).** Some problems can be worked with the second agent
-   switched off (`/.local`, or `WORKFLOW_LOCAL_MODE=1`). Decide this **before** a problem is
-   picked up, by a simple rule (for example, alternate weeks), never after seeing how hard
-   it is.
+2. **A comparison group (optional).** For local analysis/planning, start a fresh session
+   and use `/.local on`: it instructs the main agent to gather evidence locally for
+   explore/plan/analyze and resets each session. It is not a hard dispatch switch.
+   `WORKFLOW_LOCAL_MODE=1` only opens the preflight gate; it does **not** disable provider
+   dispatch. Define the task's measurement window in advance and check actual provider
+   invocations (`provider_calls`, excluding evidence reuse) to establish a zero-delegation
+   baseline. Delegated verification is outside local mode; specify its treatment before
+   the task rather than silently including it as local-only. Assign comparison groups
+   before seeing task difficulty, never after the outcome.
 3. **Where bundles go.** A shared folder or a ticket per session. The bundle is redacted,
    but it still contains your prompts and the code the agents read: keep it inside the team.
 

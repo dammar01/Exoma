@@ -60,20 +60,38 @@ def record_skill(project_root, session_id: str | None, skill: str, *, verdict: s
         pass
 
 
-def load_events(project_root) -> list[dict]:
+def _valid_event(event) -> bool:
+    if not isinstance(event, dict) or not isinstance(event.get("kind"), str) or event["kind"] not in ("skill", "edit", "commit"):
+        return False
+    for key in ("session_id", "at", "skill", "path", "commit", "verdict", "derived", "prompt_id"):
+        if event.get(key) is not None and not isinstance(event[key], str):
+            return False
+    paths = event.get("paths")
+    return paths is None or isinstance(paths, str) or isinstance(paths, list) and all(isinstance(p, str) for p in paths)
+
+
+def load_events(project_root, *, diagnostics: dict | None = None) -> list[dict]:
     """Every event on disk, oldest first; a torn or foreign line is skipped."""
+    diagnostics = {} if diagnostics is None else diagnostics
+    diagnostics.update(status="complete", invalid_rows=0)
     try:
         text = (data_dir(Path(project_root)) / TASK_STREAM_NAME).read_text(encoding="utf-8", errors="replace")
     except OSError:
+        diagnostics["status"] = "unavailable"
         return []
     events = []
     for line in text.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
+            diagnostics["invalid_rows"] += 1
+            diagnostics["status"] = "partial"
             continue
-        if isinstance(event, dict) and event.get("kind") in ("skill", "edit", "commit"):
+        if _valid_event(event):
             events.append(event)
+        else:
+            diagnostics["invalid_rows"] += 1
+            diagnostics["status"] = "partial"
     return events
 
 
@@ -95,6 +113,8 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
     claimed_commits: set[str] = set()
     unclaimed_commits: set[str] = set()
     for event in events:
+        if not _valid_event(event):
+            continue
         session = event.get("session_id") or None
         at = event.get("at")
         kind = event["kind"]
@@ -150,7 +170,8 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
 
 
 def report(project_root) -> dict:
-    tasks, unclaimed = derive_tasks(load_events(project_root))
+    diagnostics: dict = {}
+    tasks, unclaimed = derive_tasks(load_events(project_root, diagnostics=diagnostics))
     by_state: dict[str, int] = {}
     skill_counts: dict[str, int] = {}
     for task in tasks:
@@ -159,6 +180,7 @@ def report(project_root) -> dict:
             skill_counts[step] = skill_counts.get(step, 0) + 1
     return {
         "tasks": len(tasks),
+        "event_stream": diagnostics,
         "by_state": dict(sorted(by_state.items())),
         "skill_counts": dict(sorted(skill_counts.items())),
         "unclaimed_commits": unclaimed,

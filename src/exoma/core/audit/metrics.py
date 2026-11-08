@@ -33,7 +33,7 @@ from pathlib import Path
 
 from exoma.utils import osutil
 
-METRICS_VERSION = 1
+METRICS_VERSION = 2
 
 RECOUNT = (
     "on the machine holding the inputs only: inputs are private transcripts, usage streams and "
@@ -66,8 +66,8 @@ REGISTRY: dict[str, dict] = {
         "missing": "Rows of a provider-less browser run (no prompt_id, provider or tokens; CASE-014) are dropped before counting.",
     },
     "runtime.provider_call": {
-        "version": 1, "producer": _RUNTIME, "unit": "provider invocation", "statistic": "count",
-        "definition": "One usage row. Report key `provider_calls`.",
+        "version": 2, "producer": _RUNTIME, "unit": "provider invocation", "statistic": "count",
+        "definition": "One usage row excluding reused_evidence or provider_call_avoided rows, including legacy reuse-only flags. Continuations count per invocation. Report key `provider_calls`.",
         "denominator": "-", "missing": "As runtime.command.",
     },
     "runtime.cost_tokens": {

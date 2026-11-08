@@ -58,6 +58,13 @@ def _test_verify_runtime_tests() -> None:
     python = f'"{sys.executable}"'
     root = _workspace([f"{python} -c"])
     try:
+        for snapshots, reason in (((None, "after"), "identity_before_unavailable"),
+                                  (("before", None), "identity_after_unavailable"),
+                                  (("before", "after"), "inputs_changed_during_test")):
+            values = iter(snapshots)
+            out = verify_tests.run_tests(root, {"commands": [f"{python} -c pass"]}, identity=lambda: next(values))
+            assert_true(out[0]["fingerprint"] is None and out[0]["fingerprint_reason"] == reason,
+                        "unbound test outcomes must explain unavailable versus changed inputs")
         # --- green tests and a clean review: pass ------------------------------------------
         _request(root, {"commands": [f"{python} -c pass"], "reason": "covers the change"})
         result, verdict = _verify(root)
@@ -179,6 +186,11 @@ def _check_runtime_gaps_exit_nonzero() -> None:
         for label, body in (
             ("no request", None),
             ("unusable request", "not json"),
+            ("empty object", {}),
+            ("missing commands", {"reason": "not an explicit no-test request"}),
+            ("wrong commands type", {"commands": "python tests/run.py"}),
+            ("no-test missing reason", {"commands": []}),
+            ("no-test blank reason", {"commands": [], "reason": "  "}),
             ("refused command", {"commands": ["git status"], "reason": "r"}),
         ):
             if body is not None:

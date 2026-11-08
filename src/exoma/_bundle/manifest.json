@@ -259,8 +259,8 @@
     },
     {
       "path": "hosts/claude/hooks/execution-gate.py",
-      "sha256": "d22a9db5a485f0a7337c6921b48d6d43323ea956722ee158dbf1cc9294ee321e",
-      "bytes": 4661,
+      "sha256": "fd7d92cca628be46ed3cebeb79c8de1c5997398b96ab9f84718b5626b497a7de",
+      "bytes": 8436,
       "merge": "replace",
       "component": "runtime"
     },
@@ -294,8 +294,8 @@
     },
     {
       "path": "hosts/claude/hooks/intent-gate-check.py",
-      "sha256": "b74a67c85f82313d084c4cd791f11e431d1ffe61de87c0a94de014b5f7786493",
-      "bytes": 12053,
+      "sha256": "5892c753a43c29f7d1eda2563960374e8729d8b322f37f754ad270e8f758954a",
+      "bytes": 12013,
       "merge": "replace",
       "component": "runtime"
     },
@@ -392,8 +392,8 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "02a62a7894077a10a6a6fd51c210ce2bd3c09285bab2e6c33f78a1497d217184",
-      "bytes": 42555,
+      "sha256": "ee1982c8e66448818c73f7d8ae819a9f99187c5faced884272050198abe488d3",
+      "bytes": 48478,
       "merge": "replace",
       "component": "runtime"
     },
@@ -497,8 +497,8 @@
     },
     {
       "path": "hosts/codex/AGENTS.md",
-      "sha256": "26b9eea94fc97326391615bff485ff0426c3d2b77e4d8e22ca5dfa58d9bd36ba",
-      "bytes": 1986,
+      "sha256": "47fea670f73eacb92db216dd9b7b500274a5ccd7eaef75847ddb3b0ca77c010a",
+      "bytes": 2824,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -515,6 +515,13 @@
       "bytes": 11530,
       "merge": "replace",
       "component": "runtime"
+    },
+    {
+      "path": "hosts/codex/auto-review-policy.md",
+      "sha256": "c13c6d06099ec451e41157028d21c76b7d6e10bc23aee74824ee2ae6e5cd312f",
+      "bytes": 1427,
+      "merge": "merge",
+      "component": "prompt_bundle"
     },
     {
       "path": "hosts/opencode/AGENTS.md",
@@ -564,6 +571,7 @@
     "hosts/agy/skills": "{{HOME}}/.gemini/antigravity-cli/skills",
     "hosts/codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
     "hosts/codex/hooks.template.json": "{{HOME}}/.codex/hooks.json",
+    "hosts/codex/auto-review-policy.md": "{{HOME}}/.codex/config.toml",
     "hosts/codex/codex-host.py": "{{HOME}}/.codex/exoma/hooks/codex-host.py",
     "hosts/opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
     "hosts/opencode/exoma.js": "{{HOME}}/.config/opencode/plugins/exoma.js",

@@ -123,22 +123,26 @@ def run_player(
     timed_out = False
     stalled = False
     kill: dict | None = None
-    while True:
-        if proc.poll() is not None:
-            break
-        now = time.monotonic()
-        if now - started > total_timeout_s:
-            timed_out = True
+    try:
+        while True:
+            if proc.poll() is not None:
+                break
+            now = time.monotonic()
+            if now - started > total_timeout_s:
+                timed_out = True
+                kill = terminate_tree(proc)
+                break
+            if now - last_line_at[0] > idle_timeout_s:
+                stalled = True
+                kill = terminate_tree(proc)
+                break
+            time.sleep(poll_interval_s)
+    finally:
+        if proc.poll() is None:
             kill = terminate_tree(proc)
-            break
-        if now - last_line_at[0] > idle_timeout_s:
-            stalled = True
-            kill = terminate_tree(proc)
-            break
-        time.sleep(poll_interval_s)
-
-    for thread in threads[1:]:
-        thread.join(timeout=5)
+        drain_deadline = time.monotonic() + 2
+        for thread in threads:
+            thread.join(timeout=max(0, drain_deadline - time.monotonic()))
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:

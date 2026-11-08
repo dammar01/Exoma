@@ -94,6 +94,15 @@ def _test_atomic_helpers_keep_their_contract() -> None:
                 stat.S_IMODE(bin_path.stat().st_mode) == 0o640,
                 "mode is applied to the staged file before the move",
             )
+            from exoma.core.workspace.workspace_paths import atomic_write_json
+            for mode in (0o600, 0o640, 0o755):
+                for writer in (lambda: atomic_write_text(bin_path, "text"),
+                               lambda: atomic_write_bytes(bin_path, b"bytes"),
+                               lambda: atomic_write_json(bin_path, {"mode": mode})):
+                    bin_path.chmod(mode)
+                    writer()
+                    assert_true(stat.S_IMODE(bin_path.stat().st_mode) == mode,
+                                "generic text/bytes/JSON replacement preserves existing private/executable mode")
         try:
             atomic_write_text(text_path, 123)  # type: ignore[arg-type]
             raised = False

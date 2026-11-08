@@ -528,6 +528,11 @@ def _reused_evidence_reports_its_anchor_ratio() -> None:
             "anchors" not in stored,
             f"and the stored digest is not annotated with this run's numbers: {stored}",
         )
+        source = root / "src.py"
+        source.write_text("# inserted\n" + source.read_text(encoding="utf-8"), encoding="utf-8")
+        assert_true(executor._maybe_reuse(root, "analyze", "ratio query", session_id, context) is None
+                    and executor._reuse_outcome == "stale",
+                    "executor falls through to delegation rather than serving moved citations")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

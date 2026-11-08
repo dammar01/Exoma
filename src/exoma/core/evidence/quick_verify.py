@@ -148,7 +148,7 @@ SCOPE_WIDE_FILES = 30
 SCOPE_WIDE_LINES = 2000
 
 
-def changed_file_stats(project_root: Path) -> dict[str, tuple[int, int]]:
+def changed_file_stats(project_root: Path, *, errors: list[str] | None = None) -> dict[str, tuple[int, int]]:
     """Per-file (added, deleted) line counts for the working tree, keyed like
     `changed_files`.
 
@@ -161,23 +161,27 @@ def changed_file_stats(project_root: Path) -> dict[str, tuple[int, int]]:
     `-` in numstat and land as (0, 0): they have no line count to report, and inventing
     one would put weight on the exact files whose size says least about review effort.
 
-    Silent on failure, like `_changed_files_block`: no git, no repo, or a detached
-    worktree means no measurement, never a wrong one.
+    Optional `errors` reports unavailable inputs without exposing raw Git output.
     """
     stats: dict[str, tuple[int, int]] = {}
+    errors = [] if errors is None else errors
     # -z, so a name keys the same as in `changed_files` (_git_fields). A row is
     # `<added>\t<deleted>\t<path>`; a rename leaves the path empty and its source and
     # destination follow as the next two fields, the destination being the file now.
     fields, _error = _git_fields(["git", "diff", "--numstat", "-z", "HEAD", "--"], project_root)
+    if _error:
+        errors.append("tracked_changes_unavailable")
     at = 0
     while at < len(fields):
         parts = fields[at].split("\t", 2)  # -z leaves a tab in a name unquoted
         at += 1
         if len(parts) < 3:
+            errors.append("malformed_numstat")
             continue
         added, deleted, rel = parts[0], parts[1], parts[2]
         if not rel:
             if at + 1 >= len(fields):
+                errors.append("malformed_rename")
                 break
             rel = fields[at + 1]
             at += 2
@@ -188,15 +192,18 @@ def changed_file_stats(project_root: Path) -> dict[str, tuple[int, int]]:
             int(deleted) if deleted.isdigit() else 0,
         )
 
-    untracked, _ = _git_fields(
+    untracked, untracked_error = _git_fields(
         ["git", "ls-files", "-z", "--others", "--exclude-standard"], project_root
     )
+    if untracked_error:
+        errors.append("untracked_changes_unavailable")
     for rel in untracked:
         if rel in stats or _IGNORED_PARTS & set(Path(rel).parts):
             continue
         try:
             text = (project_root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
+            errors.append("untracked_content_unreadable")
             continue
         stats[rel] = (len(text.splitlines()), 0)
     return stats
@@ -228,18 +235,23 @@ def scope_width(project_root: Path, editable_scope: list[str] | None) -> dict:
     anyone wrote down what the task was supposed to touch. `outside_scope` stays empty
     in that case rather than accusing every file of being unplanned.
     """
-    stats = changed_file_stats(project_root)
+    errors: list[str] = []
+    stats = changed_file_stats(project_root, errors=errors)
     scope = [s for s in (editable_scope or []) if str(s).strip()]
     outside = (
         sorted(rel for rel in stats if not _within_scope(rel, scope)) if scope else []
     )
     total_lines = sum(added + deleted for added, deleted in stats.values())
     return {
-        "files": len(stats),
-        "lines": total_lines,
-        "outside_scope": outside,
+        "files": None if errors else len(stats),
+        "lines": None if errors else total_lines,
+        "outside_scope": None if errors else outside,
         "scope_declared": bool(scope),
-        "wide": len(stats) > SCOPE_WIDE_FILES or total_lines > SCOPE_WIDE_LINES,
+        "wide": None if errors else len(stats) > SCOPE_WIDE_FILES or total_lines > SCOPE_WIDE_LINES,
+        "measurement": "unknown" if "tracked_changes_unavailable" in errors and "untracked_changes_unavailable" in errors else "partial" if errors else "complete",
+        "measurement_errors": sorted(set(errors)),
+        "observed_files": len(stats),
+        "observed_lines": total_lines,
     }
 
 

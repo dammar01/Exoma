@@ -18,6 +18,7 @@ that cannot resolve the repository must produce a readable block reason, not a t
 from inside a subprocess call four frames down.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -26,14 +27,19 @@ from exoma.utils import osutil
 GIT_TIMEOUT_SECONDS = 10
 
 
-def _git(args: list[str], cwd: Path) -> str | None:
-    """stdout of `git <args>`, stripped. None when git fails, is missing, or hangs."""
+def _git_bytes(args: list[str], cwd: Path) -> bytes | None:
+    """Raw stdout of `git <args>`. None when git fails, is missing, or hangs.
+
+    Git writes path names and ref names as UTF-8 bytes. Text mode would decode them in
+    the locale's code page (cp1252 on most Windows machines), so `café.py` came back as a
+    different name, and a byte with no cp1252 mapping raised UnicodeDecodeError past the
+    OSError guard. Its universal newlines also rewrote a `\\r` inside a NUL record.
+    """
     try:
         completed = subprocess.run(
             ["git", *args],
             cwd=str(cwd),
             capture_output=True,
-            text=True,
             timeout=GIT_TIMEOUT_SECONDS,
             **osutil.hidden_run_kwargs(),
         )
@@ -41,7 +47,31 @@ def _git(args: list[str], cwd: Path) -> str | None:
         return None
     if completed.returncode != 0:
         return None
-    return completed.stdout.strip()
+    return completed.stdout
+
+
+def _git(args: list[str], cwd: Path, *, strip_output: bool = True) -> str | None:
+    """stdout of `git <args>`, stripped. None when git fails, is missing, or hangs.
+
+    Decoded with `os.fsdecode`, the encoding the file system API takes back, so a name
+    read here opens the same file. Undecodable output is a failure (None), never a raise.
+    """
+    raw = _git_bytes(args, cwd)
+    if raw is None:
+        return None
+    try:
+        out = os.fsdecode(raw)
+    except UnicodeError:
+        return None
+    return out.strip() if strip_output else out
+
+
+def _nul_records(raw: bytes) -> list[str] | None:
+    """NUL-separated records, each decoded on its own. None when one cannot be decoded."""
+    try:
+        return [os.fsdecode(record) for record in raw.split(b"\0") if record]
+    except UnicodeError:
+        return None
 
 
 def toplevel(project_root: Path) -> Path | None:
@@ -76,6 +106,58 @@ def head_commit(project_root: Path) -> str | None:
     return _git(["rev-parse", "HEAD"], project_root)
 
 
+def changed_paths(project_root: Path, ref: str = "HEAD") -> set[str] | None:
+    """Project-relative paths changed against a ref, including staged/untracked files.
+
+    Compare both the index and working tree: an unstaged revert must not hide a staged
+    edit. NUL records preserve whitespace and newlines in filenames. None means that
+    at least one comparison failed, never that the tree was clean.
+
+    Index entries marked assume-unchanged or skip-worktree are included as well: Git
+    never looks at a flagged entry's file, so both diffs call it unchanged however the
+    file was edited. Counting it as changed only sends its claims to the anchor check;
+    the real index is never modified.
+    """
+    commit = _git(["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"], project_root)
+    if not commit:
+        return None
+    paths: set[str] = set()
+    for args in (
+        ["diff", "--no-renames", "--relative", "--name-only", "-z", commit, "--", "."],
+        ["diff", "--cached", "--no-renames", "--relative", "--name-only", "-z", commit, "--", "."],
+        ["ls-files", "--others", "--exclude-standard", "-z", "--", "."],
+    ):
+        raw = _git_bytes(args, project_root)
+        records = None if raw is None else _nul_records(raw)
+        if records is None:
+            return None
+        paths.update(records)
+    flagged = _flagged_paths(project_root)
+    if flagged is None:
+        return None
+    paths.update(flagged)
+    return paths
+
+
+def _flagged_paths(project_root: Path) -> list[str] | None:
+    """Project-relative paths of index entries marked assume-unchanged or skip-worktree.
+
+    `ls-files -v` tags each entry: lowercase is assume-unchanged, `S` skip-worktree, `s`
+    both. None when the index cannot be listed or a name cannot be decoded.
+    """
+    raw = _git_bytes(["ls-files", "-v", "-z", "--", "."], project_root)
+    if raw is None:
+        return None
+    flagged: list[str] = []
+    for entry in raw.split(b"\0"):
+        if len(entry) > 2 and entry[1:2] == b" " and (entry[:1].islower() or entry[:1] == b"S"):
+            try:
+                flagged.append(os.fsdecode(entry[2:]))
+            except UnicodeError:
+                return None
+    return flagged
+
+
 def branches(project_root: Path) -> list[str] | None:
     """Every local branch name. None when the repository cannot be read.
 
@@ -97,7 +179,9 @@ def blob_oid(project_root: Path, path: str, ref: str = "HEAD") -> str | None:
     proves nothing on its own — a touched comment changes it — which is why this sits
     above the anchor check in the ladder rather than replacing it.
     """
-    out = _git(["rev-parse", f"{ref}:{path}"], project_root)
+    # Sources are project-relative. A bare ref:path is repository-relative, and may
+    # silently resolve a different same-named file above a monorepo subproject.
+    out = _git(["rev-parse", f"{ref}:./{path}"], project_root)
     return out or None
 
 
@@ -131,8 +215,9 @@ def is_ignored(project_root: Path, path: str) -> bool:
         completed = subprocess.run(
             ["git", "check-ignore", "-q", "--", path],
             cwd=str(project_root),
+            # Bytes: only the return code is read, and a locale decode of an error that
+            # names a non-ASCII path would raise past the OSError guard.
             capture_output=True,
-            text=True,
             timeout=GIT_TIMEOUT_SECONDS,
             **osutil.hidden_run_kwargs(),
         )

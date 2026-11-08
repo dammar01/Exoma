@@ -74,7 +74,9 @@ from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E40
 from tests.checks.self_update import _test_self_update  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.promote import _test_promote_boundaries  # noqa: E402
+from tests.checks.knowledge_retrieve import _test_knowledge_retrieval  # noqa: E402
 from tests.checks.execution import _test_execution_chain  # noqa: E402
+from tests.checks.codex_auto_review import check_codex_auto_review  # noqa: E402
 from tests.checks.e2e_browser import _test_e2e_browser_session  # noqa: E402
 from tests.checks.e2e_doctor import _test_e2e_doctor_readiness  # noqa: E402
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests  # noqa: E402
@@ -129,9 +131,10 @@ from tests.checks.installer import (  # noqa: E402
     _test_installer_text_merging,
     _test_provider_update,
 )
-from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission  # noqa: E402
+from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
+    _test_agy_guard_gitlinks,
     _test_agy_provider,
     _test_doctor_read_boundary_warning,
     _test_secret_files,
@@ -190,7 +193,13 @@ from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_key_pattern_needs_a_left_boundary, _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
-from tests.checks.manifest import _test_doctor_agrees_with_install_check, _test_malformed_manifest_entry_fails_closed, _test_manifest_matches_dist  # noqa: E402
+from tests.checks.manifest import (  # noqa: E402
+    _run_package_artifacts,
+    _test_doctor_agrees_with_install_check,
+    _test_malformed_manifest_entry_fails_closed,
+    _test_manifest_matches_dist,
+    _test_package_artifacts_dispatch,
+)
 from tests.checks.codex_write_probe import _test_codex_sandbox_blocks_writes  # noqa: E402
 from tests.checks.atomic_writers import (  # noqa: E402
     _test_atomic_helpers_keep_their_contract,
@@ -229,6 +238,8 @@ SUITES: dict[str, tuple] = {
     "hook-flavours": (_test_every_shipped_hook_is_a_launcher_and_its_module, "every shipped hook is a bash launcher beside its .py, all listed by workflow_hooks.py; no .ps1 ships"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
     "manifest": (_test_manifest_matches_dist, "src/exoma/_bundle/manifest.json matches the dist/ tree it describes"),
+    "package-artifacts": (_run_package_artifacts, "explicit opt-in: build current wheel/sdist and smoke each in a clean environment"),
+    "package-artifacts-dispatch": (_test_package_artifacts_dispatch, "both CLI spellings run artifact smoke once; ordinary suites never build"),
     "manifest-malformed": (_test_malformed_manifest_entry_fails_closed, "a malformed manifest entry fails bundle integrity by name"),
     "doctor-rendered": (_test_doctor_agrees_with_install_check, "doctor treats install-rendered files and an unselected provider's project boundary as clean, like install --check"),
     "workflow-layout": (_test_workflow_layout, ".workflow/ keeps editable files, data/ the rest; unmigrated workspaces and hooks follow the same rule"),
@@ -245,6 +256,7 @@ SUITES: dict[str, tuple] = {
     "codex-write-probe": (_test_codex_sandbox_blocks_writes, "opt-in (WORKFLOW_CODEX_PROBE=1): a real codex call cannot write under --sandbox read-only"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
+    "agy-gitlinks": (_test_agy_guard_gitlinks, "dirty gitlinks preserve ordinary mutation detection without recursive content reads"),
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
     "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
@@ -254,7 +266,7 @@ SUITES: dict[str, tuple] = {
     "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
     "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),
-    "evidence-anchor-relocation": (_test_evidence_anchor_relocation, "evidence anchors survive a line moving"),
+    "evidence-anchor-relocation": (_test_evidence_anchor_relocation, "artifact reuse rejects moved citation lines while immutable evidence stays intact"),
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),
     "evidence-lock-file": (_test_evidence_lock_file, "evidence.jsonl.lock is a persistent one-byte OS lock that excludes other processes"),
     "runtime-guards": (_test_runtime_guard_cleanup, "clean removes the runtime-lock guards of dead sessions, keeps live and held ones (DEC-013)"),
@@ -282,6 +294,7 @@ SUITES: dict[str, tuple] = {
     "e2e-metrics": (_test_e2e_metrics, "e2e runs as quality rows: rates per run kind, token join, reproducibility, delegated baseline"),
     "e2e-doctor": (_test_e2e_doctor_readiness, "doctor reports verify-browser readiness from package metadata and probes nothing"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),
+    "worker-logs": (_test_worker_log_preservation, "same-job recovery preserves previous worker log output"),
     "job-store": (_test_job_store_not_writable, "an unwritable job store names the sandbox root to grant, in submit and in doctor"),
     "workspace-release": (_test_workspace_release_guards, "lock release guards"),
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
@@ -292,6 +305,7 @@ SUITES: dict[str, tuple] = {
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
     "execution-chain": (_test_execution_chain, "plan-record refuses a proceed with open questions; execute-begin needs the user's own -y; verify writes its verdict"),
     "promote-boundaries": (_test_promote_boundaries, "promoted knowledge stays inside the project and is part of evidence reuse identity"),
+    "knowledge-retrieve": (_test_knowledge_retrieval, "retrieval checks source freshness, detached HEAD, and staged/unstaged changes"),
     "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
     "hidden-spawn": (_test_every_spawn_hides_its_console, "every runtime subprocess hides its console on Windows"),
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
@@ -338,6 +352,7 @@ SUITES: dict[str, tuple] = {
     "agy-host": (_test_agy_host_contract, "the Agy host wrapper answers every PreToolUse with a decision, fails open, passes [WORKFLOW_AGENT] turns, and gates through the same preflight_refusal as the Claude hooks (writes, precision reads, verify test selection)"),
     "codex-host": (_test_codex_host_contract, "Codex hooks bind sessions, route delegation, gate tools, and skip second-agent processes"),
     "codex-host-install": (_test_codex_host_install, "Codex host and provider blocks coexist; install and uninstall preserve user text and hooks"),
+    "codex-auto-review-context": (check_codex_auto_review, "owned additive reviewer context: preserved user policy, choice, one config transaction, rollback and uninstall"),
     "opencode-host": (_test_opencode_host_contract, "OpenCode hooks bind on the first prompt, gate tools through the shared policy, and skip second-agent processes"),
     "opencode-host-install": (_test_opencode_host_install, "OpenCode host installs beside its provider block, passes --check, and is withdrawn cleanly"),
     "host-contract-render": (_test_contract_renders_per_host, "one contract source rendered per host: no Claude-only text, placeholder or HOST marker outside Claude's"),

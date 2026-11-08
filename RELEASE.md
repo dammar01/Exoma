@@ -137,8 +137,11 @@ accident.
 ## What CI already covers
 
 `.github/workflows/ci.yml` runs steps 2, 3 and 6 (without `e2e-smoke`, `--full`, or real
-use) on every push and pull request, on Linux and Windows. Its `dist` job covers the clean
-wheel install of step 6.
+use) on every push and pull request, on Linux, Windows and macOS with Python 3.10/3.13.
+Its `dist` matrix uses Python 3.13 on all three OSes: the wheel smoke covers a clean
+install, version, noninteractive host install, init and generated inspect; a separate clean
+venv installs the sdist and checks import, bundle presence and version. Only Ubuntu uploads
+the publish artifact. The full source suite is not rerun against either installed artifact.
 
 CI bumps nothing and tags nothing. A pushed tag triggers `publish.yml` (step 8); everything
 else — deciding the number and running steps 1, 4, 5, 6b, 7 and 9 — is still a human's. The delegated end-to-end run

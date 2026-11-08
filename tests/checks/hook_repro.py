@@ -282,7 +282,7 @@ def _pin_follows_agent_home(r: _Repro) -> None:
 
 
 def _policy_helper_missing(r: _Repro) -> None:
-    """A hooks directory without workflow_policy.py (a partial install) fails open, silently."""
+    """A partial install stays fail-open, with a minimal execution-gate warning and row."""
     m = r.bind("p1")
     hooks = r.base / "hooks-no-policy"
     shutil.copytree(HOOKS, hooks, ignore=shutil.ignore_patterns("__pycache__", "workflow_policy.py"))
@@ -293,8 +293,28 @@ def _policy_helper_missing(r: _Repro) -> None:
         code, _, _ = r.prompt("p1", "/.analyze why")
         assert_true(code == 0 and not (r.runtime(m) / "delegated.marker").exists(),
                     f"partial install: intent-gate-set arms nothing and exits 0, got {code}")
-        code = r.tool("p1", "execution-gate", "Write", {"file_path": str(r.outside / "x.txt"), "content": "x"})
+        code, out, err = r.run("execution-gate", {
+            "session_id": "p1", "cwd": str(r.project), "hook_event_name": "PreToolUse",
+            "tool_name": "Write", "tool_input": {"file_path": str(r.outside / "x.txt"), "content": "x"}})
         assert_true(code == 0, f"partial install: execution-gate fails open, got {code}")
+        try:
+            message = json.loads(out).get("systemMessage", "")
+        except ValueError:
+            message = ""
+        assert_true("[EXECUTION GATE: unavailable]" in message and "helper_unavailable" in message,
+                    f"partial install: the fail-open is announced, not silent: {out!r}")
+        assert_true("Traceback" not in err, f"partial install: no traceback on the fail-open path: {err!r}")
+        skips = r.home / ".claude" / "gate-skips.jsonl"
+        rows = [json.loads(line) for line in skips.read_text(encoding="utf-8").splitlines()]
+        assert_true(any(row.get("reason") == "helper_unavailable" and row.get("root_digest") for row in rows),
+                    "a missing helper still records an attributable fallback observation")
+        assert_true(str(r.project) not in skips.read_text(encoding="utf-8"),
+                    "emergency logging does not expose the raw project path")
+        prior = skips.read_text(encoding="utf-8")
+        code, out, _ = r.run("execution-gate", {"cwd": str(r.outside), "session_id": "outside",
+                                               "tool_name": "Write", "tool_input": {}})
+        assert_true(code == 0 and not out.strip() and skips.read_text(encoding="utf-8") == prior,
+                    "a missing helper does not produce false warnings in non-Exoma projects")
         code, _, _ = r.run("status-guard", {"session_id": "p1", "cwd": str(r.project), "hook_event_name": "Stop"})
         assert_true(code == 0, f"partial install: status-guard fails open, got {code}")
         after = log_path.read_text(encoding="utf-8").count("--- ") if log_path.exists() else 0

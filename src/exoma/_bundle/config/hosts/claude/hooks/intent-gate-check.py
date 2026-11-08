@@ -165,7 +165,7 @@ try:
     if not main_id or not root:
         sys.exit(0)
 
-    runtime_dir = os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
+    runtime_dir = wp.runtime_dir(root, main_id)
     marker = os.path.join(runtime_dir, "delegated.marker")
     local_flag = os.path.join(runtime_dir, "local_mode.flag")
 

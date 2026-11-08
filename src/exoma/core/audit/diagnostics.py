@@ -1,5 +1,6 @@
 """Readiness checks: doctor, sweep, bundle integrity, MCP scan, prune."""
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -157,6 +158,8 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=GATE_SKIP_WINDOW_DAYS)
     own_root = os.path.normcase(os.path.abspath(str(project_root)))
+    canonical_root = os.path.normcase(os.path.realpath(str(project_root)))
+    own_digest = hashlib.sha256(canonical_root.encode("utf-8")).hexdigest()
     files: list[tuple[Path, bool]] = []
     sessions = Path(data_dir) / "sessions"
     try:
@@ -165,6 +168,7 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
         pass
     files.append((Path(os.path.expanduser("~")) / ".claude" / GATE_SKIPS_FILE, True))
     by_reason: dict[str, int] = {}
+    by_hook: dict[str, dict[str, int]] = {}
     latest = None
     for path, shared in files:
         try:
@@ -183,10 +187,15 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
                 continue
             if shared:
                 root = row.get("root")
-                if not root or os.path.normcase(os.path.abspath(str(root))) != own_root:
+                matches = row.get("root_digest") == own_digest or (
+                    root and os.path.normcase(os.path.abspath(str(root))) == own_root
+                )
+                if not matches:
                     continue
             reason = str(row.get("reason") or "unknown")
             by_reason[reason] = by_reason.get(reason, 0) + 1
+            hook_reasons = by_hook.setdefault(str(row.get("hook") or "preflight"), {})
+            hook_reasons[reason] = hook_reasons.get(reason, 0) + 1
             if latest is None or at > latest:
                 latest = at
     if not by_reason:
@@ -194,6 +203,7 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
     return {
         "count": sum(by_reason.values()),
         "by_reason": by_reason,
+        "by_hook": by_hook,
         "latest": latest.isoformat() if latest else None,
     }
 
@@ -873,12 +883,25 @@ def run_doctor(
     # issues; they are named so a gate that was off does not look like a gate that held.
     skips = _gate_skips(project_root, paths["data_dir"])
     checks["gate_skips"] = skips or "none"
-    if skips:
-        reasons = ", ".join(f"{k} x{v}" for k, v in sorted(skips["by_reason"].items()))
+    policy = (parsed_config or {}).get("policies") or {}
+    mode = str(policy.get("enforcement") or "hybrid") if isinstance(policy, dict) else "unknown"
+    execution_skips = (skips or {}).get("by_hook", {}).get("execution-gate", {})
+    failures = {reason: count for reason, count in execution_skips.items() if reason != "enforcement_off"}
+    checks["execution_gate"] = {
+        "configured_mode": mode,
+        "configuration_status": "disabled" if mode == "off" else "enabled" if mode in ("hybrid", "warn") else "unknown",
+        # No skips is not evidence that a hook ran, was trusted, or enforced a decision.
+        "observation_status": "unavailable_reported" if failures else "unconfirmed",
+        "recent_fail_open": failures,
+    }
+    actionable_skips = {reason: count for reason, count in (skips or {}).get("by_reason", {}).items()
+                        if reason != "enforcement_off"}
+    if actionable_skips:
+        reasons = ", ".join(f"{k} x{v}" for k, v in sorted(actionable_skips.items()))
         recommended_fixes.append(
-            f"Pre-flight gate let {skips['count']} delegation(s) through in the last "
+            f"Workflow gates reported {sum(actionable_skips.values())} skipped check(s) in the last "
             f"{GATE_SKIP_WINDOW_DAYS} days ({reasons}); if you did not set the escape, check "
-            "local_mode.flag / WORKFLOW_LOCAL_MODE and the session binding (gate-skips.jsonl)"
+            "local_mode.flag / WORKFLOW_LOCAL_MODE, session binding, and hook installation (gate-skips.jsonl)"
         )
 
     # Release integrity: the installed bundle must match the package's _bundle/manifest.json

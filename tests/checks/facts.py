@@ -289,8 +289,7 @@ def _test_fact_selection() -> None:
 
 
 def _test_evidence_anchor_relocation() -> None:
-    """Evidence survives a shifted citation. Freshness demands EVERY anchor hold, so one
-    insertion above one cited line used to discard a whole artifact and force a re-run."""
+    """Immutable evidence must not return citations with obsolete line numbers."""
     import shutil as _shutil
 
     from exoma.core.evidence import evidence_store
@@ -307,7 +306,7 @@ def _test_evidence_anchor_relocation() -> None:
         content = "FINDING [src.py:3]"
         context = {"model": "provider/model-a", "agent": "plan"}
         write_response_snapshot(root, content, "run-a", session_id)
-        evidence_store.record(
+        entry = evidence_store.record(
             root,
             "analyze",
             "shifted query",
@@ -322,13 +321,18 @@ def _test_evidence_anchor_relocation() -> None:
             is not None,
             "fixture must be reusable before the file is touched",
         )
+        assert_true(not evidence_store._is_fresh(root, {**entry, "anchors": [{}]}),
+                    "missing anchor position and hash cannot certify cached evidence")
 
         src.write_text("# added\n# added two\n" + src.read_text(encoding="utf-8"), encoding="utf-8")
         assert_true(
             evidence_store.find_fresh(root, "analyze", "shifted query", context=context)
-            is not None,
-            "an artifact whose only change is a shifted anchor line must stay fresh",
+            is None,
+            "a shifted citation needs fresh evidence rather than returning the old line number",
         )
+        artifact = workflow_paths(root, session_id)["logs_dir"] / "run-a" / "output.raw.md"
+        assert_true(artifact.read_text(encoding="utf-8") == content,
+                    "rejecting relocated reuse never rewrites the original artifact")
 
         src.write_text(
             src.read_text(encoding="utf-8").replace("anchor_3 = 3", "anchor_3 = 300"),

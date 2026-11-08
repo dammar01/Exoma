@@ -144,3 +144,23 @@ def _knowledge_is_part_of_evidence_identity() -> None:
 def _test_promote_boundaries() -> None:
     _knowledge_dir_is_contained()
     _knowledge_is_part_of_evidence_identity()
+    # Exercise the same knowledge/CLI checks used by the CI e2e entry point, so a
+    # changed applicability contract cannot leave its non-Git fixture unchecked.
+    import contextlib
+    import io
+    from unittest.mock import patch
+    from tools.e2e import e2e_promote
+    from tools.e2e.e2e_support import Report
+
+    with tempfile.TemporaryDirectory(prefix="promote-contract-") as directory:
+        original_mkdtemp = tempfile.mkdtemp
+
+        def fixture_directory(*args, **kwargs):
+            kwargs["dir"] = directory
+            return original_mkdtemp(*args, **kwargs)
+
+        report = Report()
+        output = io.StringIO()
+        with patch.object(e2e_promote.tempfile, "mkdtemp", fixture_directory), contextlib.redirect_stdout(output):
+            e2e_promote.promote_checks(report)
+        assert_true(report.failed == 0, f"CI promote checks: {output.getvalue()}")

@@ -304,17 +304,39 @@ def _uninstall_codex_hooks(plan: Plan, apply: bool, backup_root: Path) -> bool:
 
 
 def _uninstall_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
-    """Take Exoma's job-store grant block out of ~/.codex/config.toml; the rest stays."""
+    """Remove grant and owned reviewer context together in one receipted config write."""
+    import stat
+    from exoma.installer import codex_policy
+    from exoma.core.workspace.workspace_paths import atomic_write_bytes
+
     dest = codex_config_dest()
     if not dest.is_file():
         return
-    text = _read_text_lenient(dest)
-    if codex_grant_state(text) != "managed" and CODEX_GRANT_MARKERS[0] not in text:
+    try:
+        text = dest.read_bytes().decode("utf-8")
+    except (OSError, UnicodeError):
+        plan.warn(f"{dest}: unreadable UTF-8 config preserved")
+        plan.codex_policy_problem = True
+        return
+    has_grant = CODEX_GRANT_MARKERS[0] in text
+    has_policy = codex_policy.START in text or codex_policy.META in text
+    if not has_grant and not has_policy:
         return
     remaining = strip_codex_grant(text)
-    if remaining == text:
+    if has_grant and remaining == text:
         plan.warn(f"{dest}: the Exoma grant markers do not pair up — left as is; remove the block by hand")
         return
+    if has_policy:
+        if not codex_policy.location_supported(HOME):
+            plan.warn(f"{dest}: Auto-review context support-unverified: CODEX_HOME differs; preserved")
+            plan.codex_policy_problem = True
+            return
+        policy = codex_policy.merge(remaining, "", False)
+        if policy["error"]:
+            plan.warn(f"{dest}: Auto-review context {policy['status']}: {policy['error']}; config preserved")
+            plan.codex_policy_problem = True
+            return
+        remaining = policy["text"]
     if not remaining.strip():
         _remove_receipted(dest, CODEX_CONFIG_KEY, plan, apply, backup_root, "held only Exoma's job store grant")
         return
@@ -322,7 +344,8 @@ def _uninstall_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
     saved = _backup(dest, backup_root, plan, apply, f"uninstall/{CODEX_CONFIG_KEY}")
     plan.add("merge", dest, "removed Exoma's job store grant, kept your settings")
     if apply:
-        dest.write_text(remaining, encoding="utf-8")
+        mode = stat.S_IMODE(dest.stat().st_mode)
+        atomic_write_bytes(dest, remaining.encode("utf-8"), fsync=True, mode=mode)
         _record("merge", dest, f"uninstall/{CODEX_CONFIG_KEY}", saved, pre_sha256)
 
 
@@ -450,4 +473,4 @@ def run_uninstall(apply: bool) -> int:
         print("  undo with: exoma install --rollback --apply")
     else:
         print("  DRY RUN — nothing was written. Re-run with --apply to uninstall.")
-    return 0
+    return 1 if plan.codex_policy_problem else 0

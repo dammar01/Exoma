@@ -102,6 +102,10 @@ def _stored_agy_opt_out() -> bool:
     return _stored_mode().get("agy_permissions_opt_out") is True
 
 
+def _stored_codex_auto_review_context() -> bool:
+    return _stored_mode().get("codex_auto_review_context") is True
+
+
 def _store_install_mode(
     only_command: bool,
     hosts: tuple[str, ...],
@@ -111,6 +115,7 @@ def _store_install_mode(
     plan: Plan,
     apply: bool,
     backup_root: Path,
+    codex_auto_review_context: bool | None = None,
 ) -> None:
     """Persist every choice an upgrade without flags must keep: the intent mode, the hosts,
     the Agy permission rules' state, an explicit opt-out of them, and the rules Exoma added
@@ -122,6 +127,8 @@ def _store_install_mode(
             "agy_permissions": bool(agy_permissions),
             "agy_permissions_opt_out": bool(agy_opt_out),
             "agy_permission_rules": list(agy_rules),
+            **({"codex_auto_review_context": codex_auto_review_context}
+               if codex_auto_review_context is not None else {}),
         },
         indent=2,
     ) + "\n"

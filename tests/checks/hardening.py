@@ -283,7 +283,7 @@ def _check_job_lock_released_when_save_fails() -> None:
 
     root = Path(tempfile.mkdtemp(prefix="aw-joblock-"))
     try:
-        for finish in ("complete", "fail"):
+        for finish in ("complete", "fail", "reap"):
             manager = JobManager(root / f"jobs-{finish}")
             job = manager.create_job("analyze", "t", f"sess-{finish}", str(root), None)
             lock = manager._lock_path(f"sess-{finish}")
@@ -293,15 +293,24 @@ def _check_job_lock_released_when_save_fails() -> None:
                 raise OSError("simulated disk failure")
 
             manager._save = broken_save
+            killed = []
+            manager._kill_worker = lambda rec: killed.append(rec["job_id"]) or {"ok": True}
             try:
                 if finish == "complete":
                     manager.complete_job(job["job_id"], {"ok": True})
+                elif finish == "reap":
+                    outcome = manager.reap_stalled(job["job_id"], "worker_stalled", "stalled", "inspect")
                 else:
                     manager.fail_job(job["job_id"], "boom")
                 raised = False
             except OSError:
                 raised = True
-            assert_true(raised, "the save failure itself is still raised")
+            if finish == "reap":
+                assert_true(not raised and killed == [job["job_id"]]
+                            and outcome["meta"].get("job_record_error"),
+                            "reaping must attempt termination and retain storage diagnostics")
+            else:
+                assert_true(raised, "the save failure itself is still raised")
             assert_true(
                 not lock.exists(),
                 f"{finish}_job left the session locked after its save failed",
@@ -318,6 +327,90 @@ def _check_job_lock_released_when_save_fails() -> None:
             not manager._lock_path("sess-corrupt").exists(),
             "a job whose record could not be read left its session locked",
         )
+        from unittest.mock import patch
+        from exoma import cli
+        from exoma.core.jobs import job_lifecycle
+        manager = JobManager(root / "jobs-registration")
+        job = manager.create_job("analyze", "t", "registration", str(root), None)
+        with patch.object(cli, "JOB_MANAGER", manager), \
+                patch.object(manager, "set_worker_pid", side_effect=OSError("registration disk failure")):
+            outcome = job_lifecycle.run_worker(job["job_id"])
+        assert_true(outcome["meta"].get("error_type") == "worker_crashed"
+                    and not manager._lock_path("registration").exists(),
+                    "registration failures must use the worker crash guard and release its lock")
+        stored = manager.get_job(job["job_id"]) or {}
+        kept = stored.get("output") or {}
+        kept_meta = kept.get("meta") or {}
+        remedy = (outcome.get("meta") or {}).get("next_action")
+        assert_true(stored.get("status") == "failed" and kept.get("ok") is False
+                    and kept_meta.get("error_type") == "worker_crashed"
+                    and remedy and kept_meta.get("next_action") == remedy
+                    and kept.get("job_id") == job["job_id"],
+                    f"the job record keeps the typed crash a later reader attaches to: {stored}")
+        attached = manager.get_result(job["job_id"])
+        assert_true(attached.get("ok") is False and attached.get("status") == "failed"
+                    and (attached.get("meta") or {}).get("error_type") == "worker_crashed"
+                    and (attached.get("meta") or {}).get("next_action") == remedy,
+                    f"a reader attaching later gets the typed crash and its remedy: {attached}")
+        # The record cannot be written either: the typed result still reaches the caller.
+        manager = JobManager(root / "jobs-registration-unsaved")
+        job = manager.create_job("analyze", "t", "registration-unsaved", str(root), None)
+        with patch.object(cli, "JOB_MANAGER", manager), \
+                patch.object(manager, "set_worker_pid", side_effect=OSError("registration disk failure")), \
+                patch.object(manager, "fail_job", side_effect=OSError("record disk failure")):
+            outcome = job_lifecycle.run_worker(job["job_id"])
+        assert_true(outcome.get("ok") is False and outcome["meta"].get("error_type") == "worker_crashed"
+                    and "record disk failure" in (outcome["meta"].get("job_record_error") or ""),
+                    f"a failed crash record is reported, not raised: {outcome}")
+        json.dumps(outcome)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_reap_when_job_storage_fails() -> None:
+    """Locking or loading the record fails: only a trusted snapshot licenses a kill."""
+    from unittest.mock import patch
+
+    from exoma.core.jobs.job_manager import JobManager
+
+    root = Path(tempfile.mkdtemp(prefix="aw-reap-storage-"))
+    try:
+        for failure in ("lock", "load"):
+            manager = JobManager(root / f"jobs-{failure}")
+            job = manager.create_job("analyze", "t", f"sess-{failure}", str(root), None)
+            observed = manager.get_job(job["job_id"])
+            killed = []
+            manager._kill_worker = lambda rec: killed.append(rec["job_id"]) or {"ok": True, "method": "test"}
+
+            target = "_job_mutation" if failure == "lock" else "_load"
+            with patch.object(manager, target, side_effect=OSError(f"{failure} unavailable")):
+                trusted = manager.reap_stalled(job["job_id"], "worker_died", "gone", "inspect",
+                                               observed=observed)
+                foreign = manager.reap_stalled(job["job_id"], "worker_died", "gone", "inspect",
+                                               observed={**observed, "job_id": "someone-else"})
+                blind = manager.reap_stalled(job["job_id"], "worker_died", "gone", "inspect")
+            assert_true(killed == [job["job_id"]],
+                        f"{failure}: only the matching snapshot reaches _kill_worker: {killed}")
+            assert_true(trusted.get("ok") is False and trusted["meta"].get("error_type") == "worker_died"
+                        and trusted["meta"].get("job_record_error")
+                        and trusted["meta"].get("job_record_written") is False,
+                        f"{failure}: storage failure stays typed and diagnostic: {trusted}")
+            for outcome in (foreign, blind):
+                assert_true(outcome["meta"]["kill"].get("reason") == "no_trusted_worker_record",
+                            f"{failure}: no trusted record means an explicit skipped kill: {outcome}")
+                json.dumps(outcome)
+            assert_true(manager._lock_path(f"sess-{failure}").exists(),
+                        f"{failure}: a reap that could not read the record leaves the session lock alone")
+            assert_true((manager.get_job(job["job_id"]) or {}).get("status") == job["status"],
+                        f"{failure}: nothing is published for a record that could not be read")
+        # A real kill through the fallback keeps every identity guard: this process is never a target.
+        manager = JobManager(root / "jobs-self")
+        job = manager.create_job("analyze", "t", "sess-self", str(root), None)
+        observed = {**manager.get_job(job["job_id"]), "worker_pid": os.getpid()}
+        with patch.object(manager, "_load", side_effect=OSError("record unreadable")):
+            outcome = manager.reap_stalled(job["job_id"], "worker_died", "gone", "inspect", observed=observed)
+        assert_true(outcome["meta"]["kill"].get("reason") == "self_pid",
+                    f"the fallback goes through _kill_worker's self-PID refusal: {outcome}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -575,6 +668,7 @@ def _test_hardening() -> None:
     _check_migration_rollback_failure_is_reported()
     _check_installer_receipt_is_incremental()
     _check_job_lock_released_when_save_fails()
+    _check_reap_when_job_storage_fails()
     _check_telemetry_failure_keeps_the_result()
     _check_opencode_env_is_project_scoped()
     _check_browser_read_refuses_metadata_addresses()

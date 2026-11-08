@@ -5,6 +5,7 @@ change?" is to ask the same code that performs the change.
 """
 
 import json
+import re
 from pathlib import Path
 
 from exoma.config.bundle_keys import provider_dir
@@ -20,6 +21,7 @@ from exoma.installer.base import (
     CODEX_CONFIG_KEY,
     CODEX_HOST_HOOKS,
     CODEX_HOST_INSTRUCTIONS,
+    CODEX_AUTO_REVIEW_POLICY,
     DIST_CONFIG,
     HOME,
     MARKERS,
@@ -50,6 +52,7 @@ from exoma.installer.rollback import (
     _installed_hosts,
     _stored_agy_permissions,
     _stored_only_command,
+    _stored_codex_auto_review_context,
 )
 from exoma.installer.settings import (
     _install_provider_config,
@@ -158,6 +161,19 @@ def _detect_project_root() -> Path | None:
     return None
 
 
+def manifest_error(manifest) -> str | None:
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), list):
+        return "manifest must be an object with a files list"
+    if "targets" in manifest and not isinstance(manifest["targets"], dict):
+        return "manifest targets must be an object"
+    for index, entry in enumerate(manifest["files"]):
+        if (not isinstance(entry, dict) or not isinstance(entry.get("path"), str)
+                or not entry["path"] or not isinstance(entry.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])):
+            return f"malformed manifest file entry {index}"
+    return None
+
+
 def _entries_by_path(manifest: dict) -> dict[str, dict]:
     """Well-formed manifest entries by path. A malformed one is left out here and comes
     back through `_orphaned_entries` as stale, instead of raising out of the check."""
@@ -190,12 +206,15 @@ def _bundle_stale(manifest: dict) -> list[str]:
     a dist/ edited without regenerating the manifest is exactly the half-finished state that
     must not reach ~/.claude.
     """
+    error = manifest_error(manifest)
+    if error:
+        return [error]
     by_path = _entries_by_path(manifest)
     stale: list[str] = []
     # Every host's sources, chosen or not, by their manifest key: one source rendered for
     # two hosts is stamped once.
     sources = list({bundle_key(source): (source, bundle_key(source)) for source, _d, _k in _targets()}.values())
-    for key in (AGY_HOST_PERMISSIONS, AGY_DOCTOR_FRAGMENT):
+    for key in (AGY_HOST_PERMISSIONS, AGY_DOCTOR_FRAGMENT, CODEX_AUTO_REVIEW_POLICY):
         if (DIST_CONFIG / key).exists():
             sources.append((DIST_CONFIG / key, key))
     settings_src = DIST_CONFIG / CLAUDE_SETTINGS
@@ -223,6 +242,10 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     compare whole-file; managed targets (CLAUDE.md, AGENTS.md) compare only the marker block,
     since the rest of those files is legitimately the user's own content.
     """
+    error = manifest_error(manifest)
+    if error:
+        print(f"[CHECK] invalid package: {error}")
+        return 1
     by_path = _entries_by_path(manifest)
     bundle_stale: list[str] = []
     installed_drift: list[str] = []
@@ -250,7 +273,9 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     for source, _dest, key in _targets():
         if all(k != key for _s, _d, k in checks):
             checks.append((source, None, key))
-    for key in (AGY_HOST_PERMISSIONS, AGY_DOCTOR_FRAGMENT):
+    # Same auxiliary sources as _bundle_stale: a template left out here could be edited
+    # without regenerating the manifest and still pass `--check`.
+    for key in (AGY_HOST_PERMISSIONS, AGY_DOCTOR_FRAGMENT, CODEX_AUTO_REVIEW_POLICY):
         if (DIST_CONFIG / key).exists():
             checks.append((DIST_CONFIG / key, None, key))
     settings_src = DIST_CONFIG / CLAUDE_SETTINGS
@@ -343,6 +368,19 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             # conflict: Exoma's block beside a table of the user's (invalid TOML, an install
             # takes the block out); broken: grant markers that do not pair up.
             installed_drift.append(f"{CODEX_CONFIG_KEY} (job store grant)")
+
+        from exoma.installer import codex_policy
+        enabled = _stored_codex_auto_review_context()
+        # The same classifier doctor uses (core/audit/bundle_integrity.py), so the two
+        # reports cannot disagree about one installation.
+        policy_status = codex_policy.installation_status(
+            config_text, DIST_CONFIG / CODEX_AUTO_REVIEW_POLICY, enabled, HOME
+        )
+        print(f"  Codex Auto-review context: {policy_status} (installation state; effective policy may be overridden)")
+        if policy_status == "missing":
+            installed_missing.append(f"{CODEX_CONFIG_KEY} (Auto-review context)")
+        elif policy_status not in ("installed", "disabled"):
+            installed_drift.append(f"{CODEX_CONFIG_KEY} (Auto-review context: {policy_status})")
 
     settings_dest = HOME / ".claude" / "settings.json"
     if settings_src.exists() and "claude" in hosts:

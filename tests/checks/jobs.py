@@ -311,6 +311,43 @@ def _test_submit_admission() -> None:
         _shutil.rmtree(root, ignore_errors=True)
 
 
+def _test_worker_log_preservation() -> None:
+    """Two spawns of the same job preserve both output segments and the public path."""
+    from unittest.mock import patch
+    from exoma.core.jobs import job_lifecycle
+
+    with tempfile.TemporaryDirectory(prefix="worker-log-") as directory:
+        root = Path(directory)
+        manager = JobManager(root / "jobs")
+        counter = []
+
+        def spawn(args, **kwargs):
+            stream = kwargs["stdout"]
+            counter.append(len(counter) + 1)
+            stream.write(f"attempt-output-{counter[-1]}\n")
+            stream.flush()
+            return type("Process", (), {"pid": os.getpid()})()
+
+        with patch.object(main, "JOB_MANAGER", manager), patch.object(main.subprocess, "Popen", spawn):
+            first = job_lifecycle._spawn_worker("same-job", str(root))
+            second = job_lifecycle._spawn_worker("same-job", str(root))
+        log = manager.log_path("same-job")
+        content = log.read_text(encoding="utf-8")
+        assert_true("attempt-output-1" in content and "attempt-output-2" in content,
+                    f"respawn preserves earlier output: {content}")
+        assert_true(content.count("--- worker spawn ") == 2, "spawn boundaries are visible")
+        assert_true(first["meta"]["log"] == second["meta"]["log"] == str(log), "log path remains compatible")
+        from unittest.mock import Mock
+        broken = Mock()
+        broken.write.side_effect = OSError("header unavailable")
+        with patch.object(main, "JOB_MANAGER", manager), \
+                patch.object(job_lifecycle, "open", return_value=broken, create=True), \
+                patch.object(main.subprocess, "Popen", return_value=type("Process", (), {"pid": os.getpid()})()):
+            result = job_lifecycle._spawn_worker("same-job", str(root))
+        assert_true(result["ok"] and broken.close.call_count == 1,
+                    "a failed log header closes its handle and still permits spawning")
+
+
 def _test_job_store_not_writable() -> None:
     """A sandbox that refuses the global job store gets the exact fix, not a shrug (CASE-034).
 

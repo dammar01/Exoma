@@ -95,3 +95,136 @@ def _test_e2e_supervisor() -> None:
     report = build_report(out["events"], _SCENARIO)
     assert_true(out["returncode"] == 2 and not out["malformed"], f"the real player speaks the protocol: {out}")
     assert_true(report["reason"] == "launch_failed" and report["browser_verdict"] == "incomplete", f"an unlaunchable browser is incomplete: {report['reason']}")
+    import os
+    import subprocess
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from exoma.core.evidence.e2e import supervisor
+    original_popen = subprocess.Popen
+    children = []
+    def spawn(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        children.append(child)
+        return child
+    def interrupt(_):
+        raise KeyboardInterrupt
+    clock = SimpleNamespace(monotonic=time.monotonic, sleep=interrupt)
+    with patch.object(supervisor, "time", clock), patch.object(supervisor.subprocess, "Popen", side_effect=spawn):
+        try:
+            supervisor.run_player([sys.executable, "-c", "import time; time.sleep(60)"],
+                                  stdin_payload="{}", env=os.environ.copy(), cwd=None,
+                                  idle_timeout_s=5, total_timeout_s=10)
+            raise AssertionError("interrupt must propagate")
+        except KeyboardInterrupt:
+            pass
+    assert_true(children and children[0].poll() is not None,
+                "interrupt after player spawn must clean up its owned process")
+    _measure_drain_after_fast_exit()
+
+
+_BURST = 1500
+_BURST_CHILD = (
+    "import json, sys, threading\n"
+    "def err():\n"
+    "    for _ in range(2000):\n"
+    "        sys.stderr.write('e' * 200 + '\\n')\n"
+    "t = threading.Thread(target=err); t.start()\n"
+    f"for i in range({_BURST}):\n"
+    "    sys.stdout.write(json.dumps({'type': 'progress', 'step': i, 'pad': 'x' * 200}) + '\\n')\n"
+    "    if i % 300 == 0:\n"
+    "        sys.stdout.write(json.dumps({'type': 'network', 'chunk': i}) + '\\n')\n"
+    "t.join()\n"
+    "sys.stdout.write(json.dumps({'type': 'result', 'status': 'finished'}) + '\\n')\n"
+    "sys.stdout.flush()\n"
+)
+
+
+def _measure_drain_after_fast_exit() -> None:
+    """The shared drain budget against a burst, simultaneous stderr, and an exit right after.
+
+    Measurement first (m8): this pins what the 2 s join budget retains today. A realistic
+    callback must keep every event through the terminal result; a callback slower than the
+    budget must never leave a run that looks complete while its tail is missing.
+    """
+    import os
+
+    def busy(seconds):
+        def callback(_event):
+            end = time.perf_counter() + seconds
+            while time.perf_counter() < end:
+                pass
+        return callback
+
+    for label, per_event in (("realistic", 0.0003), ("slow", 0.002)):
+        started = time.monotonic()
+        out = run_player([sys.executable, "-c", _BURST_CHILD], stdin_payload="{}", env=os.environ.copy(),
+                         cwd=None, idle_timeout_s=20, total_timeout_s=60, on_progress=busy(per_event),
+                         poll_interval_s=0.05)
+        snapshot = list(out["events"])  # what a consumer reading the result right away sees
+        elapsed = round(time.monotonic() - started, 2)
+        kinds = [event.get("type") for event in snapshot]
+        assert_true(out["returncode"] == 0 and not out["malformed"] and not out["timed_out"],
+                    f"{label}: the burst child exits cleanly: {out['returncode']} {out['malformed'][:2]}")
+        assert_true(len(out["stderr_tail"]) <= 200, f"{label}: stderr stays bounded")
+        if label == "realistic":
+            assert_true(kinds[-1:] == ["result"] and kinds.count("progress") == _BURST
+                        and kinds.count("network") == len(range(0, _BURST, 300)),
+                        f"realistic: every event through the terminal result survives the drain "
+                        f"(events={len(kinds)}, last={kinds[-1:]}, {elapsed}s)")
+        elif kinds[-1:] != ["result"]:
+            report = build_report(snapshot, _SCENARIO)
+            assert_true(report["browser_verdict"] == "incomplete",
+                        f"slow: a lost tail is classified incomplete, never complete: {report.get('reason')}")
+    _measure_callback_spanning_exit()
+
+
+_QUICK_CHILD = (
+    "import json, sys\n"
+    "for i in range(3):\n"
+    "    sys.stdout.write(json.dumps({'type': 'progress', 'step': i}) + '\\n')\n"
+    "sys.stdout.write(json.dumps({'type': 'result', 'status': 'finished'}) + '\\n')\n"
+    "sys.stdout.flush()\n"
+)
+
+
+def _measure_callback_spanning_exit() -> None:
+    """A callback still running when the child exits: the wait stays bounded, the run honest.
+
+    The child writes a few lines (no pipe backpressure) and exits at once, while the first
+    progress callback blocks past the shared 2 s drain budget. So the budget is really
+    spent, unlike the burst above where backpressure keeps the child alive.
+    """
+    import os
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocking(event):
+        if event.get("step") == 0:
+            entered.set()
+            # Released by the check below, never by the clock in the normal case: the
+            # 30 s bound only keeps a broken supervisor from hanging the suite forever.
+            release.wait(30)
+            finished.set()
+
+    try:
+        out = run_player([sys.executable, "-c", _QUICK_CHILD], stdin_payload="{}", env=os.environ.copy(),
+                         cwd=None, idle_timeout_s=60, total_timeout_s=60, on_progress=blocking,
+                         poll_interval_s=0.05)
+        snapshot = list(out["events"])
+        # Ordering, not wall-clock: the run came back while its callback was still held.
+        returned_while_blocked = entered.is_set() and not finished.is_set()
+    finally:
+        release.set()  # let the daemon reader finish instead of outliving the check
+    kinds = [event.get("type") for event in snapshot]
+    assert_true(out["returncode"] == 0 and not out["timed_out"], f"the quick child exits cleanly: {out['returncode']}")
+    assert_true(returned_while_blocked,
+                f"a blocked callback cannot hold the run past the drain budget "
+                f"(entered={entered.is_set()}, finished={finished.is_set()})")
+    assert_true(kinds[-1:] != ["result"],
+                f"fixture: the drain budget expired before the reader reached the result: {kinds}")
+    report = build_report(snapshot, _SCENARIO)
+    assert_true(report["browser_verdict"] == "incomplete",
+                f"a tail the drain did not reach is classified incomplete, never complete: {report.get('reason')}")

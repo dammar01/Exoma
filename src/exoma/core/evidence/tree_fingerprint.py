@@ -139,11 +139,19 @@ def tree_fingerprint(project_root) -> str | None:
         env = dict(os.environ, GIT_INDEX_FILE=str(scratch))
         if scratch.is_file() and not _clear_index_flags(root, scratch, env):
             return None
-        # No `:(exclude).workflow` pathspec here: when `.workflow/` is ignored (the usual
-        # case) naming it makes `git add` exit 1 ("paths are ignored"). The rm below takes
-        # it out whether it was ignored, untracked or tracked.
-        if _git(root, ["add", "-A", "--", "."], env) is None:
+        # Exclude runtime state BEFORE add reads contents. Removing it only afterwards
+        # still asks Git to open a held Windows guard in projects without a .gitignore.
+        # A NUL pathspec file also avoids argv limits and treats unusual names literally.
+        listed = _git_bytes(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."], env)
+        if listed is None:
             return None
+        paths = sorted({p for p in listed.split(b"\0") if p and p != b".workflow" and not p.startswith(b".workflow/")})
+        if paths:
+            pathspec = Path(tmp) / "paths"
+            pathspec.write_bytes(b"\0".join(paths) + b"\0")
+            literal_env = dict(env, GIT_LITERAL_PATHSPECS="1")
+            if _git(root, ["add", "-A", f"--pathspec-from-file={pathspec}", "--pathspec-file-nul"], literal_env) is None:
+                return None
         # `.workflow/` is the runtime's own state, never part of what was tested.
         # Checked: a failed removal would leave the runtime's own state inside the tree id.
         if _git(root, ["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".workflow"], env) is None:

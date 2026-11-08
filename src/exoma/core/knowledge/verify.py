@@ -2,8 +2,8 @@
 
 Four rungs, cheapest first, and the order is the whole point:
 
-    verified_commit == HEAD   -> nothing in the repository moved; no file is read
-    blob_oid unchanged        -> nothing in THIS file moved; the file is not read
+    clean source + verified_commit == HEAD -> no committed change; no file is read
+    clean source + blob_oid unchanged      -> no committed change in this file
     anchor still locatable    -> the cited line survives, possibly at a new number
     otherwise                 -> needs verification by someone who can read
 
@@ -17,9 +17,11 @@ solved "where does this line live now", including the relocation case, and a sec
 implementation would be a second set of bugs.
 """
 
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 
 from exoma.core.evidence.fact_store import _anchor_hash, current_anchor_line
+from exoma.core.policy.secret_patterns import is_secret_path
 from exoma.utils import git
 
 FRESH_COMMIT = "fresh_commit"
@@ -47,6 +49,7 @@ def verify_source(
     head: str | None,
     verified_commit: str | None,
     cache: dict | None = None,
+    worktree: dict | None = None,
 ) -> dict:
     """One source's rung on the ladder, plus where its anchor sits now.
 
@@ -62,15 +65,68 @@ def verify_source(
     if not isinstance(path, str) or not path:
         return {"status": SOURCE_MISSING, "reason": "source has no path"}
 
-    if head and verified_commit and head == verified_commit:
-        return {"status": FRESH_COMMIT, "reason": "HEAD is the verified commit"}
+    # Retrieval now invokes this automatically on repository-authored documents. A
+    # manually edited source must not turn verification into an arbitrary file read.
+    relative = Path(path.replace("\\", "/"))
+    root = Path(project_root).resolve()
+    if relative.is_absolute() or PureWindowsPath(path).drive or ".." in relative.parts:
+        return {"status": NEEDS_VERIFICATION, "reason": "source must stay inside the project"}
+    try:
+        resolved = (root / relative).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return {"status": NEEDS_VERIFICATION, "reason": "cannot resolve source safely"}
+    if not resolved.is_relative_to(root):
+        return {"status": NEEDS_VERIFICATION, "reason": "source leaves the project"}
+    path = relative.as_posix()
+    target = resolved.relative_to(root).as_posix()
+    if is_secret_path(path) or is_secret_path(target):
+        return {"status": NEEDS_VERIFICATION, "reason": "secret or ignored source is not read"}
+
+    if worktree is None:
+        worktree = {"paths": git.changed_paths(project_root)}
+    ignored = worktree.setdefault("ignored", {})
+    # A symlink (or a symlinked directory on the way) is read through to its target, so
+    # an ignored target must be refused like an ignored path: checking the alias alone
+    # let a tracked link expose a file the ignore rules keep out of automatic reads.
+    for candidate in dict.fromkeys((path, target)):
+        if candidate not in ignored:
+            ignored[candidate] = git.is_ignored(root, candidate)
+        if ignored[candidate]:
+            return {"status": NEEDS_VERIFICATION, "reason": "secret or ignored source is not read"}
 
     if not (Path(project_root) / path).exists():
         return {"status": SOURCE_MISSING, "reason": f"{path} no longer exists"}
 
+    changed = worktree.get("paths")
+    # Without Git, committed shortcuts are unavailable, but a working-file anchor can
+    # still be checked. Applicability separately reports an unresolved branch comparison.
+    # An alias's own entry says nothing about its target: Git stores a symlink as a blob
+    # holding the link text, so an edited target leaves the alias clean and its blob
+    # unchanged. Both shortcuts are skipped and the anchor is read through the link.
+    # A spelling that differs only in case (Windows: resolve() returns the on-disk case)
+    # is the same file, not an alias. Neither spelling is reliably Git's: with
+    # core.ignoreCase, Git keeps the index spelling after an on-disk case-only rename, so
+    # it can report `Case.py` dirty while resolve() says `case.py`. Membership is checked
+    # under the same normalization for both spellings; on POSIX normcase is the identity
+    # and this is the exact comparison it always was.
+    same_file = os.path.normcase(path) == os.path.normcase(target)
+    folded = None
+    if changed is not None:
+        folded = worktree.get("folded")
+        if folded is None:
+            folded = worktree["folded"] = {os.path.normcase(p) for p in changed}
+    clean = (
+        folded is not None
+        and same_file
+        and os.path.normcase(path) not in folded
+        and os.path.normcase(target) not in folded
+    )
+    if clean and head and verified_commit and head == verified_commit:
+        return {"status": FRESH_COMMIT, "reason": "HEAD is the verified commit and source is clean"}
+
     recorded_blob = source.get("blob_oid")
-    if recorded_blob:
-        current_blob = git.blob_oid(project_root, path)
+    if clean and recorded_blob:
+        current_blob = git.blob_oid(project_root, target)
         if current_blob and current_blob == recorded_blob:
             return {"status": FRESH_BLOB, "reason": f"{path} unchanged since promotion"}
 
@@ -99,11 +155,15 @@ def verify_claim(
     head: str | None,
     verified_commit: str | None,
     cache: dict | None = None,
+    worktree: dict | None = None,
 ) -> dict:
+    if worktree is None:
+        worktree = {"paths": git.changed_paths(project_root)}
     sources = claim.get("sources") or []
     results = [
         verify_source(
-            project_root, source, head=head, verified_commit=verified_commit, cache=cache
+            project_root, source, head=head, verified_commit=verified_commit, cache=cache,
+            worktree=worktree,
         )
         for source in sources
         if isinstance(source, dict)
@@ -124,10 +184,12 @@ def verify_doc(project_root: Path, doc: dict) -> dict:
     production = doc.get("production") or {}
     verified_commit = production.get("verified_commit")
     cache: dict = {}
+    worktree = {"paths": git.changed_paths(project_root)}
 
     claims = [
         verify_claim(
-            project_root, claim, head=head, verified_commit=verified_commit, cache=cache
+            project_root, claim, head=head, verified_commit=verified_commit, cache=cache,
+            worktree=worktree,
         )
         for claim in doc.get("claims") or []
         if isinstance(claim, dict)

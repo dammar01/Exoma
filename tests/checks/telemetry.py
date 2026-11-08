@@ -519,6 +519,7 @@ def _call_meta_names_the_facts_it_served() -> None:
 
 
 def _test_telemetry_metrics() -> None:
+    _provider_invocations_exclude_reuse()
     _call_meta_names_the_facts_it_served()
     _fact_lifecycle_counts_commands_not_invocations()
     _acceptance_is_per_task()
@@ -535,3 +536,20 @@ def _test_telemetry_metrics() -> None:
     _graph_refresh_reports_what_the_turn_paid()
     _torn_row_is_skipped_not_fatal()
     _torn_multibyte_row_is_skipped_not_fatal()
+
+
+def _provider_invocations_exclude_reuse() -> None:
+    with tempfile.TemporaryDirectory(prefix="invocation-count-") as tmp:
+        root = Path(tmp)
+        data_dir(root).mkdir(parents=True, exist_ok=True)
+        write_usage_record(root, _usage(command="analyze", role="reasoning", reused_evidence=True,
+                                       reuse_outcome="hit").to_dict())
+        report = telemetry.report(root)
+        assert_true(report["commands"] == 1 and report["provider_calls"] == 0,
+                    "a legacy reuse-only row is one command and zero provider invocations")
+        write_usage_record(root, _usage(command="analyze", prompt_id="p1", provider_call_index=0).to_dict())
+        write_usage_record(root, _usage(command="analyze", prompt_id="p1", provider_call_index=1).to_dict())
+        write_usage_record(root, _usage(command="analyze", provider_call_avoided=True).to_dict())
+        report = telemetry.report(root)
+        assert_true(report["commands"] == 3 and report["provider_calls"] == 2,
+                    "two real continuation calls count twice; both reuse formats stay outside N")

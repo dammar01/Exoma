@@ -47,10 +47,12 @@ own rules (execution scope, project root, commit approval) on top, as far as eac
 2. **`codex` reads through a shell its permission flags never see.** Its sandbox stops
    writes; nothing stops reads. Its Windows sandbox also depends on the codex release
    ([provider releases](reference.md#provider-releases)).
-3. **`agy` runs with permissions skipped.** A guard compares `git status` before and after
-   each call, and also the size and modification time of every file that matches the secret
-   patterns, so a change to a `.gitignore`d `.env` is reported too. It detects; it does not
-   prevent.
+3. **`agy` runs with permissions skipped.** A guard compares `git status` and fingerprints
+   non-secret dirty/untracked file contents before and after each call, including another
+   edit whose status entry stays the same. Secret-pattern files, including an ignored
+   `.env`, are checked only by size and modification time; their contents are never opened
+   or hashed. Incomplete snapshots report `checked: false`. This detects changes during an
+   interval; it neither prevents writes nor identifies the writer when other tools run.
 4. **Recursion is refused, not prevented.** Every adapter marks its child
    `WORKFLOW_AGENT_ROLE=second_agent`, and the runtime refuses a marked process that asks to
    delegate again (`recursion_refused`). That covers a child that inherits the marker, which is
@@ -81,11 +83,12 @@ These are choices, not gaps waiting for a fix:
 These remain open, and nothing on this page should be read as covering them:
 
 - **Host edits are not fully attributable on any host.** Claude Code, Agy, and Codex host
-  hooks check supported write tools before they run. Changed-file and scope reports use the
-  current diff against Git `HEAD`, without a content baseline taken at the start of each
-  execution. A further edit to a file already modified before the turn can therefore be
-  visible in the final diff without being attributable to that turn. Shell and script writes
-  also bypass the host hooks' file-path checks.
+  hooks check supported write tools before they run. Changed-file and scope reports compare
+  working-tree content snapshots at execution begin/end, so further edits to an already-dirty
+  file are included. Git-ignored files and `.workflow/` are outside those snapshots, Git
+  conversions can erase a byte-level difference, and a failed snapshot reports unknown.
+  Concurrent writers cannot be distinguished. Shell and script writes bypass the hooks'
+  file-path checks even though snapshot comparison can detect their resulting changes.
 - **Reads are not confined for `codex`, `agy` or `claude`.** The confirmation records that the risk was
   accepted; it does not reduce it. Running the second agent on a filtered copy of the
   project or inside an operating-system sandbox would, and is not implemented: a filtered
@@ -94,12 +97,16 @@ These remain open, and nothing on this page should be read as covering them:
 - **Secret detection is by file name.** A secret in a file whose name matches no pattern
   (a credential in `config.py`) is not found, and a harmless file with a matching name is
   reported.
-- **The agy second-agent guard has gaps:** a tracked file already modified before a delegated call can be
-  modified again without changing its `git status` entry. The guard then reports
-  `checked: true, mutated: false` despite the write. It also misses ignored files that
-  match no secret pattern, files written and restored within one call, and projects outside
-  git (where it reports `checked: false`). The guard detects after the fact; it does not
-  prevent writes.
+- **The agy second-agent guard has gaps:** ignored files that match no secret pattern,
+  changes to a symlink's target without changing the link itself, and writes fully restored
+  within one call can be missed. Tracked submodules use exact stage-0 gitlink metadata from
+  the parent index and parent status; their contents are not recursively fingerprinted.
+  Further edits inside an already-dirty submodule can be missed when its parent status and
+  index entry stay unchanged. Ordinary file edits remain observable beside a dirty submodule.
+  It never follows symlinks to read contents. Secret checks use size/mtime only, and file-name
+  patterns can miss a secret. Outside Git, on an unreadable or unsupported dirty file,
+  ambiguous/failed gitlink lookup, or when its content snapshot is incomplete, it reports
+  `checked: false`. Detection runs after the fact; it does not prevent writes.
 - **Anchor certification proves that a cited line exists, not that the claim about it is
   true.** Reading the anchor a decision rests on is still the primary agent's job. A short
   citation (`cli.py:54`) certifies against the one project file whose path ends with it; a
@@ -113,6 +120,36 @@ These remain open, and nothing on this page should be read as covering them:
   used while armed, is only recorded in `gate-skips.jsonl` and reported by `doctor`. A
   session the hooks cannot resolve gets no gate at all (fail-open). See
   [runtime-contracts.md](runtime-contracts.md) for the exact rules.
+
+The Claude execution gate reports unavailable checks through a warning and
+`gate-skips.jsonl`, with a minimal fallback when its helper or session binding is missing.
+New shared fallback rows identify the project by digest, not its path. `doctor` separates
+configured mode from recorded failures: no recorded failure is not proof that a hook ran.
+An intentionally disabled gate is distinguished from a failure. If no interpreter can run
+the launcher, the Python fallback cannot report that failure. Projects with no owning
+`.workflow/` have no execution checks to perform and receive no unavailable warning.
+
+For Codex as the primary host, runner approval is controlled by the host's current policy.
+Normal permitted execution needs no escalation arguments. Escalation requires both a need
+for broader permissions and a host policy that permits the request. An auto-review denial
+before process creation produces no runner JSON; disclose its reason and do not route around
+it. Provider selection and any required authorization for sending repository context are
+separate from the runner's command prefix. See [reference, Hosts](reference.md#hosts).
+
+The optional installer flag `--codex-auto-review-context` adds task-scoped authorization
+context to `auto_review.extra_policy` on the Codex primary host. It keeps all existing deny
+rules, reviewer/sandbox settings, user replacement policy and managed requirements. A
+project predicate is an instruction to the reviewer, not an enforced read boundary or a
+guarantee that an action will be approved. It does not authorize retrying a previously
+denied action through a workaround. Owned metadata is kept in a TOML comment; it is not
+part of the reviewer prompt. User text outside the owned block is retained, and edited
+blocks are reported rather than overwritten. See [installer details](reference.md#codex-auto-review-context).
+
+Execution approval tokens bind the recorded plan revision and execution scope to their
+runtime session. Re-recording a plan revokes earlier approval, including an identical
+document. Legacy/unbound tokens cannot open an execution; the user must approve the
+current plan. Token claiming is single-use. These checks protect the runtime protocol;
+they do not make the prompt-based workflow an OS security boundary.
 
 For projects holding secrets the second agent must not read, use `opencode`.
 

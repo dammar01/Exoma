@@ -255,6 +255,37 @@ def _check_unstamped_dist_is_refused() -> None:
     ghost = {**manifest, "files": [*manifest["files"], {"path": "hosts/claude/skills/deleted.md", "sha256": "0" * 64}]}
     assert_true(_bundle_stale(ghost) == ["hosts/claude/skills/deleted.md"],
                 "a manifest entry whose dist source was deleted is stale too")
+    _check_policy_template_is_stamped(manifest)
+
+
+def _check_policy_template_is_stamped(manifest: dict) -> None:
+    """An Auto-review template edited without regenerating the manifest fails both checks."""
+    import contextlib
+    import io
+    from unittest.mock import patch
+
+    from exoma.installer import base, check
+
+    key = "hosts/codex/auto-review-policy.md"
+    assert_true(any(entry["path"] == key for entry in manifest["files"]), "fixture: the template is stamped")
+    edited = {**manifest, "files": [
+        {**entry, "sha256": "0" * 64} if entry["path"] == key else entry for entry in manifest["files"]
+    ]}
+    dropped = {**manifest, "files": [entry for entry in manifest["files"] if entry["path"] != key]}
+    with tempfile.TemporaryDirectory(prefix="aw-policy-stale-") as tmp:
+        home = Path(tmp)
+        for enabled in (False, True):
+            for tampered in (edited, dropped):
+                assert_true(key in check._bundle_stale(tampered), "install refuses the unstamped template")
+                output = io.StringIO()
+                with patch.object(base, "HOME", home), patch.object(check, "HOME", home), \
+                        patch.object(check, "_installed_hosts", return_value=()), \
+                        patch.object(check, "_stored_codex_auto_review_context", return_value=enabled), \
+                        contextlib.redirect_stdout(output):
+                    code = check._run_check(tampered)
+                assert_true(code != 0 and f"    - {key}" in output.getvalue(),
+                            f"--check reports the unstamped template (context enabled={enabled}): "
+                            f"{output.getvalue()[-600:]}")
 
 
 def _check_upgrade_points_at_the_running_build() -> None:

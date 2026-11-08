@@ -1,5 +1,39 @@
 # Runtime contracts
 
+## State and transport hardening
+
+Execution mutations and standalone approval writers coordinate through the session's
+`runtime/execution.state.guard`, a byte-0 advisory lock. Acquisition is bounded to ten
+seconds; it covers state transactions, never provider inference. A plan re-record still
+does not close an existing execution. Each new execution has an `execution_id` and
+`plan_revision`; end/verification publication checks the execution it targeted. A stale
+verification reports `meta.execution_state_error` and leaves the replacement untouched.
+
+Provider deadlines include stdin write/close through a feeder thread. Capture reads are
+bounded even for a single oversized line; `capture_truncated` identifies dropped earlier
+output. An undrained/failed reader is `output_complete: false` and cannot become a
+successful evidence response. Interrupts propagate after owned-process cleanup is attempted.
+
+`scope_width.measurement` is `complete`, `partial`, or `unknown`. Incomplete inputs make
+`files`, `lines`, `outside_scope`, and `wide` null; `observed_files`/`observed_lines` retain
+partial observations and `measurement_errors` lists safe reason codes. Unknown is not zero.
+Unbound test outcomes carry `fingerprint_reason`: `identity_before_unavailable`,
+`identity_after_unavailable`, or `inputs_changed_during_test`.
+
+Task reports expose `event_stream.status` and `invalid_rows`; malformed JSON and wrong-type
+events are isolated without discarding valid following rows. Session-export manifests
+describe each stream as available, missing, or unreadable with malformed/matched row counts.
+These diagnostics do not prove that every intended event was successfully written.
+
+Atomic text/JSON/bytes replacement preserves an existing target's permission mode; an
+explicit bytes-writer mode takes precedence. New files retain the creation-mode/umask
+policy. This does not promise preservation of ownership or ACLs.
+
+`python tests/run.py --only package-artifacts` is an explicit build smoke: it requires uv,
+builds a temporary copy of the current source, and installs the wheel and sdist into
+separate temporary environments. It checks bundled hashes and CLI init/inspect without
+installing into the user's home. The default source suites do not invoke this build.
+
 Which parts of `.workflow/config.json` the Python runtime actually obeys, and which
 contracts it structurally cannot enforce. Both lists once lived in the since-removed
 `core/workflow_runtime.py` as tuples no code ever read — documentation wearing a data
@@ -86,7 +120,7 @@ session the hooks cannot resolve (no registry entry) gets no gate at all, these 
 included. An escape in use while a marker is armed, and a
 delegated command the user named that could not arm (no session binding, logged to
 `~/.claude/gate-skips.jsonl` for projects with a `.workflow/`), append one line to
-`gate-skips.jsonl` (`at`, `hook`, `reason`, `root`, `key` = the marker's `set_at`; never the
+`gate-skips.jsonl` (pre-flight rows: `at`, `hook`, `reason`, `root`, `key` = the marker's `set_at`; never the
 path or command), once per marker; `doctor` reports them as `checks.gate_skips`. A shell
 write of an escape file while the gate is not armed is not refused — no hook parses shell
 writes — and shows up only through that log once a later delegation is skipped. What the gate
@@ -110,6 +144,35 @@ The `execution-gate` hook records its own refusals: one line per block or warnin
 bound session's `runtime/gate-blocks.jsonl` (rule, tool, mode, exit code, plan id; never the
 path or command), fail-open. The runtime does not read it; it counts how often
 the gate fires, and whether a block was legitimate is still judged from the transcript.
+
+Claude's execution gate also records checks it could not perform: missing helper, payload,
+session/workspace, or an exception. These remain fail-open and emit an unavailable warning.
+Without a runtime directory, a minimal fallback uses `~/.claude/gate-skips.jsonl`; new rows
+carry a project `root_digest` rather than its raw path. Doctor accepts both that form and
+older `root` rows. Intentional enforcement `off` is recorded separately without a warning.
+`checks.execution_gate` reports configured mode and recent failures independently; an
+`unconfirmed` observation proves neither that hooks ran nor that they are trusted. A missing
+Python interpreter prevents this fallback from running at all. The global hook stays
+silent outside an Exoma workspace. Subdirectory observations use the owning workflow's
+root digest, stopping discovery at a separate repository boundary. This discovery is
+for reporting only: enforcement continues to use the session's bound root, matching
+the approval writers. It does not repair subfolder approval bindings; start the host
+session at the project root when execution approvals and scope enforcement are required.
+
+Codex runner invocation follows the host's current permissions. Escalation is conditional,
+and forbidden escalation arguments are omitted. A host denial before process creation is
+reported from the tool result; Exoma cannot return JSON for a process that never started.
+No shell/prefix substitution or weaker policy is a recovery path for an explicit denial.
+See [reference, Hosts](reference.md#hosts) for authorization and failure distinctions.
+
+Knowledge retrieval verifies current sources per claim before injection, retaining separate
+document applicability. Unusable claims and their summary text are excluded; working-tree
+edits invalidate committed-source shortcuts. Applicability includes staged, unstaged, and
+untracked paths and does not assume detached HEAD is production. Index entries flagged
+`assume-unchanged`/`skip-worktree` count as changed, Git names are decoded from bytes with the
+file system encoding, and a source reached through a symlink is checked (ignore, secret
+pattern, applicability) by its in-project target and never takes the commit/blob shortcut.
+The knowledge document schema is unchanged; served claims add `freshness` metadata.
 
 ## /.verify-browser
 
@@ -953,7 +1016,9 @@ values with the live PID and answers one of:
 A worker is killed only on `matched` (`JobManager._kill_worker`). `reused`, `dead` and
 `unverifiable` return `{"method": "skipped", "reason": "pid_reuse_detected" | "worker_dead"
 | "identity_unverifiable"}` and the job is still failed and reaped. The runtime's own PID is
-never killed (`self_pid`). The policy is fail-closed because the two errors are not
+never killed (`self_pid`). A reap whose job record cannot be locked or read uses the
+caller's earlier read of the same, still-active job for this check and writes nothing; with
+no such record the kill is skipped (`no_trusted_worker_record`) and the session lock is kept. The policy is fail-closed because the two errors are not
 symmetric: a missed kill leaves a stray worker whose job is already failed; a wrongful kill
 ends a process that is not ours. Admission and recovery keep their rules: an `unverifiable`
 worker still counts against capacity while younger than the claim staleness window, and a

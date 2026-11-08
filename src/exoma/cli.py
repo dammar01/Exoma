@@ -591,7 +591,10 @@ def run(
     # The plan -> execute chain. Local like promote: nothing here reaches a provider, and
     # execute-begin must answer while a delegated job of the same session may hold the lock.
     if normalized_command in ("plan-record", "execute-begin", "execute-end"):
-        return _execution_command(normalized_command, project_root, session_id, task)
+        try:
+            return _execution_command(normalized_command, project_root, session_id, task)
+        except (OSError, ValueError) as exc:
+            return make_error("runtime_lock", str(exc), next_action="Inspect execution state and retry after the active mutation.")
 
     lock_path = workflow_paths(project_root, session_id)["lock"]
     lock_claim = acquire_runtime_lock(lock_path, normalized_command, session_id)
@@ -604,6 +607,7 @@ def run(
             meta={"lock": payload, "lock_path": str(lock_path)},
         )
     try:
+        verification_execution = execution.execution_identity(execution.current_execution(project_root, session_id))
         provider_sessions = _session_manager_for(project_root)
         try:
             session = provider_sessions.load_or_create(_session_storage_id(session_id))
@@ -643,7 +647,7 @@ def run(
         output = _finalize_verify_result(finalize_as, output)
         if finalize_as == "verify":
             try:
-                execution.record_verification(project_root, session_id, output)
+                execution.record_verification(project_root, session_id, output, expected=verification_execution)
             except (OSError, ValueError) as exc:
                 output.setdefault("meta", {})["execution_state_error"] = f"{type(exc).__name__}: {exc}"
         try:

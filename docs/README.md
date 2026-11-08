@@ -16,6 +16,9 @@ Working on Exoma itself: [development.md](development.md) (the checkout, tests, 
 development build away from your daily `~/.claude` and `~/.gemini`, and staging a release in
 agent-workflow).
 
+Future work: [roadmap.md](roadmap.md) records deferred compatibility and provider-contract
+work, plus low-priority architecture and evidence-quality proposals.
+
 Supporting documents: [limitations.md](limitations.md),
 [why-not-subagent.md](why-not-subagent.md) (why evidence goes to a second agent rather than
 a native subagent, with the figures behind it), the

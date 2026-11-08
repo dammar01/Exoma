@@ -100,6 +100,23 @@ def _check_migration_moves_everything_once() -> None:
 
 def _check_live_job_blocks_migration() -> None:
     import exoma.core.runtime.upgrade as upgrade
+    import os
+    from unittest.mock import patch
+    from exoma.core.jobs.job_manager import JobManager
+
+    with tempfile.TemporaryDirectory(prefix="upgrade-mixed-jobs-") as tmp:
+        project = Path(tmp)
+        manager = JobManager(project / "jobs")
+        live = manager.create_job("analyze", "live", "mixed", str(project), None)
+        manager.set_worker_pid(live["job_id"], os.getpid())
+        manager.mark_running(live["job_id"])
+        for index, record in enumerate(([], None, {"status": []}, {"status": "running", "work_dir": ["bad"]})):
+            (manager.job_dir / f"job_corrupt_{index}.json").write_text(json.dumps(record), encoding="utf-8")
+        with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager):
+            active = upgrade.active_jobs_for_workspace(project)
+        assert_true([job["job_id"] for job in active] == [live["job_id"]],
+                    "corrupt records must not erase healthy live-job detection")
+        manager.fail_job(live["job_id"], "cleanup")
 
     root = _legacy_workspace()
     saved = upgrade.active_jobs_for_workspace

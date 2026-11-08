@@ -257,6 +257,12 @@ def _test_provider_seam() -> None:
         broken["config"].get("timeout_seconds") is not None,
         "readers such as doctor still get a config shape to report on",
     )
+    bad_bytes = b"\xff\xfe invalid encoding"
+    (broken_dir / "second_agent.json").write_bytes(bad_bytes)
+    invalid_encoding = resolve_provider_config_for(broken_root)
+    assert_true(invalid_encoding["source"] == "invalid" and invalid_encoding["error"]
+                and (broken_dir / "second_agent.json").read_bytes() == bad_bytes,
+                "invalid UTF-8 config is diagnosed without replacing the corrupt bytes")
 
     # And the executor refuses both before any provider is called.
     from exoma.core.provider.executor import Executor
@@ -1136,6 +1142,178 @@ def _test_secret_files() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _test_agy_guard_gitlinks() -> None:
+    """A dirty gitlink must not hide mutations to ordinary files in the parent repo."""
+    import os
+    import time
+    from unittest.mock import patch
+
+    from exoma.core.policy import agy_guard
+
+    fixture_env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_OPTIONAL_LOCKS="0", GIT_AUTHOR_NAME="Exoma fixture",
+                       GIT_AUTHOR_EMAIL="test@example.invalid", GIT_COMMITTER_NAME="Exoma fixture",
+                       GIT_COMMITTER_EMAIL="test@example.invalid")
+
+    def git(cwd, *args, text=None):
+        result = subprocess.run(["git", "-C", str(cwd), *args], input=text, env=fixture_env,
+                                capture_output=True, text=True, encoding="utf-8", timeout=20,
+                                **no_console())
+        assert_true(result.returncode == 0, f"gitlink fixture {args}: {result.stderr}")
+        return result.stdout.strip()
+
+    def commit_fixture(cwd):
+        tree = git(cwd, "write-tree")
+        commit = git(cwd, "commit-tree", tree, text="Disposable gitlink fixture\n")
+        git(cwd, "update-ref", "HEAD", commit)
+        return commit
+
+    with tempfile.TemporaryDirectory(prefix="exoma-agy-gitlinks-") as temporary:
+        root = Path(temporary).resolve()
+        git(root, "init", "-q")
+        nested = root / "nested project"
+        nested.mkdir()
+        dependency = nested / "dep [literal]"
+        dependency.mkdir()
+        git(dependency, "init", "-q")
+        member = dependency / "member.txt"
+        member.write_text("base\n", encoding="utf-8")
+        git(dependency, "add", "--", member.name)
+        dependency_commit = commit_fixture(dependency)
+        relative = dependency.relative_to(root).as_posix()
+        (root / ".gitmodules").write_text(
+            f'[submodule "fixture"]\n\tpath = {relative}\n\turl = unused-local-fixture\n', encoding="utf-8")
+        ordinary = root / "ordinary.txt"
+        local = nested / "local.txt"
+        ordinary.write_text("base\n", encoding="utf-8")
+        local.write_text("base\n", encoding="utf-8")
+        git(root, "add", "--", ".gitmodules", ordinary.name, "nested project/local.txt")
+        git(root, "update-index", "--add", "--cacheinfo", f"160000,{dependency_commit},{relative}")
+        commit_fixture(root)
+        assert_true(not git(root, "status", "--porcelain"), "gitlink fixture starts clean")
+        index = (root / ".git" / "index").read_bytes()
+
+        clean_before = agy_guard.snapshot(root)
+        ordinary.write_text("clean-submodule control\n", encoding="utf-8")
+        clean_change = agy_guard.verdict(clean_before, agy_guard.snapshot(root))
+        assert_true(clean_change["checked"] and clean_change["mutated"],
+                    f"ordinary edits with a clean submodule remain visible: {clean_change}")
+        ordinary.write_text("base\n", encoding="utf-8")
+        member.write_text("dirty submodule\n", encoding="utf-8")
+        secret = dependency / ".env"
+        secret.write_text("FAKE_FIXTURE=metadata-only\n", encoding="utf-8")
+        original_open = Path.open
+
+        def refuse_member_contents(path, *args, **kwargs):
+            assert_true(dependency not in path.parents,
+                        "gitlink observation must not open subtree or secret contents")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", refuse_member_contents):
+            before = agy_guard.snapshot(root)
+            ordinary.write_text("mutation during delegation\n", encoding="utf-8")
+            after = agy_guard.snapshot(root)
+            changed = agy_guard.verdict(before, after)
+            assert_true(before["available"] and after["available"] and changed["checked"]
+                        and changed["mutated"] and "ordinary.txt" in changed["content_changed"],
+                        f"dirty gitlink cannot hide ordinary clean-to-dirty mutation: {changed}")
+            ordinary.write_text("already-dirty mutation\n", encoding="utf-8")
+            further = agy_guard.snapshot(root)
+            assert_true(after["entries"] == further["entries"]
+                        and "ordinary.txt" in agy_guard.verdict(after, further)["content_changed"],
+                        "same-status ordinary edits remain visible alongside a dirty gitlink")
+            unchanged = agy_guard.verdict(further, agy_guard.snapshot(root))
+            assert_true(unchanged["checked"] and not unchanged["mutated"],
+                        f"unchanged dirty-submodule snapshot remains checked: {unchanged}")
+            nested_before = agy_guard.snapshot(nested)
+            local.write_text("nested project mutation\n", encoding="utf-8")
+            nested_change = agy_guard.verdict(nested_before, agy_guard.snapshot(nested))
+            assert_true(nested_change["checked"] and nested_change["content_changed"] == ["local.txt"],
+                        f"index lookup uses repo paths, hashes use project paths: {nested_change}")
+
+        assert_true((root / ".git" / "index").read_bytes() == index, "gitlink snapshots do not write index")
+        directory = root / "ordinary directory"
+        directory.mkdir()
+        try:
+            agy_guard._content_hash(directory, time.monotonic() + 5, root)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("an ordinary directory must not receive a gitlink exemption")
+
+        import stat
+        from types import SimpleNamespace
+
+        with patch.object(Path, "lstat", return_value=SimpleNamespace(st_mode=stat.S_IFLNK)), \
+                patch.object(agy_guard.os, "readlink", return_value=str(dependency)), \
+                patch.object(agy_guard, "_gitlink_hash") as lookup, \
+                patch.object(Path, "open") as opened:
+            assert_true(agy_guard._content_hash(root / "mock-link", time.monotonic() + 5, root).startswith("link:"),
+                        "symlinks keep their own metadata path even when their target is a gitlink")
+            lookup.assert_not_called()
+            opened.assert_not_called()
+
+        record = b"160000 " + dependency_commit.encode("ascii") + b" 0\t" + os.fsencode(relative) + b"\0"
+        for output in (b"", record.replace(b"160000", b"100644", 1),
+                       record.replace(b" 0\t", b" 1\t", 1), record + record,
+                       record.replace(os.fsencode(relative), b"different-path", 1), record[:-1],
+                       record.replace(dependency_commit.encode("ascii"), b"invalid-object", 1)):
+            with patch.object(agy_guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output, b"")):
+                try:
+                    agy_guard._gitlink_hash(dependency, root, time.monotonic() + 5)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("unproven, unmerged, ambiguous or malformed gitlink metadata must fail")
+
+        for failure in (OSError("metadata unavailable"), subprocess.TimeoutExpired("git", 1)):
+            with patch.object(agy_guard.subprocess, "run", side_effect=failure):
+                try:
+                    agy_guard._gitlink_hash(dependency, root, time.monotonic() + 5)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("metadata failure must not become a checked gitlink")
+        with patch.object(agy_guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"failure")):
+            try:
+                agy_guard._gitlink_hash(dependency, root, time.monotonic() + 5)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("a nonzero Git exit must not become a checked gitlink")
+        with patch.object(agy_guard, "_gitlink_hash", side_effect=OSError("metadata unavailable")):
+            incomplete = agy_guard.snapshot(root)
+        assert_true(not agy_guard.verdict(after, incomplete)["checked"],
+                    "a failed gitlink lookup leaves the snapshot unchecked")
+        with patch.object(agy_guard.subprocess, "run") as command:
+            try:
+                agy_guard._gitlink_hash(dependency, root, time.monotonic() - 1)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("an exhausted snapshot budget must fail before metadata lookup")
+            command.assert_not_called()
+        with patch.object(agy_guard.time, "monotonic", side_effect=(10.0, 10.5)), \
+                patch.object(agy_guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, record, b"")) as command:
+            sentinel = agy_guard._gitlink_hash(dependency, root, 11.0)
+            assert_true(sentinel.startswith("gitlink:") and command.call_args.kwargs["timeout"] == 1.0,
+                        "gitlink lookup receives only the remaining snapshot budget")
+        with patch.object(agy_guard.time, "monotonic", side_effect=(10.0, 11.1)), \
+                patch.object(agy_guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, record, b"")):
+            try:
+                agy_guard._gitlink_hash(dependency, root, 11.0)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("metadata returned after the budget must leave the snapshot incomplete")
+        unusual = root / "tab\tnewline\nand [literal]"
+        unusual_record = record.partition(b"\t")[0] + b"\t" + os.fsencode(unusual.relative_to(root).as_posix()) + b"\0"
+        with patch.object(agy_guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, unusual_record, b"")) as command:
+            assert_true(agy_guard._gitlink_hash(unusual, root, time.monotonic() + 5).startswith("gitlink:")
+                        and "--literal-pathspecs" in command.call_args.args[0],
+                        "index paths retain tabs/newlines and literal pathspec characters")
+
+
 def _test_agy_provider() -> None:
     """agy: parsing, argv, and the guard that stands in for a boundary it does not have.
 
@@ -1291,6 +1469,72 @@ def _test_agy_provider() -> None:
             clean["checked"] and not clean["mutated"],
             f"an unchanged tree must read as clean, not as unknown: {clean}",
         )
+
+        from unittest.mock import patch
+
+        tracked = guard_root / "already dirty.txt"
+        tracked.write_text("baseline", encoding="utf-8")
+        for args in (["add", "."], ["-c", "user.name=Exoma test", "-c", "user.email=test@example.invalid",
+                                   "commit", "-m", "fixture"]):
+            done = subprocess.run(["git", *args], cwd=guard_root, capture_output=True, text=True, **no_console())
+            assert_true(done.returncode == 0, f"guard fixture: {done.stderr}")
+        tracked.write_text("dirty-one", encoding="utf-8")
+        loose = guard_root / " leading loose file.txt"
+        loose.write_text("one", encoding="utf-8")
+        index = (guard_root / ".git" / "index").read_bytes()
+        before = agy_guard.snapshot(guard_root)
+        tracked.write_text("dirty-two", encoding="utf-8")
+        loose.write_text("two", encoding="utf-8")
+        after = agy_guard.snapshot(guard_root)
+        changed = agy_guard.verdict(before, after)
+        assert_true(before["entries"] == after["entries"], "fixture keeps the same status records")
+        assert_true(changed["checked"] and changed["mutated"]
+                    and changed["content_changed"] == [loose.name, tracked.name],
+                    f"same-status tracked and untracked edits are detected: {changed}")
+        assert_true((guard_root / ".git" / "index").read_bytes() == index, "snapshot never changes the index")
+
+        secret = guard_root / ".env"
+        secret.write_text("FAKE_FIXTURE=one", encoding="utf-8")
+        original_open = Path.open
+
+        def refuse_secret_open(path, *args, **kwargs):
+            assert_true(path != secret, "the guard must never open secret contents")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", refuse_secret_open):
+            secret_before = agy_guard.snapshot(guard_root)
+            assert_true(".env" not in secret_before.get("hashes", {}), "secret has metadata only")
+            link = guard_root / "plain-link"
+            try:
+                link.symlink_to(".env")
+            except (OSError, NotImplementedError):
+                pass
+            else:
+                linked = agy_guard.snapshot(guard_root)
+                assert_true(linked["available"] and linked["hashes"][link.name].startswith("link:"),
+                            "a symlink target is not read")
+                link.unlink()
+        with patch.object(agy_guard, "_content_hash", side_effect=OSError("unreadable")):
+            partial = agy_guard.snapshot(guard_root)
+        assert_true(not agy_guard.verdict(before, partial)["checked"],
+                    "an incomplete content snapshot cannot report a checked-clean result")
+
+        renamed = guard_root / "renamed space.txt"
+        moved = subprocess.run(["git", "mv", tracked.name, renamed.name], cwd=guard_root,
+                               capture_output=True, text=True, **no_console())
+        assert_true(moved.returncode == 0, f"rename fixture: {moved.stderr}")
+        rename_before = agy_guard.snapshot(guard_root)
+        renamed.write_text("new-content", encoding="utf-8")
+        assert_true(renamed.name in agy_guard.verdict(rename_before, agy_guard.snapshot(guard_root))["content_changed"],
+                    "rename records preserve both path boundaries")
+
+        nested = guard_root / "nested"
+        nested.mkdir()
+        (nested / "local.txt").write_text("one", encoding="utf-8")
+        nested_before = agy_guard.snapshot(nested)
+        (nested / "local.txt").write_text("two", encoding="utf-8")
+        assert_true(agy_guard.verdict(nested_before, agy_guard.snapshot(nested))["content_changed"] == ["local.txt"],
+                    "a project below the repo root hashes project-relative paths")
     finally:
         shutil.rmtree(guard_root, ignore_errors=True)
 
@@ -1852,7 +2096,9 @@ def _assert_codex_provider() -> None:
     assert_true(
         not socket_denied["ok"]
         and socket_denied["meta"]["error_type"] == "network_denied"
-        and "require_escalated" in socket_denied["meta"]["next_action"],
+        and "require_escalated" in socket_denied["meta"]["next_action"]
+        and "approval_policy=never" in socket_denied["meta"]["next_action"]
+        and "Do not bypass" in socket_denied["meta"]["next_action"],
         f"os error 10013 is a network refusal, not a path one: {socket_denied['meta'].get('error_type')}",
     )
 

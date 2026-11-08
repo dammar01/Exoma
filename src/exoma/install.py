@@ -82,6 +82,7 @@ from exoma.installer.base import (  # noqa: E402,F401
 from exoma.config.providers import PROVIDER_BUNDLES  # noqa: E402
 from exoma.config.settings import PROVIDER_EXAMPLE_FILE, PROVIDER_SEED_FILE  # noqa: E402
 from exoma.installer.check import (  # noqa: E402,F401
+    manifest_error,
     _bundle_stale,
     _detect_project_root,
     _provider_config_would_change,
@@ -95,6 +96,7 @@ from exoma.installer.rollback import (  # noqa: E402,F401
     _store_install_mode,
     _stored_agy_opt_out,
     _stored_agy_permissions,
+    _stored_codex_auto_review_context,
     _stored_hosts,
     _stored_only_command,
 )
@@ -233,6 +235,11 @@ def _ask_choices(args, host_choice, apply: bool, plan, interactive: bool, intent
         args.agy_permissions = _ask_yes_no(
             "add Agy allow rules for the .workflow runner and Exoma's data directory?",
             not _stored_agy_opt_out(),
+        )
+    if "codex" in hosts and getattr(args, "codex_auto_review_context", False) is None:
+        args.codex_auto_review_context = _ask_yes_no(
+            "add Exoma authorization context to Codex Auto-review (keeps your reviewer and sandbox)?",
+            _stored_codex_auto_review_context(),
         )
     if not args.update_providers:
         args.update_providers = _ask_yes_no(
@@ -684,6 +691,11 @@ def main() -> int:
         "undoes that",
     )
     parser.add_argument(
+        "--codex-auto-review-context", action=argparse.BooleanOptionalAction, default=None,
+        help="add owned Exoma authorization context to Codex HOST auto_review.extra_policy; "
+             "keeps your policy, reviewer and sandbox. Choice persists across updates; default off",
+    )
+    parser.add_argument(
         "--model",
         metavar="ID",
         help="pin this model in each chosen host's seed (second_agent.seed.<host>.json). "
@@ -751,7 +763,15 @@ def main() -> int:
     if not MANIFEST.exists():
         print("[INSTALL] exoma/_bundle/manifest.json missing — the package is incomplete; reinstall exoma")
         return 1
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[INSTALL] manifest unreadable or invalid ({type(exc).__name__}); reinstall exoma. Nothing was written.")
+        return 1
+    error = manifest_error(manifest)
+    if error:
+        print(f"[INSTALL] {error}; reinstall exoma. Nothing was written.")
+        return 1
 
     project_root = _detect_project_root()
     if args.check:
@@ -793,6 +813,9 @@ def main() -> int:
     if "opencode" in hosts:
         plan.warn("OpenCode loads its plugins at startup: restart any running opencode session to load Exoma's host plugin")
     agy_permissions, agy_opt_out = _resolve_agy_permissions(args.agy_permissions, hosts)
+    plan.codex_auto_review_context = (args.codex_auto_review_context
+                                     if args.codex_auto_review_context is not None
+                                     else _stored_codex_auto_review_context())
     print(f"  hosts:  {', '.join(hosts)}")
     print()
 
@@ -945,7 +968,8 @@ def main() -> int:
             plan.warn(f"to drop the Agy host from this choice: {deselect_hint('agy', hosts)}")
 
     _store_install_mode(
-        args.only_command, hosts, agy_permissions, owned_rules, agy_opt_out, plan, apply, backup_root
+        args.only_command, hosts, agy_permissions, owned_rules, agy_opt_out, plan, apply, backup_root,
+        codex_auto_review_context=plan.codex_auto_review_context,
     )
     _write_ledger(targets, apply)
 
@@ -991,7 +1015,7 @@ def main() -> int:
     if not apply:
         print()
         print("  DRY RUN — nothing was written. Re-run without --dry-run to install.")
-    return 1 if workspace_upgrade_failed or e2e_failure else 0
+    return 1 if workspace_upgrade_failed or e2e_failure or plan.codex_policy_problem else 0
 
 
 if __name__ == "__main__":

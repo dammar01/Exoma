@@ -22,17 +22,16 @@ concurrency:
 
 jobs:
   checks:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # Both, deliberately. The runtime ships a PowerShell runner and generates a POSIX
-        # one, the workspace checks shell out to whichever the platform has, and path
-        # handling differs where it matters most (locks, session dirs). A single-OS run
-        # would pass while half the product stayed untested.
-        os: [ubuntu-latest, windows-latest]
+        # Run the full source suite on every supported OS. Hooks and generated runners
+        # use Bash (Git Bash on Windows), while locks, process identity and paths differ.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.10', '3.13']
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +43,7 @@ jobs:
           # something outside the stdlib, which is the point at which a lockfile WOULD
           # be needed. A constraints file listing nothing would document the claim
           # without testing it.
-          python-version: '3.13'
+          python-version: ${{ matrix.python }}
 
       - name: Bash for the hook launchers
         # The hooks run as bash launchers on every OS (Git Bash on Windows), and
@@ -81,6 +80,22 @@ jobs:
         # workflow deliberately does not hold.
         run: python tools/e2e/e2e.py
 
+  posix-permissions:
+    name: POSIX permissions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Existing private and executable modes survive replacement
+        run: python tests/run.py --keep-going --only atomic-helpers --only codex-auto-review-context
+
   dist:
     name: dist (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -90,8 +105,8 @@ jobs:
       matrix:
         # The source suites above import from src/. Only an installed wheel proves the
         # runtime finds its _bundle through the package path, and that path is
-        # platform-shaped (Scripts/ vs bin/, drive letters), so both OSes again.
-        os: [ubuntu-latest, windows-latest]
+        # platform-shaped (Scripts/ vs bin/, drive letters), so all three OSes again.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          artifacts="$PWD/dist"
           tmp="$(mktemp -d)"
           python -m venv "$tmp/venv"
           bin="$tmp/venv/bin"; [ -d "$bin" ] || bin="$tmp/venv/Scripts"
@@ -120,9 +136,14 @@ jobs:
           cd "$tmp"
           "$bin/python" -c 'import exoma, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b; print("bundle", b)'
           "$bin/exoma" --version
-          "$bin/exoma" install
+          "$bin/exoma" install claude --no-input
           "$bin/exoma" init --work-dir "$tmp/project"
           bash "$tmp/project/.workflow/inspect.sh"
+          python -m venv "$tmp/sdist-venv"
+          sdist_bin="$tmp/sdist-venv/bin"; [ -d "$sdist_bin" ] || sdist_bin="$tmp/sdist-venv/Scripts"
+          "$sdist_bin/python" -m pip install --quiet "$artifacts"/exoma-*.tar.gz
+          "$sdist_bin/python" -c 'import exoma, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b'
+          "$sdist_bin/exoma" --version
 
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest'

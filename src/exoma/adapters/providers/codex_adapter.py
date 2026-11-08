@@ -138,13 +138,18 @@ _SOCKET_DENIED_SIGNS = (
 )
 
 _NETWORK_DENIED_NEXT_ACTION = (
-    "The OS refused codex a network socket (os error 10013); nothing was read. The usual "
+    "The OS refused codex a network socket (os error 10013) after the provider process started. The usual "
     "cause is the MAIN host's sandbox with network off, inherited by the runner and the "
-    "codex it starts (Codex as main agent: its workspace-write sandbox). Rerun the same "
-    "runner command with escalated sandbox permissions (Codex: sandbox_permissions "
-    "require_escalated, approve once with the suggested prefix rule); the second agent "
-    "itself keeps its read-only sandbox. If the main host is not sandboxed, check a "
-    "firewall or proxy blocking codex."
+    "codex it starts (Codex as main agent: its workspace-write sandbox). Check the CURRENT "
+    "host permissions first. If broader permissions are necessary and requests are allowed, "
+    "request only the delegated runner with sandbox_permissions require_escalated, a narrow "
+    "prefix rule, and justification naming the provider and context being sent, reusing "
+    "existing user authorization for this provider, project and context. With "
+    "approval_policy=never or escalation forbidden, omit "
+    "escalation arguments and report the blocked network boundary. Do not bypass an explicit "
+    "auto-review denial via another shell, prefix, or weaker policy. Such a denial before "
+    "process creation is a host denial, not this network_denied result. The second agent "
+    "keeps its read-only sandbox. If networking is already allowed, check the firewall or proxy."
 )
 
 _PERMISSION_SIGNS = (
@@ -561,6 +566,10 @@ class CodexAdapter:
                 meta=meta,
             )
 
+        if not outcome.get("output_complete", True):
+            meta["output_complete"] = False
+            return make_error("streaming_failed", "Provider output capture did not finish",
+                              next_action="Inspect the partial output and child-process cleanup before retrying.", meta=meta)
         if not content.strip():
             return make_error(
                 "empty_output",
@@ -836,13 +845,14 @@ class CodexAdapter:
         chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         sizes: dict[str, int] = {"stdout": 0, "stderr": 0}
         truncated: dict[str, bool] = {"stdout": False, "stderr": False}
+        read_failed = {"value": False}
         last_output = {"at": started}
         seen_session = {"done": False}
 
         def _drain(stream, key: str) -> None:
             buf = chunks[key]
             try:
-                for line in iter(stream.readline, ""):
+                for line in iter(lambda: stream.readline(max(1, min(MAX_CAPTURE_CHARS, 65536))), ""):
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
@@ -859,7 +869,7 @@ class CodexAdapter:
                         sizes[key] -= len(buf.pop(0))
                         truncated[key] = True
             except Exception:
-                pass
+                read_failed["value"] = True
             finally:
                 try:
                     stream.close()
@@ -890,39 +900,45 @@ class CodexAdapter:
         # from an empty answer, which is why "prompt too long" has been guesswork rather
         # than something the run meta could state.
         stdin_error: str | None = None
-        try:
-            proc.stdin.write(prompt or "")
-        except Exception as exc:  # noqa: BLE001 - the reason is data here, not control flow
-            stdin_error = f"{type(exc).__name__}: {exc}"
-        finally:
+        def feed_stdin() -> None:
+            nonlocal stdin_error
             try:
-                proc.stdin.close()
-            except Exception as exc:  # noqa: BLE001
-                # A close that fails after a successful write is the same broken pipe seen
-                # one step later; only report it when the write itself looked fine.
-                if stdin_error is None:
-                    stdin_error = f"{type(exc).__name__}: {exc} (on close)"
+                proc.stdin.write(prompt or "")
+            except Exception as exc:
+                stdin_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                try:
+                    proc.stdin.close()
+                except Exception as exc:
+                    if stdin_error is None:
+                        stdin_error = f"{type(exc).__name__}: {exc} (on close)"
+        feeder = threading.Thread(target=feed_stdin, daemon=True)
+        feeder.start()
         prompt_chars = len(prompt or "")
 
         timed_out = False
         kill_info: dict = {}
         interval = max(0.2, float(self.poll_interval or 2))
-        while True:
-            if proc.poll() is not None:
-                break
-            if timeout and (time.monotonic() - started) >= timeout:
-                timed_out = True
+        try:
+            while True:
+                if proc.poll() is not None:
+                    break
+                if timeout and (time.monotonic() - started) >= timeout:
+                    timed_out = True
+                    kill_info = osutil.terminate_tree(proc)
+                    break
+                now = time.monotonic()
+                self._tick(phase, now - started, now - last_output["at"])
+                time.sleep(interval)
+        finally:
+            # Also runs on KeyboardInterrupt; the feeder owns stdin so a blocked close
+            # cannot prevent the supervising thread from terminating the process tree.
+            if proc.poll() is None:
                 kill_info = osutil.terminate_tree(proc)
-                break
-            now = time.monotonic()
-            self._tick(phase, now - started, now - last_output["at"])
-            time.sleep(interval)
-
-        drained = True
-        for reader in readers:
-            reader.join(timeout=10)
-            if reader.is_alive():
-                drained = False
+            drain_deadline = time.monotonic() + 2
+            for reader in [feeder, *readers]:
+                reader.join(timeout=max(0, drain_deadline - time.monotonic()))
+        drained = not read_failed["value"] and not any(t.is_alive() for t in [feeder, *readers])
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -950,6 +966,7 @@ class CodexAdapter:
                 "timeout_seconds": timeout,
                 "kill": kill_info or None,
                 "output_complete": drained,
+                "capture_truncated": any(truncated.values()),
                 "idle_seconds": outcome["idle_seconds"],
                 "stderr_tail": outcome["stderr"][-2000:],
                 # Carried into THIS dict rather than written when they are learned, because

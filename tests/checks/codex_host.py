@@ -274,6 +274,8 @@ def _codex_hook_quoting():
 
 
 def _test_codex_host_install():
+    from tests.checks.codex_auto_review import check_codex_auto_review
+    check_codex_auto_review()
     from exoma.installer import base, uninstall
     from exoma.install import _resolve_hosts
 
@@ -315,11 +317,13 @@ def _test_codex_host_install():
             assert_true(not (codex / "prompts").exists() and not (codex / "commands").exists(),
                         "no Codex command directory is written")
             assert_true("`$exoma-<name>` skills" in agents and "/skills" in agents
-                        and "require_escalated" in agents,
-                        "the Codex host block names $exoma- skills and the escalated runner call")
+                        and "require_escalated" in agents and "approval_policy=never" in agents
+                        and "host denial" in agents,
+                        "the Codex host block names skills and policy-aware runner permissions")
             contract = (codex / "exoma" / "CONTRACT.md").read_text(encoding="utf-8")
-            assert_true("require_escalated" in contract,
-                        "the Codex contract asks for the runner call escalated (network for the second agent)")
+            assert_true("require_escalated" in contract and "approval_policy=never" in contract
+                        and "BEFORE process creation" in contract and "existing user authorization" in contract,
+                        "the rendered contract distinguishes conditional escalation and pre-execution denial")
             from exoma.core.audit.bundle_integrity import _host_status
             mode = home / ".claude" / ".workflow-install-mode.json"
             mode.parent.mkdir(parents=True)

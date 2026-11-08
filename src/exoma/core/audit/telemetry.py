@@ -721,7 +721,9 @@ def report(project_root) -> dict:
         # the figure simply starts meaning something else.
         "calls": _work_units(rows),
         # The new quantity, under a name that says what it counts.
-        "provider_calls": len(rows),
+        "provider_calls": sum(
+            1 for row in rows if not (row.reused_evidence or row.provider_call_avoided)
+        ),
         # Kept as an alias of `calls` for readers written against the interim shape.
         "commands": _work_units(rows),
         "calls_by_command": {

@@ -26,7 +26,7 @@ from exoma.core.evidence import verify_tests
 from exoma.core.evidence.contract import make_error
 from exoma.core.jobs.job_manager import DEAD
 from exoma.core.evidence.result_shaping import _finalize_verify_result
-from exoma.core.workspace.workspace_paths import detect_project_root
+from exoma.core.workspace.workspace_paths import detect_project_root, now_iso
 from exoma.utils import osutil
 
 
@@ -408,6 +408,7 @@ def check_stalled_job(
             next_action=(
                 "Check .workflow job logs for the worker traceback, then resubmit the command."
             ),
+            observed=job,
         )
 
     # The probe is a provider call. A second_agent process (`exoma check --wait` run by a
@@ -438,6 +439,7 @@ def check_stalled_job(
                 ".workflow/second_agent.json, or check the provider account, then rerun the command."
             ),
             probe=probe,
+            observed=job,
         )
 
     if probe.get("stream_failed") or probe.get("reason") == "probe_stream_failed":
@@ -454,6 +456,7 @@ def check_stalled_job(
                 "dies again, split the task into two narrower calls. Do NOT wait for a quota reset."
             ),
             probe=probe,
+            observed=job,
         )
 
     return _main().JOB_MANAGER.reap_stalled(
@@ -468,6 +471,7 @@ def check_stalled_job(
             "provider_command runs manually and is logged in, then rerun the command."
         ),
         probe=probe,
+        observed=job,
     )
 
 
@@ -627,23 +631,21 @@ def run_worker(job_id: str) -> dict:
     if not job:
         return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
 
-    # The worker is authoritative for its own PID. Parent-side registration is only a
-    # fast-path; this closes the small spawn-to-persist race after caller interruption.
-    _main().JOB_MANAGER.set_worker_pid(job_id, os.getpid())
-    running = _main().JOB_MANAGER.mark_running(job_id)
-    if running.get("status") != "running":
-        return make_error(
-            "worker_died",
-            f"job {job_id} became terminal before its worker started",
-            next_action="Inspect the terminal job result; do not restart this worker.",
-            meta={"job_id": job_id, "status": running.get("status")},
-        )
-    _main().JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
-
     def _beat(progress: dict) -> None:
         _main().JOB_MANAGER.touch_heartbeat(job_id, progress)
 
     try:
+        # Registration can fail on the same storage faults as the call itself.
+        _main().JOB_MANAGER.set_worker_pid(job_id, os.getpid())
+        running = _main().JOB_MANAGER.mark_running(job_id)
+        if running.get("status") != "running":
+            return make_error(
+                "worker_died",
+                f"job {job_id} became terminal before its worker started",
+                next_action="Inspect the terminal job result; do not restart this worker.",
+                meta={"job_id": job_id, "status": running.get("status")},
+            )
+        _main().JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
         effective_task = job["task"]
         require_provider_session = int(job.get("recovery_attempt") or 0) > 0
         if require_provider_session and job.get("command") == "verify-browser":
@@ -693,11 +695,6 @@ def run_worker(job_id: str) -> dict:
         # same disk that failed the run), letting it escape would lose the crash report the
         # caller is about to get. fail_job releases the session lock itself, even when its
         # own save fails, so a raise here no longer strands the lock.
-        record_error = None
-        try:
-            _main().JOB_MANAGER.fail_job(job_id, str(exc))
-        except Exception as fail_exc:  # noqa: BLE001 — reported in the failure meta
-            record_error = f"{type(fail_exc).__name__}: {fail_exc}"
         # Through make_error like every other failure: a plain dict here carried no
         # error_type and no next_action, so a caller branching on error_type saw None and
         # treated a crashed worker as an unknown shape rather than a known failure.
@@ -709,8 +706,12 @@ def run_worker(job_id: str) -> dict:
         failure["job_id"] = job_id
         failure["status"] = "failed"
         failure.setdefault("meta", {})["job_id"] = job_id
-        if record_error:
-            failure["meta"]["job_record_error"] = record_error
+        # The same typed result is what the job record keeps: a reader attaching later
+        # must see `worker_crashed`, not a bare message the direct caller never got.
+        try:
+            _main().JOB_MANAGER.fail_job(job_id, str(exc), output=dict(failure, meta=dict(failure["meta"])))
+        except Exception as fail_exc:  # noqa: BLE001 — reported in the failure meta
+            failure["meta"]["job_record_error"] = f"{type(fail_exc).__name__}: {fail_exc}"
         return failure
 
 
@@ -734,8 +735,15 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
     log_handle = _main().subprocess.DEVNULL
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_handle = open(log_path, "w", encoding="utf-8", errors="replace")
+        log_handle = open(log_path, "a", encoding="utf-8", errors="replace")
+        log_handle.write(f"\n--- worker spawn {now_iso()} ---\n")
+        log_handle.flush()
     except OSError:
+        if log_handle is not _main().subprocess.DEVNULL:
+            try:
+                log_handle.close()
+            except OSError:
+                pass
         log_handle = _main().subprocess.DEVNULL  # never block spawning on logging
     try:
         proc = _main().subprocess.Popen(

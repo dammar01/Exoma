@@ -11,8 +11,8 @@ What goes in, all text redacted through utils/redact.py (credential shapes becom
     session/               the session directory: prompts, responses, per-call logs and
                            their archived evidence (`evidence_ref.artifact_path` lives
                            here), runtime sidecars (plan, execution, markers)
-    streams/<name>.jsonl   rows of the shared usage/audit/quality streams that name this
-                           session — the delegated calls and what they cost
+    streams/<name>.jsonl   rows of the shared usage/audit/quality/task streams that name this
+                           session — delegated calls, costs and local task lifecycle events
     transcript/            the host's own transcript of the main session when the host
                            records where it is (Claude Code, Codex); otherwise the
                            manifest says `transcript: unavailable` and why
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from exoma.config.settings import TOOL_VERSION
+from exoma.core.evidence.contracts import TASK_STREAM_NAME
 from exoma.core.workspace.workspace_paths import workflow_paths
 from exoma.utils.redact import redact
 
@@ -107,14 +108,26 @@ def _inside(path: Path, base: Path) -> bool:
     return True
 
 
-def _rows_for(path: Path, session_id: str) -> list[str]:
+def _rows_for(path: Path, session_id: str, *, diagnostics: dict | None = None) -> list[str]:
+    diagnostics = {} if diagnostics is None else diagnostics
+    diagnostics.update(status="available", malformed_rows=0)
     if not path.is_file():
+        diagnostics["status"] = "missing"
         return []
     rows = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        diagnostics["status"] = "unreadable"
+        return []
+    for line in text.splitlines():
         try:
             row = json.loads(line)
         except ValueError:
+            diagnostics["malformed_rows"] += 1
+            continue
+        if not isinstance(row, dict):
+            diagnostics["malformed_rows"] += 1
             continue
         if isinstance(row, dict) and session_id in (row.get("session_id"), row.get("main_session_id")):
             rows.append(line)
@@ -221,10 +234,16 @@ def export_session(
                 continue
             add("session/" + rel, path.read_bytes())
 
-        for key in STREAMS:
-            rows = _rows_for(paths[key], session_id)
+        stream_paths = [paths[key] for key in STREAMS]
+        stream_paths.append(paths["data_dir"] / TASK_STREAM_NAME)
+        stream_diagnostics = {}
+        for stream_path in stream_paths:
+            diagnostic = {}
+            rows = _rows_for(stream_path, session_id, diagnostics=diagnostic)
+            diagnostic["matched_rows"] = len(rows)
+            stream_diagnostics[stream_path.name] = diagnostic
             if rows:
-                add(f"streams/{paths[key].name}", ("\n".join(rows) + "\n").encode("utf-8"))
+                add(f"streams/{stream_path.name}", ("\n".join(rows) + "\n").encode("utf-8"))
 
         transcript = {"status": "skipped", "reason": "--no-transcript"}
         host = "unknown"
@@ -270,6 +289,7 @@ def export_session(
             "transcript": transcript,
             "redactions": redactions,
             "files": files,
+            "streams": stream_diagnostics,
             "skipped": skipped,
             "review": {"status": review_status, "source": str(review_path)},
         }

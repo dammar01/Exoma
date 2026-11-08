@@ -266,8 +266,8 @@ def promote_checks(report: Report) -> None:
     empty_anchor_doc["anchors"]["paths"] = []
     verdict = retrieve.applicability(root, doc, branch="main", production_ref="main")
     report.check(
-        "on the production branch everything applies",
-        verdict["status"] == retrieve.APPLICABLE,
+        "a production branch name alone cannot establish applicability without Git",
+        verdict["status"] == retrieve.NEEDS_BRANCH_VERIFICATION,
     )
     excluded_doc = json.loads(json.dumps(doc))
     excluded_doc["applicability"]["excluded_branches"] = [

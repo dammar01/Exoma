@@ -39,6 +39,109 @@ def _test_manifest_matches_dist() -> None:
     )
 
 
+def _run_package_artifacts() -> None:
+    """Explicit opt-in callback; ordinary manifest/default checks never build artifacts."""
+    _test_manifest_matches_dist()
+    _check_package_artifacts()
+
+
+def _test_package_artifacts_dispatch() -> None:
+    """Exercise the real CLI dispatch without building or accessing the network."""
+    import runpy
+    from unittest.mock import Mock, patch
+
+    # A non-main name loads the real parser/registry without starting the scenario.
+    # Restore the entrypoint's environment/path setup after this nested import.
+    import os
+    with patch.dict(os.environ), patch.object(sys, "path", list(sys.path)):
+        runner = runpy.run_path(str(REPO_ROOT / "tests/run.py"), run_name="_artifact_dispatch_regression")
+
+    def invoke(arguments, *, smoke_error=None, manifest_code=0):
+        smoke = Mock(side_effect=smoke_error)
+        scenario = Mock(side_effect=_test_manifest_matches_dist)
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["tests/run.py", *arguments]), \
+                patch.object(sys.modules[__name__], "_check_package_artifacts", smoke), \
+                patch("tools.maintain.gen_manifest.main", return_value=manifest_code), \
+                patch.dict(runner["SUITES"], {"scenario": (scenario, "default dispatch control")}), \
+                contextlib.redirect_stdout(output):
+            code = runner["main"]()
+        return code, smoke, scenario, output.getvalue()
+
+    for arguments in (["--only=package-artifacts"], ["--only", "package-artifacts"]):
+        code, smoke, _, output = invoke(arguments)
+        assert_true(code == 0 and smoke.call_count == 1,
+                    f"{arguments} must run exactly one artifact smoke, got {smoke.call_count}: {output}")
+        code, smoke, _, output = invoke(arguments, smoke_error=RuntimeError("injected smoke failure"))
+        assert_true(code == 1 and smoke.call_count == 1 and "FAIL  package-artifacts" in output
+                    and "PASS  package-artifacts" not in output,
+                    f"a failed smoke must not pass for {arguments}: {output}")
+        code, smoke, _, output = invoke(arguments, manifest_code=1)
+        assert_true(code == 1 and smoke.call_count == 0,
+                    f"a failed manifest must stop before artifact smoke: {output}")
+    for arguments in (["--only", "manifest"], []):
+        code, smoke, scenario, output = invoke(arguments)
+        assert_true(code == 0 and smoke.call_count == 0 and scenario.call_count == (not arguments),
+                    f"manifest/default dispatch must not build artifacts: {output}")
+
+
+def _check_package_artifacts() -> None:
+    """Explicit opt-in: build the snapshot and exercise both installed artifacts."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    import venv
+    from exoma.config.settings import TOOL_VERSION
+    from tests.checks.support import no_console
+
+    uv = shutil.which("uv")
+    assert_true(uv is not None, "package-artifacts requires the existing uv build tool")
+    with tempfile.TemporaryDirectory(prefix="exoma-package-artifacts-") as tmp:
+        root = Path(tmp)
+        source = root / "source"
+        source.mkdir()
+        for name in ("pyproject.toml", "README.md", "LICENSE"):
+            shutil.copy2(REPO_ROOT / name, source / name)
+        shutil.copytree(REPO_ROOT / "src/exoma", source / "src/exoma",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        home = root / "home"
+        home.mkdir()
+        env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), AGENT_HOME=str(home),
+                   EXOMA_HOME=str(home / "exoma"), CODEX_HOME=str(home / ".codex"),
+                   AGENT_ENV_FILE=str(home / "absent.env"), UV_CACHE_DIR=str(root / "uv-cache"),
+                   PIP_CACHE_DIR=str(root / "pip-cache"))
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
+        for key in ("AGENT_PATH", "EXOMA_AGENT_PATH", "WORKFLOW_AGENT_ROLE"):
+            env.pop(key, None)
+        def run(args, cwd=source):
+            result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                                    errors="replace", timeout=180, **no_console())
+            assert_true(result.returncode == 0, f"artifact smoke failed: {result.stdout[-1800:]}")
+            return result
+        run([uv, "build"])
+        artifacts = list((source / "dist").glob("*.whl")) + list((source / "dist").glob("*.tar.gz"))
+        assert_true(len(artifacts) == 2, "current snapshot produces one wheel and one sdist")
+        check_bundle = (
+            "import hashlib,json,pathlib,exoma; b=pathlib.Path(exoma.__file__).parent/'_bundle'; "
+            "m=json.loads((b/'manifest.json').read_text(encoding='utf-8')); "
+            f"assert m['version']=={TOOL_VERSION!r}; "
+            "assert all(hashlib.sha256((b/'config'/e['path']).read_text(encoding='utf-8').encode()).hexdigest()==e['sha256'] for e in m['files'])"
+        )
+        for index, artifact in enumerate(artifacts):
+            target = root / f"venv-{index}"
+            venv.EnvBuilder(with_pip=True).create(target)
+            python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            run([str(python), "-I", "-m", "pip", "install", "--no-deps", str(artifact)], root)
+            run([str(python), "-I", "-c", check_bundle], root)
+            run([str(python), "-I", "-m", "exoma", "--version"], root)
+            project = root / f"project-{index}"
+            run([str(python), "-I", "-m", "exoma", "init", "--work-dir", str(project)], root)
+            run([str(python), "-I", "-m", "exoma", "--command", "inspect", "--work-dir", str(project)], root)
+
+
 def _test_malformed_manifest_entry_fails_closed() -> None:
     """A manifest entry doctor cannot read is a broken manifest, not an edited install.
 
@@ -53,6 +156,23 @@ def _test_malformed_manifest_entry_fails_closed() -> None:
 
     root = Path(tempfile.mkdtemp(prefix="bundle-malformed-"))
     try:
+        from unittest.mock import patch
+        from exoma import install
+        from exoma.installer.check import _run_check
+        for body in (b"{broken", b"[]", b"null", b'{"files": null}',
+                     b'{"files": [null]}', b"\xff\xfe"):
+            manifest = root / "invalid.json"
+            manifest.write_bytes(body)
+            with patch.object(install, "MANIFEST", manifest), \
+                    patch.object(sys, "argv", ["exoma.install", "--check", "--no-input"]), \
+                    patch.object(install, "_begin_receipt", side_effect=AssertionError("must not write")), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = install.main()
+            assert_true(code == 1 and manifest.read_bytes() == body,
+                        "invalid manifests must return a controlled error before any write")
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert_true(_run_check({"files": None}) == 1,
+                        "direct install check rejects malformed manifest shape")
         for label, bad in (
             ("a bare string", "claude/skills/plan.md"),
             ("an entry without a hash", {"path": "claude/skills/plan.md"}),

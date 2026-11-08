@@ -61,6 +61,7 @@ AGY_CONTRACT = "hosts/agy/exoma/CONTRACT.md"
 AGY_HOOKS_PREFIX = "hosts/agy/exoma/hooks/"
 CODEX_HOST_INSTRUCTIONS = f"{CODEX_HOST}/AGENTS.md"
 CODEX_HOST_HOOKS = f"{CODEX_HOST}/hooks.template.json"
+CODEX_AUTO_REVIEW_POLICY = f"{CODEX_HOST}/auto-review-policy.md"
 CODEX_CONTRACT = f"{CODEX_HOST}/exoma/CONTRACT.md"
 CODEX_HOOKS_PREFIX = f"{CODEX_HOST}/exoma/hooks/"
 CODEX_SKILLS_PREFIX = f"{CODEX_HOST}/skills/"
@@ -108,6 +109,8 @@ class Plan:
     def __init__(self) -> None:
         self.actions: list[tuple[str, str, str]] = []
         self.warnings: list[str] = []
+        self.codex_auto_review_context: bool | None = None
+        self.codex_policy_problem = False
 
     def add(self, verb: str, target: Path | str, detail: str = "") -> None:
         self.actions.append((verb, str(target), detail))
@@ -984,27 +987,63 @@ def _toml_valid(text: str) -> bool:
         return False
 
 
-def _install_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
+def _install_codex_grant(plan: Plan, apply: bool, backup_root: Path,
+                         auto_review_context: bool | None = None) -> None:
+    """One Codex config transaction: grant and optional owned reviewer context."""
+    from exoma.installer import codex_policy
+
     dest = codex_config_dest()
     exists = dest.exists()
     existing = _read_text_lenient(dest) if exists else ""
+    has_policy = codex_policy.START in existing or codex_policy.META in existing
+    if auto_review_context is not None and (auto_review_context or has_policy):
+        if not codex_policy.location_supported(HOME):
+            plan.add("refused", dest, "Auto-review context support-unverified: CODEX_HOME differs from the managed host")
+            plan.codex_policy_problem = True
+            return
+        if auto_review_context and not codex_policy.cli_supported():
+            plan.add("refused", dest, "Auto-review context support-unverified: tested CLI baseline is "
+                     + ", ".join(sorted(codex_policy.TESTED_CLI_VERSIONS)))
+            plan.codex_policy_problem = True
+            return
+        try:
+            existing = dest.read_bytes().decode("utf-8") if exists else ""
+        except (OSError, UnicodeError):
+            plan.add("refused", dest, "Auto-review context needs readable UTF-8 TOML; config preserved")
+            plan.codex_policy_problem = True
+            return
     state = codex_grant_state(existing)
     snippet = codex_grant_fix()["snippet"]
     if state == "broken":
+        if auto_review_context is not None and (auto_review_context or has_policy):
+            plan.codex_policy_problem = True
         plan.add("refused", dest, "the Exoma grant markers do not pair up")
         plan.warn(f"{dest}: the # EXOMA-CODEX-GRANT:START / END lines do not pair up — keep one pair "
                   f"(or delete both with the lines between them), then install again")
         return
     if state == "user_table":
-        plan.add("unchanged", dest, "your own [sandbox_workspace_write] table")
         plan.warn(f"{dest}: your [sandbox_workspace_write] table is kept as it is; for delegated "
                   f"calls from Codex, its writable_roots needs the job store:\n{snippet}")
-        return
+        if auto_review_context is None:
+            plan.add("unchanged", dest, "your own [sandbox_workspace_write] table")
+            return
     if state == "conflict":
         plan.warn(f"{dest}: you added your own [sandbox_workspace_write] table beside Exoma's grant — "
                   f"two tables of one name are invalid TOML, so Exoma's block is taken out and yours "
                   f"governs; its writable_roots needs the job store:\n{snippet}")
     merged = codex_grant_text(existing)
+    if merged is None:
+        merged = existing
+    if auto_review_context is not None:
+        body = ((DIST_CONFIG / CODEX_AUTO_REVIEW_POLICY).read_text(encoding="utf-8")
+                if auto_review_context else "")
+        policy = codex_policy.merge(merged, body, auto_review_context)
+        if policy["error"]:
+            plan.add("refused", dest, f"Auto-review context {policy['status']}: {policy['error']}")
+            plan.codex_policy_problem = True
+            return
+        merged = policy["text"]
+        plan.add("policy", dest, f"Auto-review context: {policy['status']}; effective reviewer policy may be overridden")
     if merged == existing:
         plan.add("unchanged", dest, "job store grant")
         return
@@ -1019,8 +1058,10 @@ def _install_codex_grant(plan: Plan, apply: bool, backup_root: Path) -> None:
              "removed Exoma's grant: your table governs" if state == "conflict"
              else "Codex sandbox grant for the job store")
     if apply:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(merged, encoding="utf-8")
+        import stat
+        from exoma.core.workspace.workspace_paths import atomic_write_bytes
+        mode = stat.S_IMODE(dest.stat().st_mode) if exists else 0o600
+        atomic_write_bytes(dest, merged.encode("utf-8"), fsync=True, mode=mode)
         _record("merge" if exists else "create", dest, CODEX_CONFIG_KEY, saved, pre_sha256)
 
 
@@ -1242,7 +1283,7 @@ def _install_text(
 ) -> None:
     if key == CODEX_HOST_HOOKS:
         _install_codex_hooks(dest, plan, apply, backup_root)
-        _install_codex_grant(plan, apply, backup_root)
+        _install_codex_grant(plan, apply, backup_root, plan.codex_auto_review_context)
         return
     if key == CODEX_HOST_INSTRUCTIONS:
         _current, problem = codex_hooks_state(codex_hooks_dest())

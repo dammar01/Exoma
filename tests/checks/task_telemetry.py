@@ -107,6 +107,12 @@ def _check_runtime_event() -> None:
         (root / ".workflow" / "data").mkdir(parents=True)
         task_telemetry.record_skill(root, "s1", "verify", verdict="DONE", derived="incomplete", next_action="/.commit", prompt_id="p1")
         (root / ".workflow" / "data" / "tasks.jsonl").open("a", encoding="utf-8").write("{torn\n")
+        stream = root / ".workflow/data/tasks.jsonl"
+        with stream.open("a", encoding="utf-8") as handle:
+            for bad in ({"kind": "skill", "session_id": ["s"]},
+                        {"kind": "commit", "session_id": "s", "paths": 7},
+                        {"kind": [], "session_id": "s"}):
+                handle.write(json.dumps(bad) + "\n")
         events = task_telemetry.load_events(root)
         assert_true(
             len(events) == 1 and events[0]["source"] == "runtime" and events[0]["verdict"] == "DONE"
@@ -115,6 +121,11 @@ def _check_runtime_event() -> None:
         )
         summary = task_telemetry.report(root)
         assert_true(summary["by_state"] == {"read_only": 1}, f"report reads the stream: {summary}")
+        assert_true(summary["event_stream"] == {"status": "partial", "invalid_rows": 4},
+                    "malformed events must be counted without erasing valid events")
+        tasks, _ = derive_tasks([{"kind": "skill", "session_id": []}, _edit("valid", "ok.py")])
+        assert_true(len(tasks) == 1 and tasks[0]["session_id"] == "valid",
+                    "direct consumers also isolate wrong-type events")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

@@ -171,6 +171,14 @@ def read_request(project_root, session_id: str) -> dict | None:
         return {"invalid": "tests.json is not valid JSON"}
     if not isinstance(data, dict):
         return {"invalid": "tests.json must be an object"}
+    commands = data.get("commands")
+    if not isinstance(commands, list) or any(not isinstance(command, str) for command in commands):
+        return {"invalid": "`commands` must be a list of command strings"}
+    reason = data.get("reason")
+    if reason is not None and not isinstance(reason, str):
+        return {"invalid": "`reason` must be a string"}
+    if not commands and not (reason or "").strip():
+        return {"invalid": "an explicit no-test request needs a non-empty `reason`"}
     if any(ch in str(data.get("reason") or "") for ch in "\r\n"):
         return {"invalid": "`reason` must be one line"}
     return data
@@ -278,6 +286,10 @@ def run_tests(
         if identity is not None:
             after = identity()
             outcome["fingerprint"] = current if current is not None and current == after else None
+            if outcome["fingerprint"] is None:
+                outcome["fingerprint_reason"] = ("identity_before_unavailable" if current is None else
+                                                  "identity_after_unavailable" if after is None else
+                                                  "inputs_changed_during_test")
             current = after
         outcomes.append(outcome)
         # The identity behind `reuse` was the tree before this command ran.
@@ -451,6 +463,7 @@ def _record_verify_failures(project_root, session_id: str, outcomes: list[dict])
         json.dumps({
             "command": o["command"], "status": o["status"], "seconds": o.get("seconds"),
             "fingerprint": None, "at": _now(), "source": "verify",
+            "fingerprint_reason": "verification_test_failed",
         }) + "\n"
         for o in failed
     )
@@ -690,6 +703,7 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
         json.dumps({
             "command": outcome["command"], "status": outcome["status"],
             "seconds": outcome.get("seconds"), "fingerprint": bound[id(outcome)], "at": _now(),
+            "fingerprint_reason": outcome.get("fingerprint_reason"),
         }) + "\n"
         for outcome in ran
     )

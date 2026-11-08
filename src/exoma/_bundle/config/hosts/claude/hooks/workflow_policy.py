@@ -13,11 +13,81 @@ with no repository on disk and imports nothing beyond the standard library. It i
 not a hook: no launcher, never run on its own.
 """
 import datetime
+import contextlib
 import fnmatch
+import hashlib
 import json
 import os
 import re
 import tempfile
+import threading
+import time
+
+_EXECUTION_TRANSACTIONS = threading.local()
+
+
+@contextlib.contextmanager
+def execution_transaction(rt_dir):
+    """Byte-0 lock shared with core/runtime/execution; never held during inference."""
+    path = os.path.join(rt_dir, "execution.state.guard")
+    key = os.path.normcase(os.path.realpath(path))
+    held = getattr(_EXECUTION_TRANSACTIONS, "held", set())
+    if key in held:
+        yield
+        return
+    deadline = time.monotonic() + 10
+    handle = None
+    locked = False
+    try:
+        while True:
+            os.makedirs(rt_dir, exist_ok=True)
+            handle = open(path, "a+b")
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                named, opened = os.stat(path), os.fstat(handle.fileno())
+                if os.name == "nt" or (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino):
+                    break
+            except OSError:
+                pass
+            if locked:
+                _unlock_execution(handle)
+                locked = False
+            handle.close()
+            handle = None
+            if time.monotonic() >= deadline:
+                raise TimeoutError("execution state transaction is busy")
+            time.sleep(0.02)
+        _EXECUTION_TRANSACTIONS.held = held | {key}
+        yield
+    finally:
+        _EXECUTION_TRANSACTIONS.held = held
+        if handle is not None:
+            try:
+                if locked:
+                    _unlock_execution(handle)
+            finally:
+                handle.close()
+
+
+def _unlock_execution(handle):
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 # --- workspace layout -------------------------------------------------------------------
 
@@ -35,8 +105,38 @@ def workflow_data_dir(root):
     return data
 
 
+def _session_component(value):
+    """Mirror utils.path_guard.safe_path_component for standalone hook installs.
+
+    Input is the logical ID from the registry, never an already mapped directory name.
+    Contract parity (including legacy layouts) is checked by workflow_layout tests.
+    """
+    reserved = {"con", "prn", "aux", "nul"}
+    reserved.update(f"com{index}" for index in range(1, 10))
+    reserved.update(f"lpt{index}" for index in range(1, 10))
+    raw = str(value or "")
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", raw)
+    if (
+        cleaned == raw
+        and cleaned not in {"", ".", ".."}
+        and len(cleaned) <= 120
+        and raw == raw.casefold()
+        and not raw.endswith((".", " "))
+        and raw.casefold().split(".", 1)[0] not in reserved
+        and not re.search(r"--[0-9a-f]{12}$", raw)
+    ):
+        return cleaned
+    stem = cleaned.strip(". ")[:96] or "session"
+    if stem.casefold().split(".", 1)[0] in reserved:
+        stem = f"id_{stem}"
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"{stem}--{digest}"
+
+
 def runtime_dir(root, main_id):
-    return os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
+    data = workflow_data_dir(root)
+    session = os.path.join(data, "sessions", _session_component(main_id)) if main_id else data
+    return os.path.join(session, "runtime")
 
 
 def read_json(path):
@@ -321,7 +421,7 @@ GATE_SKIPS_FILE = "gate-skips.jsonl"
 GATE_SKIPS_MAX_BYTES = 256 * 1024
 
 
-def log_gate_skip(log_dir, hook, reason, root=None, key=None):
+def log_gate_skip(log_dir, hook, reason, root=None, key=None, root_digest=None):
     """Append one line to <log_dir>/gate-skips.jsonl; never the path or command.
 
     `key` names the occurrence (the marker's set_at): a row with the same reason, root and
@@ -332,6 +432,8 @@ def log_gate_skip(log_dir, hook, reason, root=None, key=None):
         return
     path = os.path.join(log_dir, GATE_SKIPS_FILE)
     row = {"at": _now(), "hook": hook, "reason": reason, "root": root, "key": key}
+    if root_digest is not None:
+        row["root_digest"] = root_digest
     try:
         os.makedirs(log_dir, exist_ok=True)
         if os.path.isfile(path):
@@ -344,7 +446,7 @@ def log_gate_skip(log_dir, hook, reason, root=None, key=None):
                     last = json.loads(line)
                 except ValueError:
                     continue
-                if (last.get("reason"), last.get("root"), last.get("key")) == (reason, root, key):
+                if (last.get("reason"), last.get("root"), last.get("key"), last.get("root_digest")) == (reason, root, key, root_digest):
                     return
             if size > GATE_SKIPS_MAX_BYTES:
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -848,7 +950,34 @@ def _now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def approval_plan_binding(rt_dir):
+    """Same execution snapshot as core.runtime.execution.approval_binding, stdlib-only."""
+    try:
+        with open(os.path.join(rt_dir, "plan.json"), encoding="utf-8") as handle:
+            plan = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(plan, dict) or plan.get("decision") != "proceed":
+        return None
+    if not all(isinstance(plan.get(key), str) and plan[key] for key in ("plan_id", "recorded_at", "task")):
+        return None
+    files = plan.get("files")
+    if not isinstance(files, list) or not files or not all(isinstance(p, str) and p for p in files):
+        return None
+    return {
+        "plan_id": plan["plan_id"], "recorded_at": plan["recorded_at"],
+        "revision": plan.get("revision") or plan["recorded_at"],
+        "task": plan["task"], "files": files,
+        "runtime": os.path.normcase(os.path.realpath(rt_dir)),
+    }
+
+
 def record_approvals(text, rt_dir, anchored, provenance):
+    with execution_transaction(rt_dir):
+        return _record_approvals_locked(text, rt_dir, anchored, provenance)
+
+
+def _record_approvals_locked(text, rt_dir, anchored, provenance):
     """Write or clear execute.token and commit.marker for the user's own turn.
 
     The files the runtime and the execution gate check (core/runtime/execution.py). Written
@@ -865,8 +994,30 @@ def record_approvals(text, rt_dir, anchored, provenance):
             continue  # the yes to a commit this session just proposed
         if given:
             os.makedirs(rt_dir, exist_ok=True)
+            payload = {"set_at": _now(), **provenance}
+            if name == "execute.token":
+                binding = approval_plan_binding(rt_dir)
+                # Record the user's intent even before a plan exists, for host parity.
+                # An unbound token is never accepted by execute-begin; plan-record also
+                # revokes it, so approval cannot silently attach to a future plan.
+                payload["plan_binding"] = binding
+                fd, temporary = tempfile.mkstemp(prefix=".execute-approval-", dir=rt_dir)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        json.dump(payload, handle)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    if approval_plan_binding(rt_dir) != binding:
+                        # Only the private staging file belongs to this writer. A token
+                        # at the public path may have been issued for a newer revision.
+                        continue
+                    os.replace(temporary, path)
+                finally:
+                    if os.path.isfile(temporary):
+                        os.remove(temporary)
+                continue
             with open(path, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"set_at": _now(), **provenance}))
+                f.write(json.dumps(payload))
         elif name == "commit.marker" and os.path.isfile(path):
             # A commit is approved for the turn the user asked for it, not for the rest of
             # the session. The execute token is consumed by execute-begin instead, and

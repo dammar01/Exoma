@@ -196,6 +196,48 @@ def _project_scoped_elsewhere(rel: str, targets: dict, project_root: Path | str 
     )
 
 
+_CODEX_AUTO_REVIEW_POLICY = f"{host_dir('codex')}/auto-review-policy.md"
+
+
+def _audit_codex_auto_review(
+    result: dict, rel: str, installed: Path | None, dist_config_dir: Path, home: Path
+) -> None:
+    """The owned Auto-review block's installation state, through the installer's classifier.
+
+    installed/disabled are clean; missing goes to `missing`; outdated, removed, conflict,
+    support-unverified, an unreadable template and a config that cannot be opened are
+    drift with that reason. An absent config.toml is read as empty: with the context off
+    that is clean, as it is for `install --check`. The config is decoded the way the
+    installer reads it (`_read_text_lenient`), so an ANSI-written file gets the same
+    verdict from both. Read-only.
+    """
+    from exoma.installer import codex_policy
+    from exoma.installer.base import _read_text_lenient
+
+    text = ""
+    if installed is not None and installed.is_file():
+        try:
+            text = _read_text_lenient(installed)
+        except OSError:
+            result["mismatched"].append(rel)
+            result["drift"].append({"path": rel, "reason": "unreadable"})
+            return
+    enabled = _install_mode().get("codex_auto_review_context") is True
+    try:
+        status = codex_policy.installation_status(text, dist_config_dir / rel, enabled, home)
+    except Exception as exc:  # noqa: BLE001 — doctor reports, never raises
+        status = f"unavailable ({type(exc).__name__})"
+    result["checked"] += 1
+    if status in ("installed", "disabled"):
+        return
+    if status == "missing":
+        result["missing"].append(rel)
+        result["drift"].append({"path": rel, "reason": "auto_review_context_missing"})
+        return
+    result["mismatched"].append(rel)
+    result["drift"].append({"path": rel, "reason": f"auto_review_context: {status}"})
+
+
 def _bundle_integrity(
     dist_config_dir: Path, manifest_path: Path, project_root: Path | str | None = None
 ) -> dict:
@@ -290,6 +332,11 @@ def _bundle_integrity(
             alias = _installed_config_alias(installed)
             if alias is not None:
                 installed = alias
+        if rel == _CODEX_AUTO_REVIEW_POLICY:
+            # Merged into config.toml, so the generic merge branch below would accept any
+            # file that exists. Classified like `install --check` instead.
+            _audit_codex_auto_review(result, rel, installed, dist_config_dir, Path(home))
+            continue
         if installed is None or not installed.is_file():
             result["missing"].append(rel)
             result["drift"].append({"path": rel, "reason": "not_installed"})
@@ -308,7 +355,7 @@ def _bundle_integrity(
             continue
         try:
             text = installed.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeError):
             result["missing"].append(rel)
             result["drift"].append({"path": rel, "reason": "unreadable"})
             continue
@@ -322,7 +369,7 @@ def _bundle_integrity(
             source = dist_config_dir / rel
             try:
                 expected = source.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeError):
                 result["drift"].append({"path": rel, "reason": "dist_source_unreadable"})
                 continue
             expected = expected.replace("{{HOME}}", home)

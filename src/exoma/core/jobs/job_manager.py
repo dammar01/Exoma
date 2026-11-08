@@ -831,6 +831,8 @@ class JobManager:
         message: str,
         next_action: str,
         probe: dict | None = None,
+        *,
+        observed: dict | None = None,
     ) -> dict:
         """Terminate a stalled worker and fail its job with a typed reason.
 
@@ -839,21 +841,38 @@ class JobManager:
         and a later `complete_job` would resurrect a record the caller already treated
         as terminal. Best-effort: an unkillable worker still gets its job failed —
         reporting a stall the caller can act on beats blocking on a process kill.
+
+        `observed` is the record the caller read before deciding to reap. It is used only
+        when the job's own storage cannot be locked or read: then termination still goes
+        through `_kill_worker` and its process-generation check, nothing is published, and
+        no session lock is released — a newer job may own it. Without a usable snapshot
+        the result says the kill was skipped; a worker is never chosen by job ID alone.
         """
         from exoma.core.evidence.contract import make_error
 
-        with self._job_mutation(job_id):
-            job = self._load(job_id)
-            if job.get("status") not in {"pending", "running", "recovering"}:
-                terminal = True
-            else:
-                job["status"] = "failed"
-                job["reaped"] = True
-                job["completed_at"] = self._now()
-                job["error"] = message
-                job.pop("recovery_in_progress", None)
-                self._save(job)
-                terminal = False
+        save_error = None
+        try:
+            with self._job_mutation(job_id):
+                job = self._load(job_id)
+                if job.get("status") not in {"pending", "running", "recovering"}:
+                    terminal = True
+                else:
+                    job["status"] = "failed"
+                    job["reaped"] = True
+                    job["completed_at"] = self._now()
+                    job["error"] = message
+                    job.pop("recovery_in_progress", None)
+                    try:
+                        self._save(job)
+                    except Exception as exc:
+                        # Persistence failure cannot make termination optional.
+                        save_error = f"{type(exc).__name__}: {exc}"
+                    terminal = False
+        except Exception as exc:  # noqa: BLE001 — storage failure, reported below
+            return self._reap_without_record(
+                job_id, error_type, message, next_action, probe, observed,
+                f"{type(exc).__name__}: {exc}",
+            )
 
         if terminal:
             result = self.get_result(job_id)
@@ -876,10 +895,55 @@ class JobManager:
         }
         if probe is not None:
             meta["probe"] = probe
+        if save_error:
+            meta["job_record_error"] = save_error
         output = make_error(error_type, message, next_action=next_action, meta=meta)
 
-        failed = self.fail_job(job_id, message, output=output, reaped=True)
+        try:
+            failed = self.fail_job(job_id, message, output=output, reaped=True)
+        except Exception as exc:
+            output["meta"]["job_record_error"] = f"{type(exc).__name__}: {exc}"
+            failed = {"status": "failed"}
         return {**output, "job_id": job_id, "status": failed.get("status", "failed")}
+
+    def _reap_without_record(
+        self,
+        job_id: str,
+        error_type: str,
+        message: str,
+        next_action: str,
+        probe: dict | None,
+        observed: dict | None,
+        storage_error: str,
+    ) -> dict:
+        """reap_stalled when the job record cannot be locked or loaded.
+
+        Only a snapshot of this same job, still active when it was read, licenses a kill,
+        and the kill is `_kill_worker`'s (generation-checked, never this process). The
+        record is not written and the session lock is not touched: the storage that failed
+        is the one both live in. The next poll retries the reap against real state.
+        """
+        from exoma.core.evidence.contract import make_error
+
+        usable = (
+            isinstance(observed, dict)
+            and observed.get("job_id") == job_id
+            and observed.get("status") in {"pending", "running", "recovering"}
+        )
+        if usable:
+            kill = self._kill_worker(observed)
+        else:
+            kill = {"method": "skipped", "ok": False, "reason": "no_trusted_worker_record"}
+        meta = {
+            "worker_pid": observed.get("worker_pid") if usable else None,
+            "kill": kill,
+            "job_record_error": storage_error,
+            "job_record_written": False,
+        }
+        if probe is not None:
+            meta["probe"] = probe
+        output = make_error(error_type, message, next_action=next_action, meta=meta)
+        return {**output, "job_id": job_id, "status": "failed"}
 
     def active_worker_count(self) -> int:
         """Workers in flight across ALL sessions (global concurrency).

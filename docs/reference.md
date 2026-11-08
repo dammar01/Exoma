@@ -93,7 +93,7 @@ A closed set in `core/evidence/contract.py` `ERROR_TYPES`; `make_error` rejects 
 
 `sandbox_unavailable` with `meta.reason: resume_sandbox_failed` means the codex Windows sandbox rejects a **resumed** thread; a new thread is known to work (see "Codex on Windows" in [`.workflow/second_agent.json`](#workflowsecond_agentjson)).
 
-`network_denied`: the OS refused the provider a network socket — Windows WSAEACCES, `os error 10013` (codex), or `connect EACCES <address>` (opencode, Node). Classified from stderr only, before `permission_denied`, whose signs (`forbidden`, `eacces`) the same text also carries. The usual cause is a main host's sandbox with network off, which the runner and the provider it starts inherit: Codex as main agent on its `workspace-write` sandbox (see "Codex host" in [Hosts](#hosts)). `next_action` names the escalated runner call; the second agent keeps its own sandbox.
+`network_denied`: the OS refused the provider a network socket — Windows WSAEACCES, `os error 10013` (codex), or `connect EACCES <address>` (opencode, Node). Classified from stderr only, before `permission_denied`, whose signs (`forbidden`, `eacces`) the same text also carries. One cause is a main host's network restriction inherited by the runner and provider. Codex advice is conditional on the current host permissions: request escalation only when necessary and permitted, otherwise report the blocked boundary. A host auto-review denial before process creation is a separate case with no runner JSON. See [Hosts](#hosts).
 
 ---
 
@@ -744,7 +744,7 @@ is data in `src/exoma/config/hosts.py` (`PROFILES`), not a rewrite of Claude's t
 |---|---|---|---|---|
 | Runner prefix (`{{RUNNER}}`) | `bash` (the Bash tool is Git Bash on Windows) | this machine's bash by full path; on Windows `& '<Git>/bin/bash.exe'` (PowerShell) | as Agy | as Agy |
 | Shell tool (`{{SHELL_TOOL}}`) | the Bash tool | `run_command`, sandbox bypassed | `exec_command` | the `bash` tool |
-| Waiting for the runner (`{{DELEGATED_RUN}}`) | background-task tool, collect the same task ID | Agy backgrounds a long call itself; read that task's output | `exec_command` with a long timeout, requested with `sandbox_permissions: "require_escalated"` and a runner prefix rule; wait on the same session | foreground, 600000 ms timeout (no background tool) |
+| Waiting for the runner (`{{DELEGATED_RUN}}`) | background-task tool, collect the same task ID | Agy backgrounds a long call itself; read that task's output | `exec_command` with a long timeout; normal permissions when allowed, conditional escalation only when needed and permitted; wait on the same session | foreground, 600000 ms timeout (no background tool) |
 | Asking the user (`{{ASK_USER}}`) | AskUserQuestion | `ask_question` | the user-input tool, else the reply | the reply |
 | Skill path (`{{SKILL_PATH}}`) | `~/.claude/skills/<name>.md` | `~/.gemini/antigravity-cli/skills/.<name>/SKILL.md` | `~/.codex/skills/exoma-<name>/SKILL.md` | `~/.config/opencode/skills/exoma-<name>/SKILL.md` |
 
@@ -842,18 +842,28 @@ agent remains independent of the host hooks, and its read boundary remains unenf
 See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks) for current event
 and tool coverage.
 
-**Codex host: the runner call is escalated.** A Codex `workspace-write` sandbox has network off,
-and every process the runner starts inherits it: the second agent's connection to its model is
-refused (`os error 10013` on Windows, classified `network_denied`). The host block and the
-contract (`{{DELEGATED_RUN}}`) therefore tell the agent to request the runner call with
-`sandbox_permissions: "require_escalated"`, a `justification`, and a prefix rule for
-`<bash> <root>/.workflow/run.sh`, so the user approves it once per rule; no other call of the
-session is escalated. Everything the runner starts runs outside the sandbox with it: the second
-agent, the project tests `test` and `/.verify` run (only commands under
-`commands.verify_test_commands`, the user's own allowlist), and a `verify-browser` run. This needs an approval policy that lets Codex ask (`on-request`); with `never` the
-call stays sandboxed and fails with `network_denied`. The second agent keeps its own
-`--sandbox read-only` and `approval_policy="never"`. Exoma does not write `network_access` into
-`~/.codex/config.toml`: that would open the network to every shell command of the main session.
+**Codex host: runner permissions follow the active session.** Use normal execution when
+the runner is allowed. With `approval_policy=never`, or when escalation is forbidden,
+omit `sandbox_permissions`, `justification`, and `prefix_rule`. A restricted network may
+still prevent delegation; `never` alone does not establish whether networking is allowed.
+Only when broader permissions are needed and the host permits requesting them, request
+the delegated runner with `sandbox_permissions: "require_escalated"`, a justification,
+and a narrow prefix for `<bash> <root>/.workflow/run.sh`. Use available metadata to name
+the configured provider and the kind of repository context sent to its service, reusing
+existing authorization for this provider, project and context, and asking only for missing
+authorization. Do not guess an endpoint.
+
+Distinguish host approval denial **before** process creation (no runner JSON), shell
+failure without JSON, `network_denied` after launch, and a job error returned as JSON.
+Report an auto-review denial and its reason; do not retry through another shell, prefix,
+or weaker policy. Continue only through a materially safer authorized path or explicit new
+authorization, still subject to host policy. Exoma cannot override review, and a command
+prefix does not guarantee approval. See [OpenAI's Auto-review documentation](https://learn.chatgpt.com/docs/sandboxing/auto-review).
+
+Keep waiting on the same running session. When the runner itself is escalated, its children
+inherit that environment; provider-specific restrictions remain separate. The Codex second
+agent still uses `--sandbox read-only` and `approval_policy="never"`. Exoma does not change
+the host's approval policy or write a network grant into its configuration.
 
 **Codex host on a `workspace-write` sandbox.** Every delegated call writes the global job
 store (`<data dir>/storage/jobs`, see [the workspace layout](#workspace-layout)) and the
@@ -1819,7 +1829,7 @@ Since agent-workflow 3.9.0 the plan → `/.execute -y` → `/.verify` chain is r
 | Command | Reads | Writes | Refuses with |
 |---|---|---|---|
 | `plan-record <path>` | the plan JSON at `<path>` | `plan.json` (with `base_tree`) | `plan_invalid`: `decision: proceed` with open questions, `solution_path` below `high`, an empty `files` scope, an option without `minus`, or not exactly one recommended option; `plan_input_missing`, `plan_input_unreadable` |
-| `execute-begin` | `plan.json`, `execute.token` | `execution.json` (`status: active`, `verification: not_run`, `scope` = the plan's `files`, `begin_tree`, `changed_since_plan`); consumes the token | `execute_no_plan`, `execute_plan_not_proceed`, `execute_not_approved` (no `execute.token` younger than 15 minutes) |
+| `execute-begin` | `plan.json`, `execute.token` | `execution.json` (`status: active`, `verification: not_run`, `scope` = the plan's `files`, `plan_revision`, `begin_tree`, `changed_since_plan`); consumes the token | `execute_no_plan`, `execute_plan_not_proceed`, `execute_not_approved` (no `execute.token` younger than 15 minutes bound to the current plan revision, scope and session; a legacy/unbound or copied token; a token already consumed; the plan re-recorded — even unchanged — before or during opening); `runtime_lock` when the session's execution transaction cannot be acquired in time or its state cannot be read or written |
 | `execute-end` | `execution.json` | `status: implemented`, `end_tree`, `changed_files`, `outside_scope` | `execution_not_active` |
 | `verify` (delegated or syntax) | — | `verification`: `pass`, `fail`, `incomplete`, or `syntax_only`; `changed_since_execute` | — |
 
@@ -1837,6 +1847,14 @@ and the out-of-scope paths. A snapshot that cannot be taken or compared (no Git,
 pruned an unreferenced tree) makes the list `null`: unknown, never "nothing changed". Like test
 reuse, a snapshot sees content as Git stores it, so an edit Git's conversions undo (LF to CRLF in
 a normalized file) is not a change.
+
+**Approval binding.** An `execute.token` carries a `plan_binding`: the recorded plan's revision,
+its `files` scope and the runtime session. `execute-begin` opens an execution only when that
+binding equals the current plan's, so a token from before a `plan-record` (an identical document
+included), from another session, or without a binding cannot open it. The token is claimed by an
+atomic rename, so one `-y` opens one execution even when two `execute-begin` calls race. Plan and
+execution writes share one per-session transaction lock with the hooks; contention past its bound
+returns `runtime_lock` instead of a partial write.
 
 `execute.token` and `commit.marker` are written by the `intent-gate-set` hook only for a prompt
 the user wrote: `/.execute -y` (typed or as the expanded slash command) and a prompt asking to
@@ -1857,6 +1875,12 @@ Hooks, governed by `policies.enforcement`:
   `outside_root`, `outside_scope`), `tool`, `mode`, `exit` (2 or 0) and the active `plan_id`.
   The path and the command are not recorded. Writing the line is fail-open: a failure never
   changes the decision.
+  If its helper, session binding, workspace, or payload is unavailable, or an exception
+  prevents checking, the Claude hook stays fail-open but emits an unavailable warning and
+  records a reason in `gate-skips.jsonl`. It falls back to `~/.claude/gate-skips.jsonl`
+  without a session; new shared rows use `root_digest`. Intentional `off` is recorded
+  without an unavailable warning. Doctor's `checks.execution_gate` separates configured
+  mode from recent fail-open observations; `unconfirmed` never means enforcement was proved.
 - `status-guard` (Stop): when `execution.json` says `verification: not_run`, a reply whose own
   `[EXECUTION RESULT]` block claims more — `status` outside `implemented|partial|blocked`, or a
   `verification` other than `not_run` — gets a `systemMessage` warning. It reads those fields
@@ -1866,6 +1890,27 @@ Hooks, governed by `policies.enforcement`:
   `[EXECUTION RESULT]` is not judged. It never blocks.
 
 ## Evidence reuse and boundary
+
+Promoted knowledge is checked before injection: freshness per claim is separate from
+document applicability. Invalid documents and unsafe, secret-pattern, ignored, or
+out-of-project code sources are not used for automatic source reads.
+Missing/unlocatable code sources are omitted, and summaries are
+rebuilt from retained claims. Commit/blob shortcuts require a clean existing source;
+otherwise the current working-file anchor is checked. Git path output is read as bytes and
+decoded with the file system encoding, so a non-ASCII name is matched by its real spelling
+under any process locale; undecodable output is an unresolved comparison, not a clean tree.
+Index entries marked `assume-unchanged` or `skip-worktree` count as changed (the index is never
+modified), so their claims are decided by the anchor. A source reached through a symlink, or
+through a symlinked directory, stays inside the project by its resolved target: secret-pattern
+and ignore checks apply to both the cited path and the target, the commit/blob shortcuts are
+skipped (Git records the link, not the target's content), and the anchor is read through the
+link. A concurrent swap of the link is not guarded. User-sourced intent remains separate
+from code-backed observations. Fresh anchors establish source continuity, not semantic truth.
+Applicability compares the production ref with the index and working tree, including
+untracked paths and the in-project targets of anchored symlinks; detached HEAD is evaluated by
+its actual content, not assumed production.
+An unresolved comparison reports `needs_branch_verification`. The served metadata is part
+of the evidence reuse fingerprint.
 
 The reuse identity includes a fingerprint of the promoted knowledge the call was shown (evidence context schema 3), so promoting or correcting knowledge invalidates an identical earlier answer; rows written under schema 2 miss once.
 
@@ -1975,6 +2020,10 @@ If the worker is already dead, the same job is recovered once through the old pr
 with a structured continuation prompt. A second death yields
 `recovery_exhausted`, releases the lock, and does not trigger an automatic loop.
 
+The worker log path stays `logs/<job_id>.log`; each spawn appends a timestamped separator
+and its output, preserving earlier recovery segments. Pruning removes it with the job.
+This is diagnostic output, not an append-only lifecycle journal or an ownership fence.
+
 ```bash
 bash .workflow/inspect.sh
 bash .workflow/check.sh <job_id> --wait --result
@@ -2016,6 +2065,17 @@ The normal `await` path reads `stall_threshold_seconds`, `idle_stall_seconds`, a
 - probe stream cut off → terminate/reap as `streaming_failed`;
 - probe fails for another reason → terminate/reap as `second_agent_unavailable`;
 - PID gone at any time → reap as `worker_died`.
+
+Termination always goes through the process-generation check: a reused, unverifiable or
+current-process PID is never killed. When the job record cannot be locked or read during a
+reap, the record read just before the reap decision is used for that check only if it is the
+same job and still active; nothing is written, the session lock is left alone, and `meta`
+carries `job_record_error` and `job_record_written: false`. Without such a record the kill is
+skipped with `kill.reason: no_trusted_worker_record`. The call that hit the failure returns this
+result and stops waiting; nothing retries on its own. The job record still reads as active, so a
+later `check` or await on the same job reaps again against the state it can then read.
+A worker that raises records the same typed `worker_crashed` result in its job record that it
+returns, so a later attach reads `error_type` and `next_action`, not a bare message.
 
 The JobManager hard ceiling remains as a safety net: default 5400 seconds, changeable via the env `EXOMA_JOB_MAX_RUNTIME_SECONDS`. A job that exceeds it fails as `job_expired` even if the PID appears alive. A project-local key with the same name does not yet change this value.
 
@@ -2103,22 +2163,24 @@ dispatch inputs — defaults `e2e-dispatch` and `self-hosted`.
 
 ### Toolchain and matrix
 
-Python is pinned to `3.13` via `actions/setup-python`, so the workflow PROVIDES the interpreter
-instead of hoping the runner has it. The `runs-on` matrix covers `ubuntu-latest` and
-`windows-latest` with `fail-fast: false`: hooks and the runner are bash on both OSes (Git Bash on
-Windows, checked in the job's first step), but path handling differs most exactly where
-it matters (locks, session directories, backslash paths accepted by the launcher) — a single-OS run would
-pass while half the product went untested, and one red platform must not hide
-the other platform's results.
+The full checks matrix uses Python `3.10` and `3.13` via `actions/setup-python` on
+`ubuntu-latest`, `windows-latest`, and `macos-latest`, with `fail-fast: false`. Hooks and
+generated runners use Bash on every OS (Git Bash on Windows, checked in the job's first
+step). Each platform runs the default source suite and local E2E checks; process identity,
+locks and path handling are exercised on the native OS. A separate POSIX-permissions job
+keeps the atomic-mode and Codex auto-review checks on Linux/macOS with Python `3.13`.
 
 `on: push` (`main`/`dev`) + `pull_request` + `workflow_dispatch`, with
 `concurrency: cancel-in-progress` so that a pipeline overtaken on the same ref is cancelled
 instead of being left to finish against a stale commit. Job permissions are locked to `contents: read`.
 
-The `dist` job builds the sdist and wheel, installs the wheel into a clean venv with every
-home variable pointed at a temp directory, and runs `exoma --version`, `exoma install` (dry
-run), `exoma init` and the generated `inspect.sh`; on Linux it uploads `dist/` as an artifact.
-`ci.yml` also accepts `workflow_call`.
+The `dist` matrix uses Python `3.13` on the same three OSes. It builds the sdist and wheel,
+installs the wheel into a clean venv with home variables and cwd pointed at temporary
+directories, and runs `exoma --version`, `exoma install claude --no-input`, `exoma init`,
+and the generated `inspect.sh`. A second clean venv installs the sdist and checks import,
+bundle presence and version. Only Ubuntu uploads `dist/` as the publish artifact.
+These smoke checks do not run the full source suite against installed artifacts or invoke
+real provider CLIs. `ci.yml` also accepts `workflow_call`.
 
 `.github/workflows/publish.yml` runs on a pushed `v*` tag: it calls `ci.yml`, refuses a tag
 whose name does not match the built wheel's version, and uploads that same artifact to PyPI
@@ -2135,6 +2197,43 @@ Moved to [`docs/limitations.md`](limitations.md). This heading is kept so that o
 links to `#batasan-yang-diketahui` keep working.
 
 ---
+
+## Codex Auto-review context
+
+`exoma install codex --codex-auto-review-context` opts into an owned additive block in
+the Codex host's `auto_review.extra_policy`. A terminal install asks the choice; an update
+with `--no-input` keeps it. Fresh noninteractive installs leave it off unless explicitly
+enabled. `--no-codex-auto-review-context` removes the owned block and remembers that choice.
+This is independent of the project's second-agent provider.
+
+The block describes authorized Exoma source inspection and evidence gathering. It does not
+change the reviewer, sandbox, user replacement policy, trust, authentication or managed
+requirements. Global installation state does not establish the effective policy of an
+already running chat: profile/project/managed settings may override it. Reload Codex after
+installation and inspect its active settings when determining which policy is in use.
+
+Automatic merge currently requires Python 3.11+ (`tomllib`) and a tested Codex CLI
+baseline listed in [`installer/codex_policy.py`](../src/exoma/installer/codex_policy.py).
+Other CLI versions are reported as `support-unverified`, not assumed
+unsupported upstream or silently accepted. An effective `CODEX_HOME` different from the
+host directory managed by the installer is likewise reported without writing another file.
+
+Grant and reviewer context share one atomic config write, original backup and final-hash
+receipt. Reinstall replaces only an unedited owned block. User policy text and settings
+remain; hand-edited ownership, invalid TOML and unsupported layouts are preserved and
+reported. `--check` distinguishes installed/disabled, missing/outdated, conflict and
+support-unverified. Uninstall removes only the owned block; rollback refuses a config
+edited after installation. Unmarked policy text added manually stays user-owned.
+Doctor classifies the block with the same read-only classifier, not by the config file's
+existence: installed/disabled are clean; missing is listed under `missing`; outdated, a block
+left while the context is off (`removed`), conflict, support-unverified, an unreadable template
+or a config that cannot be opened (`unreadable`) are drift with that reason. The config is
+decoded as the installer reads it (UTF-8, then cp1252, then Latin-1, which maps every byte), so
+a decoding problem is never `unreadable`. Where the classifier reaches TOML parsing, bytes that
+are not valid TOML read as `conflict`; with the context off and no owned markers it does not
+parse and reports `disabled`, and an unverified CLI or `CODEX_HOME` reports `support-unverified`
+first. The template is part of the package hash
+check of both `--check` and a writing install.
 
 ## References
 

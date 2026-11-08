@@ -49,15 +49,17 @@ def _flavours(hook: str) -> list[tuple[str, list[str]]]:
 class _Workspace:
     """A throwaway home with a session registry and one project bound to MAIN_SESSION_ID m1."""
 
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, main_id: str = "m1") -> None:
         self.base = Path(tempfile.mkdtemp(prefix=f"hook-contract-{label}-"))
         self.home, self.project = self.base / "home", self.base / "project"
         (self.home / ".claude").mkdir(parents=True)
-        self.runtime = self.project / ".workflow" / "data" / "sessions" / "m1" / "runtime"
+        from exoma.core.workspace.workspace_paths import workflow_paths
+        self.main_id = main_id
+        self.runtime = workflow_paths(self.project, main_id)["runtime_dir"]
         self.runtime.mkdir(parents=True)
         self.registry = self.home / ".claude" / "session_registry.json"
         self.registry.write_bytes(
-            json.dumps({"c1": {"main_session_id": "m1", "cwd": str(self.project)}}).encode("utf-8")
+            json.dumps({"c1": {"main_session_id": main_id, "cwd": str(self.project)}}).encode("utf-8")
         )
         self.marker = self.runtime / "delegated.marker"
         self.env = {
@@ -116,6 +118,13 @@ def _case_gate_set(ws: _Workspace, run) -> None:
     _silent(ws, out, "intent-gate-set")
 
     token, commit = ws.runtime / "execute.token", ws.runtime / "commit.marker"
+    from exoma.core.runtime import execution as execution_runtime
+    execution_runtime.record_plan(ws.project, ws.main_id, {
+        "task": "hook approval binding", "decision": "proceed",
+        "confidence": {key: "high" for key in execution_runtime.CONFIDENCE_KEYS},
+        "open_questions": [], "files": ["core/a.py"],
+        "options": [{"name": "scoped", "minus": "requires approval", "recommended": True}],
+    })
     for prompt, wants_token in (
         ("kerjakan", False),
         ("/.execute", False),
@@ -125,6 +134,10 @@ def _case_gate_set(ws: _Workspace, run) -> None:
         token.unlink(missing_ok=True)
         run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": prompt})
         assert_true(token.is_file() == wants_token, f"only the user's `/.execute -y` writes execute.token: {prompt!r}")
+        if wants_token:
+            saved_token = json.loads(token.read_text(encoding="utf-8"))
+            assert_true(saved_token.get("plan_binding") == execution_runtime.approval_binding(ws.project, ws.main_id),
+                        "standalone hook and runtime bind the same plan revision and scope")
     run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": "tolong commit perubahan ini"})
     assert_true(commit.is_file(), "a prompt asking to commit writes commit.marker")
     run({"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit", "prompt": "yes"})
@@ -349,6 +362,65 @@ def _case_execution_gate(ws: _Workspace, run) -> None:
         "the log holds no path and no command",
     )
 
+    config.write_text(json.dumps({"policies": {"enforcement": "off"}}), encoding="utf-8")
+    code, out, _ = run({"session_id": "c1", "cwd": str(ws.project), "tool_name": "Write",
+                        "tool_input": {"file_path": other}})
+    assert_true(code == 0 and not out.strip(), "intentional off remains silent and allows")
+    skips = ws.runtime / "gate-skips.jsonl"
+    off_rows = [json.loads(line) for line in skips.read_text(encoding="utf-8").splitlines()]
+    assert_true(off_rows[-1]["reason"] == "enforcement_off", "intentional off has an explicit observation")
+
+    payload = {"session_id": "unbound", "cwd": str(ws.project), "tool_name": "Write",
+               "tool_input": {"file_path": other, "content": "not-for-the-log"}}
+    code, out, _ = run(payload)
+    assert_true(code == 0 and "EXECUTION GATE: unavailable" in out,
+                "missing binding allows with a visible protection warning")
+    run(payload)
+    code, out, _ = run({k: v for k, v in payload.items() if k != "session_id"})
+    assert_true(code == 0 and "session_id_unavailable" in out, "missing session id is reported")
+    shared = ws.home / ".claude" / "gate-skips.jsonl"
+    shared_rows = [json.loads(line) for line in shared.read_text(encoding="utf-8").splitlines()]
+    assert_true(sum(r["reason"] == "session_or_workspace_unavailable" for r in shared_rows) == 1,
+                "repeated missing-binding observations are deduplicated")
+    assert_true(all(r.get("root_digest") and not r.get("root") for r in shared_rows),
+                "shared fallback rows use a digest instead of a raw project path")
+    assert_true("not-for-the-log" not in shared.read_text(encoding="utf-8")
+                and other not in shared.read_text(encoding="utf-8"), "fallback logs exclude tool inputs")
+    plain = ws.base / "plain-project"
+    (plain / ".git").mkdir(parents=True)
+    before_plain = shared.read_text(encoding="utf-8")
+    code, out, _ = run({**payload, "cwd": str(plain)})
+    assert_true(code == 0 and not out.strip() and shared.read_text(encoding="utf-8") == before_plain,
+                "a global hook stays silent and records no failure outside Exoma workspaces")
+    subdirectory = ws.project / "subdirectory"
+    subdirectory.mkdir()
+    code, out, _ = run({**payload, "session_id": "unbound-subdir", "cwd": str(subdirectory)})
+    latest = json.loads(shared.read_text(encoding="utf-8").splitlines()[-1])
+    assert_true(code == 0 and "unavailable" in out and latest["root_digest"] == shared_rows[0]["root_digest"],
+                "subdirectory failures are attributed to the owning workflow root")
+    registry = json.loads(ws.registry.read_text(encoding="utf-8"))
+    registry["bound-subdir"] = {"main_session_id": "subdir-session", "cwd": str(subdirectory)}
+    ws.registry.write_text(json.dumps(registry), encoding="utf-8")
+    code, out, _ = run({**payload, "session_id": "bound-subdir", "cwd": str(subdirectory)})
+    assert_true(code == 0 and "unavailable" in out,
+                "a subfolder binding is reported unavailable, not silently rebound to another runtime")
+    assert_true(not (subdirectory / ".workflow").exists(), "reporting never creates another workflow")
+    code, out, _ = run(["invalid-payload"])
+    assert_true(code == 0 and "hook_exception" in out, "unexpected payloads fail open visibly")
+
+    from unittest.mock import patch
+    from exoma.core.audit import diagnostics
+    from exoma.core.workspace.workspace_paths import workflow_paths
+
+    with patch.dict(os.environ, {"HOME": str(ws.home), "USERPROFILE": str(ws.home)}):
+        report = diagnostics.run_doctor(ws.project, "exoma-fixture-no-provider", "m1")
+        report_path = workflow_paths(ws.project, "m1")["doctor_report"]
+        checks = json.loads(report_path.read_text(encoding="utf-8"))["checks"]
+    gate_status = checks["execution_gate"]
+    assert_true(gate_status["configuration_status"] == "disabled"
+                and "session_or_workspace_unavailable" in gate_status["recent_fail_open"],
+                f"doctor distinguishes off configuration and recorded failures: {gate_status}")
+
 
 def _case_status_guard(ws: _Workspace, run) -> None:
     stop = {"session_id": "c1", "cwd": str(ws.project), "hook_event_name": "Stop"}
@@ -404,6 +476,31 @@ _CASES = {
 }
 
 
+def _check_hashed_session_approval() -> None:
+    """The real hook launchers must approve and gate the runtime's hashed session."""
+    from exoma.core.runtime import execution as execution_runtime
+
+    for main_id in ("main_Mixed Project_03ef", "main_\u65e5\u672c\u8a9e_03ef--6cf57e7e3cc7"):
+        ws = _Workspace("hashed-session", main_id)
+        try:
+            commands = {hook: _flavours(hook)[0][1] for hook in ("intent-gate-set", "intent-gate-check")}
+            _case_gate_set(ws, lambda payload: ws.run(commands["intent-gate-set"], payload))
+            _case_gate_check(ws, lambda payload: ws.run(commands["intent-gate-check"], payload))
+            code, _, _ = ws.run(commands["intent-gate-set"], {
+                "session_id": "c1", "cwd": str(ws.project), "hook_event_name": "UserPromptSubmit",
+                "prompt": "/.execute -y",
+            })
+            assert_true(code == 0 and execution_runtime.begin_execution(ws.project, main_id)["ok"],
+                        "a fresh hook approval opens the plan in the runtime's canonical session")
+            assert_true(not (ws.runtime / "execute.token").exists()
+                        and execution_runtime.begin_execution(ws.project, main_id).get("reason") == "not_approved",
+                        "hook approval is consumed once in a hashed session")
+            raw = ws.project / ".workflow/data/sessions" / main_id
+            assert_true(not raw.exists(), "hooks must not create a second raw-ID session directory")
+        finally:
+            ws.close()
+
+
 def _test_hooks_run_through_their_launchers() -> None:
     # Fails closed: the bash launchers are what every OS will run, so a machine that cannot
     # run them has not tested the contract, and a green result there would be false.
@@ -441,6 +538,7 @@ def _test_hooks_run_through_their_launchers() -> None:
         ))
     # The failures reproduced from real sessions (DEC-068), through the same launchers.
     check_repro_matrix()
+    _check_hashed_session_approval()
 
 
 def _shim(directory: Path, name: str, body: str) -> None:

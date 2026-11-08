@@ -494,6 +494,10 @@ class AgyAdapter:
                 orphan_content=content[:4000],
             )
 
+        if not outcome.get("output_complete", True):
+            meta["output_complete"] = False
+            return make_error("streaming_failed", "Agy output capture did not finish",
+                              next_action="Inspect the partial output and child-process cleanup before retrying.", meta=meta)
         if not content.strip():
             return make_error(
                 "empty_output",
@@ -656,13 +660,14 @@ class AgyAdapter:
         chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         sizes: dict[str, int] = {"stdout": 0, "stderr": 0}
         truncated: dict[str, bool] = {"stdout": False, "stderr": False}
+        read_failed = {"value": False}
         last_output = {"at": started}
         seen_session = {"done": False}
 
         def _drain(stream, key: str) -> None:
             buf = chunks[key]
             try:
-                for line in iter(stream.readline, ""):
+                for line in iter(lambda: stream.readline(max(1, min(MAX_CAPTURE_CHARS, 65536))), ""):
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
@@ -677,7 +682,7 @@ class AgyAdapter:
                         sizes[key] -= len(buf.pop(0))
                         truncated[key] = True
             except Exception:
-                pass
+                read_failed["value"] = True
             finally:
                 try:
                     stream.close()
@@ -703,22 +708,24 @@ class AgyAdapter:
         timed_out = False
         kill_info: dict = {}
         interval = max(0.2, float(self.poll_interval or 2))
-        while True:
-            if proc.poll() is not None:
-                break
-            if timeout and (time.monotonic() - started) >= timeout:
-                timed_out = True
+        try:
+            while True:
+                if proc.poll() is not None:
+                    break
+                if timeout and (time.monotonic() - started) >= timeout:
+                    timed_out = True
+                    kill_info = osutil.terminate_tree(proc)
+                    break
+                now = time.monotonic()
+                self._tick(phase, now - started, now - last_output["at"])
+                time.sleep(interval)
+        finally:
+            if proc.poll() is None:
                 kill_info = osutil.terminate_tree(proc)
-                break
-            now = time.monotonic()
-            self._tick(phase, now - started, now - last_output["at"])
-            time.sleep(interval)
-
-        drained = True
-        for reader in readers:
-            reader.join(timeout=10)
-            if reader.is_alive():
-                drained = False
+            drain_deadline = time.monotonic() + 2
+            for reader in readers:
+                reader.join(timeout=max(0, drain_deadline - time.monotonic()))
+        drained = not read_failed["value"] and not any(t.is_alive() for t in readers)
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -746,6 +753,7 @@ class AgyAdapter:
                 "timeout_seconds": timeout,
                 "kill": kill_info or None,
                 "output_complete": drained,
+                "capture_truncated": any(truncated.values()),
                 "idle_seconds": outcome["idle_seconds"],
                 "stderr_tail": outcome["stderr"][-2000:],
             }

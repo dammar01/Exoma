@@ -333,6 +333,12 @@ def _test_session_export() -> None:
         data = root / ".workflow" / "data"
         rows = [{"session_id": sid, "command": "explore"}, {"session_id": "other", "command": "plan"}]
         (data / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        task_rows = [{"session_id": sid, "event": kind, "prompt_id": "p1"}
+                     for kind in ("edit", "verify", "commit")]
+        task_rows[0]["detail"] = "credential ghp_" + "c" * 36
+        task_rows.append({"session_id": "other", "event": "edit"})
+        (data / "tasks.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in task_rows) + "\n{torn", encoding="utf-8")
         home = Path(tmp) / "home"
         home.mkdir()
 
@@ -341,15 +347,28 @@ def _test_session_export() -> None:
         manifest = first["manifest"]
         assert_true(manifest["review"]["status"] == "template", "an unfilled review is reported as such")
         assert_true(manifest["transcript"]["status"] == "unavailable", "no host transcript is said, not guessed")
+        assert_true(manifest["streams"]["tasks.jsonl"]["malformed_rows"] == 1,
+                    "export records malformed rows separately from exported bytes")
         with zipfile.ZipFile(first["path"]) as bundle:
             names = set(bundle.namelist())
             raw = bundle.read("session/logs/call1/output.raw.md").decode("utf-8")
             usage = bundle.read("streams/usage.jsonl").decode("utf-8")
+            tasks = bundle.read("streams/tasks.jsonl").decode("utf-8")
         assert_true("session/runtime/lock" not in names and "review.md" in names and "manifest.json" in names,
                     "lock files stay out; review and manifest go in")
         assert_true("ghp_" not in raw and "[REDACTED" in raw and manifest["redactions"] >= 1,
                     "credential-shaped text is redacted")
         assert_true(sid in usage and "other" not in usage, "only this session's stream rows")
+        exported_tasks = [json.loads(line) for line in tasks.splitlines()]
+        assert_true([row["event"] for row in exported_tasks] == ["edit", "verify", "commit"]
+                    and all(row["session_id"] == sid for row in exported_tasks),
+                    "raw task lifecycle events are portable, session-filtered and torn rows skipped")
+        assert_true("ghp_" not in tasks and "[REDACTED" in tasks,
+                    "task event payloads use the same credential redaction as other streams")
+        import hashlib
+        task_entry = next(row for row in manifest["files"] if row["path"] == "streams/tasks.jsonl")
+        assert_true(task_entry["sha256"] == hashlib.sha256(tasks.encode("utf-8")).hexdigest(),
+                    "task stream manifest hash matches exported bytes")
 
         review = Path(manifest["review"]["source"])
         review.write_text(review.read_text(encoding="utf-8") + "\n- solved | partly solved | not solved: solved\n",
@@ -387,6 +406,13 @@ def _test_session_export() -> None:
                     "nothing is written outside the exports directory")
         missing = export_session(root, "main_nope", home=home)
         assert_true(not missing["ok"], "an unknown session is refused")
+        (data / "tasks.jsonl").unlink()
+        without_tasks = export_session(root, sid, home=home)
+        assert_true(without_tasks["manifest"]["streams"]["tasks.jsonl"]["status"] == "missing",
+                    "missing instrumentation is explicit, not an apparently empty measurement")
+        with zipfile.ZipFile(without_tasks["path"]) as bundle:
+            assert_true("streams/tasks.jsonl" not in bundle.namelist(),
+                        "a session without task instrumentation still exports")
 
 
 def _test_e2e_stays_opt_in() -> None:

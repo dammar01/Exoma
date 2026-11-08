@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -111,6 +112,10 @@ def atomic_write_text(
     write, and only the writers that already paid for durability ask for it.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = None  # New files retain the ordinary creation-mode/umask policy.
     temp = _staging_path(path)
     try:
         with temp.open("w", encoding=encoding, newline=newline) as file:
@@ -118,6 +123,8 @@ def atomic_write_text(
             if fsync:
                 file.flush()
                 os.fsync(file.fileno())
+        if mode is not None:
+            os.chmod(temp, mode)
     except BaseException:
         try:
             temp.unlink()
@@ -133,6 +140,11 @@ def atomic_write_bytes(
     """Binary twin of `atomic_write_text`. `mode`, when given, is applied to the staged
     file before the move, so the result does not inherit the staging file's permissions."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            pass
     temp = _staging_path(path)
     try:
         with temp.open("wb") as file:

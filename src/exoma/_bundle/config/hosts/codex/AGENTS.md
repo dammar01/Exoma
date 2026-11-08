@@ -14,10 +14,20 @@ written for Claude Code; translate their tool names to Codex tools:
 
 - Read/Grep/Glob: use available file/search tools or `exec_command` for a small precision read.
 - Bash: use `exec_command`; start the runner exactly as the contract writes it (Git Bash by
-  its full path on Windows, bash on POSIX). Request the runner call with
-  `sandbox_permissions: "require_escalated"` and suggest a prefix rule for the runner, so the
-  user approves it once: the second agent needs the network your sandbox denies. Escalate
-  nothing else.
+  its full path on Windows, bash on POSIX). Follow the current host permissions. Use normal
+  execution when allowed. With approval_policy=never or escalation forbidden, omit
+  `sandbox_permissions`, `justification`, and `prefix_rule`. Only if broader permissions
+  are necessary and the host permits requesting them, use
+  `sandbox_permissions: "require_escalated"` with a narrow runner prefix and justification
+  naming the configured provider and the repository context sent to its service. Reuse
+  existing user authorization for this provider, project and context; ask only for missing
+  authorization. Never guess an endpoint.
+  Escalate only the delegated runner. Auto-review denial before process creation is a
+  host denial, not a run.sh failure: report its reason; the runner produced no JSON.
+  Do not retry through another shell/prefix or weaken policy. Continue only through a
+  materially safer authorized path or new explicit authorization, subject to host policy.
+  Exoma cannot override host approval. Distinguish host denial, shell failure,
+  network_denied after launch, and JSON job errors.
 - Write/Edit: use `apply_patch` or the available file-edit tool.
 - AskUserQuestion: use the available user-input tool.
 - Background task: wait on the same running `exec_command` session, never launch a duplicate.

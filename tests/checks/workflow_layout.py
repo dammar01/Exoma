@@ -101,8 +101,35 @@ def _check_consumers_do_not_spell_the_root_layout() -> None:
         )
 
 
+def _check_hook_session_paths_match_runtime() -> None:
+    import importlib.util
+
+    source = _REPO / "src/exoma/_bundle/config/hosts/claude/hooks/workflow_policy.py"
+    spec = importlib.util.spec_from_file_location("layout_hook_policy", source)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    sessions = (
+        "m1", "main_mixed_03ef", "main_Mixed_03ef", "main_Mixed Project_03ef",
+        "main_\u65e5\u672c\u8a9e_03ef", "con", "NUL.txt", "com1", "lpt9", ".", "..", "",
+        "../outside", "/absolute", "C:\\outside", "trailing.", "trailing ",
+        "s" * 121, "main_03ef--6cf57e7e3cc7",
+    )
+    with tempfile.TemporaryDirectory(prefix="aw-hook-session-layout-") as tmp:
+        for layout in ("modern", "legacy"):
+            root = Path(tmp) / layout
+            data = root / ".workflow" / ("data" if layout == "modern" else "")
+            (data / "sessions").mkdir(parents=True)
+            for session in sessions:
+                # Empty logical IDs mean shared data paths in workflow_paths.
+                expected = workflow_paths(root, session)["runtime_dir"]
+                actual = Path(policy.runtime_dir(str(root), session))
+                assert_true(actual == expected,
+                            f"{layout}: hooks and runtime must agree for {session!r}: {actual} != {expected}")
+
+
 def _test_workflow_layout() -> None:
     _check_new_workspace_keeps_its_root_editable()
     _check_unmigrated_workspace_stays_where_its_data_is()
     _check_hooks_share_the_rule()
     _check_consumers_do_not_spell_the_root_layout()
+    _check_hook_session_paths_match_runtime()

@@ -79,6 +79,10 @@ def _test_contract_renders_per_host():
                 assert_true(not leaks, f"{host}: Claude-only text in its contract: {leaks}")
                 assert_true(hosts.PROFILES[host].skill_path in text, f"{host}: the contract names its skill path")
                 assert_true(hosts.PROFILES[host].delegated_run in text, f"{host}: the contract says how to wait here")
+            if host == "codex":
+                assert_true("If the runner is allowed normally, omit escalation arguments" in text
+                            and "approval_policy=never" in text and "Exoma cannot override host review" in text,
+                            "Codex guidance respects current permissions and cannot promise approval")
 
 
 def _test_host_sections_whitespace():

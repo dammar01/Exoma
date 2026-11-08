@@ -36,7 +36,9 @@ def _token(root: Path, session: str, age_seconds: float = 0) -> None:
     runtime = workflow_paths(root, session)["runtime_dir"]
     runtime.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age_seconds)
-    (runtime / execution.EXECUTE_TOKEN_FILE).write_text(json.dumps({"set_at": stamp.isoformat()}), encoding="utf-8")
+    (runtime / execution.EXECUTE_TOKEN_FILE).write_text(json.dumps({
+        "set_at": stamp.isoformat(), "plan_binding": execution.approval_binding(root, session)
+    }), encoding="utf-8")
 
 
 def _plan_is_checked_mechanically() -> None:
@@ -207,5 +209,155 @@ def _execution_tracks_its_own_edits() -> None:
 def _test_execution_chain() -> None:
     _plan_is_checked_mechanically()
     _execution_needs_the_users_yes()
+    _approval_cannot_follow_a_replaced_plan()
     _cli_speaks_the_error_contract()
     _execution_tracks_its_own_edits()
+    _concurrent_execution_publication()
+    _stale_approval_preserves_new_token()
+
+
+def _concurrent_execution_publication() -> None:
+    import threading
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="execution-concurrent-") as tmp:
+        root, session = Path(tmp), "concurrent"
+        execution.record_plan(root, session, _plan(files=["a.py"]))
+        _token(root, session)
+        publishing, release, second_started, second_done = (threading.Event() for _ in range(4))
+        original_write = execution._write
+        results, errors = [], []
+        def write(path, value):
+            if path.name == execution.EXECUTION_FILE and value.get("scope") == ["a.py"]:
+                publishing.set()
+                if not release.wait(5):
+                    raise TimeoutError("test did not release publication")
+            original_write(path, value)
+        def first():
+            try:
+                results.append(execution.begin_execution(root, session))
+            except BaseException as exc:
+                errors.append(exc)
+        def second():
+            second_started.set()
+            try:
+                execution.record_plan(root, session, _plan(files=["b.py"]))
+                _token(root, session)
+                results.append(execution.begin_execution(root, session))
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                second_done.set()
+        with patch.object(execution, "_write", side_effect=write):
+            a, b = threading.Thread(target=first), threading.Thread(target=second)
+            a.start()
+            try:
+                assert_true(publishing.wait(5), "first begin reached publication")
+                b.start()
+                assert_true(second_started.wait(2) and not second_done.wait(0.1),
+                            "the second mutation cannot publish through the first transaction")
+            finally:
+                release.set()
+                a.join(8)
+                if b.ident is not None:
+                    b.join(8)
+        current = execution.current_execution(root, session)
+        assert_true(not errors and len(results) == 2 and all(r["ok"] for r in results)
+                    and current["scope"] == ["b.py"], "an older publication cannot overwrite the newer begin")
+        old_id = next(r["execution"]["execution_id"] for r in results if r["execution"]["scope"] == ["a.py"])
+        result = {"ok": True, "meta": {"verdict": "pass"}}
+        execution.record_verification(root, session, result, expected=old_id)
+        stale_end = execution.end_execution(root, session, expected=old_id)
+        assert_true(result["meta"].get("execution_state_error") and not stale_end["ok"]
+                    and execution.current_execution(root, session)["verification"] == "not_run",
+                    "stale end/verify cannot modify the replacement execution")
+        _token(root, session)
+        barrier = threading.Barrier(2)
+        results.clear()
+        def consume():
+            barrier.wait(timeout=3)
+            results.append(execution.begin_execution(root, session))
+        workers = [threading.Thread(target=consume) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(8)
+        assert_true(len(results) == 2 and sum(r["ok"] for r in results) == 1,
+                    "parallel begin consumers can use one approval only once")
+
+
+def _stale_approval_preserves_new_token() -> None:
+    import importlib.util
+    from unittest.mock import patch
+    source = Path(__file__).resolve().parents[2] / "src/exoma/_bundle/config/hosts/claude/hooks/workflow_policy.py"
+    spec = importlib.util.spec_from_file_location("execution_policy_check", source)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    with tempfile.TemporaryDirectory(prefix="approval-stale-") as tmp:
+        token = Path(tmp) / "execute.token"
+        newer = '{"newer": true}'
+        with patch.object(policy, "approval_plan_binding", side_effect=[{"revision": "old"}, {"revision": "new"}]):
+            token.write_text(newer, encoding="utf-8")
+            policy.record_approvals("/.execute -y", tmp, True, {})
+        assert_true(token.read_text(encoding="utf-8") == newer,
+                    "a stale writer may discard its staging file, never somebody else's new approval")
+        # Standalone hooks and the runtime must agree on the same OS lock, not just
+        # each exclude their own threads independently.
+        import threading
+        acquired = threading.Event()
+        root = Path(tmp) / "project"
+        runtime = workflow_paths(root, "s")["runtime_dir"]
+        runtime.mkdir(parents=True)
+        with execution._execution_transaction(root, "s"):
+            def host_mutation_at(path):
+                with policy.execution_transaction(str(path)):
+                    acquired.set()
+            worker = threading.Thread(target=host_mutation_at, args=(runtime,))
+            worker.start()
+            assert_true(not acquired.wait(0.1), "standalone and runtime transaction locks must exclude each other")
+        worker.join(3)
+        assert_true(acquired.is_set(), "standalone mutation proceeds after runtime releases its transaction")
+
+
+def _approval_cannot_follow_a_replaced_plan() -> None:
+    with tempfile.TemporaryDirectory(prefix="execution-plan-binding-") as tmp:
+        root, session = Path(tmp), "binding-session"
+        execution.record_plan(root, session, _plan())
+        _token(root, session)
+        old_token = (workflow_paths(root, session)["runtime_dir"] / execution.EXECUTE_TOKEN_FILE).read_bytes()
+        execution.record_plan(root, session, _plan(files=["different.py"]))
+        assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                    "approval for A cannot open replacement plan B")
+        # Even if a stale writer restores the old token, binding must reject it.
+        token_path = workflow_paths(root, session)["runtime_dir"] / execution.EXECUTE_TOKEN_FILE
+        token_path.write_bytes(old_token)
+        assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                    "restoring an old token cannot approve a newer plan")
+        _token(root, session)
+        assert_true(execution.begin_execution(root, session)["ok"], "new B approval opens B")
+        execution.record_plan(root, session, _plan())
+        _token(root, session)
+        old = token_path.read_bytes()
+        execution.record_plan(root, session, _plan())
+        token_path.write_bytes(old)
+        assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                    "even an identical plan re-record has a new approval revision")
+        token_path.write_text(json.dumps({"set_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}),
+                              encoding="utf-8")
+        assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                    "legacy unbound approvals are not a fallback")
+        _token(root, session)
+        other = "other-session"
+        execution.record_plan(root, other, _plan())
+        other_token = workflow_paths(root, other)["runtime_dir"] / execution.EXECUTE_TOKEN_FILE
+        other_token.write_bytes(token_path.read_bytes())
+        assert_true(execution.begin_execution(root, other).get("reason") == "not_approved",
+                    "copied approval cannot cross runtime sessions")
+        from unittest.mock import patch
+        _token(root, session)
+        def replace_during_begin(_root):
+            with patch.object(execution, "_tree", return_value=None):
+                execution.record_plan(root, session, _plan(files=["interleaved.py"]))
+            return None
+        with patch.object(execution, "_tree", side_effect=replace_during_begin):
+            assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                        "plan replacement during begin snapshot is rejected")

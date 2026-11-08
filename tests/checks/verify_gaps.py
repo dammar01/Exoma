@@ -90,6 +90,17 @@ def _check_scope_width() -> None:
             quick_verify.scope_width(repo, None)["wide"] is True,
             "more changed lines than the ceiling reads as wide on its own",
         )
+        from unittest.mock import patch
+        with patch.object(quick_verify, "_git_fields", return_value=([], "unavailable")):
+            unknown = quick_verify.scope_width(repo, ["src/"])
+        assert_true(unknown["measurement"] == "unknown" and unknown["files"] is None
+                    and unknown["wide"] is None and unknown["outside_scope"] is None,
+                    f"unavailable Git cannot certify a clean tree: {unknown}")
+        with patch.object(quick_verify, "_git_fields", side_effect=[([], "unavailable"), (["notes.md"], None)]):
+            partial = quick_verify.scope_width(repo, ["src/"])
+        assert_true(partial["measurement"] == "partial" and partial["files"] is None
+                    and partial["observed_files"] == 1,
+                    f"partial observations remain visible without claiming complete totals: {partial}")
     finally:
         quick_verify.SCOPE_WIDE_FILES = original_files
         quick_verify.SCOPE_WIDE_LINES = original_lines

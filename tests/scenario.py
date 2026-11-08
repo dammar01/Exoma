@@ -76,7 +76,7 @@ from tests.checks.verify_gaps import (
     _test_quick_verify_gaps,
     _test_verification_routing,
 )
-from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission
+from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
     _test_script_drift_path_spelling,
@@ -90,6 +90,7 @@ from tests.checks.continuation import (
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code
 from tests.checks.contracts import _test_workflow_contracts
 from tests.checks.promote import _test_promote_boundaries
+from tests.checks.knowledge_retrieve import _test_knowledge_retrieval
 from tests.checks.execution import _test_execution_chain
 from tests.checks.e2e_browser import _test_e2e_browser_session
 from tests.checks.e2e_doctor import _test_e2e_doctor_readiness
@@ -133,6 +134,7 @@ from tests.checks.transcript import _test_transcript_parsing
 from tests.checks.usage_tokens import _test_usage_token_accounting
 from tests.checks.messages import _test_no_code_in_messages
 from tests.checks.provider import (
+    _test_agy_guard_gitlinks,
     _test_agy_provider,
     _test_doctor_read_boundary_warning,
     _test_secret_files,
@@ -149,6 +151,7 @@ from tests.checks.manifest import (
     _test_doctor_agrees_with_install_check,
     _test_malformed_manifest_entry_fails_closed,
     _test_manifest_matches_dist,
+    _test_package_artifacts_dispatch,
 )
 from tests.checks.codex_write_probe import _test_codex_sandbox_blocks_writes
 from tests.checks.atomic_writers import (
@@ -250,6 +253,7 @@ def run_tests() -> None:
     _test_every_shipped_hook_is_a_launcher_and_its_module()
     _test_stamp_version_reads_versions_not_addresses()
     _test_manifest_matches_dist()
+    _test_package_artifacts_dispatch()
     _test_malformed_manifest_entry_fails_closed()
     _test_doctor_agrees_with_install_check()
     _test_workflow_layout()
@@ -314,6 +318,7 @@ def run_tests() -> None:
     _test_codex_sandbox_blocks_writes()
     _test_provider_selection()
     _test_agy_provider()
+    _test_agy_guard_gitlinks()
     _test_doctor_read_boundary_warning()
     _test_secret_files()
     _test_no_code_in_messages()
@@ -1373,6 +1378,7 @@ confidence: high — all requested checks ran
         _test_e2e_harness_names_its_model()
         _test_e2e_real_browser_smoke()
         _test_submit_admission()
+        _test_worker_log_preservation()
         _test_job_store_not_writable()
         _test_workspace_release_guards()
         _test_project_session_isolation()
@@ -1382,6 +1388,7 @@ confidence: high — all requested checks ran
         _test_continuation_prompt_is_bounded()
         _test_workflow_contracts()
         _test_promote_boundaries()
+        _test_knowledge_retrieval()
         _test_execution_chain()
         _test_installer_text_merging()
         _test_installer_settings_merge()

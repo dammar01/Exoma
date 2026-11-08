@@ -579,7 +579,7 @@ def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str], bo
             loaded = json.load(file)
     except FileNotFoundError:
         return default_provider_config(), None, [], False
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         return default_provider_config(), f"{type(exc).__name__}: {exc}", [], False
 
     if not isinstance(loaded, dict):

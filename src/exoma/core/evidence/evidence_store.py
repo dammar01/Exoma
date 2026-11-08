@@ -334,18 +334,15 @@ def _is_fresh(project_root: Path, entry: dict) -> bool:
     anchors = entry.get("anchors") or []
     if not anchors or entry.get("anchors_complete") is not True:
         return False
-    # An anchor that merely MOVED still points at the same source text, so it does not make
-    # the artifact stale — see `fact_store.current_anchor_line`. This matters more here than
-    # it does for a single fact: freshness demands EVERY anchor hold, so one insertion above
-    # one cited line was enough to discard a whole piece of evidence and re-run the call.
+    # Unlike individual facts, an immutable artifact cannot rewrite a relocated citation.
+    # Reusing it would return obsolete line numbers in content/digest. Keep fact relocation,
+    # but require this artifact's recorded positions and fall through to fresh delegation.
     index_cache: dict = {}
     for a in anchors:
-        if (
-            current_anchor_line(
-                project_root, a.get("file"), a.get("line"), a.get("hash"), index_cache
-            )
-            is None
-        ):
+        resolved = current_anchor_line(
+            project_root, a.get("file"), a.get("line"), a.get("hash"), index_cache
+        )
+        if resolved is None or resolved != a.get("line"):
             return False
     return True
 

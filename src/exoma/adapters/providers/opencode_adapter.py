@@ -161,6 +161,25 @@ def _is_stream_failure(*texts: str) -> bool:
     return any(sign in blob for sign in _STREAM_FAIL_SIGNS)
 
 
+_AUTH_SIGNS = ("unauthorized", "authentication", "invalid api key", "not logged in", "401")
+
+
+def _bootstrap_failure(text: str) -> tuple[str, str, bool]:
+    """Classify a failed launch before deciding whether another bootstrap can help."""
+    low = text.lower()
+    if any(sign in low for sign in _SOCKET_DENIED_SIGNS):
+        return "network_denied", _NETWORK_DENIED_NEXT_ACTION, False
+    if _is_rate_limited(text):
+        return "rate_limited", "Wait for quota to reset or select an available model; do not retry immediately.", False
+    if any(sign in low for sign in _AUTH_SIGNS):
+        return "permission_denied", "Log in to OpenCode or repair the provider credentials, then retry.", False
+    if any(sign in low for sign in _PERMISSION_SIGNS):
+        return "permission_denied", "Check the provider's access permissions before retrying.", False
+    if _is_stream_failure(text):
+        return "streaming_failed", _STREAM_FAIL_NEXT_ACTION, True
+    return "unknown", "Inspect the provider error before starting another session.", False
+
+
 _ERROR_TAIL_CHARS = 1600
 
 
@@ -505,6 +524,7 @@ class OpenCodeAdapter:
         chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         sizes: dict[str, int] = {"stdout": 0, "stderr": 0}
         truncated: dict[str, bool] = {"stdout": False, "stderr": False}
+        read_failed = {"value": False}
         last_output = {"at": started}
 
         def _drain(stream, key: str) -> None:
@@ -514,7 +534,7 @@ class OpenCodeAdapter:
             # FRONT and keep the tail — the part the main_agent actually consumes.
             buf = chunks[key]
             try:
-                for line in iter(stream.readline, ""):
+                for line in iter(lambda: stream.readline(max(1, min(MAX_CAPTURE_CHARS, 65536))), ""):
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
@@ -522,7 +542,7 @@ class OpenCodeAdapter:
                         sizes[key] -= len(buf.pop(0))
                         truncated[key] = True
             except Exception:
-                pass
+                read_failed["value"] = True
             finally:
                 try:
                     stream.close()
@@ -548,22 +568,24 @@ class OpenCodeAdapter:
         timed_out = False
         kill_info: dict = {}
         interval = max(0.2, float(self.poll_interval or 2))
-        while True:
-            if proc.poll() is not None:
-                break
-            if timeout and (time.monotonic() - started) >= timeout:
-                timed_out = True
+        try:
+            while True:
+                if proc.poll() is not None:
+                    break
+                if timeout and (time.monotonic() - started) >= timeout:
+                    timed_out = True
+                    kill_info = osutil.terminate_tree(proc)
+                    break
+                now = time.monotonic()
+                self._tick(phase, now - started, now - last_output["at"])
+                time.sleep(interval)
+        finally:
+            if proc.poll() is None:
                 kill_info = osutil.terminate_tree(proc)
-                break
-            now = time.monotonic()
-            self._tick(phase, now - started, now - last_output["at"])
-            time.sleep(interval)
-
-        drained = True
-        for reader in readers:
-            reader.join(timeout=10)
-            if reader.is_alive():
-                drained = False
+            drain_deadline = time.monotonic() + 2
+            for reader in readers:
+                reader.join(timeout=max(0, drain_deadline - time.monotonic()))
+        drained = not read_failed["value"] and not any(t.is_alive() for t in readers)
         try:
             proc.wait(timeout=10)
         except Exception:
@@ -591,6 +613,7 @@ class OpenCodeAdapter:
                 "timeout_seconds": timeout,
                 "kill": kill_info or None,
                 "output_complete": drained,
+                "capture_truncated": any(truncated.values()),
                 "idle_seconds": meta["idle_seconds"],
                 "stderr_tail": meta["stderr"][-2000:],
                 # Read from the captured stdout while it is still raw. Expected to be
@@ -672,7 +695,10 @@ class OpenCodeAdapter:
             outcome = self._popen_capture(args, env, cwd, budget, "bootstrap")
         except (OSError, FileNotFoundError) as exc:
             meta.update(
-                {"error": str(exc), "returncode": 1, "provider_session_id": None}
+                {"error": str(exc), "returncode": 1, "provider_session_id": None,
+                 "error_type": "command_not_found" if isinstance(exc, FileNotFoundError) else "permission_denied" if isinstance(exc, PermissionError) else "unknown",
+                 "next_action": "Install opencode or correct provider_command and its executable permissions.",
+                 "retryable": False}
             )
             return None, _sanitize_meta(meta)
 
@@ -700,6 +726,13 @@ class OpenCodeAdapter:
 
         combined = outcome["stdout"] + outcome["stderr"]
         session_id = self.extract_session_id(combined)
+        if outcome["returncode"] != 0:
+            kind, action, retryable = _bootstrap_failure(_error_tail(outcome["stderr"], outcome["stdout"]))
+            meta.update(error_type=kind, next_action=action, retryable=retryable)
+            session_id = None
+        elif not outcome.get("output_complete", True):
+            meta.update(error_type="streaming_failed", next_action=_STREAM_FAIL_NEXT_ACTION, retryable=False)
+            session_id = None
         meta.update(
             {
                 "returncode": outcome["returncode"],
@@ -838,7 +871,7 @@ class OpenCodeAdapter:
             provider_session_id, bootstrap_meta = self.init_session(
                 model, work_dir, workflow_session_id=session.get("session_id")
             )
-            if not provider_session_id:
+            if not provider_session_id and (bootstrap_meta or {}).get("retryable", True):
                 provider_session_id, bootstrap_meta = self.init_session(
                     model, work_dir, workflow_session_id=session.get("session_id")
                 )
@@ -848,6 +881,9 @@ class OpenCodeAdapter:
             raw_tail = first_non_empty(
                 meta.get("error"), meta.get("stderr_tail"), meta.get("stdout_tail")
             )[:500]
+            if meta.get("error_type"):
+                return make_error(meta["error_type"], raw_tail or "OpenCode bootstrap failed",
+                                  next_action=meta["next_action"], meta=meta, raw_tail=raw_tail)
             if meta.get("rate_limited"):
                 return make_error(
                     "rate_limited",
@@ -1113,11 +1149,13 @@ class OpenCodeAdapter:
                     ),
                     meta=meta,
                 )
-            if any(sign in tail_low for sign in _PERMISSION_SIGNS):
+            if any(sign in tail_low for sign in (*_PERMISSION_SIGNS, *_AUTH_SIGNS)):
                 return make_error(
                     "permission_denied",
                     cleaned or "opencode refused access",
-                    next_action="Grant explicit access to the path or move the context inside the project, then retry.",
+                    next_action=("Log in to OpenCode or repair provider credentials, then retry."
+                                 if any(sign in tail_low for sign in _AUTH_SIGNS) else
+                                 "Grant explicit access to the path or move the context inside the project, then retry."),
                     meta=meta,
                     blocked_paths=_guess_blocked_paths(meta["stderr"]),
                 )
@@ -1128,6 +1166,10 @@ class OpenCodeAdapter:
                 meta=meta,
             )
 
+        if not outcome.get("output_complete", True):
+            meta["output_complete"] = False
+            return make_error("streaming_failed", "OpenCode output capture did not finish",
+                              next_action="Inspect the partial output and child-process cleanup before retrying.", meta=meta)
         if not cleaned.strip():
             return make_error(
                 "empty_output",

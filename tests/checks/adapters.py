@@ -102,6 +102,34 @@ def _test_adapter_error_normalization() -> None:
             "one code path, so a key present for one provider and absent for another is "
             "a branch nobody wrote",
         )
+    _check_bootstrap_failures()
+
+
+def _check_bootstrap_failures() -> None:
+    import tempfile
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="bootstrap-failure-") as tmp:
+        for failure, expected in ((FileNotFoundError("missing executable"), "command_not_found"),
+                                  ("quota exhausted", "rate_limited"),
+                                  ("unauthorized: authentication failed", "permission_denied"),
+                                  ("connect EACCES", "network_denied")):
+            adapter = opencode_adapter.OpenCodeAdapter()
+            outcome = {"returncode": 1, "stdout": "", "stderr": failure, "duration_seconds": 0,
+                       "timed_out": False, "kill": None, "output_complete": True}
+            with patch.object(adapter, "_resolve_command", return_value="opencode"), \
+                    patch.object(adapter, "_child_env", return_value={}), \
+                    patch.object(adapter, "_popen_capture", **({"side_effect": failure} if isinstance(failure, Exception) else {"return_value": outcome})) as capture:
+                result = adapter.run("task", {"session_id": "s"}, model="test-model", work_dir=tmp)
+            assert_true(result["meta"]["error_type"] == expected and capture.call_count == 1,
+                        f"bootstrap must classify permanent failure before retry: {result}")
+        adapter = opencode_adapter.OpenCodeAdapter()
+        outcome = {"returncode": 0, "stdout": "a partial answer", "stderr": "", "duration_seconds": 0,
+                   "timed_out": False, "kill": None, "output_complete": False}
+        with patch.object(adapter, "_child_env", return_value={}), \
+                patch.object(adapter, "_popen_capture", return_value=outcome):
+            result = adapter._run_args(["opencode", "run"], tmp)
+        assert_true(result["meta"]["error_type"] == "streaming_failed",
+                    "a partial capture cannot be accepted as complete evidence")
 
 
 def _test_adapter_redaction_is_shared() -> None:
@@ -177,6 +205,54 @@ def _test_stdin_failure_reaches_call_meta() -> None:
         meta.get("prompt_chars") == 5 and meta.get("stdin_write_failed") is None,
         f"a successful handover reported a failure, which would make the signal noise: {meta}",
     )
+    _check_transport_boundaries()
+
+
+def _check_transport_boundaries() -> None:
+    import os
+    import subprocess
+    import sys
+    import time
+    from unittest.mock import patch
+
+    adapter = codex_adapter.CodexAdapter()
+    adapter.poll_interval = 0.05
+    started = time.monotonic()
+    out = adapter._popen_capture([sys.executable, "-c", "import time; time.sleep(60)"],
+                                 "x" * 5_000_000, None, 0.3, "probe", None)
+    assert_true(out["timed_out"] and time.monotonic() - started < 10,
+                "stdin write/close must not bypass the supervising deadline")
+
+    for module, cls in ((codex_adapter, codex_adapter.CodexAdapter),
+                        (opencode_adapter, opencode_adapter.OpenCodeAdapter),
+                        (agy_adapter, agy_adapter.AgyAdapter)):
+        adapter = cls()
+        adapter.poll_interval = 0.05
+        def capture(args, timeout=5):
+            if module is codex_adapter:
+                return adapter._popen_capture(args, "", None, timeout, "probe", None)
+            if module is opencode_adapter:
+                return adapter._popen_capture(args, os.environ.copy(), None, timeout, "probe")
+            return adapter._popen_capture(args, None, timeout, "probe", None)
+        with patch.object(module, "MAX_CAPTURE_CHARS", 4096):
+            out = capture([sys.executable, "-c", "print('x' * 50000, end='')"])
+        assert_true(len(out["stdout"]) < 4300 and adapter.last_call_meta["capture_truncated"],
+                    f"{module.__name__}: a single line must obey the capture bound")
+        children = []
+        original_popen = subprocess.Popen
+        def spawn(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+        with patch.object(module.subprocess, "Popen", side_effect=spawn), \
+                patch.object(adapter, "_tick", side_effect=KeyboardInterrupt):
+            try:
+                capture([sys.executable, "-c", "import time; time.sleep(60)"])
+                raise AssertionError("interrupt must propagate")
+            except KeyboardInterrupt:
+                pass
+        assert_true(children and children[0].poll() is not None,
+                    f"{module.__name__}: interrupt left its child running")
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

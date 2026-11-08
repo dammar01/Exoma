@@ -34,11 +34,75 @@ Git, a tree `git gc` pruned) is `null`: unknown, never "nothing changed".
 from __future__ import annotations
 
 import datetime
+import contextlib
+import functools
 import hashlib
 import json
+import os
+import threading
+import time
+import uuid
 from pathlib import Path, PurePosixPath
 
 from exoma.core.workspace.workspace_paths import atomic_write_text, now_iso, workflow_paths
+from exoma.utils import osutil
+
+_TRANSACTIONS = threading.local()
+_UNSPECIFIED = object()
+
+
+@contextlib.contextmanager
+def _execution_transaction(project_root, session_id):
+    """Same byte-lock protocol as standalone workflow_policy.execution_transaction."""
+    path = _runtime_file(project_root, session_id, "execution.state.guard")
+    key = os.path.normcase(os.path.realpath(path))
+    held = getattr(_TRANSACTIONS, "held", set())
+    if key in held:
+        yield
+        return
+    deadline = time.monotonic() + 10
+    handle = None
+    locked = False
+    try:
+        while True:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = osutil.open_lock_file(path)
+            try:
+                osutil.lock_file(handle)
+                locked = True
+                named, opened = path.stat(), os.fstat(handle.fileno())
+                if osutil.IS_WINDOWS or (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino):
+                    break
+            except OSError:
+                pass
+            if locked:
+                osutil.unlock_file(handle)
+                locked = False
+            handle.close()
+            handle = None
+            if time.monotonic() >= deadline:
+                raise TimeoutError("execution state transaction is busy; retry after the active mutation")
+            time.sleep(0.02)
+        _TRANSACTIONS.held = held | {key}
+        yield
+    finally:
+        _TRANSACTIONS.held = held
+        if handle is not None:
+            try:
+                if locked:
+                    osutil.unlock_file(handle)
+            finally:
+                handle.close()
+
+
+def _transactional(function):
+    @functools.wraps(function)
+    def guarded(project_root, session_id, *args, **kwargs):
+        if function.__name__ in ("end_execution", "record_verification") and "expected" not in kwargs:
+            kwargs["expected"] = execution_identity(current_execution(project_root, session_id))
+        with _execution_transaction(project_root, session_id):
+            return function(project_root, session_id, *args, **kwargs)
+    return guarded
 
 PLAN_FILE = "plan.json"
 EXECUTION_FILE = "execution.json"
@@ -201,6 +265,7 @@ def _plan_id(doc: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+@_transactional
 def record_plan(project_root: Path, session_id: str, doc) -> dict:
     """Validate and store the session's plan. A new plan closes no execution by itself."""
     errors = validate_plan(doc)
@@ -210,15 +275,42 @@ def record_plan(project_root: Path, session_id: str, doc) -> dict:
         **doc,
         "plan_id": _plan_id(doc),
         "recorded_at": now_iso(),
+        "revision": uuid.uuid4().hex,
         "files": [entry.strip().replace("\\", "/") for entry in doc["files"]],
         "base_tree": _tree(project_root),
     }
+    try:
+        _runtime_file(project_root, session_id, EXECUTE_TOKEN_FILE).unlink(missing_ok=True)
+    except OSError as exc:
+        return {"ok": False, "errors": [f"cannot revoke the preceding approval: {exc}"]}
     _write(_runtime_file(project_root, session_id, PLAN_FILE), stored)
     return {"ok": True, "plan_id": stored["plan_id"], "decision": stored["decision"]}
 
 
 def current_plan(project_root: Path, session_id: str) -> dict | None:
     return _read(_runtime_file(project_root, session_id, PLAN_FILE))
+
+
+def approval_binding(project_root: Path, session_id: str, plan: dict | None = None) -> dict | None:
+    """Execution-relevant snapshot, also produced by the standalone shared host hook.
+
+    Include the runtime location and revision as well as the document ID: identical
+    re-records and copied approvals in another session must not authorize this plan.
+    """
+    plan = current_plan(project_root, session_id) if plan is None else plan
+    if not isinstance(plan, dict) or plan.get("decision") != "proceed":
+        return None
+    if not all(isinstance(plan.get(key), str) and plan[key] for key in ("plan_id", "recorded_at", "task")):
+        return None
+    files = plan.get("files")
+    if not isinstance(files, list) or not files or not all(isinstance(p, str) and p for p in files):
+        return None
+    return {
+        "plan_id": plan["plan_id"], "recorded_at": plan["recorded_at"],
+        "revision": plan.get("revision") or plan["recorded_at"],
+        "task": plan["task"], "files": files,
+        "runtime": os.path.normcase(os.path.realpath(_runtime_file(project_root, session_id, PLAN_FILE).parent)),
+    }
 
 
 def _token_age(token: dict) -> float | None:
@@ -231,6 +323,7 @@ def _token_age(token: dict) -> float | None:
     return (datetime.datetime.now(datetime.timezone.utc) - set_at).total_seconds()
 
 
+@_transactional
 def begin_execution(project_root: Path, session_id: str) -> dict:
     """Open an execution, or say exactly which precondition is missing.
 
@@ -249,17 +342,37 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
     token_path = _runtime_file(project_root, session_id, EXECUTE_TOKEN_FILE)
     token = _read(token_path)
     age = _token_age(token) if token else None
-    if token is None or age is None or age < 0 or age > TOKEN_TTL_SECONDS:
+    binding = approval_binding(project_root, session_id, plan)
+    if (token is None or age is None or age < 0 or age > TOKEN_TTL_SECONDS
+            or binding is None or token.get("plan_binding") != binding):
         return {
             "ok": False,
             "reason": "not_approved",
             "error": (
-                "no fresh `/.execute -y` from the user"
+                "no fresh `/.execute -y` bound to this plan revision from the user"
                 + (f" (the last one is {int(age)}s old)" if age is not None and age > 0 else "")
             ),
         }
-    begin_tree = _tree(project_root)
+    # Atomically claim the token: two begin calls cannot both consume the same approval.
+    claimed = token_path.with_name(f".execute-token-{uuid.uuid4().hex}.used")
+    try:
+        token_path.replace(claimed)
+    except OSError:
+        return {"ok": False, "reason": "not_approved", "error": "approval could not be consumed"}
+    try:
+        if _read(claimed) != token:
+            return {"ok": False, "reason": "not_approved", "error": "approval changed before consumption"}
+        begin_tree = _tree(project_root)
+        if approval_binding(project_root, session_id) != binding:
+            return {"ok": False, "reason": "not_approved", "error": "plan changed while opening execution"}
+    finally:
+        try:
+            claimed.unlink(missing_ok=True)
+        except OSError:
+            pass  # A consumed private file is never accepted as execute.token.
     execution = {
+        "execution_id": uuid.uuid4().hex,
+        "plan_revision": binding["revision"],
         "plan_id": plan.get("plan_id"),
         "task": plan.get("task"),
         "scope": list(plan.get("files") or []),
@@ -271,16 +384,15 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
         "changed_since_plan": _changed(project_root, plan.get("base_tree"), begin_tree),
     }
     _write(_runtime_file(project_root, session_id, EXECUTION_FILE), execution)
-    try:
-        token_path.unlink()
-    except OSError:
-        pass
     return {"ok": True, "execution": execution}
 
 
-def end_execution(project_root: Path, session_id: str) -> dict:
+@_transactional
+def end_execution(project_root: Path, session_id: str, *, expected=_UNSPECIFIED) -> dict:
     path = _runtime_file(project_root, session_id, EXECUTION_FILE)
     execution = _read(path)
+    if expected is not _UNSPECIFIED and execution_identity(execution) != expected:
+        return {"ok": False, "reason": "not_active", "error": "execution was replaced while closing it"}
     if execution is None or execution.get("status") != STATUS_ACTIVE:
         return {"ok": False, "reason": "not_active", "error": "no active execution for this session"}
     end_tree = _tree(project_root)
@@ -301,7 +413,14 @@ def current_execution(project_root: Path, session_id: str) -> dict | None:
     return _read(_runtime_file(project_root, session_id, EXECUTION_FILE))
 
 
-def record_verification(project_root: Path, session_id: str, result: dict) -> None:
+def execution_identity(execution: dict | None):
+    if not isinstance(execution, dict):
+        return None
+    return execution.get("execution_id") or (execution.get("plan_id"), execution.get("started_at"), execution.get("approved_at"))
+
+
+@_transactional
+def record_verification(project_root: Path, session_id: str, result: dict, *, expected=_UNSPECIFIED) -> None:
     """Write a finished /.verify's verdict onto the session's execution, if there is one.
 
     The verdict is the runtime's (`meta.verdict`: pass | fail | incomplete), never the
@@ -310,6 +429,10 @@ def record_verification(project_root: Path, session_id: str, result: dict) -> No
     """
     path = _runtime_file(project_root, session_id, EXECUTION_FILE)
     execution = _read(path)
+    if expected is not _UNSPECIFIED and execution_identity(execution) != expected:
+        if isinstance(result, dict):
+            result.setdefault("meta", {})["execution_state_error"] = "stale verification: execution was replaced; verdict not attached"
+        return
     if execution is None or not isinstance(result, dict):
         return
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}

@@ -66,6 +66,9 @@ TARGETS = {
     "hosts/agy/skills": "{{HOME}}/.gemini/antigravity-cli/skills",
     "hosts/codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
     "hosts/codex/hooks.template.json": "{{HOME}}/.codex/hooks.json",
+    # Reviewer context is merged into the host config, never installed as its own file.
+    # The grant keeps this target present even when the optional context is disabled.
+    "hosts/codex/auto-review-policy.md": "{{HOME}}/.codex/config.toml",
     "hosts/codex/codex-host.py": "{{HOME}}/.codex/exoma/hooks/codex-host.py",
     # The OpenCode host (installer/base.py OPENCODE_*): block, plugin shim and hook; its
     # contract and skills are rendered from the hosts/claude/ sources above.
@@ -120,6 +123,7 @@ def _dist_files() -> list[str]:
         # One directory per skill (`<name>/SKILL.md`), as Agy lays them out.
         paths += [p.relative_to(DIST_CONFIG).as_posix() for p in sorted(agy_skills.glob("*/SKILL.md"))]
     for rel in ("hosts/codex/AGENTS.md", "hosts/codex/hooks.template.json", "hosts/codex/codex-host.py",
+                "hosts/codex/auto-review-policy.md",
                 "hosts/opencode/AGENTS.md", "hosts/opencode/exoma.js", "hosts/opencode/opencode-host.py"):
         if (DIST_CONFIG / rel).is_file():
             paths.append(rel)
@@ -161,6 +165,7 @@ def _component(rel: str) -> str:
         or "/commands/" in rel
         or "/agents/" in rel
         or rel in ("hosts/claude/CLAUDE.md", "hosts/agy/GEMINI.md", "hosts/codex/AGENTS.md",
+                   "hosts/codex/auto-review-policy.md",
                    "hosts/opencode/AGENTS.md")
         or rel in instructions
     ):
