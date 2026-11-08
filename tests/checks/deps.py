@@ -13,6 +13,7 @@ tooling out of reach for no gain.
 """
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -42,6 +43,16 @@ _OPTIONAL_EXTRAS = {
     "playwright": "src/exoma/core/evidence/e2e/",
 }
 _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
+
+# Stdlib modules newer than the oldest Python the package supports, by the version that
+# added them. While `requires-python` still admits an older interpreter, such a module is
+# absent there exactly like a missing extra, so it takes the same shape: imported only
+# under an ImportError guard, in any shipped file. The rule is judged against the
+# package's floor, not the interpreter running this check — an unguarded `import tomllib`
+# is found on 3.13 too, where the module exists, because it would still crash on 3.10.
+_VERSIONED_STDLIB = {
+    "tomllib": (3, 11),
+}
 
 # Shipped modules imported by their bare name from the directory they are installed into.
 # The Codex and OpenCode hosts install the Claude source beside their hook at its destination.
@@ -107,23 +118,61 @@ def _guarded_imports(tree: ast.AST) -> set[int]:
     return guarded
 
 
-def _imported_roots(path: Path) -> set[str]:
-    """Top-level module names this file imports, by any import form.
+def _python_floor() -> tuple[int, int]:
+    """The oldest Python the package admits, read from pyproject's `requires-python`."""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^requires-python\s*=\s*">=\s*(\d+)\.(\d+)', text, re.M)
+    assert_true(match is not None, 'pyproject.toml has no `requires-python = ">=X.Y"`; the stdlib floor is unknown')
+    return int(match[1]), int(match[2])
+
+
+def _late_stdlib(floor: tuple[int, int]) -> frozenset[str]:
+    """Stdlib modules the floor interpreter does not have."""
+    return frozenset(name for name, since in _VERSIONED_STDLIB.items() if since > floor)
+
+
+def _roots_in(tree: ast.AST, relative: str, late: frozenset[str]) -> set[str]:
+    """Top-level module names this tree imports, by any import form.
 
     An optional extra imported in its allowed package under an ImportError guard is
-    not reported; the same import anywhere else, or unguarded, is.
+    not reported, nor is a late stdlib module imported under one anywhere; the same
+    import unguarded, or an extra outside its package, is.
     """
     roots: set[str] = set()
-    tree = ast.parse(path.read_text(encoding="utf-8"))
     guarded = _guarded_imports(tree)
-    relative = path.relative_to(REPO_ROOT).as_posix()
     for node in ast.walk(tree):
         for root in _import_root(node):
-            prefix = _OPTIONAL_EXTRAS.get(root)
-            if prefix and relative.startswith(prefix) and id(node) in guarded:
-                continue
+            if id(node) in guarded:
+                if root in late:
+                    continue
+                prefix = _OPTIONAL_EXTRAS.get(root)
+                if prefix and relative.startswith(prefix):
+                    continue
             roots.add(root)
     return roots
+
+
+def _imported_roots(path: Path, late: frozenset[str]) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return _roots_in(tree, path.relative_to(REPO_ROOT).as_posix(), late)
+
+
+def _scanner_judges_late_stdlib_by_guard(late: frozenset[str]) -> None:
+    """The exemption is the guard, not the module name: prove both directions."""
+    assert_true("tomllib" in _late_stdlib((3, 10)) and "tomllib" not in _late_stdlib((3, 11)),
+                "tomllib is late stdlib below 3.11 and plain stdlib from 3.11")
+    guarded = ast.parse("def f():\n    try:\n        import tomllib\n    except ImportError:\n        return None\n")
+    bare = ast.parse("import tomllib\n")
+    late_ok = frozenset({"tomllib"})
+    assert_true(_roots_in(guarded, "src/exoma/anywhere.py", late_ok) == set(),
+                "a guarded late-stdlib import passes in any shipped file")
+    assert_true(_roots_in(bare, "src/exoma/anywhere.py", late_ok) == {"tomllib"},
+                "an unguarded late-stdlib import is reported")
+    mixed = ast.parse("try:\n    import tomllib\nexcept ImportError:\n    pass\nimport tomllib as again\n")
+    assert_true(_roots_in(mixed, "src/exoma/anywhere.py", late_ok) == {"tomllib"},
+                "a second, bare import of a guarded late module is still reported")
+    stdlib = set(sys.stdlib_module_names) - late
+    assert_true(not (late & stdlib), "late stdlib never counts as stdlib, whatever interpreter runs the check")
 
 
 def _test_runtime_is_stdlib_only() -> None:
@@ -134,10 +183,14 @@ def _test_runtime_is_stdlib_only() -> None:
         "broken, and a broken scan passes for the wrong reason",
     )
 
-    stdlib = set(sys.stdlib_module_names)
+    late = _late_stdlib(_python_floor())
+    _scanner_judges_late_stdlib_by_guard(late)
+    # A late module is judged by its guard alone, so it is never stdlib here, even on an
+    # interpreter that has it.
+    stdlib = set(sys.stdlib_module_names) - late
     offenders: list[str] = []
     for path in files:
-        for root in sorted(_imported_roots(path)):
+        for root in sorted(_imported_roots(path, late)):
             if root in stdlib or root in _INTERNAL:
                 continue
             sibling_dirs = _HOOK_SIBLINGS.get(root, ())

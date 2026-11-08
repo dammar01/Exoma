@@ -214,6 +214,8 @@ def _test_execution_chain() -> None:
     _execution_tracks_its_own_edits()
     _concurrent_execution_publication()
     _stale_approval_preserves_new_token()
+    _two_sessions_do_not_share_the_guard()
+    _two_active_executions_keep_their_own_scope()
 
 
 def _concurrent_execution_publication() -> None:
@@ -316,6 +318,91 @@ def _stale_approval_preserves_new_token() -> None:
             assert_true(not acquired.wait(0.1), "standalone and runtime transaction locks must exclude each other")
         worker.join(3)
         assert_true(acquired.is_set(), "standalone mutation proceeds after runtime releases its transaction")
+
+
+def _load_standalone_policy(name: str):
+    import importlib.util
+    source = Path(__file__).resolve().parents[2] / "src/exoma/_bundle/config/hosts/claude/hooks/workflow_policy.py"
+    spec = importlib.util.spec_from_file_location(name, source)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    return policy
+
+
+def _two_sessions_do_not_share_the_guard() -> None:
+    """A guard held by one session does not stall another session on the same root.
+
+    Session B mutates from a separate thread on purpose: the guard is reentrant per
+    thread, so B driven from the thread holding A would pass even if the guard were
+    project-wide. B must finish while A still holds its guard, well inside the guard's
+    own ten-second acquisition limit. The Git snapshot is stubbed so that limit measures
+    the lock alone, not how fast Git starts; other checks cover the snapshot itself.
+    """
+    import threading
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="execution-two-sessions-", ignore_cleanup_errors=True) as tmp, \
+            patch.object(execution, "_tree", return_value=None):
+        root = Path(tmp)
+        done, errors, results = threading.Event(), [], {}
+        def mutate_b():
+            try:
+                execution.record_plan(root, "sess-b", _plan(files=["b.py"]))
+                _token(root, "sess-b")
+                results["begin"] = execution.begin_execution(root, "sess-b")
+                results["end"] = execution.end_execution(root, "sess-b")
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+        worker = threading.Thread(target=mutate_b)
+        with execution._execution_transaction(root, "sess-a"):
+            worker.start()
+            finished_under_a = done.wait(5)
+        # B waits at most the guard's ten seconds once A is released; it must be gone
+        # before the directory holding its guard file is removed.
+        worker.join(15)
+        assert_true(not worker.is_alive(), "session B's worker stopped before its runtime directory is removed")
+        assert_true(not errors, f"session B mutates without error while A holds its guard: {errors}")
+        assert_true(finished_under_a, "session B's plan, begin and end complete while A still holds its guard")
+        assert_true(results.get("begin", {}).get("ok") and results.get("end", {}).get("ok"),
+                    f"session B opens and closes its own execution: {results}")
+        assert_true(execution.current_plan(root, "sess-a") is None and execution.current_execution(root, "sess-a") is None,
+                    "session B's mutations leave session A's runtime untouched")
+
+
+def _two_active_executions_keep_their_own_scope() -> None:
+    """Two executions open at once: each session's gate and verdict are its own."""
+    policy = _load_standalone_policy("execution_policy_two_scopes")
+    with tempfile.TemporaryDirectory(prefix="execution-two-scopes-") as tmp:
+        root = Path(tmp)
+        sessions = (("sess-a", "a.py", "b.py"), ("sess-b", "b.py", "a.py"))
+        opened = {}
+        for session, own, _other in sessions:
+            execution.record_plan(root, session, _plan(files=[own]))
+            _token(root, session)
+            begun = execution.begin_execution(root, session)
+            assert_true(begun["ok"], f"{session} opens its own execution: {begun}")
+            opened[session] = begun["execution"]["execution_id"]
+        assert_true(opened["sess-a"] != opened["sess-b"], "each execution has its own identity")
+        for session, own, other in sessions:
+            runtime = str(workflow_paths(root, session)["runtime_dir"])
+            allowed = policy.write_refusal("Edit", str(root / own), str(root), str(root), {}, runtime)
+            refused = policy.write_refusal("Edit", str(root / other), str(root), str(root), {}, runtime)
+            assert_true(allowed is None, f"{session} may write its own scope ({own}): {allowed}")
+            assert_true(refused is not None and refused[0] == "outside_scope",
+                        f"{session} is refused the other session's scope ({other}): {refused}")
+        before_b = execution.current_execution(root, "sess-b")
+        execution.record_verification(root, "sess-a", {"ok": True, "meta": {"verdict": "pass"}},
+                                      expected=opened["sess-a"])
+        assert_true(execution.current_execution(root, "sess-b") == before_b,
+                    "a verdict recorded for A leaves B's execution unchanged")
+        execution.record_verification(root, "sess-b", {"ok": True, "meta": {"verdict": "fail"}},
+                                      expected=opened["sess-b"])
+        a, b = execution.current_execution(root, "sess-a"), execution.current_execution(root, "sess-b")
+        assert_true(a["execution_id"] == opened["sess-a"] and a["scope"] == ["a.py"] and a["verification"] == "pass",
+                    f"A keeps its identity, scope and verdict: {a}")
+        assert_true(b["execution_id"] == opened["sess-b"] and b["scope"] == ["b.py"] and b["verification"] == "fail",
+                    f"B keeps its identity, scope and verdict: {b}")
 
 
 def _approval_cannot_follow_a_replaced_plan() -> None:

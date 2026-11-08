@@ -501,6 +501,81 @@ def _check_hashed_session_approval() -> None:
             ws.close()
 
 
+def _check_fork_execution_approval() -> None:
+    """A forked session needs its own plan and its own `/.execute -y`, through the real launchers.
+
+    DEC-068 gave a fork its own MAIN_SESSION_ID; this follows it through to execution. The
+    parent's approval opens nothing in the fork, not even when copied into the fork's
+    runtime, and the fork's own approval leaves the parent's untouched.
+    """
+    from exoma.core.runtime import execution as execution_runtime
+    from exoma.core.workspace.workspace_paths import workflow_paths
+
+    ws = _Workspace("fork-approval")
+    try:
+        bind, gate_set = _flavours("session-bind")[0][1], _flavours("intent-gate-set")[0][1]
+
+        def start(source: str, host_id: str) -> str:
+            code, _, _ = ws.run(bind, {"source": source, "session_id": host_id, "cwd": str(ws.project),
+                                       "hook_event_name": "SessionStart"})
+            assert_true(code == 0, f"session-bind ({source}) exits 0, got {code}")
+            registry = json.loads(ws.registry.read_text(encoding="utf-8-sig"))
+            bound = (registry.get(host_id) or {}).get("main_session_id")
+            assert_true(bound, f"session-bind ({source}) records {host_id}: {registry}")
+            return bound
+
+        def approve(host_id: str) -> None:
+            code, _, _ = ws.run(gate_set, {"session_id": host_id, "cwd": str(ws.project),
+                                           "hook_event_name": "UserPromptSubmit", "prompt": "/.execute -y"})
+            assert_true(code == 0, f"intent-gate-set exits 0 for {host_id}, got {code}")
+
+        def plan() -> dict:
+            return {
+                "task": "fork approval", "decision": "proceed",
+                "confidence": {key: "high" for key in execution_runtime.CONFIDENCE_KEYS},
+                "open_questions": [], "files": ["core/a.py"],
+                "options": [{"name": "scoped", "minus": "requires approval", "recommended": True}],
+            }
+
+        def begin(session: str) -> dict:
+            return execution_runtime.begin_execution(ws.project, session)
+
+        parent, child = start("startup", "p1"), start("fork", "f1")
+        assert_true(parent != child, f"the fork is bound to its own MAIN_SESSION_ID: {parent} / {child}")
+        parent_rt, child_rt = (workflow_paths(ws.project, s)["runtime_dir"] for s in (parent, child))
+
+        execution_runtime.record_plan(ws.project, parent, plan())
+        approve("p1")
+        assert_true((parent_rt / "execute.token").is_file(), "the parent's `/.execute -y` writes the parent's token")
+
+        assert_true(begin(child).get("reason") == "no_plan", "the fork does not inherit the parent's plan")
+        execution_runtime.record_plan(ws.project, child, plan())
+        assert_true(begin(child).get("reason") == "not_approved",
+                    "an identical plan in the fork is not approved by the parent's `-y`")
+        child_rt.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(parent_rt / "execute.token", child_rt / "execute.token")
+        assert_true(begin(child).get("reason") == "not_approved",
+                    "the parent's token copied into the fork's runtime is bound to the parent and refused")
+        # Copy the parent's plan as well: every binding field now matches except the runtime
+        # location, so this refusal is the runtime field's alone.
+        shutil.copyfile(parent_rt / execution_runtime.PLAN_FILE, child_rt / execution_runtime.PLAN_FILE)
+        parent_binding = execution_runtime.approval_binding(ws.project, parent)
+        child_binding = execution_runtime.approval_binding(ws.project, child)
+        without_runtime = lambda binding: {k: v for k, v in binding.items() if k != "runtime"}  # noqa: E731
+        assert_true(without_runtime(parent_binding) == without_runtime(child_binding)
+                    and parent_binding["runtime"] != child_binding["runtime"],
+                    f"a copied plan binds alike except for its runtime: {parent_binding} / {child_binding}")
+        assert_true(begin(child).get("reason") == "not_approved",
+                    "a copied plan and token are refused on the runtime location alone")
+
+        approve("f1")
+        assert_true(begin(child)["ok"], "the fork's own `/.execute -y` opens the fork's plan")
+        assert_true((parent_rt / "execute.token").is_file() and begin(parent)["ok"],
+                    "the fork's approval leaves the parent's approval intact and usable")
+    finally:
+        ws.close()
+
+
 def _test_hooks_run_through_their_launchers() -> None:
     # Fails closed: the bash launchers are what every OS will run, so a machine that cannot
     # run them has not tested the contract, and a green result there would be false.
@@ -539,6 +614,7 @@ def _test_hooks_run_through_their_launchers() -> None:
     # The failures reproduced from real sessions (DEC-068), through the same launchers.
     check_repro_matrix()
     _check_hashed_session_approval()
+    _check_fork_execution_approval()
 
 
 def _shim(directory: Path, name: str, body: str) -> None:
