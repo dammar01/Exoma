@@ -97,7 +97,7 @@ from exoma.installer.rollback import (  # noqa: E402,F401
     _store_install_mode,
     _stored_agy_opt_out,
     _stored_agy_permissions,
-    _stored_codex_auto_review_context,
+    _stored_mode,
     _stored_hosts,
     _stored_only_command,
 )
@@ -236,11 +236,6 @@ def _ask_choices(args, host_choice, apply: bool, plan, interactive: bool, intent
         args.agy_permissions = _ask_yes_no(
             "add Agy allow rules for the .workflow runner and Exoma's data directory?",
             not _stored_agy_opt_out(),
-        )
-    if "codex" in hosts and getattr(args, "codex_auto_review_context", False) is None:
-        args.codex_auto_review_context = _ask_yes_no(
-            "add Exoma authorization context to Codex Auto-review (keeps your reviewer and sandbox)?",
-            _stored_codex_auto_review_context(),
         )
     if not args.update_providers:
         args.update_providers = _ask_yes_no(
@@ -693,8 +688,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--codex-auto-review-context", action=argparse.BooleanOptionalAction, default=None,
-        help="add owned Exoma authorization context to Codex HOST auto_review.extra_policy; "
-             "keeps your policy, reviewer and sandbox. Choice persists across updates; default off",
+        help="Exoma authorization context in Codex HOST auto_review.extra_policy is added "
+             "automatically when codex is chosen. --no-codex-auto-review-context removes it "
+             "and keeps the opt-out across updates; --codex-auto-review-context clears that. "
+             "Keeps your policy, reviewer and sandbox",
     )
     parser.add_argument(
         "--model",
@@ -814,9 +811,11 @@ def main() -> int:
     if "opencode" in hosts:
         plan.warn("OpenCode loads its plugins at startup: restart any running opencode session to load Exoma's host plugin")
     agy_permissions, agy_opt_out = _resolve_agy_permissions(args.agy_permissions, hosts)
-    plan.codex_auto_review_context = (args.codex_auto_review_context
-                                     if args.codex_auto_review_context is not None
-                                     else _stored_codex_auto_review_context())
+    from exoma.installer.codex_policy import resolve_context
+
+    plan.codex_auto_review_context, codex_opt_out = resolve_context(
+        _stored_mode(), hosts, args.codex_auto_review_context,
+    )
     print(f"  hosts:  {', '.join(hosts)}")
     print()
 
@@ -971,6 +970,7 @@ def main() -> int:
     _store_install_mode(
         args.only_command, hosts, agy_permissions, owned_rules, agy_opt_out, plan, apply, backup_root,
         codex_auto_review_context=plan.codex_auto_review_context,
+        codex_auto_review_context_opt_out=codex_opt_out,
     )
     _write_ledger(targets, apply)
 

@@ -1606,7 +1606,11 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
 
 `verify_mode` controls **how deep** `/.verify` goes:
 
-- **`delegated`** (default) — second_agent verifies and returns a labeled contract. Every finding must carry three tags: `severity` (critical/high/medium/low), `origin` (introduced/regression/pre_existing/unknown), `scope_relation` (in_scope/out_of_scope). Blocking is determined by the combination of all three, not severity alone — a pre-existing defect does not hold the verdict of the current change hostage, and `origin: unknown` fails closed. A section without findings must contain an explicit `none`; the runtime also accepts `none.`, `none (…)` (free remark without a tag), `n/a`, `not applicable`, `nothing found`/`nothing to report`, `no (blocking) findings`, `tidak ada`, `tidak ada temuan`, and a sentinel followed by a separator (`;`, `:`, `,`, `—`, `-`) with a remark that consists entirely of neutral phrases (`clean`, `all clean`, `ok`, `nothing found`/`nothing blocking`/`nothing to report`, `no issues`, `bersih`, `semua bersih`, `tidak ada temuan`). Free explanation goes in parentheses. Anything else — `none of …`, `none - caller X fails`, `none; all inspected paths are clean`, a tagged remark, multi-line text — is read as a finding; a continuation then asks for the entry to be written as `- none`. Exception in the E2E reviewer (`verify-browser`): an item with continuation lines is still empty when its first line is a plain `none` or `none (…)`, as before.
+- **`delegated`** (default) — second_agent verifies and returns a labeled contract. Every finding must carry three tags: `severity` (critical/high/medium/low), `origin` (introduced/regression/pre_existing/unknown), `scope_relation` (in_scope/out_of_scope). Blocking is determined by all three tags; a pre-existing defect does not block the current change, while `origin: unknown` fails closed. For an empty section write exactly `- none`; describe the checks in `checks_run`. Compatibility forms include `none.`, `n/a`, `not applicable`, `nothing found`/`nothing to report`, `no (blocking) findings`, `tidak ada`, `tidak ada temuan`, and separator notes consisting entirely of supported neutral phrases such as `clean`, `all clean`, `ok`, `no issues`, `bersih`, and `semua bersih`.
+
+  Parentheses now use a bounded grammar too: supported neutral phrases, `tidak ada blocking findings`, or `checked` followed by check targets joined by `and`, optionally ending in `, clean`. Targets are hooks, telemetry, retry/timeout paths (optionally prefixed by `the`), or `file:line` references (optionally followed by `and its callers`). For example, `none (checked hooks and telemetry)` and `none (checked core/evidence/contract.py:590 and its callers, clean)` remain empty. The legacy `none (checked the retry path)` followed by `and the timeout path` remains empty only because the **whole** combined explanation matches that grammar. Unknown prose is meaningful, including `none (caller X fails)` or a neutral prefix followed by a problem. Both the validator and E2E reviewer retain complete continuation text and apply the same classifier; plain `none` followed by a finding is never empty. Tags on continuation lines participate in routing.
+
+  The shared commit gate likewise preserves the distinction between command data and execution. A complete `python[3[.version]][.exe] -c` invocation containing only one `print` expression with literal string arguments is recognized as data. The matcher rejects double-quoted shell expansion/escaping, wrappers, extra statements, keyword arguments, redirects, chaining and pipelines; anything unrecognized retains the existing approval check. This bounded recognition is not a general shell parser. P01–P12 and G01–G04 run through the native `research-parser-regressions` and `research-gate-regressions` suites, with command strings passed as data only.
   **Tests in `delegated` mode.** The second agent verifies by reading and tracing; it
   does not run a test runner. Tests are selected by main_agent from the diff and dependents, written to
   `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json` —
@@ -1862,7 +1866,14 @@ the user wrote: `/.execute -y` (typed or as the expanded slash command) and a pr
 commit (a bare affirmative keeps an existing commit marker; any other prompt, a negated mention
 included, clears it). Both live in the session's own runtime directory, and a fork is its own
 session, so a prompt in one window never clears another window's approval. For a prompt whose
-`source` neither list names, see the intent gate above: the command must open the prompt.
+`source` neither list names, see the intent gate above: the execute command must open the
+prompt. Commit also accepts a direct request at the start such as `gas commit`, `tolong
+commit perubahan ini`, or `please commit these changes`. Codex and OpenCode apply that
+same rule after normalizing `$exoma-commit`. Pasted material, skill bodies, code fences,
+blockquotes and quoted examples do not supply commit intent or negate a request outside
+them. A bare affirmative never creates or renews permission; an expired marker remains
+expired. Negation outside a literal still applies when naming a quoted command, such as
+``don't `git commit` yet``. These commit rules do not relax the anchored `execute -y` approval.
 
 Hooks, governed by `policies.enforcement`:
 
@@ -1870,7 +1881,17 @@ Hooks, governed by `policies.enforcement`:
   write outside the project root (the temp dir, `~/.claude` and `policies.write_allowed_outside_root`
   excepted), a write inside the root outside an active execution's scope (`.workflow/` always
   passes; with no active execution every in-root write passes), and `git commit` without a
-  `commit.marker` younger than 30 minutes (`git.exe` and a quoted path to git count, as do quoted option values such as `git -C "a b" commit`; so does the text `git commit` inside another command's quoted argument — a fail-closed false block). Containment is decided on the path after resolving symlinks and junctions; scope accepts either spelling. Shell commands are not parsed for file writes.
+   `commit.marker` younger than 30 minutes (`git.exe` and a quoted path to git count, as do
+   quoted option values such as `git -C "a b" commit`). One validated call to this project's
+   `.workflow/run.sh` for `explore`, `plan`, `analyze` or `verify` treats its task argument
+   as data: mentioning `git commit` there needs no commit marker. This exception requires
+   an absolute path to the runner, a recognized interpreter/direct runner, named `--session` and exactly one `--task` or
+   `--task-file`, with bare/single-quoted arguments and no additional shell commands.
+   `run.sh test` is excluded because its task is a command to execute. Appended commands,
+   nested shells, substitutions, relative/tilde runner paths, unknown options, positional runner arguments and other
+   unsupported quoting retain the conservative regex check; text in those forms can still
+   produce a false block. Containment is decided on the path after resolving symlinks and
+   junctions; scope accepts either spelling. Shell commands are not parsed for file writes.
   Every refusal, blocked (`hybrid`) or warned (`warn`), appends one JSON line to
   `runtime/gate-blocks.jsonl` of the bound session: `at`, `hook`, `rule` (`commit_unapproved`,
   `outside_root`, `outside_scope`), `tool`, `mode`, `exit` (2 or 0) and the active `plan_id`.
@@ -2201,11 +2222,24 @@ links to `#batasan-yang-diketahui` keep working.
 
 ## Codex Auto-review context
 
-`exoma install codex --codex-auto-review-context` opts into an owned additive block in
-the Codex host's `auto_review.extra_policy`. A terminal install asks the choice; an update
-with `--no-input` keeps it. Fresh noninteractive installs leave it off unless explicitly
-enabled. `--no-codex-auto-review-context` removes the owned block and remembers that choice.
-This is independent of the project's second-agent provider.
+`exoma install codex` automatically installs an owned additive block in the Codex host's
+`auto_review.extra_policy`, together with the contract, skills, instructions and hooks.
+Selecting Codex in the terminal menu, `all`, the legacy `--host codex`, or a stored host
+choice uses the same rule. There is no separate context prompt or required opt-in flag,
+including on a fresh noninteractive install or an update with `--no-input`.
+
+`--no-codex-auto-review-context` removes the owned block and saves an explicit opt-out,
+including across updates and host deselection/reselection. The existing positive flag
+`--codex-auto-review-context` clears that opt-out. Selecting only Codex as the project's
+second-agent provider does not enable Codex host context.
+
+Migration: old install state recorded only the effective `codex_auto_review_context`
+boolean, so a default `false` cannot be distinguished from a deliberate refusal. Missing,
+`true` and `false` legacy values all adopt the automatic default when Codex is a chosen
+host. To keep the context disabled, use `--no-codex-auto-review-context` once after updating;
+new state records this separately as `codex_auto_review_context_opt_out`. Installer,
+`--check` and doctor resolve this intent with the same rule; missing context in a legacy
+Codex install is reported as missing until the next install repairs it.
 
 The block describes authorized Exoma source inspection and evidence gathering. It does not
 change the reviewer, sandbox, user replacement policy, trust, authentication or managed
@@ -2218,6 +2252,9 @@ baseline listed in [`installer/codex_policy.py`](../src/exoma/installer/codex_po
 Other CLI versions are reported as `support-unverified`, not assumed
 unsupported upstream or silently accepted. An effective `CODEX_HOME` different from the
 host directory managed by the installer is likewise reported without writing another file.
+These guards apply to automatic installs as well: a refused config transaction exits
+nonzero and reports an incomplete integration. Review and trust the installed hooks with
+`/hooks`; installing their files alone does not activate the host gates.
 
 Grant and reviewer context share one atomic config write, original backup and final-hash
 receipt. Reinstall replaces only an unedited owned block. User policy text and settings

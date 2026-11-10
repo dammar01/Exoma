@@ -94,7 +94,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from workflow_policy import (  # noqa: E402
         commit_refusal, log_refusal as _log_refusal, log_gate_skip as _log_gate_skip,
-        read_json, runtime_dir as _runtime_dir, write_refusal,
+        read_json, runtime_dir as _runtime_dir, write_refusal, is_bash,
     )
 except Exception:
     # A partial install without the shared helper: fail open like every other state this
@@ -152,7 +152,8 @@ try:
         ti = {}
 
     if tool_name in ("Bash", "PowerShell"):
-        refusal = commit_refusal(str(ti.get("command") or ""), runtime_dir)
+        refusal = commit_refusal(str(ti.get("command") or ""), runtime_dir,
+                                 {"root": root, "home": home, "is_bash": is_bash})
         if refusal:
             refuse(mode, *refusal)
         sys.exit(0)

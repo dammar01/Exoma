@@ -628,14 +628,14 @@ def _verification_format() -> list[str]:
         " INCOMPLETE when you could not finish the verification at all;"
         " gaps you CAN name belong in not_verified with the verdict still DONE)",
         "",
-        "blocking_findings:   # routed here by the table above, not by severity alone",
+        "blocking_findings:   # routed by the table; when empty use - none; describe clean checks in checks_run",
         "- severity: <critical|high> | origin: <introduced|regression|unknown>"
         " | scope_relation: <in_scope|out_of_scope>",
         "  problem: <what is wrong> [file:line | db:<obj> | mcp:<server:tool> | runtime:<key> | cmd:<output>]",
         "  trigger: <concrete input/state that makes it fail>",
         "  impact: <what breaks for the user>",
         "  fix: <specific change>",
-        "- none (say why: what you checked that came back clean)",
+        "- none",
         "",
         "escalations:         # critical/high that does NOT block this verdict — user decides",
         "- severity: <critical|high> | origin: <pre_existing|introduced|regression>"

@@ -142,7 +142,7 @@ def user_prompt_submit(payload):
     text = _normalize_skill_mentions(raw)
     rt = wp.runtime_dir(root, main_id)
     provenance = {"host": "opencode", "session_id": sid}
-    # OpenCode does not expose a prompt source. Only a command at the very start may approve.
+    # Without a prompt source, execute stays anchored; commit accepts direct requests too.
     wp.record_approvals(text, rt, True, provenance)
     intent = wp.load_intent_map(str(HERE))
     hinted = None
@@ -232,7 +232,7 @@ def pre_tool_use(payload):
             refusal = (refusal_key, "Delegate /.%s first, in the foreground with a long timeout: %s %s --session '%s' --task '<task>'"
                        % (marker.get("command"), wp.runner_command(root, profile), marker.get("command"), main_id))
     if refusal is None and tool in SHELL_TOOLS:
-        refusal = wp.commit_refusal(command, rt)
+        refusal = wp.commit_refusal(command, rt, {"root": root, "home": str(Path.home()), "is_bash": _is_bash})
     if refusal is None:
         for target in paths:
             refusal = wp.write_refusal(tool, target, cwd, root, policy, rt, host_dirs=(str(_home()),))

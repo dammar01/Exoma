@@ -264,7 +264,7 @@ def _check_policy_template_is_stamped(manifest: dict) -> None:
     import io
     from unittest.mock import patch
 
-    from exoma.installer import base, check
+    from exoma.installer import base, check, codex_policy, rollback
 
     key = "hosts/codex/auto-review-policy.md"
     assert_true(any(entry["path"] == key for entry in manifest["files"]), "fixture: the template is stamped")
@@ -274,17 +274,21 @@ def _check_policy_template_is_stamped(manifest: dict) -> None:
     dropped = {**manifest, "files": [entry for entry in manifest["files"] if entry["path"] != key]}
     with tempfile.TemporaryDirectory(prefix="aw-policy-stale-") as tmp:
         home = Path(tmp)
-        for enabled in (False, True):
+        for mode in ({"hosts": ["codex"]},
+                     {"hosts": ["codex"], "codex_auto_review_context": False},
+                     {"hosts": ["codex"], "codex_auto_review_context_opt_out": True}):
             for tampered in (edited, dropped):
                 assert_true(key in check._bundle_stale(tampered), "install refuses the unstamped template")
                 output = io.StringIO()
                 with patch.object(base, "HOME", home), patch.object(check, "HOME", home), \
-                        patch.object(check, "_installed_hosts", return_value=()), \
-                        patch.object(check, "_stored_codex_auto_review_context", return_value=enabled), \
+                        patch.object(check, "_installed_hosts", return_value=("codex",)), \
+                        patch.object(rollback, "_stored_mode", return_value=mode), \
+                        patch.object(codex_policy, "cli_supported", return_value=True), \
+                        patch.object(codex_policy, "location_supported", return_value=True), \
                         contextlib.redirect_stdout(output):
                     code = check._run_check(tampered)
                 assert_true(code != 0 and f"    - {key}" in output.getvalue(),
-                            f"--check reports the unstamped template (context enabled={enabled}): "
+                            f"--check reports the unstamped template (mode={mode}): "
                             f"{output.getvalue()[-600:]}")
 
 

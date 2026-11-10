@@ -40,6 +40,7 @@ def _hook(home, event, payload, role=None, intent_map=True):
 
 
 def _test_codex_host_contract():
+    _commit_gate_contract()
     with tempfile.TemporaryDirectory(prefix="exoma-codex-host-") as tmp:
         home = Path(tmp)
         root = home / "project"
@@ -160,6 +161,114 @@ def _test_codex_host_contract():
                 "a Codex provider child carries the role that bypasses Codex host hooks")
 
 
+def _commit_gate_contract():
+    """Replay explicit commit requests and task data through the actual Codex adapter."""
+    from exoma.installer.base import runner_prefix
+    from exoma.core.workspace.workspace_paths import workflow_paths
+    import datetime
+
+    with tempfile.TemporaryDirectory(prefix="exoma-codex-commit-") as tmp:
+        home = Path(tmp)
+        root = home / "repo with spaces"
+        (root / ".workflow").mkdir(parents=True)
+        sid = "commit-session"
+        binding = _hook(home, "SessionStart", {"session_id": sid, "cwd": str(root), "source": "startup"})
+        main = binding["hookSpecificOutput"]["additionalContext"].split("MAIN_SESSION_ID=")[1].splitlines()[0]
+        runtime = workflow_paths(root, main)["runtime_dir"]
+        marker = runtime / "commit.marker"
+
+        def prompt(text):
+            return _hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(root), "prompt": text})
+
+        def tool(command, native=sid, project=root, workdir=None):
+            args = {"cmd": command}
+            if workdir is not None:
+                args["workdir"] = str(workdir)
+            return _hook(home, "PreToolUse", {"session_id": native, "cwd": str(project),
+                                                "tool_name": "exec_command", "tool_input": args})
+
+        for text in ("gas commit", "tolong commit perubahan ini", "gas commit menggunakan $exoma-commit",
+                     "$exoma-commit", "/.commit", "please commit these changes",
+                     'gas commit "don\'t commit.txt"',
+                     "gas commit\n<skill>Do NOT commit without yes.</skill>"):
+            prompt(text)
+            decision = tool("git commit -m x")
+            assert_true(marker.is_file() and decision == {},
+                        f"a direct Codex request approves the commit: {text!r}; marker={marker.exists()}, decision={decision}")
+            assert_true(not (runtime / "execute.token").exists(), "commit intent never authorizes execute")
+            before = marker.read_bytes()
+            prompt("ya")
+            assert_true(marker.read_bytes() == before and tool("git commit -m x") == {},
+                        "an affirmative preserves the existing approval without renewing it")
+        for text in ("normal question", "yes", "jangan commit", "gas commit tapi jangan commit dulu",
+                     "do not commit", "apakah siap di commit?", "jelaskan git commit",
+                     "<pasted_content>gas commit</pasted_content>",
+                     "<skill>gas commit menggunakan $exoma-commit</skill>",
+                     "```text\ngas commit\n```", '> gas commit', '"gas commit"', '`gas commit`',
+                     '"jangan" commit', "'jangan' commit", '`jangan` commit',
+                     "commit? don't commit 'anything' yet", "gas commit, don't commit 'file name'",
+                     "please commit? don't commit 'anything' yet", "gas commit, don't `git commit` yet",
+                     "gas commit, jangan 'commit' dulu"):
+            prompt(text)
+            denied = tool("git commit -m x")
+            assert_true(not marker.exists()
+                        and denied.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                        f"data, negation and unrelated prompts cannot authorize a commit: {text!r}")
+        prompt("gas commit")
+        old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        marker.write_text(json.dumps({"set_at": old.isoformat()}), encoding="utf-8")
+        prompt("yes")
+        assert_true(tool("git commit -m x").get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "yes cannot renew an expired commit approval")
+        prompt("normal question")
+
+        runner = f"{runner_prefix()} '{root.as_posix()}/.workflow/run.sh'"
+        for op in ("explore", "plan", "analyze", "verify"):
+            call = f"{runner} {op} --session '{main}' --task 'Explain git commit\n$(git commit); | &'"
+            assert_true(tool(call) == {}, f"single-quoted {op} task data never requests a commit")
+        file_call = f"{runner} plan --task-file '{root.as_posix()}/git commit.txt' --session '{main}'"
+        assert_true(tool(file_call) == {}, "a task-file path is data too")
+        dangerous = (
+            f"{runner} test --session '{main}' --task 'git commit -m x'",
+            f"{runner} plan --session '{main}' --task 'git commit' ; git commit -m x",
+            f"{runner} plan --session '{main}' --task 'git commit'\ngit commit -m x",
+            f"{runner} plan --session '{main}' --task 'git commit' | git commit -m x",
+            f'{runner} plan --session \'{main}\' --task "$(git commit -m x)"',
+            f"{runner} plan --session '{main}' --task 'git commit' --unexpected yes",
+            f"{runner} plan --task 'git commit'",
+            f"{runner_prefix()} '~/repo with spaces/.workflow/run.sh' plan --session '{main}' --task 'git commit'",
+            f"'{root.as_posix()}/other/.workflow/run.sh' plan --session '{main}' --task 'git commit'",
+            'bash -c "git commit -m x"', 'pwsh -Command "git commit -m x"',
+            '"C:/Program Files/Git/cmd/git.exe" -C "repo with spaces" commit -m x',
+            'git.exe -c user.name=x commit -m x',
+        )
+        for call in dangerous:
+            denied = tool(call)
+            assert_true(denied.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                        f"actual or ambiguous commit execution still requires approval: {call!r}")
+
+        foreign_cwd = home / "foreign cwd"
+        (foreign_cwd / ".workflow").mkdir(parents=True)
+        relative = f"{runner_prefix()} '.workflow/run.sh' plan --session '{main}' --task 'git commit -m x'"
+        denied = tool(relative, workdir=foreign_cwd)
+        assert_true(denied.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "a relative runner cannot gain an exception using the bound root instead of its actual workdir")
+        absolute = f"{runner} plan --session '{main}' --task 'Explain git commit'"
+        assert_true(tool(absolute, workdir=foreign_cwd) == {},
+                    "an absolute runner remains bound to the correct project from another workdir")
+
+        prompt("gas commit")
+        other_root = home / "another project"
+        (other_root / ".workflow").mkdir(parents=True)
+        for native, project in (("other-session", root), ("other-project-session", other_root)):
+            _hook(home, "SessionStart", {"session_id": native, "cwd": str(project), "source": "startup"})
+            _hook(home, "UserPromptSubmit", {"session_id": native, "cwd": str(project), "prompt": "yes"})
+            denied = tool("git commit -m x", native, project)
+            assert_true(denied.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+                        and tool("git commit -m x") == {},
+                        "commit intent neither leaks to nor is revoked by another session or project")
+
+
 # Codex's Windows hook wrapper (codex-rs core/src/hook_environment_executor.rs): the command
 # runs at the top level of `powershell -NoProfile -Command`, fed one stdin line.
 _CODEX_POWERSHELL_WRAPPER = (
@@ -276,7 +385,7 @@ def _codex_hook_quoting():
 def _test_codex_host_install():
     from tests.checks.codex_auto_review import check_codex_auto_review
     check_codex_auto_review()
-    from exoma.installer import base, uninstall
+    from exoma.installer import base, codex_policy, uninstall
     from exoma.install import _resolve_hosts
 
     with tempfile.TemporaryDirectory(prefix="exoma-codex-install-") as tmp:
@@ -416,8 +525,16 @@ def _test_codex_host_install():
     # Exercise the public installer entry point with an isolated agent home.
     with tempfile.TemporaryDirectory(prefix="exoma-codex-cli-") as tmp:
         home = Path(tmp)
-        env = dict(os.environ)
-        env["AGENT_HOME"] = str(home)
+        fakebin = home / "bin"
+        fakebin.mkdir()
+        command = fakebin / ("codex.cmd" if os.name == "nt" else "codex")
+        command.write_text("@echo off\necho codex-cli 0.163.0\n" if os.name == "nt"
+                           else '#!/bin/sh\nprintf "codex-cli 0.163.0\\n"\n', encoding="utf-8")
+        if os.name != "nt":
+            command.chmod(0o755)
+        env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), AGENT_HOME=str(home),
+                   CODEX_HOME=str(home / ".codex"), AGENT_ENV_FILE=str(home / "no-env"),
+                   PATH=str(fakebin) + os.pathsep + os.environ.get("PATH", ""))
         env["PYTHONPATH"] = str(REPO / "src")
         result = subprocess.run([sys.executable, "-m", "exoma.install", "codex",
                                  "--provider", "codex"], cwd=home, env=env, text=True, capture_output=True,
@@ -426,6 +543,8 @@ def _test_codex_host_install():
         codex = home / ".codex"
         assert_true((codex / "hooks.json").is_file() and (codex / "AGENTS.md").is_file(),
                     "public install writes Codex host registration and instructions")
+        assert_true(codex_policy.START in (codex / "config.toml").read_text(encoding="utf-8"),
+                    "the public host install also writes reviewer context without an extra flag")
         assert_true("EXOMA-CODEX-HOST" in (codex / "AGENTS.md").read_text(encoding="utf-8")
                     and "WORKFLOW-SECOND-AGENT" in (codex / "AGENTS.md").read_text(encoding="utf-8"),
                     "public install supports Codex as host and second agent together")
@@ -445,6 +564,27 @@ def _test_codex_host_install():
                                   text=True, capture_output=True, timeout=30, **no_console())
         assert_true(flagless.returncode == 0 and "hosts:  claude, codex" in flagless.stdout,
                     "a flagless install infers Codex when the mode file is lost: " + flagless.stdout[-500:])
+        config = codex / "config.toml"
+        original_config = config.read_bytes()
+        config.unlink()
+        audited = subprocess.run([
+            sys.executable, "-c",
+            "import json; from exoma.installer.base import DIST_CONFIG; "
+            "from exoma.core.audit.bundle_integrity import _bundle_integrity; "
+            "print(json.dumps(_bundle_integrity(DIST_CONFIG, DIST_CONFIG.parent / 'manifest.json')))",
+        ], cwd=home, env=env, text=True, capture_output=True, timeout=30, **no_console())
+        assert_true(audited.returncode == 0, "lost-mode doctor runs: " + audited.stderr[-500:])
+        audit = json.loads(audited.stdout)
+        assert_true(codex_policy.TEMPLATE_KEY in audit["missing"],
+                    "lost-mode doctor reports missing Codex context instead of skipping the host")
+        assert_true(not config.exists() and not (home / ".claude/.workflow-install-mode.json").exists(),
+                    "doctor infers a lost host choice without recreating any config")
+        checked_missing = subprocess.run([sys.executable, "-m", "exoma.install", "--check"],
+                                         cwd=home, env=env, text=True, capture_output=True,
+                                         timeout=30, **no_console())
+        assert_true(checked_missing.returncode == 1 and "Auto-review context: missing" in checked_missing.stdout,
+                    "doctor and installer-check agree when Codex context and install-mode are missing")
+        config.write_bytes(original_config)
         # A refused hooks.json withdraws the AGENTS.md block; --check reports the hooks only.
         (codex / "hooks.json").write_text("{bad", encoding="utf-8")
         subprocess.run([sys.executable, "-m", "exoma.install", "codex",

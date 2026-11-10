@@ -87,6 +87,14 @@ opencode, the only provider whose read-only boundary is enforced. The host, the 
 host's second agent are remembered for later upgrades; run the other flag to switch. The browser
 extra for `/.verify-browser` is installed only with `--with-e2e`.
 
+Choosing Codex as a host (`exoma install codex`, the terminal menu, or `all`) also installs
+the Exoma authorization context in `auto_review.extra_policy`, alongside the contract,
+skills, instructions and hooks. No extra flag or context prompt is needed; noninteractive
+updates use the same default. An explicit `--no-codex-auto-review-context` opt-out is
+remembered; `--codex-auto-review-context` clears it. Old boolean-only `false` states migrate
+to the automatic default. See [compatibility and migration](reference.md#codex-auto-review-context).
+Review and trust the installed Codex hooks with `/hooks` before using the host gates.
+
 After installing for OpenCode, restart it: it loads Exoma's plugin at startup.
 
 > **Do not skip this step.** It installs the permission block for the secondary agent as

@@ -122,9 +122,33 @@ def _installed_intent_mode() -> bool:
 
 
 def _installed_hosts() -> set[str]:
-    """The hosts the last install chose; Claude alone for an install from before the choice."""
+    """The recorded hosts, or hosts recovered from registrations when mode is missing."""
     hosts = _install_mode().get("hosts")
-    return {h for h in hosts if isinstance(h, str)} if isinstance(hosts, list) else {"claude"}
+    return ({h for h in hosts if isinstance(h, str)} if isinstance(hosts, list)
+            else set(_fallback_hosts(Path(os.path.expanduser("~")))))
+
+
+def _fallback_hosts(home: Path) -> list[str]:
+    """Recover the same host choice for bundle inspection and the host status report."""
+    try:
+        legacy_hooks = read_json_file(home / ".gemini" / "config" / "hooks.json")
+    except (OSError, ValueError):
+        legacy_hooks = {}
+    chosen = ["claude", "agy"] if isinstance(legacy_hooks, dict) and "exoma" in legacy_hooks else ["claude"]
+    try:
+        codex_hooks = read_json_file(home / ".codex" / "hooks.json")
+    except (OSError, ValueError):
+        codex_hooks = {}
+    if isinstance(codex_hooks, dict):
+        from exoma.installer.base import codex_hook_events_present
+
+        # Like installer migration: an older registration still belongs to Codex even
+        # when its command needs repair. The host report checks launchability separately.
+        if codex_hook_events_present(codex_hooks.get("hooks"), home, launchable=False):
+            chosen.append("codex")
+    if (home / ".config" / "opencode" / "plugins" / "exoma.js").is_file():
+        chosen.append("opencode")
+    return chosen
 
 
 def _select_intent_section(text: str, only_command: bool) -> str:
@@ -222,7 +246,7 @@ def _audit_codex_auto_review(
             result["mismatched"].append(rel)
             result["drift"].append({"path": rel, "reason": "unreadable"})
             return
-    enabled = _install_mode().get("codex_auto_review_context") is True
+    enabled, _opt_out = codex_policy.resolve_context(_install_mode(), _installed_hosts())
     try:
         status = codex_policy.installation_status(text, dist_config_dir / rel, enabled, home)
     except Exception as exc:  # noqa: BLE001 — doctor reports, never raises
@@ -484,22 +508,7 @@ def _host_status(home: Path | None = None) -> dict:
     if isinstance(chosen, list):
         chosen = [h for h in chosen if isinstance(h, str)]
     else:
-        try:
-            legacy_hooks = read_json_file(home / ".gemini" / "config" / "hooks.json")
-        except (OSError, ValueError):
-            legacy_hooks = {}
-        chosen = ["claude", "agy"] if isinstance(legacy_hooks, dict) and "exoma" in legacy_hooks else ["claude"]
-        try:
-            codex_hooks = read_json_file(home / ".codex" / "hooks.json")
-        except (OSError, ValueError):
-            codex_hooks = {}
-        if isinstance(codex_hooks, dict):
-            from exoma.installer.base import codex_hook_events_present
-
-            if codex_hook_events_present(codex_hooks.get("hooks"), home):
-                chosen.append("codex")
-        if (home / ".config" / "opencode" / "plugins" / "exoma.js").is_file():
-            chosen.append("opencode")
+        chosen = _fallback_hosts(home)
     result: dict = {"chosen": chosen, "hosts": {}}
     if "claude" in chosen:
         claude = home / ".claude"

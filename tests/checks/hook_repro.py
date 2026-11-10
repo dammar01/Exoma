@@ -160,6 +160,42 @@ def _skill_and_task_reads(r: _Repro) -> None:
         shutil.rmtree(tasks.parent.parent, ignore_errors=True)
 
 
+def _commit_runner_data(r: _Repro) -> None:
+    """Commit text in an evidence task is data; shell execution and test tasks are not."""
+    sid = "commit-data"
+    main = r.bind(sid)
+    r.prompt(sid, "explain changes")
+    base = f"'{Path(r.bash).as_posix()}' '{r.project.as_posix()}/.workflow/run.sh'"
+    for tool in ("Bash", "PowerShell"):
+        runner = ("& " if tool == "PowerShell" else "") + base
+        literal = 'python -c "print(\'git commit\')"'
+        assert_true(r.tool(sid, "execution-gate", tool, {"command": literal}) == 0,
+                    f"{tool}: a literal Python print passes through the real launcher")
+        for command in (
+            literal + "; git commit -m x",
+            literal + " | git commit -m x",
+            'python -c "print(\'$(git commit)\')"',
+            'python -c "print(\'git commit\'); __import__(\'os\').system(\'git commit\')"',
+        ):
+            assert_true(r.tool(sid, "execution-gate", tool, {"command": command}) == 2,
+                        f"{tool}: a mention never exempts execution: {command!r}")
+        for op in ("plan", "analyze", "explore", "verify"):
+            command = f"{runner} {op} --session '{main}' --task 'Explain git commit\n$(git commit); | &'"
+            code = r.tool(sid, "execution-gate", tool, {"command": command})
+            assert_true(code == 0, f"{tool} recognizes task data in a plain {op} runner call: {code}")
+        file_call = f"{runner} plan --task-file 'notes git commit.txt' --session '{main}'"
+        assert_true(r.tool(sid, "execution-gate", tool, {"command": file_call}) == 0,
+                    "an evidence task-file name does not execute its contents")
+        data = f"{runner} plan --session '{main}' --task 'git commit'"
+        for command in (data + "; git commit -m x", data + "\ngit commit -m x", data + " | git commit -m x",
+                        f"{runner} test --session '{main}' --task 'git commit -m x'",
+                        data + " --task-file duplicate", data + " --session duplicate",
+                        f"'{Path(r.bash).as_posix()}' '.workflow/run.sh' plan --session '{main}' --task 'git commit'",
+                        f"{runner} plan 'git commit' '{main}'", 'bash -c "git commit -m x"'):
+            assert_true(r.tool(sid, "execution-gate", tool, {"command": command}) == 2,
+                        f"execution or an unsupported runner form still needs commit approval: {command!r}")
+
+
 def _runner_and_verify_lanes(r: _Repro) -> None:
     """G: the runner with a multi-line task, and verify's file-name diff as models write it."""
     m = r.bind("g1")
@@ -413,6 +449,7 @@ def check_repro_matrix() -> None:
         _payload_size(r)
         _fork_isolation(r)
         _commit_strict(r)
+        _commit_runner_data(r)
         _skill_and_task_reads(r)
         _runner_and_verify_lanes(r)
         _explicit_arming(r)

@@ -99,6 +99,24 @@ def _test_opencode_host_contract() -> None:
                       "follow it exactly, with the arguments above."})
         token = project / ".workflow" / "data" / "sessions" / main_cmd / "runtime" / "execute.token"
         assert_true(token.is_file(), "an expanded /exoma-execute -y records the execute approval")
+        commit_sid = "ses_commit"
+        for text in ("gas commit", "gas commit menggunakan $exoma-commit", "tolong commit perubahan ini"):
+            _opencode_hook(home, "UserPromptSubmit", {"session_id": commit_sid, "cwd": str(project), "prompt": text})
+            approved = _opencode_hook(home, "PreToolUse", {"session_id": commit_sid, "cwd": str(project),
+                                                           "tool_name": "bash", "tool_input": {"command": "git commit -m x"}})
+            assert_true(approved == {}, "OpenCode recognizes a direct commit request: " + text)
+        _opencode_hook(home, "UserPromptSubmit", {"session_id": commit_sid, "cwd": str(project), "prompt": "jangan commit"})
+        denied_commit = _opencode_hook(home, "PreToolUse", {"session_id": commit_sid, "cwd": str(project),
+                                                            "tool_name": "bash", "tool_input": {"command": "git commit -m x"}})
+        assert_true("deny" in denied_commit, "OpenCode revokes commit intent on negation")
+        from exoma.installer.base import runner_prefix
+        evidence = f"{runner_prefix()} '{project.as_posix()}/.workflow/run.sh' plan --session 'test' --task 'Explain git commit'"
+        accepted = _opencode_hook(home, "PreToolUse", {"session_id": commit_sid, "cwd": str(project),
+                                                      "tool_name": "bash", "tool_input": {"command": evidence}})
+        assert_true(accepted == {}, "OpenCode forwards the runner context so a task mention is data")
+        nested = _opencode_hook(home, "PreToolUse", {"session_id": commit_sid, "cwd": str(project),
+                                                    "tool_name": "bash", "tool_input": {"command": evidence + "; git commit -m x"}})
+        assert_true("deny" in nested, "OpenCode still requires approval for an appended commit")
         outside = _opencode_hook(home, "UserPromptSubmit", {"session_id": "ses_x", "cwd": str(Path(tmp)), "prompt": "hi"})
         assert_true(outside == {}, "a directory without .workflow/ is left alone")
 

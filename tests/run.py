@@ -220,6 +220,10 @@ from tests.checks.verify_gaps import (  # noqa: E402
     _test_quick_verify_gaps,
     _test_verification_routing,
 )
+from tests.checks.research_regressions import (  # noqa: E402
+    _test_research_parser_regressions,
+    _test_research_gate_regressions,
+)
 from tests.checks.workspace import (  # noqa: E402
     _test_init_upgrade_and_session_guard,
     _test_script_drift_path_spelling,
@@ -233,6 +237,8 @@ from tests.scenario import run_tests  # noqa: E402
 SUITES: dict[str, tuple] = {
     "scenario": (run_tests, "stateful sequence + every standalone check (the full run)"),
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
+    "research-parser-regressions": (_test_research_parser_regressions, "P01-P12: preserve findings while accepting supported empty-section forms"),
+    "research-gate-regressions": (_test_research_gate_regressions, "G01-G04: session authorization, literal command data, and directory scope"),
     "test-isolation": (_test_suite_ignores_the_machine_seed, "test workspaces are seeded from the shipped example, never the machine's provider pick"),
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
     "hook-flavours": (_test_every_shipped_hook_is_a_launcher_and_its_module, "every shipped hook is a bash launcher beside its .py, all listed by workflow_hooks.py; no .ps1 ships"),

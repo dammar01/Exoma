@@ -76,6 +76,10 @@ from tests.checks.verify_gaps import (
     _test_quick_verify_gaps,
     _test_verification_routing,
 )
+from tests.checks.research_regressions import (
+    _test_research_parser_regressions,
+    _test_research_gate_regressions,
+)
 from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
@@ -1361,6 +1365,8 @@ confidence: high — all requested checks ran
         _test_quick_verify_gaps()
         _test_verification_routing()
         _test_empty_section_is_not_a_finding()
+        _test_research_parser_regressions()
+        _test_research_gate_regressions()
         _test_cli_script_reaches_its_exit_code()
         _test_e2e_spec_contract()
         _test_e2e_classification_and_verdicts()

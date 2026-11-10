@@ -102,8 +102,10 @@ def _stored_agy_opt_out() -> bool:
     return _stored_mode().get("agy_permissions_opt_out") is True
 
 
-def _stored_codex_auto_review_context() -> bool:
-    return _stored_mode().get("codex_auto_review_context") is True
+def _stored_codex_auto_review_context(hosts: tuple[str, ...] | None = None) -> bool:
+    from exoma.installer.codex_policy import resolve_context
+
+    return resolve_context(_stored_mode(), _installed_hosts() if hosts is None else hosts)[0]
 
 
 def _store_install_mode(
@@ -116,10 +118,13 @@ def _store_install_mode(
     apply: bool,
     backup_root: Path,
     codex_auto_review_context: bool | None = None,
+    codex_auto_review_context_opt_out: bool | None = None,
 ) -> None:
     """Persist every choice an upgrade without flags must keep: the intent mode, the hosts,
-    the Agy permission rules' state, an explicit opt-out of them, and the rules Exoma added
-    (what --uninstall may remove)."""
+    the Agy permission rules' state, explicit Agy/Codex opt-outs, and the rules Exoma added
+    (what --uninstall may remove). Legacy Codex false is not an explicit opt-out."""
+    if codex_auto_review_context_opt_out is None:
+        codex_auto_review_context_opt_out = _stored_mode().get("codex_auto_review_context_opt_out") is True
     content = json.dumps(
         {
             "only_command": bool(only_command),
@@ -129,6 +134,7 @@ def _store_install_mode(
             "agy_permission_rules": list(agy_rules),
             **({"codex_auto_review_context": codex_auto_review_context}
                if codex_auto_review_context is not None else {}),
+            "codex_auto_review_context_opt_out": codex_auto_review_context_opt_out,
         },
         indent=2,
     ) + "\n"

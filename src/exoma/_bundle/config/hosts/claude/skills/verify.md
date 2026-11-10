@@ -75,12 +75,15 @@ Do NOT raise severity to get attention / lower it to get through.
 [VERIFICATION]
 mode: delegated | syntax          ← you fill this in; the second_agent does not know the mode (syntax never goes through it)
 verdict: DONE | NEEDS FIX  ← NEEDS FIX ONLY when blocking_findings exist
-blocking_findings: - severity|origin|scope_relation — <problem> [file:line] — trigger — impact — fix | (none: what was checked clean)
+blocking_findings: - severity|origin|scope_relation — <problem> [file:line] — trigger — impact — fix | - none
 escalations: - severity|origin|scope_relation — <problem> [file:line] — why it does not block | (none)
 notes: - severity|origin|scope_relation — <problem> [file:line] | (none)
 checks_run: <what was run/read + result>
 not_verified: <what could not be checked + reason> | (none)
 confidence: low|medium|high — <reason>
+For an empty section write exactly `- none`. Describe what was checked clean in `checks_run`.
+Legacy neutral sentinel explanations remain supported only by a bounded grammar; arbitrary
+parenthetical prose or continuation findings are meaningful and cannot be discarded.
 NEEDS FIX → fix the blocking ones first → re-run /.verify. Do NOT output a final before done.
 Do NOT drop escalations + notes — show them; the user decides whether to work on them now or later.
 The runtime verdict (`meta.verdict`) is written automatically into the session's execution (`runtime/execution.json`): pass | fail | incomplete, and `syntax_only` for syntax mode — parse OK is never recorded as pass.

@@ -630,9 +630,8 @@ _NONE_WORD = re.compile(
     r"(?P<rest>.*)",
     re.IGNORECASE,
 )
-# The old pattern, word for word: what a first line may say when its item goes on. The
-# wider spellings (`none.`, `nothing found`, `no findings`) would read `- none.` followed by
-# a finding on the next line as empty.
+# Plain legacy forms. A continuation is accepted only when the entire explanation
+# matches the bounded checked-target grammar below, never from this first line alone.
 _NONE_PLAIN = re.compile(
     r"(?:none|\(none\)|n/?a|not applicable)(?:\s*(?P<note>\([^\r\n]*\)))?",
     re.IGNORECASE,
@@ -641,15 +640,36 @@ _NONE_SEPARATOR = re.compile(r"\s*[;:,—–-]\s*(?P<note>.*)")
 _TAG_FIELD = re.compile(r"\b(?:severity|origin|scope_relation)\s*[:=]", re.IGNORECASE)
 # A note after a separator is the whole note, from a closed list of neutral phrases. A
 # blocklist of problem words was tried and lost: every round of review found another word
-# ("issue", "defect", "concern") that let a real finding read as empty. Free explanation
-# belongs in parentheses, which the verify prompt asks for; anything else after a separator
-# stays a finding, and the continuation asks for `- none`.
+# ("issue", "defect", "concern") that let a real finding read as empty. Unknown prose
+# stays meaningful in parentheses too; new reports put explanations in checks_run.
 _NEUTRAL_NOTE = re.compile(
     r"(?:all\s+)?(?:clean|bersih|ok|okay|fine|passed|lulus|aman"
     r"|nothing (?:found|blocking|to report)|no (?:issues?|findings?|problems?)"
     r"|semua bersih|tidak ada (?:temuan|masalah))[.!]*",
     re.IGNORECASE,
 )
+# Compatibility with the neutral explanations already emitted by reviewers. Targets
+# are named check areas or file:line references, not arbitrary natural-language claims.
+# Full matching matters: `checked hooks and telemetry; caller fails` is NOT neutral.
+_CHECK_TARGET = (
+    r"(?:hooks?|telemetry|(?:the )?(?:retry|timeout) paths?"
+    r"|[\w./\\-]+:\d+(?: and its callers)?)"
+)
+_CHECKED_NOTE = re.compile(
+    rf"checked {_CHECK_TARGET}(?: and {_CHECK_TARGET})*(?:, clean)?[.!]*",
+    re.IGNORECASE,
+)
+
+
+def _neutral_explanation(note: str) -> bool:
+    if _TAG_FIELD.search(note):
+        return False
+    note = " ".join(note.split())
+    return bool(
+        _NEUTRAL_NOTE.fullmatch(note)
+        or _CHECKED_NOTE.fullmatch(note)
+        or re.fullmatch(r"tidak ada blocking findings[.!]*", note, re.IGNORECASE)
+    )
 
 
 class _NoneSentinel:
@@ -660,29 +680,30 @@ class _NoneSentinel:
     read as an untagged finding: in `blocking_findings` that is a blocking finding, so a
     clean DONE became `fail`, and the continuation then asked for tags on it (CASE-009).
 
-    Still a finding, fail-closed: a sentinel word running straight into text with no
-    separator (`none of the callers handle X`), any note carrying tag fields, and a note
-    after a separator that is anything but a neutral phrase (`none - caller X fails`,
-    `none; all inspected paths are clean`). A parenthetical note is free, as it always was:
-    the verify prompt asks for `- none (say why: what you checked)`. Multi-line text is
-    never a sentinel.
+    Both consumers judge the entire item. Unknown explanations, tags and continuation
+    findings stay meaningful. Only bounded neutral explanations retain legacy support;
+    new reports use `- none` and describe the actual checks in `checks_run`.
 
     Exposes `fullmatch` so callers written against the old compiled pattern keep working.
     """
 
     def fullmatch_plain(self, text: str) -> bool:
-        """The forms the old pattern took: a sentinel alone, or with a parenthetical note.
-
-        For a first line whose item continues on further lines. A separator note there
-        would let `none - clean` stand in front of a finding written on the next line.
-        """
+        """Plain forms with a whole, neutral parenthetical explanation, if present."""
         match = _NONE_PLAIN.fullmatch((text or "").strip())
-        return bool(match) and not _TAG_FIELD.search(match.group("note") or "")
+        if not match:
+            return False
+        note = match.group("note")
+        return not note or _neutral_explanation(note[1:-1])
 
     def fullmatch(self, text: str) -> bool:
         text = (text or "").strip()
-        if "\n" in text:
-            return False
+        if "\n" in text or "\r" in text:
+            first, _, more = text.partition("\n")
+            match = _NONE_PLAIN.fullmatch(first.strip())
+            note = match.group("note") if match else None
+            # Preserve the old checked-target continuation only after validating ALL
+            # its words. Plain `none` cannot introduce arbitrary continuation text.
+            return bool(note) and _neutral_explanation(note[1:-1] + " " + more)
         match = _NONE_WORD.fullmatch(text)
         if not match:
             return False
@@ -690,7 +711,7 @@ class _NoneSentinel:
         if not rest or re.fullmatch(r"[.!]+", rest):
             return True
         if rest.startswith("(") and rest.endswith(")"):
-            return not _TAG_FIELD.search(rest)
+            return _neutral_explanation(rest[1:-1])
         separated = _NONE_SEPARATOR.fullmatch(rest)
         if not separated:
             return False
@@ -726,6 +747,7 @@ _H_SPACE = r"[^\S\n]"
 
 
 def _section_items(content: str, name: str) -> list[str]:
+    """Whole items, including continuation text, within one verification section."""
     pattern = re.compile(
         rf"^{_H_SPACE}*{re.escape(name)}{_H_SPACE}*:{_H_SPACE}*(.*)$",
         re.IGNORECASE | re.MULTILINE,
@@ -746,10 +768,14 @@ def _section_items(content: str, name: str) -> list[str]:
         heading = re.match(r"^([a-z_]+)\s*:", stripped, re.IGNORECASE)
         if heading and heading.group(1).lower() in section_heads:
             break
-        if stripped.startswith("[") and stripped.endswith("]"):
+        if re.fullmatch(r"\[[A-Z][A-Z _-]*\]", stripped, re.IGNORECASE):
             break
         if stripped.startswith("-"):
             items.append(stripped.lstrip("-").strip())
+        elif items:
+            items[-1] += "\n  " + stripped
+        else:
+            items.append(stripped)
     return items
 
 

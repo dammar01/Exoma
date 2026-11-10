@@ -126,8 +126,8 @@
     },
     {
       "path": "hosts/claude/skills/verify.md",
-      "sha256": "d90891564ce3583d4b57b24fca1e5ee182a2a7b92db0c5420d4d7d3ffdefab76",
-      "bytes": 7028,
+      "sha256": "298d50b45845e2293547d17f7ff0f2e597e3f89f13b378281a638b3b96b18b1e",
+      "bytes": 7274,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -252,15 +252,15 @@
     },
     {
       "path": "hosts/claude/hooks/agy-host.py",
-      "sha256": "1b23cf8cc56b7bba5c308f66ced2a603c92cf5b2568d81ec375f5b3243e2d2a9",
-      "bytes": 17254,
+      "sha256": "59e1f2c7d351c99a60d918e7ee958e37b500b3a41c2e92361133f723a3e7a9f2",
+      "bytes": 17324,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "hosts/claude/hooks/execution-gate.py",
-      "sha256": "fd7d92cca628be46ed3cebeb79c8de1c5997398b96ab9f84718b5626b497a7de",
-      "bytes": 8436,
+      "sha256": "580cf61657b07d10a62eeba93c9bb462e363f899225b6b5bdfc73077f4667f06",
+      "bytes": 8528,
       "merge": "replace",
       "component": "runtime"
     },
@@ -392,8 +392,8 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "ee1982c8e66448818c73f7d8ae819a9f99187c5faced884272050198abe488d3",
-      "bytes": 48478,
+      "sha256": "e178bff512ce2c0294f23f7020b9b3e71fe1e980e602c2422b417899321cb4f8",
+      "bytes": 52962,
       "merge": "replace",
       "component": "runtime"
     },
@@ -511,8 +511,8 @@
     },
     {
       "path": "hosts/codex/codex-host.py",
-      "sha256": "030e55e386c02e32a0b07545a9bc0514d7e769af49f0e1588471bd7887628deb",
-      "bytes": 11530,
+      "sha256": "e845b38230bd3e62d017892e1e518ebc165d5de91b185e0513c1e62544bf03e4",
+      "bytes": 11593,
       "merge": "replace",
       "component": "runtime"
     },
@@ -539,8 +539,8 @@
     },
     {
       "path": "hosts/opencode/opencode-host.py",
-      "sha256": "145ab9eba1b29061e354b0027f2b8d2bcb3b20e7ec10d58c449809b54fa68963",
-      "bytes": 11756,
+      "sha256": "205fd575c20f6b093369e770ac7fe94355fac0284e2f0ededfe2c14c07dcb6a1",
+      "bytes": 11816,
       "merge": "replace",
       "component": "runtime"
     },

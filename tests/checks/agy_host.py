@@ -212,6 +212,19 @@ def _test_agy_host_contract() -> None:
         assert_true('"hook": "agy-host"' in blocks and str(other) not in blocks,
                     "refusals are logged without their paths")
 
+        for text in ("gas commit", "tolong commit perubahan ini"):
+            _run(home, "PreInvocation", _payload(root, cid, text, invocationNum=0))
+            allowed_commit = _run(home, "PreToolUse", _tool(root, cid, text, "run_command", CommandLine="git commit -m x"))
+            assert_true(allowed_commit == {"decision": "allow"}, "Agy preserves direct commit requests: " + text)
+        _run(home, "PreInvocation", _payload(root, cid, "jangan commit", invocationNum=0))
+        revoked = _run(home, "PreToolUse", _tool(root, cid, "jangan commit", "run_command", CommandLine="git commit -m x"))
+        assert_true(revoked.get("decision") == "deny", "Agy negation still revokes commit permission")
+        evidence = f"{runner_prefix()} '{root.as_posix()}/.workflow/run.sh' plan --session 'test' --task 'Explain git commit'"
+        accepted = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=evidence))
+        assert_true(accepted == {"decision": "allow"}, "Agy treats a validated evidence task mention as data")
+        nested = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=evidence + "; git commit -m x"))
+        assert_true(nested.get("decision") == "deny", "Agy still requires permission for an appended commit")
+
         # The second agent passes untouched, by the environment the runtime sets. The prompt
         # header is text a user can type or paste: it switches nothing off.
         prompt = "[WORKFLOW_AGENT]\nsource: second_agent\ncommand: explore"

@@ -136,8 +136,11 @@ before process creation produces no runner JSON; disclose its reason and do not 
 it. Provider selection and any required authorization for sending repository context are
 separate from the runner's command prefix. See [reference, Hosts](reference.md#hosts).
 
-The optional installer flag `--codex-auto-review-context` adds task-scoped authorization
-context to `auto_review.extra_policy` on the Codex primary host. It keeps all existing deny
+Choosing Codex as the primary host automatically adds task-scoped authorization context
+to `auto_review.extra_policy`; no extra flag or opt-in prompt is required. An explicit
+`--no-codex-auto-review-context` opt-out persists across updates; the positive flag clears
+it. Boolean-only legacy states adopt the automatic default because the former format
+did not distinguish default off from an explicit opt-out. The context keeps all existing deny
 rules, reviewer/sandbox settings, user replacement policy and managed requirements. A
 project predicate is an instruction to the reviewer, not an enforced read boundary or a
 guarantee that an action will be approved. It does not authorize retrying a previously

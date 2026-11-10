@@ -12,6 +12,7 @@ import json
 import os
 import re
 import tomllib
+from collections.abc import Collection
 from pathlib import Path
 
 TEMPLATE_KEY = "hosts/codex/auto-review-policy.md"
@@ -20,6 +21,17 @@ START = "<!-- EXOMA-CODEX-AUTO-REVIEW:START"
 END = "<!-- EXOMA-CODEX-AUTO-REVIEW:END -->"
 META = "# EXOMA-CODEX-AUTO-REVIEW:OWNERSHIP "
 _BLOCK = re.compile(re.escape(START) + r" sha256=([0-9a-f]{64}) -->\n(.*?)\n" + re.escape(END), re.S)
+
+
+def resolve_context(mode: dict, hosts: Collection[str], flag: bool | None = None) -> tuple[bool, bool]:
+    """(enabled, explicit opt-out): context follows the host unless explicitly disabled.
+
+    The legacy effective boolean cannot distinguish the former default off from an
+    opt-out. Only the new intent field persists a refusal, as with Agy permissions.
+    Keep that intent even when Codex is deselected; an explicit enable clears it.
+    """
+    opt_out = flag is False or (flag is None and mode.get("codex_auto_review_context_opt_out") is True)
+    return "codex" in hosts and not opt_out, opt_out
 
 
 def _parse(text):

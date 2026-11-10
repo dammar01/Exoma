@@ -22,6 +22,7 @@ import re
 from exoma.core.evidence.contract import (
     _NONE_ITEM,
     _expected_verification_section,
+    _section_items,
     _verification_tags,
     validate_verification_contract,
 )
@@ -208,57 +209,14 @@ def evidence_block(report: dict, *, artifacts: str | None = None, spec_notes: li
     return "\n".join(lines)
 
 
-_HEAD = re.compile(r"^([a-z_]+)\s*:", re.IGNORECASE)
-_KNOWN_HEADS = {*_VERIFICATION_SECTIONS, "verdict", "confidence"}
-
-
 def _section_blocks(body: str, name: str) -> list[str]:
-    """Bullet items under `name:` WITH their indented continuation lines.
-
-    The shared contract parser keeps one line per finding, which is all a verdict needs.
-    Carrying a reviewer's finding forward needs the whole thing — problem, trigger,
-    impact, fix — so this walks the same section boundaries and keeps every line.
-    """
-    lines = body.splitlines()
-    items: list[str] = []
-    current: list[str] | None = None
-    collecting = False
-    for line in lines:
-        stripped = line.strip()
-        head = _HEAD.match(stripped)
-        if head and head.group(1).lower() in _KNOWN_HEADS and not stripped.startswith("-"):
-            if collecting:
-                break
-            collecting = head.group(1).lower() == name
-            inline = stripped.split(":", 1)[1].strip()
-            if collecting and inline and not inline.startswith("#"):
-                current = [inline.lstrip("-").strip()]
-                items.append("")  # placeholder replaced below
-            continue
-        if not collecting:
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            break
-        if stripped.startswith("-"):
-            if current is not None:
-                items[-1] = "\n  ".join(current)
-            current = [stripped.lstrip("-").strip()]
-            items.append("")
-        elif stripped and current is not None:
-            current.append(stripped)
-    if current is not None and items:
-        items[-1] = "\n  ".join(current)
-    return [item for item in items if item and not _is_none_item(item)]
+    """Keep findings and continuation text using the shared section parser."""
+    return [item for item in _section_items(body, name) if item and not _is_none_item(item)]
 
 
 def _is_none_item(item: str) -> bool:
-    """A sentinel, judged by its first line. An item that continues on further lines gets
-    only the plain forms (`none`, `none (why)`): a separator note such as `none - clean`
-    in front of a continuation line could hide the finding written there."""
-    first, _, more = item.partition("\n")
-    if more.strip():
-        return _NONE_ITEM.fullmatch_plain(first)
-    return _NONE_ITEM.fullmatch(first)
+    """Never drop a finding based on only its first line."""
+    return _NONE_ITEM.fullmatch(item)
 
 
 def _reviewer_sections(content: str | None) -> dict[str, list[str]]:
@@ -280,7 +238,7 @@ def _reviewer_sections(content: str | None) -> dict[str, list[str]]:
     routed["not_verified"] = raw["not_verified"]
     for name in ("blocking_findings", "escalations", "notes"):
         for item in raw[name]:
-            tags, invalid = _verification_tags(item.split("\n", 1)[0])
+            tags, invalid = _verification_tags(item)
             target = name if invalid else _expected_verification_section(tags)
             routed[target].append(item)
     return routed

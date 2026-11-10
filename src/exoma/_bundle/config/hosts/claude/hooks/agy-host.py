@@ -304,7 +304,7 @@ def pre_tool_use(payload, cid):
                  if rule == "preflight_quota" else "",
                  runner, cmd, main_id, marker_path))
     if refusal is None and is_shell:
-        refusal = wp.commit_refusal(command, rt)
+        refusal = wp.commit_refusal(command, rt, {"root": root, "home": os.path.expanduser("~"), "is_bash": _is_bash})
     if refusal is None and is_write and target:
         home = os.path.expanduser("~")
         refusal = wp.write_refusal(tool, target, root, root, pol, rt,

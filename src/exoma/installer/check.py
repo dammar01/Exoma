@@ -370,7 +370,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             installed_drift.append(f"{CODEX_CONFIG_KEY} (job store grant)")
 
         from exoma.installer import codex_policy
-        enabled = _stored_codex_auto_review_context()
+        enabled = _stored_codex_auto_review_context(hosts)
         # The same classifier doctor uses (core/audit/bundle_integrity.py), so the two
         # reports cannot disagree about one installation.
         policy_status = codex_policy.installation_status(

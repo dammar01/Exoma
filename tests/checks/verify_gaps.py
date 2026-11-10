@@ -399,6 +399,8 @@ def _test_empty_section_is_not_a_finding() -> None:
         "no blocking findings",
         "nothing to report",
         "none (checked hooks and telemetry)",
+        "none (clean)",
+        "none (checked src/pkg.py:1, clean)",
     ):
         verdict = validate_verification_contract(_report(f"\n- {clean}", f"\n- {clean}"))
         assert_true(
@@ -418,11 +420,17 @@ def _test_empty_section_is_not_a_finding() -> None:
         "none; caller X fails, rest clean",
         "none - see below",
         # A blocklist of problem words lost to each of these in review; only a closed list
-        # of neutral phrases may follow a separator. Explanation goes in parentheses.
+        # of neutral phrases may follow a separator; parentheses are bounded too.
         "none - issue in caller X, clean",
         "none - defect found, clean",
         "none - concern remains, clean",
         "none; all inspected paths are clean",
+        "none (caller X fails)",
+        "none (checked hooks and telemetry; caller X fails)",
+        "none (checked hooks and telemetry, clean; caller X fails)",
+        "none (clean)\n  caller X fails [fixture.py:1]",
+        "none (checked the retry path)\n  and the timeout path fails",
+        "none (checked the retry path)\n  and the timeout path\n  caller X fails",
     ):
         verdict = validate_verification_contract(_report(f"\n- {finding}", "\n- none"))
         assert_true(
@@ -430,13 +438,23 @@ def _test_empty_section_is_not_a_finding() -> None:
             f"`- {finding}` is a claim, not an empty section, and keeps blocking: {verdict}",
         )
 
+    # Inline items obey the same continuation and section boundaries as bullet items.
+    bounded = _report(" none\n  caller X fails [fixture.py:1]", " none")
+    assert_true(
+        _section_items(bounded, "blocking_findings") == ["none\n  caller X fails [fixture.py:1]"]
+        and _section_items(bounded, "escalations") == ["none"],
+        "keep inline continuation text without absorbing the next section",
+    )
+    assert_true(validate_verification_contract(bounded)["verdict"] == "fail",
+                "an inline none cannot discard a continuation finding")
+
     # The browser reviewer's normalizer reads the same sentinel; it must not keep as a
     # finding what the validator above now drops.
     from exoma.core.evidence.contract import _NONE_ITEM
 
     assert_true(
         not _NONE_ITEM.fullmatch("none - clean\ncaller X fails"),
-        "text spanning lines is never a sentinel, whatever its first line says",
+        "a separator sentinel cannot hide a finding on the next line",
     )
 
     from exoma.core.evidence.e2e.normalize import _reviewer_sections
@@ -446,8 +464,7 @@ def _test_empty_section_is_not_a_finding() -> None:
         not reviewed.get("blocking_findings") and not reviewed.get("escalations"),
         f"the E2E normalizer drops the same sentinels as the validator: {reviewed}",
     )
-    # The normalizer joins continuation lines into the item and judges the first line. A
-    # separator note there must not hide what follows; the plain forms keep their old reach.
+    # Both parsers classify the complete item, not just its first line.
     hidden = _reviewer_sections(_report("\n- none - clean\n  caller X fails on retry", "\n- none"))
     assert_true(
         len(hidden.get("blocking_findings") or []) == 1,
@@ -456,9 +473,30 @@ def _test_empty_section_is_not_a_finding() -> None:
     plain = _reviewer_sections(_report("\n- none (checked the retry path)\n  and the timeout path", "\n- none"))
     assert_true(
         not plain.get("blocking_findings"),
-        f"a plain `none (why)` with a continuation line stays empty, as before: {plain}",
+        f"the whole bounded checked-target continuation stays empty: {plain}",
     )
-    # Only the old pattern's forms: the wider spellings never reached this far before.
+    assert_true(
+        validate_verification_contract(_report("\n- none (checked the retry path)\n  and the timeout path", "\n- none"))["verdict"] == "pass",
+        "validator and normalizer agree on the supported neutral continuation",
+    )
+    for finding in (
+        "none (caller X fails)",
+        "none (checked hooks and telemetry; caller X fails)",
+        "none\n  caller X fails [fixture.py:1]",
+        "none (checked the retry path)\n  and the timeout path fails",
+    ):
+        normalized = _reviewer_sections(_report(f"\n- {finding}", "\n- none"))
+        assert_true(normalized["blocking_findings"] == [finding],
+                    f"normalizer preserves the entire finding: {normalized}")
+    tagged = "none\n  [severity:high] [origin:introduced] [scope_relation:in_scope]"
+    late_tags = _report("\n- none", f"\n- {tagged}")
+    normalized = _reviewer_sections(late_tags)
+    assert_true(
+        validate_verification_contract(late_tags)["verdict"] == "fail"
+        and normalized["blocking_findings"] == [tagged] and not normalized["escalations"],
+        "tags on a continuation survive section parsing and route consistently",
+    )
+    # Sentinel-looking first lines never discard a continuation finding.
     for first in ("none.", "(none).", "none!", "no findings", "nothing found", "tidak ada", "none (severity: high)"):
         kept = _reviewer_sections(_report(f"\n- {first}\n  caller X fails on retry", "\n- none"))
         assert_true(

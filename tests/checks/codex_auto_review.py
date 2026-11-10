@@ -36,6 +36,7 @@ def check_codex_auto_review():
         "notes = '''\n[auto_review]\nextra_policy = fake\n'''\n",
         'auto_review.extra_policy = "dotted user policy"\n',
     ]
+    samples += [text.replace('\n', '\r\n') for text in samples if '\n' in text]
     for original in samples:
         merged = codex_policy.merge(original, body, True)
         assert_true(not merged["error"], f"supported TOML merges: {merged['error']}: {original!r}")
@@ -122,7 +123,8 @@ def _doctor_agrees(body):
             before = config.read_bytes() if config.exists() else None
             result = {'checked': 0, 'mismatched': [], 'missing': [], 'drift': []}
             with patch.object(bundle_integrity, '_install_mode',
-                              return_value={'codex_auto_review_context': enabled}), \
+                              return_value={'hosts': ['codex'], 'codex_auto_review_context': enabled,
+                                            'codex_auto_review_context_opt_out': not enabled}), \
                     patch.object(codex_policy, 'cli_supported', return_value=True), \
                     patch.object(codex_policy, 'location_supported', return_value=True):
                 bundle_integrity._audit_codex_auto_review(result, key, config, dist, home)
@@ -141,7 +143,7 @@ def _doctor_agrees(body):
             assert_true(listed == [key], f'{expected} lands in the matching list: {result}')
         config.write_text(installed or 'model = "user"\n', encoding='utf-8')
         result = {'checked': 0, 'mismatched': [], 'missing': [], 'drift': []}
-        with patch.object(bundle_integrity, '_install_mode', return_value={'codex_auto_review_context': True}), \
+        with patch.object(bundle_integrity, '_install_mode', return_value={'hosts': ['codex']}), \
                 patch.object(codex_policy, 'cli_supported', return_value=False):
             bundle_integrity._audit_codex_auto_review(result, key, config, dist, home)
         assert_true(any('support-unverified' in row['reason'] for row in result['drift']),
@@ -154,7 +156,8 @@ def _doctor_agrees(body):
             config.write_bytes(raw)
             result = {'checked': 0, 'mismatched': [], 'missing': [], 'drift': []}
             with patch.object(bundle_integrity, '_install_mode',
-                              return_value={'codex_auto_review_context': enabled}), \
+                              return_value={'hosts': ['codex'], 'codex_auto_review_context': enabled,
+                                            'codex_auto_review_context_opt_out': not enabled}), \
                     patch.object(codex_policy, 'cli_supported', return_value=True), \
                     patch.object(codex_policy, 'location_supported', return_value=True):
                 bundle_integrity._audit_codex_auto_review(result, key, config, dist, home)
@@ -251,7 +254,8 @@ def _lifecycle(body):
                                              home / 'mode-backup', codex_auto_review_context=True)
                 assert_true(rollback._stored_codex_auto_review_context(), 'opt-in persists for no-input update')
                 rollback._store_install_mode(False, ('codex',), False, [], False, base.Plan(), True,
-                                             home / 'mode-backup2', codex_auto_review_context=False)
+                                             home / 'mode-backup2', codex_auto_review_context=False,
+                                             codex_auto_review_context_opt_out=True)
                 assert_true(not rollback._stored_codex_auto_review_context(), 'explicit opt-out persists')
             finally:
                 base._reset_receipt()
@@ -262,16 +266,15 @@ def _choice():
     args = SimpleNamespace(only_command=False, with_e2e=True, agy_permissions=False,
                            codex_auto_review_context=None, update_providers=True, provider='codex')
     with patch.object(install, '_resolve_hosts', return_value=('codex',)), \
-            patch.object(install, '_ask_yes_no', return_value=True) as ask, \
-            patch.object(install, '_stored_codex_auto_review_context', return_value=False):
+            patch.object(install, '_ask_yes_no', side_effect=AssertionError('must not ask')):
         install._ask_choices(args, 'codex', True, base.Plan(), True, True)
-        assert_true(args.codex_auto_review_context is True and ask.call_count == 1,
-                    'interactive Codex host asks the additive choice once')
-    args.codex_auto_review_context = None
+        assert_true(args.codex_auto_review_context is None,
+                    'choosing Codex in a terminal needs no separate context consent prompt')
     with patch.object(install, '_resolve_hosts', return_value=('codex',)), \
             patch.object(install, '_ask_yes_no', side_effect=AssertionError('must not ask')):
         install._ask_choices(args, 'codex', True, base.Plan(), False, True)
-        assert_true(args.codex_auto_review_context is None, 'no-input never manufactures consent')
+        assert_true(args.codex_auto_review_context is None,
+                    'no-input leaves the same host-driven default for the resolver')
 
 
 def _orchestration():
@@ -307,7 +310,8 @@ def _orchestration():
                                     env=env, cwd=home, capture_output=True, text=True,
                                     encoding='utf-8', errors='replace', timeout=90, **no_console())
             assert_true(result.returncode == expected,
-                        (f'installer {args}: rc={result.returncode}: {result.stdout[-1800:]} {result.stderr[-800:]}')
+                        (f'{result.stdout[-1200:]} {result.stderr[-400:]} installer {args}: '
+                         f'rc={result.returncode}, expected={expected}')
                         .encode('ascii', 'backslashreplace').decode('ascii'))
             return result
 
@@ -341,12 +345,35 @@ def _orchestration():
                             key: bundle.get(key) for key in ('error', 'missing', 'drift')}))
 
         run('codex', '--no-input', '--provider', 'codex')
-        assert_true(codex_policy.START not in config.read_text(encoding='utf-8'),
-                    'fresh no-input install does not opt into global policy')
-        check_bundle(False)
+        assert_true(codex_policy.START in config.read_text(encoding='utf-8'),
+                    'fresh Codex host installs the reviewer context without another flag')
+        check_bundle(True)
+        mode_file = home / '.claude/.workflow-install-mode.json'
+        for legacy in (None, False, True):
+            mode = json.loads(mode_file.read_text(encoding='utf-8'))
+            mode.pop('codex_auto_review_context_opt_out', None)
+            if legacy is None:
+                mode.pop('codex_auto_review_context', None)
+            else:
+                mode['codex_auto_review_context'] = legacy
+            mode_file.write_text(json.dumps(mode), encoding='utf-8')
+            without_context = codex_policy.merge(config.read_text(encoding='utf-8'), '', False)['text']
+            config.write_bytes(without_context.encode('utf-8'))
+            checked = run('--check', expected=1)
+            assert_true('Auto-review context: missing' in checked.stdout
+                        and codex_policy.TEMPLATE_KEY in doctor()['missing'],
+                        f'check and doctor expect context for legacy state {legacy}')
+            run('--no-input', '--provider', 'codex')
+            migrated = json.loads(mode_file.read_text(encoding='utf-8'))
+            assert_true(codex_policy.START in config.read_text(encoding='utf-8')
+                        and migrated['codex_auto_review_context'] is True
+                        and migrated['codex_auto_review_context_opt_out'] is False,
+                        f'flagless update migrates legacy {legacy} to the host default')
+        check_bundle(True)
+        automatic = config.read_bytes()
         run('codex', '--no-input', '--provider', 'codex', '--codex-auto-review-context')
         enabled = config.read_bytes()
-        assert_true(codex_policy.START in enabled.decode('utf-8'), 'explicit opt-in reaches config')
+        assert_true(enabled == automatic, 'legacy positive flag keeps the automatic install unchanged')
         check_bundle(True)
         run('codex', '--no-input', '--provider', 'codex')
         assert_true(config.read_bytes() == enabled, 'no-input update keeps enabled choice byte-idempotently')
@@ -363,18 +390,40 @@ def _orchestration():
                     'Codex host deselection removes its grant/context but keeps user policy')
         run('codex', '--no-input', '--provider', 'codex')
         assert_true(codex_policy.START in config.read_text(encoding='utf-8'),
-                    'reselecting Codex keeps the explicitly saved preference')
+                    'reselecting Codex automatically reinstalls its context')
         run('codex', '--no-input', '--provider', 'codex', '--no-codex-auto-review-context')
         disabled = config.read_bytes()
         run('codex', '--no-input', '--provider', 'codex')
         assert_true(config.read_bytes() == disabled and codex_policy.START not in disabled.decode('utf-8'),
                     'explicit opt-out survives subsequent update')
         check_bundle(False)
+        run('claude', '--no-input', '--provider', 'codex')
+        assert_true(config.read_bytes() == original.encode('utf-8'),
+                    'a Codex provider without the Codex host never adds host context')
+        run('codex', '--no-input', '--provider', 'codex')
+        assert_true(codex_policy.START not in config.read_text(encoding='utf-8')
+                    and json.loads(mode_file.read_text(encoding='utf-8'))['codex_auto_review_context_opt_out'],
+                    'explicit opt-out survives deselection and reselecting the host')
+        run('codex', '--no-input', '--provider', 'codex', '--codex-auto-review-context')
+        assert_true(codex_policy.START in config.read_text(encoding='utf-8')
+                    and not json.loads(mode_file.read_text(encoding='utf-8'))['codex_auto_review_context_opt_out'],
+                    'legacy positive flag clears a saved explicit opt-out')
+        check_bundle(True)
+        before = config.read_bytes()
+        with patch.dict(env, {'CODEX_HOME': str(home / 'different')}):
+            unsupported = run('codex', '--no-input', '--provider', 'codex', expected=1)
+        assert_true('support-unverified' in unsupported.stdout and config.read_bytes() == before,
+                    'automatic context preserves the location guard and cannot partially mutate config')
+        command.write_text(command.read_text(encoding='utf-8').replace('0.163.0', '0.163.1'), encoding='utf-8')
+        unsupported = run('codex', '--no-input', '--provider', 'codex', expected=1)
+        assert_true('support-unverified' in unsupported.stdout and config.read_bytes() == before,
+                    'automatic context reports an unverified CLI as an incomplete install')
         run('--uninstall', '--apply')
         assert_true(config.read_bytes() == original.encode('utf-8'),
                     'full uninstall preserves user replacement policy and original bytes')
         broken = original + '\n' + base.CODEX_GRANT_MARKERS[0] + '\n'
         config.write_bytes(broken.encode('utf-8'))
-        run('codex', '--no-input', '--provider', 'codex', '--codex-auto-review-context', expected=1)
+        command.write_text(command.read_text(encoding='utf-8').replace('0.163.1', '0.163.0'), encoding='utf-8')
+        run('codex', '--no-input', '--provider', 'codex', expected=1)
         assert_true(config.read_bytes() == broken.encode('utf-8'),
                     'requested context with broken grant fails without changing user config')

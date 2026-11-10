@@ -12,6 +12,7 @@ Standalone on purpose, like every hook beside it: installed into ~/.claude/hooks
 with no repository on disk and imports nothing beyond the standard library. It is a library,
 not a hook: no launcher, never run on its own.
 """
+import ast
 import datetime
 import contextlib
 import fnmatch
@@ -235,9 +236,38 @@ def marker_fresh(path, ttl=COMMIT_MARKER_TTL_S):
     return 0 <= age <= ttl
 
 
-def commit_refusal(command, rt_dir):
+_LITERAL_PRINT_COMMAND = re.compile(
+    r"[ \t]*python(?:3(?:\.\d+)?)?(?:\.exe)?[ \t]+-c[ \t]+"
+    r'''(?:"(?P<double>[^"$`\\%!\r\n]*)"|'(?P<single>[^'\r\n]*)')[ \t]*'''
+)
+
+
+def literal_print_call(command):
+    """Recognize one complete Python invocation that only prints literal strings.
+
+    This is intentionally not a shell parser. Double-quoted code cannot contain shell
+    expansion/escaping; single quotes are literal in Bash and PowerShell. Full matching
+    rejects chaining, redirects, wrappers and extra arguments. Inspect Python syntax,
+    never execute it; a prefix like `print(...)` is not enough to exempt arbitrary code.
+    """
+    match = _LITERAL_PRINT_COMMAND.fullmatch(command or "")
+    if not match:
+        return False
+    code = match.group("double") if match.group("double") is not None else match.group("single")
+    try:
+        expr = ast.parse(code, mode="eval").body
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name)
+            and expr.func.id == "print" and bool(expr.args) and not expr.keywords
+            and all(isinstance(arg, ast.Constant) and isinstance(arg.value, str) for arg in expr.args))
+
+
+def commit_refusal(command, rt_dir, ctx=None):
     """(rule, message) when `command` commits without the user's approval this turn."""
-    if GIT_COMMIT.search(command or "") and not marker_fresh(os.path.join(rt_dir, "commit.marker")):
+    if (GIT_COMMIT.search(command or "") and not evidence_runner_call(command, ctx)
+            and not literal_print_call(command)
+            and not marker_fresh(os.path.join(rt_dir, "commit.marker"))):
         return "commit_unapproved", (
             "`git commit` without the user asking for a commit this turn.\n"
             "A commit is approved by the user's own prompt (e.g. /.commit, or asking to commit); "
@@ -637,6 +667,50 @@ def runner_call(words, root, home, is_bash):
     return i < len(words) and runner_target(local_path(words[i], home), root)
 
 
+def evidence_runner_call(command, ctx):
+    """Only a plain, root-bound evidence call: its task is data, never a test command.
+
+    Share the preflight tokenizer instead of removing quoted strings: quoted executables
+    and nested shells can still execute a commit. Anything unrecognized keeps the regex
+    check. In particular `run.sh test --task ...` executes its task and is not exempt.
+    """
+    if not ctx:
+        return False
+    try:
+        root, home, is_bash = ctx["root"], ctx["home"], ctx["is_bash"]
+        line = (command or "").strip()
+        if line.startswith("& "):
+            line = line[2:].lstrip()
+        words = plain_words(line)
+        if not words or not runner_call(words, root, home, is_bash):
+            return False
+        index = 1 if is_bash(words[0]) else 0
+        raw_path = words[index]
+        path = local_path(raw_path, home)
+        absolute = os.path.isabs(path)
+        if os.name == "nt":
+            drive, tail = os.path.splitdrive(path)
+            absolute = bool(drive and tail.startswith(("/", "\\")))
+        # Relative/current-drive paths depend on the tool's workdir, which may differ
+        # from the session root. A quoted tilde is literal; MSYS spelling needs bash.
+        if (not absolute or raw_path.startswith("~") or (index == 0 and raw_path != path)
+                or not same_path(path, os.path.join(root, ".workflow", "run.sh"), root)
+                or index + 1 >= len(words)
+                or words[index + 1] not in {"explore", "plan", "analyze", "verify"}):
+            return False
+        args = words[index + 2:]
+        if len(args) % 2:
+            return False
+        options = {}
+        for key, value in zip(args[::2], args[1::2]):
+            if key not in {"--session", "--task", "--task-file"} or key in options or not value.strip():
+                return False
+            options[key] = value
+        return "--session" in options and len(options) == 2
+    except Exception:
+        return False  # uncertainty never exempts a command from the commit check
+
+
 DIFF_SUMMARY = {"--name-only", "--name-status"}
 DIFF_ALLOWED = {"--cached", "--staged", "--relative", "--no-renames", "--no-color", "--"}
 
@@ -769,6 +843,7 @@ _EXECUTE_YES = re.compile(
     re.IGNORECASE,
 )
 _COMMIT = re.compile(r"(?:^|\s)/\.commit\b|\bcommit\w*\b", re.IGNORECASE)
+_COMMIT_QUOTED = re.compile(r"""`[^`\n]*`|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)""")
 # "jangan commit", "don't commit", "tanpa commit": naming the act is not asking for it.
 _COMMIT_NEGATED = re.compile(
     r"\b(?:jangan|tanpa|belum|tidak|bukan|don'?t|do\s+not|no|never|without)\b[^.\n]{0,20}\bcommit",
@@ -787,7 +862,11 @@ AFFIRM = re.compile(
 # `source` must look like to approve anything. The slash-command payload counts wherever it
 # sits, since the host, not the text, puts the tag there.
 _EXECUTE_AT_START = re.compile(r"/\.execute\s+-y\b", re.IGNORECASE)
-_COMMIT_AT_START = re.compile(r"(?:/\.commit\b|commit\w*\b)", re.IGNORECASE)
+_COMMIT_AT_START = re.compile(
+    r"(?:(?:ya|yes|ok|oke|okay)[,!]?\s+)?"
+    r"(?:(?:gas|tolong|silakan|silahkan|please|ayo|lanjutkan)\s+)?"
+    r"(?:/\.commit\b|commit(?:kan)?\b)", re.IGNORECASE,
+)
 _EXECUTE_TAG = re.compile(r"<command-name>/?\.execute</command-name>\s*<command-args>\s*-y\b", re.IGNORECASE)
 _COMMIT_TAG = re.compile(r"<command-name>/?\.commit</command-name>", re.IGNORECASE)
 
@@ -804,9 +883,19 @@ def execute_approved(prompt, anchored=False):
 
 
 def commit_requested(prompt, anchored=False):
-    text = prompt or ""
+    # Skill bodies and examples are data, including any negation inside them. This
+    # filtering is commit-specific: execute's anchored approval contract is unchanged.
+    text = user_text(prompt)
+    text = re.sub(r"<skill\b[^>]*>.*?(?:</skill>|\Z)", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"(?ms)^[ \t]*(?:```|~~~).*?(?:^[ \t]*(?:```|~~~)[^\n]*(?:\n|$)|\Z)", " ", text)
+    text = re.sub(r"(?m)^[ \t]*>[^\n]*", " ", text)
+    # An apostrophe inside a word is not a quote delimiter. Literal contents cannot
+    # authorize/negate a request, but a negation outside may target a quoted command:
+    # don't `git commit` must still revoke permission, unlike commit "don't commit.txt".
+    negation_text = _COMMIT_QUOTED.sub(lambda m: " commit " if _COMMIT.search(m.group(0)) else " ", text)
+    text = _COMMIT_QUOTED.sub(" <quoted> ", text).lstrip()
     asked = (_COMMIT_AT_START.match(text) or _COMMIT_TAG.search(text)) if anchored else _COMMIT.search(text)
-    return bool(asked) and not _COMMIT_NEGATED.search(text)
+    return bool(asked) and not _COMMIT_NEGATED.search(negation_text)
 
 
 def explicit_command(text, prefix_regex):
