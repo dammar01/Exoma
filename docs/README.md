@@ -14,7 +14,9 @@ them in one place) and [security.md](security.md) (what each provider can read a
 
 Working on Exoma itself: [development.md](development.md) (the checkout, tests, keeping a
 development build away from your daily `~/.claude` and `~/.gemini`, and staging a release in
-agent-workflow).
+agent-workflow). Its
+[Development and Research Relationship](development.md#development-and-research-relationship)
+defines independent development, optional research entry paths, and reciprocal learning.
 
 Future work: [roadmap.md](roadmap.md) records deferred compatibility and provider-contract
 work, plus low-priority architecture and evidence-quality proposals.

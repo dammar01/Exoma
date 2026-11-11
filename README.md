@@ -128,9 +128,18 @@ delegation produces sufficient marginal task value to justify its additional tok
 compute usage, latency, human intervention, and coordination overhead.
 
 Its supporting research areas include context allocation, persistent repository knowledge,
-evidence quality, and runtime governance. The repository preserves the hypotheses,
-experiments, measurement methods, and decision records behind Exoma's development, while
-the runtime and product implementation remain in Exoma.
+evidence quality, and runtime governance. The repository preserves hypotheses, experiments,
+measurement methods, and decision records used to investigate Exoma, while the runtime and
+product implementation remain in Exoma.
+
+Exoma evolves from practical needs, engineering discoveries, and research findings,
+independently of the research agenda or prior formal research validation. Relevant,
+technically feasible ideas may be explored or implemented directly; unclear concepts may
+first be investigated in agent-workflow. These paths can occur in either order and
+continuously inform each other. Agent-workflow helps understand, evaluate, and learn from
+Exoma implementations; it does not control permission to implement them. See the
+[Development and Research Relationship](docs/development.md#development-and-research-relationship)
+for the policy and its boundary with engineering release staging.
 
 This research does not assume that delegation is inherently beneficial, nor does it claim
 that an optimal degree of agent decomposition has already been established.

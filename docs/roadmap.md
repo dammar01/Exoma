@@ -119,6 +119,11 @@ consumers, specify compatibility and failure behavior, and record a bounded plan
 acceptance checks. Backlog priority can change when new evidence warrants it.
 
 Runtime changes belong in this repository. Research and staging remain in agent-workflow;
-see [Developing Exoma](development.md). This page describes future proposals, while the
+see [Developing Exoma](development.md). The
+[Development and Research Relationship](development.md#development-and-research-relationship)
+allows direct implementation or prior research as appropriate, with reciprocal learning;
+research milestones and formal research validation are not prerequisites for scheduling
+Exoma work. The engineering criteria above and release staging requirements still apply.
+This page describes future proposals, while the
 [runtime contracts](runtime-contracts.md) and [architecture](architecture/README.md)
 describe current behavior.

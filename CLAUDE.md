@@ -9,9 +9,18 @@ here belongs in it.
 Exoma is the core: the runtime, library and CLI. Every runtime change lands here.
 agent-workflow is the research and staging repository that depends on Exoma: research on
 delegation (hypotheses, experiments, decision records) stays there, and it exercises a
-release candidate before it is tagged. Nothing is merged back from agent-workflow; this
-repository does not carry `docs/research/` or research records. Local drafts may live in
-the git-ignored `docs/research-drafts/`; tracked files never link there.
+release candidate before it is tagged. Runtime code is not merged back from agent-workflow;
+ideas, findings, and research questions flow both ways. This repository does not carry
+`docs/research/` or research records. Local drafts may live in the git-ignored
+`docs/research-drafts/`; tracked files never link there.
+
+Follow the [Development and Research Relationship](docs/development.md#development-and-research-relationship).
+Exoma development is independent of the research agenda and prior formal research
+validation. Relevant, technically feasible ideas may be explored or implemented directly;
+unclear concepts may first be investigated in agent-workflow. Either path may inform the
+other, in any order. Agent-workflow supports evaluation and learning, and does not grant
+permission to implement Exoma changes. Applicable engineering planning, user authorization,
+verification, and release staging requirements still apply.
 
 ## Package layout
 

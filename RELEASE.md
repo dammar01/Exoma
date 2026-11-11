@@ -95,6 +95,13 @@ accident.
    nothing is patched inside agent-workflow. See
    [docs/development.md](docs/development.md#staging-a-release-in-agent-workflow).
 
+   This remains an engineering release gate. Harnesses, delegated E2E, and integrity checks
+   for research records maintained there are required by the staging procedure; successful
+   scientific validation or an answered research question is not a prerequisite for
+   implementation or release acceptance. An Exoma feature does not require its own research
+   record. See the
+   [Development and Research Relationship](docs/development.md#development-and-research-relationship).
+
 7. **Commit, then tag.** The tag points at the commit whose `stamp_version --check` and
    `gen_manifest --check` both passed:
 

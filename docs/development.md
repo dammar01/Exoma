@@ -10,10 +10,38 @@ For maintainers working on this repository. Using Exoma in a project is covered 
 | **Exoma** (this one) | The core: the runtime, CLI, installer, bundled skills and hooks, and the package published to PyPI. Every runtime change lands here. |
 | [agent-workflow](https://github.com/dammar01/agent-workflow) | Research and staging: hypotheses, experiments, decision records, simulation and measurement harnesses, and the place a release candidate is exercised before it is tagged. It depends on Exoma; it does not carry its own copy of the runtime. |
 
-Exoma began as a fork of agent-workflow 3.9.0 and shares its history up to that point. Code
-flows one way from here on: runtime fixes are made in Exoma, and agent-workflow picks them up
-by depending on a newer Exoma. Nothing is merged back from agent-workflow into this
-repository.
+Exoma began as a fork of agent-workflow 3.9.0 and shares its history up to that point.
+Runtime fixes are made in Exoma, and agent-workflow picks them up by depending on a newer
+Exoma. Runtime code is not merged back from agent-workflow into this repository. This
+ownership and dependency direction allows ideas, findings, and research questions to flow
+in both directions.
+
+## Development and Research Relationship
+
+Exoma should evolve continuously based on practical needs, engineering discoveries, and
+opportunities for improvement. Its development must not be constrained by the research
+agenda or require formal research validation before new ideas can be implemented.
+
+Relevant findings from research papers, emerging concepts, or engineering observations may
+follow either of two paths:
+
+1. **Direct Implementation:** When a finding has clear relevance and sufficient technical
+   feasibility, it may be explored, prototyped, or implemented directly in Exoma. Its
+   effectiveness and limitations can be evaluated afterward through usage, testing, and
+   further experimentation.
+
+2. **Research and Evaluation:** When the underlying concept, applicability, expected
+   benefits, or potential risks are still unclear, it may first be investigated through
+   agent-workflow. This can involve theoretical analysis, hypothesis formulation,
+   experiments, and comparative evaluation before deciding whether and how it should be
+   adopted.
+
+These paths are not mutually exclusive or strictly sequential. Implementation may generate
+new research questions, while research may inspire new implementations. Findings from both
+environments should continuously inform each other.
+
+**The purpose of agent-workflow is not to control what Exoma is allowed to implement, but
+to help understand, evaluate, and learn from what Exoma implements.**
 
 ## Daily use versus development
 
@@ -68,6 +96,16 @@ release candidate rather than against the last published version:
 2. In agent-workflow, point its Exoma dependency at that commit and run its staging suite,
    including the delegated end-to-end run that spends real provider quota.
 3. Only then tag the release here ([RELEASE.md](../RELEASE.md), step 6b).
+
+This staging requirement is an engineering release gate under the
+[Development and Research Relationship](#development-and-research-relationship).
+Candidate compatibility, regression checks, delegated end-to-end coverage, and integrity
+checks for research records maintained in agent-workflow remain required by the staging
+procedure. Successful scientific validation or an answered research question is not a
+prerequisite for implementing a change or accepting a release candidate. An Exoma feature
+does not require its own research record; record-integrity checks apply to the records
+maintained there. Direct implementation still follows applicable engineering planning,
+user authorization, and verification requirements.
 
 A failure found in staging is fixed in Exoma, never patched inside agent-workflow.
 
