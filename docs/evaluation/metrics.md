@@ -35,6 +35,40 @@ exports describe invalid/missing input separately. Test-run `fingerprint_reason`
 why an outcome is unbound; such an outcome remains ineligible for reuse. These fields do
 not turn missing events or unavailable provider usage into measured data.
 
+## Interpretation boundaries
+
+These metrics describe observable runtime and transcript-derived signals. They should not
+be interpreted beyond what their measurement methods establish.
+
+- Runtime task acceptance and completion metrics (`runtime.accepted_task@1` and
+  `runtime.workflow_task@1`) reflect runtime-derived verification outcomes, not an
+  independently captured final acceptance decision by the primary agent or proof of
+  substantive task correctness.
+- Context avoided and context saved figures (`runtime.context_avoided@1` and
+  `outcome.context_saved@2`) are measurement proxies based on output-size and token-count
+  differences. They do not establish counterfactual token savings, actual time saved, or
+  improved task quality. The former estimates answer-to-digest size reduction using
+  characters divided by four; the latter subtracts estimated returned-output tokens from
+  measured fresh secondary-agent input, with fixed instruction overhead still included.
+- Session activity derived from transcript timestamps (`real_use.active_minutes@1`) is not
+  equivalent to measured human working time.
+- Pattern-matched corrections (`real_use.rebuttal@1`) capture only a subset of human
+  intervention: a heuristic lower bound, not a complete intervention count. Questions,
+  clarifications, approvals, rejections, and reasoning corrections may not all be
+  represented.
+
+A metric becoming available does not automatically establish the effectiveness of the
+mechanism it measures.
+
+The companion research's [RQ-02](https://github.com/dammar01/agent-workflow/blob/main/docs/research/questions/RQ-02-objective-delegation-and-orchestration-overhead.yaml)
+describes transcript-event collection and semantic classification while retaining limits
+on objective linkage, semantic coverage, and treatment comparison. It does not establish a
+complete measure of human intervention or a reduction in orchestration burden. Its
+[Research Methodology](https://github.com/dammar01/agent-workflow/blob/main/docs/research/methodology.md#evidence-tiers)
+also separates observations, designed comparisons, and independent evaluation; bounded
+audit acceptance, implementation validation, and answers to research questions remain
+distinct.
+
 ## Running the tools
 
 All three read only; each prints one JSON object. Run them from the clone.
@@ -112,7 +146,7 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | `outcome.solved_fixed_outside_feature@1` | solved task | `count` | An outcome.solved_fixed@1 task whose fix no continuation explains. A task continues an earlier one of the same project when it starts at most --link-hours (72) after that one ended and edits a file that one left lines in; with several such earlier tasks it is `ambiguous` and continues none. A fix is explained when a continuation of the task started within --fix-hours of landing and edited every file whose lines were lost. No author check: transcripts carry none. | - | - |
 | `outcome.continuation_cost@1` | coding task | `median_stdlib` | Delegated calls (distinct prompt_id with a provider) and their input tokens (actual, else estimated) recorded before the session's first edit in tasks.jsonl. Reported for continuations and for tasks that continue nothing. Report keys `ramp_up_*`. | tasks with a recorded edit | Tasks without task events (before 3.8.0) are left out. |
 | `outcome.context_final@1` | tokens | `median_stdlib` | input + cache_read + cache_creation of the task's last main-agent message. p90 uses p90_floor. | tasks with usage | Tasks without usage are left out of the statistic. |
-| `outcome.context_saved@2` | tokens per task | `median_stdlib` | Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.) | coding tasks | Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks. |
+| `outcome.context_saved@2` | tokens per task | `median_stdlib` | Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.) | coding tasks | Rows without provider counts add nothing to fresh input; the returned-output estimate is still subtracted, and such tasks are counted in context_saved_partly_estimated_tasks. The fallback estimate is used only in the separate badge figure. |
 
 ### Fact replay (`tools/maintain/replay_facts.py`)
 

@@ -182,7 +182,7 @@ REGISTRY: dict[str, dict] = {
     "outcome.context_saved": {
         "version": 2, "producer": _OUTCOMES, "unit": "tokens per task", "statistic": "median_stdlib",
         "definition": "Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.)",
-        "denominator": "coding tasks", "missing": "Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks.",
+        "denominator": "coding tasks", "missing": "Rows without provider counts add nothing to fresh input; the returned-output estimate is still subtracted, and such tasks are counted in context_saved_partly_estimated_tasks. The fallback estimate is used only in the separate badge figure.",
     },
     # --- fact replay: archived calls + facts.jsonl (EXP-013) --------------------------------
     "replay.call": {

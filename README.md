@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](docs/installation.md#requirements)
 [![PyPI](https://img.shields.io/badge/pip-exoma-blue.svg)](docs/installation.md)
-[![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.1-informational.svg)](CHANGELOG.md)
 
 **[Installation guide](docs/installation.md)** · [Security](docs/security.md) · [Team guide](docs/team-guide/README.md) · [Reference](docs/reference.md)
 
@@ -122,16 +122,21 @@ enforce state, contracts, policy, provenance, and execution control.
 
 ## Relationship to agent-workflow
 
-[agent-workflow](https://github.com/dammar01/agent-workflow) is the implementation and
-research foundation Exoma grew from. It explores separating repository exploration from the
-primary agent's reasoning and implementation context, and how delegation, evidence
-management, and runtime control affect the outcome of the work. That research, including its
-hypotheses and experiments, stays in agent-workflow.
+[agent-workflow](https://github.com/dammar01/agent-workflow) is the research and staging
+companion to Exoma. It studies resource-aware agent decomposition: when and to what extent
+delegation produces sufficient marginal task value to justify its additional token and
+compute usage, latency, human intervention, and coordination overhead.
 
-This first release of Exoma repackages that runtime as a library: the same commands,
-contracts and workspace, installed and upgraded like any other Python tool. Exoma is meant to
-grow into a broader library identity, developed from mechanisms that have been tested and
-needs that have been measured.
+Its supporting research areas include context allocation, persistent repository knowledge,
+evidence quality, and runtime governance. The repository preserves the hypotheses,
+experiments, measurement methods, and decision records behind Exoma's development, while
+the runtime and product implementation remain in Exoma.
+
+This research does not assume that delegation is inherently beneficial, nor does it claim
+that an optimal degree of agent decomposition has already been established.
+
+Exoma grew from agent-workflow's runtime and packages its commands, contracts and workspace
+as a library, installed and upgraded like any other Python tool.
 
 ---
 
@@ -154,6 +159,9 @@ Exoma sets out to explore how external systems can help AI agents solve problems
 effectively: with the right context, a directed investigation, traceable evidence, and a
 compute cost proportionate to its benefit.
 
+The goal is useful context allocation, with task quality and resource cost evaluated
+together. Context size and the amount of delegation alone do not establish that value.
+
 Its value is not measured by how many agents it uses or how complex its architecture is, but
 by how far it actually helps an AI solve problems with better quality and conclusions that
 can be accounted for.
@@ -164,9 +172,18 @@ can be accounted for.
 
 ## When it is useful
 
-The idea behind the design: on a large codebase, keeping exploration out of the primary
-agent's context should leave it more room to reason. That is a design premise, not a measured
-result; Exoma does not claim a benchmark.
+The design hypothesis is context allocation, not context reduction alone. Broad repository
+exploration is handled in a separate execution context and returned as structured,
+traceable evidence, allowing the primary agent to focus its reasoning context on decisions
+and implementation.
+
+However, externalizing work can also introduce latency, additional token usage,
+coordination overhead, and the risk of losing relevant information during evidence
+gathering and summarization. Its value therefore depends on the task and cannot be assumed
+universally.
+
+This remains a design hypothesis, not a benchmark result or a claim that Exoma automatically
+optimizes context allocation.
 
 Typical requests (translated, names removed):
 
