@@ -64,6 +64,15 @@ def _test_codex_host_contract():
         accepted = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                                  "tool_name": "exec_command", "tool_input": {"cmd": runner}})
         assert_true(accepted == {}, f"the Codex runner call passes the armed gate: {accepted}")
+        prepare = runner.split(" plan ")[0] + f" verify-prepare --session '{main}'"
+        for tool in ("Bash", "exec_command", "functions.exec_command"):
+            accepted_prepare = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
+                                    "tool_name": tool, "tool_input": {"cmd": prepare}})
+            assert_true(accepted_prepare == {}, f"{tool}: local prepare passes the armed gate")
+        wrong_prepare = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
+                              "tool_name": "exec_command", "tool_input": {"cmd": prepare.replace(main, "other")}})
+        assert_true(wrong_prepare.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "prepare remains bound to the authoritative Codex session")
         for suffix in ("--session 'wrong' --task 'task'", "--session 'default'", "--task 'task'",
                        f"--session '{main}' --session '{main}'", f"--session '{main}' --task '--session'",
                        f"--session '{main}' --task 'x' extra",

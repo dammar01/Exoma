@@ -56,6 +56,7 @@ def _verify(root: Path) -> tuple[dict, dict]:
 
 
 def _test_verify_runtime_tests() -> None:
+    _check_verify_preparation()
     python = f'"{sys.executable}"'
     root = _workspace([f"{python} -c"])
     try:
@@ -150,6 +151,103 @@ def _test_verify_runtime_tests() -> None:
 
 
 _REVIEW_NO_CHECKS = _REVIEW.replace("- traced the change and its callers", "- none")
+
+
+def _check_verify_preparation() -> None:
+    from unittest.mock import patch
+    from exoma import cli
+    from exoma.core.runtime.config_defaults import auto_verify_after_execute, verify_mode
+
+    root = _workspace(["python check.py"])
+    try:
+        marker = workflow_paths(root, "s1")["runtime_dir"] / "delegated.marker"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text('{"command":"verify"}', encoding="utf-8")
+        claimed = verify_tests.claimed_path(root, "s1")
+        claimed.parent.mkdir(parents=True, exist_ok=True)
+        claimed.write_text('{"commands":["old job"]}', encoding="utf-8")
+
+        def snapshot():
+            return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+        before = snapshot()
+        with patch.object(cli.EXECUTOR, "execute", side_effect=AssertionError("provider called")), \
+                patch.object(cli, "acquire_runtime_lock", side_effect=AssertionError("provider lock")), \
+                patch.object(verify_tests.osutil, "run_bounded", side_effect=AssertionError("test run")):
+            with verify_tests.job("old-job"):
+                result = cli.run("verify-prepare", "", "s1", str(root))
+        meta = result["meta"]
+        assert_true(result["ok"] and meta["request"]["status"] == "missing"
+                    and meta["next_step"]["action"] == "select_tests" and "verdict" not in meta,
+                    "prepare ignores old claims and needs a pending request, without claiming a verdict")
+        assert_true(snapshot() == before, "prepare changes no request, marker, job or session files")
+        assert_true(meta["policy"]["test_command_prefixes"] == [["python", "check.py"]],
+                    "prepare returns effective argv prefixes, not raw config")
+
+        _request(root, {"commands": ["python check.py --only target"], "reason": "target changed"})
+        before = snapshot()
+        prepared = cli.run("verify-prepare", "", "s1", str(root))["meta"]
+        assert_true(prepared["request"]["status"] == "valid" and prepared["next_step"]["action"] == "verify"
+                    and snapshot() == before, "valid preparation never consumes the pending request")
+        assert_true(cli.run("verify-prepare", "", "s2", str(root))["meta"]["request"]["status"] == "missing",
+                    "another session cannot inherit this pending request")
+
+        config_path = workflow_paths(root)["config"]
+        config = read_json_file(config_path)
+        config["commands"]["verify_test_commands"] = ["python other.py"]
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        rejected = cli.run("verify-prepare", "", "s1", str(root))["meta"]
+        assert_true(rejected["request"]["status"] == "invalid"
+                    and rejected["next_step"]["action"] == "fix_request"
+                    and verify_tests.run_tests(root, {"commands": prepared["request"]["commands"]})[0]["status"] == "refused",
+                    "changed policy is rechecked by both preparation and actual execution")
+        for command in ("python other.py | whoami", "python other.py\x00", "git status"):
+            _request(root, {"commands": [command], "reason": "r"})
+            diagnostic = verify_tests.prepare(root, "s1")["meta"]["request"]
+            outcome = verify_tests.run_tests(root, {"commands": [command]})[0]
+            assert_true(diagnostic["status"] == "invalid" and outcome["detail"] in diagnostic["validation_errors"][0],
+                        "prepare and actual command validation agree")
+        _request(root, {"commands": ["python other.py"] * 6, "reason": "r"})
+        assert_true(verify_tests.prepare(root, "s1")["meta"]["request"]["status"] == "invalid",
+                    "prepare reports excess commands")
+        for body, expected in (({"commands": []}, "invalid"),
+                               ({"commands": [], "reason": "no relevant tests"}, "valid"),
+                               ({"commands": [], "reason": "two\nlines"}, "invalid"),
+                               (["wrong type"], "invalid")):
+            _request(root, body)
+            assert_true(verify_tests.prepare(root, "s1")["meta"]["request"]["status"] == expected,
+                        "prepare preserves request validation and explicit no-test semantics")
+        verify_tests.request_path(root, "s1").write_text("{", encoding="utf-8")
+        assert_true(verify_tests.prepare(root, "s1")["meta"]["request"]["status"] == "invalid",
+                    "malformed JSON is diagnosed without a failed inspection")
+
+        config["commands"]["verify_mode"] = "syntax"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        syntax = verify_tests.prepare(root, "s1")["meta"]
+        assert_true(syntax["next_step"]["action"] == "verify" and verify_mode(root) == "syntax",
+                    "syntax mode does not demand test selection even with an invalid pending request")
+
+        for invalid in ({"commands": {"verify_mode": [], "auto_verify_after_execute": "false",
+                                      "verify_test_commands": "python", "verify_test_timeout_seconds": True}},
+                        {"commands": []}, [], None):
+            config_path.write_text(json.dumps(invalid), encoding="utf-8")
+            invalid_meta = verify_tests.prepare(root, "s1")["meta"]
+            effective = invalid_meta["policy"]
+            assert_true(effective["verify_mode"] == verify_mode(root) == "delegated"
+                        and effective["auto_verify_after_execute"] is auto_verify_after_execute(root) is False
+                        and effective["test_command_prefixes"] == [] and effective["test_timeout_seconds"] == 900
+                        and invalid_meta["config_warnings"], "malformed config uses consistent typed defaults")
+        config_path.write_text('{"commands":{"verify_test_commands":["python",9]}}', encoding="utf-8")
+        assert_true(verify_tests._policy(root)[0] == [], "a malformed allowlist permits no commands")
+        config_path.write_text('{"commands":{"verify_test_commands":["python", "bad | prefix"]}}', encoding="utf-8")
+        assert_true(verify_tests._policy(root)[0] == [], "an invalid prefix cannot leave a partially valid policy")
+        config_path.write_text("{", encoding="utf-8")
+        assert_true(verify_tests.prepare(root, "s1")["meta"]["config_warnings"], "broken config JSON is diagnosed")
+        config_path.unlink()
+        assert_true(verify_tests.prepare(root, "s1")["meta"]["policy"]["verify_mode"] == "delegated",
+                    "missing config retains delegated defaults")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _check_no_test_line_is_not_a_check() -> None:

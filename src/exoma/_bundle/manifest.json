@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "f4321e81ede09e98b804087369058461ef83b61dd41719273ba389578c81e838",
-      "bytes": 40466,
+      "sha256": "501ce4d63adbbf4152383f857f7141ff641f6c625bf0f085888c7a0b1916acc0",
+      "bytes": 41178,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -42,8 +42,8 @@
     },
     {
       "path": "hosts/claude/skills/execute.md",
-      "sha256": "8e2dd4d91b0483daa9b14ac8821ff7137df6240eca2e43147c4f014fe8ec430c",
-      "bytes": 6034,
+      "sha256": "b9e81705919d4293e01f86a7794640982aa769df931fbbc3430b2a5d19f5a662",
+      "bytes": 6367,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -126,8 +126,8 @@
     },
     {
       "path": "hosts/claude/skills/verify.md",
-      "sha256": "bd2fe24183556c2cb525d09823e33bf5bf19806e4d99a6858e88debb4b4e3231",
-      "bytes": 7292,
+      "sha256": "907a250dacbc9c463cc9b8afa854d9e0fb0e60804779fb41cbf0a53db8917a84",
+      "bytes": 8269,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -392,8 +392,8 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "df5bae9c721612bf7f3c1ac68e46fac5b200df48d64845f66d2ded72f70c7200",
-      "bytes": 57277,
+      "sha256": "0e72a10ac1b0d325447b6443a0c717ac909a2d790aa26cc79438fce47d5fdd28",
+      "bytes": 57295,
       "merge": "replace",
       "component": "runtime"
     },

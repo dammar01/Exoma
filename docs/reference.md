@@ -1205,9 +1205,9 @@ in single quotes: that is the form the pre-flight gate lets through, and its con
 **The session.** `--session` falls back to `$MAIN_SESSION_ID`, then to `"default"`, which the
 CLI resolves through the tool's global cache — so several main_agents can share an effective
 ID, overwrite each other's state, and block each other's jobs. The runner therefore **refuses**
-`default` (exit 2, naming `--session`) for every command that writes one session's state:
+`default` (exit 2, naming `--session`) for every command that reads or writes one session's state:
 `explore`, `plan`, `analyze`, `verify`, `verify-browser`, `sweep`, `plan-record`,
-`execute-begin`, `execute-end` (`core/runtime/scripts.SESSION_REQUIRED`). The CLI refuses it
+`execute-begin`, `execute-end`, `test`, `verify-prepare` (`core/runtime/scripts.SESSION_REQUIRED`). The CLI refuses it
 too for the local ones of that list (`exoma sweep` with no `--session` exits with the same
 advice); a delegated command typed by hand at a terminal keeps the cache. `doctor`, `init`,
 `upgrade`, `clean`, `inspect` and `provider` work on the project and need no session.
@@ -1285,6 +1285,7 @@ table differ, fix one of them in the same change.
 | `plan` | delegated | yes | evidence + reverse dependency trace |
 | `analyze` | delegated | yes | in-depth analysis, zero code changes |
 | `verify` | delegated¹ | yes | verification; depth set by `verify_mode` |
+| `verify-prepare` | local | no | effective verification policy and pending request diagnostics for an explicit session; no provider, tests, verdict, or marker removal |
 | `verify-browser` | delegated³ | yes | verification through a Playwright browser from a per-session request; `draft` stage then `run` |
 | `sweep` | local | — | scan staged, unstaged, and untracked diff without OpenCode |
 | `promote-validate` | local | yes² | validate a knowledge document; zero writes |
@@ -1643,6 +1644,31 @@ States: `completed` (verify `derived: pass` with no edit afterwards, committed o
 <a id="mode-verify"></a>
 ## Verify mode
 
+### Runtime preparation
+
+Before selecting tests, call `run.sh verify-prepare --session '<MAIN_SESSION_ID>'`.
+This local protocol command returns `{ok, content, meta}` without a provider call, job,
+test run, request claim/consumption, verdict, or delegated-marker removal. An explicit
+session is required. It is a runner command, not a user-facing skill.
+
+`meta.policy` contains `verify_mode`, `auto_verify_after_execute`, `test_command_prefixes`
+(argv arrays), `test_timeout_seconds`, and `max_commands` (5). `meta.request` describes
+only that session's pending `verify/tests.json`: `path`, `status` (`missing`, `invalid`,
+or `valid`), `commands`, `reason`, and `validation_errors`. Claimed requests from earlier
+jobs are not inspected. Missing/invalid requests are successful inspections, not verification
+passes. `meta.config_warnings` reports invalid configuration without returning raw config.
+`meta.next_step.action` is `select_tests`, `fix_request`, or `verify`; syntax mode needs
+no test request. The agent selects relevant tests from the returned prefixes, writes the
+request, and invokes verify explicitly. Preparation never selects or executes tests.
+
+Preparation and execution share policy and command validation. Missing/unreadable config
+uses delegated mode, an empty allowlist, 900 seconds, and auto-verify false. Invalid mode,
+timeout, or boolean values use those defaults with diagnostics; auto-verify requires an
+actual boolean (the string `"false"` is not true). A malformed allowlist permits no commands.
+Preparation is a snapshot: actual verification rechecks policy and claims the request as
+usual. Agents need not read config or pending requests directly; old read exemptions remain
+available for compatibility.
+
 The configuration contract in question separates two settings:
 
 - `auto_verify_after_execute` determines whether main_agent automatically calls `/.verify` after implementation; default `false`;
@@ -1698,8 +1724,10 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   timeout value is ignored (default 900). The prompt line "jangan jalankan test runner" ("do not run the test runner") is only
   sent when `verify_test_commands` is set; while it is empty, `doctor` gives a warning
   (`checks.verify_test_commands: empty`) because verify runs no tests and cannot `pass`.
-  Under a verify intent, the gate hook lets main_agent read `git diff --name-only`/`--stat`,
-  `.workflow/config.json`, and write `verify/tests.json` before `.workflow/run`. The reason: when the second agent also ran tests, codex
+  Under a verify intent, main_agent calls local `verify-prepare` for policy/request diagnostics,
+  reads `git diff --name-only`/`--stat`, and writes `verify/tests.json` before delegated dispatch.
+  Legacy native config/request read exemptions remain compatible but are no longer needed.
+  The reason: when the second agent also ran tests, codex
   ran the whole suite (verify median up to 366 s) while opencode could not
   run a single one and its verify became `incomplete`.
   **Tests already run.** `run.sh test --session <id> --task '<command>'` (`--task` may be a JSON

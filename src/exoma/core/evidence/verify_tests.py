@@ -56,6 +56,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from exoma.core.evidence.contract import RUNTIME_GAP_PREFIX, RUNTIME_NO_TEST_ITEM
+from exoma.core.runtime.config_defaults import verification_settings
 from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
 from exoma.utils import osutil
 from exoma.utils.redact import redact
@@ -122,19 +123,31 @@ def _request_file(project_root, session_id: str) -> Path:
     return request_path(project_root, session_id)
 
 
+def policy(project_root) -> tuple[dict, list[str]]:
+    """Effective policy for both prepare and actual shell-free test execution."""
+    settings, warnings = verification_settings(Path(project_root))
+    prefixes = []
+    for item in settings["verify_test_commands"]:
+        if not item.strip():
+            continue
+        tokens = _split(item)
+        if not tokens or _SHELL_SYNTAX.search(item) or _CONTROL_CHARS.search(item):
+            warnings.append("commands.verify_test_commands: invalid prefix; no commands allowed")
+            prefixes = []
+            break
+        prefixes.append(tokens)
+    return {
+        "verify_mode": settings["verify_mode"],
+        "auto_verify_after_execute": settings["auto_verify_after_execute"],
+        "test_command_prefixes": prefixes,
+        "test_timeout_seconds": settings["verify_test_timeout_seconds"],
+        "max_commands": MAX_COMMANDS,
+    }, warnings
+
+
 def _policy(project_root) -> tuple[list[list[str]], int]:
-    try:
-        config = read_json_file(workflow_paths(Path(project_root))["config"])
-    except (OSError, ValueError):
-        config = {}
-    commands = config.get("commands") if isinstance(config.get("commands"), dict) else {}
-    prefixes = [
-        _split(str(item)) for item in commands.get("verify_test_commands") or [] if str(item).strip()
-    ]
-    timeout = commands.get("verify_test_timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
-    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
-        timeout = DEFAULT_TIMEOUT_SECONDS
-    return [p for p in prefixes if p], timeout
+    effective, _ = policy(project_root)
+    return effective["test_command_prefixes"], effective["test_timeout_seconds"]
 
 
 def configured(project_root) -> bool:
@@ -162,7 +175,10 @@ def _split(command: str) -> list[str]:
 
 def read_request(project_root, session_id: str) -> dict | None:
     """The request as written, or None when there is none. Not consumed here: see `apply`."""
-    path = _request_file(project_root, session_id)
+    return _read_request(_request_file(project_root, session_id))
+
+
+def _read_request(path: Path) -> dict | None:
     if not path.is_file():
         return None
     try:
@@ -194,6 +210,55 @@ def _consume(project_root, session_id: str) -> None:
 
 def _allowed(tokens: list[str], prefixes: list[list[str]]) -> bool:
     return any(tokens[: len(prefix)] == prefix for prefix in prefixes)
+
+
+def _command_error(command: str, tokens: list[str], prefixes: list[list[str]]) -> str | None:
+    if not command or not tokens:
+        return "empty or unparseable"
+    if _SHELL_SYNTAX.search(command):
+        return "shell syntax is not run"
+    if _CONTROL_CHARS.search(command):
+        return "control characters are not run"
+    if not _allowed(tokens, prefixes):
+        return "not under commands.verify_test_commands in .workflow/config.json"
+    return None
+
+
+def prepare(project_root, session_id: str) -> dict:
+    """Inspect pending inputs only: no claim, test, provider, state write or verdict."""
+    effective, warnings = policy(project_root)
+    path = request_path(project_root, session_id)
+    data = _read_request(path)  # deliberately ignores this process's job/claimed context
+    errors = []
+    commands, reason = [], None
+    if data is None:
+        status = "missing"
+    elif "invalid" in data:
+        status = "invalid"
+        errors.append(data["invalid"])
+    else:
+        commands, reason = data["commands"], data.get("reason")
+        if len(commands) > MAX_COMMANDS:
+            errors.append(f"at most {MAX_COMMANDS} commands are allowed")
+        for index, raw in enumerate(commands[:MAX_COMMANDS]):
+            command = raw.strip()
+            error = _command_error(command, _split(command), effective["test_command_prefixes"])
+            if error:
+                errors.append(f"commands[{index}]: {error}")
+        status = "invalid" if errors else "valid"
+    action = ("verify" if effective["verify_mode"] == "syntax" or status == "valid" else
+              "fix_request" if status == "invalid" else "select_tests")
+    return {
+        "ok": True,
+        "content": f"verification prepared: mode {effective['verify_mode']}; pending request {status}",
+        "meta": {
+            "command": "verify-prepare", "session_id": session_id,
+            "policy": effective, "config_warnings": warnings,
+            "request": {"path": str(path), "status": status, "commands": commands,
+                        "reason": reason, "validation_errors": errors},
+            "next_step": {"action": action, "session_id": session_id, "automatic": False},
+        },
+    }
 
 
 def _beat(on_progress, started: float, **fields) -> None:
@@ -235,21 +300,9 @@ def run_tests(
     for index, raw in enumerate(commands[:MAX_COMMANDS]):
         command = str(raw).strip()
         tokens = _split(command)
-        if not command or not tokens:
-            outcomes.append({"command": command, "status": "refused", "detail": "empty or unparseable"})
-            continue
-        if _SHELL_SYNTAX.search(command):
-            outcomes.append({"command": command, "status": "refused", "detail": "shell syntax is not run"})
-            continue
-        if _CONTROL_CHARS.search(command):
-            outcomes.append({"command": command, "status": "refused", "detail": "control characters are not run"})
-            continue
-        if not _allowed(tokens, prefixes):
-            outcomes.append({
-                "command": command,
-                "status": "refused",
-                "detail": "not under commands.verify_test_commands in .workflow/config.json",
-            })
+        error = _command_error(command, tokens, prefixes)
+        if error:
+            outcomes.append({"command": command, "status": "refused", "detail": error})
             continue
         earlier = (reuse or {}).get(command)
         if earlier is not None:

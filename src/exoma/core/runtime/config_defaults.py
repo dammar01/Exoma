@@ -19,7 +19,7 @@ def default_commands() -> dict:
         "auto_sweep_after_execute": True,
         # whether /.execute chains into /.verify on its own. false => /.execute reports
         # `verification: not_run` and must never call itself done. The chain itself is
-        # prompt-only: core/runtime/execution.py (DEC-067) records not_run at execute-end,
+        # performed by main_agent: execute-end returns the fresh policy and next step,
         # but nothing in the runtime starts /.verify.
         "auto_verify_after_execute": False,
         # --- runtime-consumed ---
@@ -271,41 +271,54 @@ def validate_config(config: dict) -> list[str]:
             )
     return warnings
 
-def verify_mode(project_root: Path) -> str:
-    """commands.verify_mode. Anything unreadable or unrecognised falls back to
-    'delegated' — an unclear setting must not silently downgrade verification."""
+def verification_settings(project_root: Path) -> tuple[dict, list[str]]:
+    """Typed verification settings shared by preparation and execution.
+
+    Diagnostics name fields, never raw configuration values. Invalid policy cannot
+    expand the test allowlist or silently opt into automatic verification.
+    """
+    keys = ("verify_mode", "auto_verify_after_execute", "verify_test_commands",
+            "verify_test_timeout_seconds")
+    defaults = default_commands()
+    settings = {key: defaults[key] for key in keys}
+    warnings = []
     try:
         config = read_json_file(workflow_paths(project_root)["config"])
+    except FileNotFoundError:
+        return settings, warnings
     except (OSError, ValueError):
-        return "delegated"
-    commands = config.get("commands")
+        return settings, ["config: unreadable or invalid JSON; verification defaults applied"]
+    if not isinstance(config, dict):
+        return settings, ["config: expected object; verification defaults applied"]
+    commands = config.get("commands", {})
     if not isinstance(commands, dict):
-        return "delegated"
-    mode = commands.get("verify_mode", "delegated")
-    return mode if mode in VERIFY_MODES else "delegated"
+        return settings, ["commands: expected object; verification defaults applied"]
+    for key in keys:
+        if key not in commands:
+            continue
+        value = commands[key]
+        if key == "verify_mode":
+            valid = isinstance(value, str) and value in VERIFY_MODES
+        elif key == "auto_verify_after_execute":
+            valid = isinstance(value, bool)
+        elif key == "verify_test_commands":
+            valid = isinstance(value, list) and all(isinstance(item, str) for item in value)
+        else:
+            valid = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        if valid:
+            settings[key] = value
+        else:
+            warnings.append(f"commands.{key}: invalid type or value; default applied")
+    return settings, warnings
+
+
+def verify_mode(project_root: Path) -> str:
+    """An unclear setting must not silently downgrade verification."""
+    return verification_settings(project_root)[0]["verify_mode"]
 
 def auto_verify_after_execute(project_root: Path) -> bool:
-    """commands.auto_verify_after_execute.
-
-    Still prompt-only in effect — /.execute has a runtime path since DEC-067
-    (core/runtime/execution.py), but it only records `verification: not_run`; nothing
-    here can make it chain into /.verify. What this does buy: the value now rides out on every
-    delegated result, so main_agent reads the project's actual setting instead of
-    recalling what the config said.
-    """
-    try:
-        config = read_json_file(workflow_paths(project_root)["config"])
-    except (OSError, ValueError):
-        return bool(default_commands()["auto_verify_after_execute"])
-    commands = config.get("commands")
-    if not isinstance(commands, dict):
-        return bool(default_commands()["auto_verify_after_execute"])
-    return bool(
-        commands.get(
-            "auto_verify_after_execute",
-            default_commands()["auto_verify_after_execute"],
-        )
-    )
+    """Fresh typed policy; the agent performs the requested continuation."""
+    return verification_settings(project_root)[0]["auto_verify_after_execute"]
 
 def graph_leads_enabled(project_root: Path) -> bool:
     """policies.graph_leads_enabled. Defaults to on; an unreadable config must not

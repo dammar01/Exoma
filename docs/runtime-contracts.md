@@ -2,6 +2,20 @@
 
 ## State and transport hardening
 
+Verification preparation is runtime-owned. `verify-prepare` reads effective policy and
+the named session's pending request before provider dispatch, without claiming/consuming
+the request, removing the delegated marker, running tests, or publishing a verdict.
+The agent supplies test relevance and the request; runtime policy remains authoritative
+when verify actually runs. Preparation does not read an earlier job's claimed request.
+
+Successful `execute-end` preserves its existing content and execution metadata and adds
+fresh `meta.policy` (`auto_verify_after_execute`, `verify_mode`), `meta.config_warnings`,
+and `meta.next_step`: `action` (`verify_prepare` or `offer_verify`), `required`, `session_id`,
+`execution_id`, and `automatic: false`. Identity comes from the execution just closed.
+True auto-verify requires the agent to continue through preparation and explicit verify;
+false offers verification. Runtime does not auto-chain or change `verification: not_run`.
+Policy diagnostics cannot turn a successfully closed execution into a close failure.
+
 Execution mutations and standalone approval writers coordinate through the session's
 `runtime/execution.state.guard`, a byte-0 advisory lock. Acquisition is bounded to ten
 seconds; it covers state transactions, never provider inference. A plan re-record still
@@ -64,8 +78,9 @@ nothing in Python. The list is kept explicit so that "configured" is never mista
 - `policies.subagent_fanout_enabled`
 - `policies.production_branch`, `policies.knowledge_dir`, `policies.knowledge_relevant_limit` (promote and the knowledge sidecar)
 
-`commands.auto_verify_after_execute` sits between the two: the runtime reads it and echoes
-it in `meta.policy`, but nothing in Python acts on it (see the table below). The execute path
+`commands.auto_verify_after_execute` sits between the two: the runtime reads it and returns
+it in `meta.policy`, including a structured next step from `execute-end`; the agent still
+invokes verification (see the table below). The execute path
 itself (plan record, `-y` approval, scope, verification status) is runtime state since 3.9.0 —
 see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state).
 

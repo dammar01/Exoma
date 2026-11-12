@@ -64,6 +64,8 @@ def _test_contract_renders_per_host():
             assert_true(not re.search(r"<!--\s*HOST:", text), f"{host}: a HOST section marker shipped")
             assert_true(hosts.runner_call(host) in text,
                         f"{host}: the contract names the profile's runner call {hosts.runner_call(host)!r}")
+            assert_true(f"Verify preparation is a local runner call: `{hosts.runner_call(host)} verify-prepare" in text,
+                        f"{host}: preparation uses the configured runner prefix in the shared contract")
             assert_true("not returned yet)" in text and "the call killed)" in text
                         and "orthe" not in text and ",the call" not in text,
                         f"{host}: an inline HOST section keeps the space before the text after it")
@@ -203,6 +205,15 @@ def _test_runner_call_single_source():
             wp = _policy(hook_dir)
             from exoma.core.runtime.scripts import SESSION_REQUIRED
             assert_true(wp.SESSION_COMMANDS == frozenset(SESSION_REQUIRED), "standalone session policy matches runtime")
+            prepare_call = f"'{root}/.workflow/run.sh' verify-prepare --session 'main_x'"
+            context = {"root": root, "home": str(Path.home()), "rt_dir": str(hook_dir),
+                       "is_bash": lambda word: wp.is_bash(word, wp.load_host_profile(str(hook_dir))),
+                       "expected_session": "main_x", "host_read": lambda path: False}
+            assert_true(wp.preflight_refusal("shell", "", prepare_call, {"command": "verify"}, context) is None,
+                        f"{host}: armed gate accepts local prepare as a plain runner call")
+            assert_true(wp.runner_session_refusal(prepare_call.replace("'main_x'", "'other'"), context)
+                        and wp.runner_session_refusal(prepare_call.split(" --session")[0], context),
+                        f"{host}: prepare rejects wrong or missing authoritative session")
             profile = wp.load_host_profile(str(hook_dir))
             assert_true(profile.get("host") == host and profile.get("runner_prefix") == hosts.runner_prefix(host),
                         f"{host}: host-profile.json is the profile: {profile}")

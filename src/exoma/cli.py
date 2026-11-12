@@ -401,6 +401,18 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
             next_action="Nothing to close; execute-begin opens an execution.",
         )
     closed = ended["execution"]
+    from exoma.core.runtime.config_defaults import verification_settings
+    settings, config_warnings = verification_settings(project_root)
+    required = settings["auto_verify_after_execute"]
+    metadata = {
+        **closed,
+        "policy": {"auto_verify_after_execute": required, "verify_mode": settings["verify_mode"]},
+        "config_warnings": config_warnings,
+        "next_step": {
+            "action": "verify_prepare" if required else "offer_verify", "required": required,
+            "session_id": session_id, "execution_id": closed.get("execution_id"), "automatic": False,
+        },
+    }
     changed, outside = closed.get("changed_files"), closed.get("outside_scope")
     if changed is None:
         summary = "changed files unknown (no tree snapshot to compare)"
@@ -411,7 +423,7 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
     return {
         "ok": True,
         "content": f"execution closed: implemented, verification not_run; {summary}",
-        "meta": closed,
+        "meta": metadata,
     }
 
 
@@ -575,6 +587,10 @@ def run(
 
     if normalized_command == "test":
         return _test_command(project_root, session_id, task, main_host)
+
+    if normalized_command == "verify-prepare":
+        from exoma.core.evidence import verify_tests
+        return verify_tests.prepare(project_root, session_id)
 
     if normalized_command == "sweep":
         output = run_sweep(project_root, session_id)
@@ -797,6 +813,7 @@ COMMANDS = (
     "plan",
     "analyze",
     "verify",
+    "verify-prepare",
     "verify-browser",
     "sweep",
     "clean",

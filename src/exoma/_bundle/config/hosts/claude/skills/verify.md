@@ -11,7 +11,18 @@ syntax → QUICK: the runtime parse-checks the changed files locally (git diff H
   Relay not_checked/skipped as they are; do NOT count them as pass.
   A DONE verdict for a runtime/behavior problem is FORBIDDEN; at most "syntax OK, behavior not yet verified" + suggest setting verify_mode=delegated.
 
-## Pick the tests FIRST (verify_mode=delegated — REQUIRED before the run)
+## Prepare FIRST (local runtime, before selecting tests)
+Call `bash '<work_dir>/.workflow/run.sh' verify-prepare{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'`.
+This protocol command needs no task and is not a skill. Read `meta.policy`, `meta.request`,
+`meta.config_warnings`, and `meta.next_step`; do NOT read config.json or tests.json directly
+to reconstruct them. It does not call a provider, run tests, consume a request, clear the
+delegated marker, or publish a verdict. The normal delegated verify call is still required.
+`policy.verify_mode=syntax` → invoke verify directly; do not request tests.
+For delegated mode, a missing request needs test selection; an invalid one needs correction.
+A valid pending request may be used if it still covers the change. Preparation is a snapshot;
+the runtime rechecks policy when verification actually runs.
+
+## Pick the tests (verify_mode=delegated — REQUIRED before the run)
 The second agent only reads and traces; the runtime runs the tests. You choose them:
 1. From the diff + dependents (who calls what changed), pick the tests that cover the change.
    Targeted — related files/suites only, NOT the whole suite. No relevant test (docs, pure
@@ -21,12 +32,12 @@ The second agent only reads and traces; the runtime runs the tests. You choose t
    verdict rests on the review. Skipping tests.json = a runtime gap, exit nonzero.
 2. Write `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`:
    `{"commands": ["<cmd>", ...], "reason": "<why these tests cover the change>"}` (max 5).
-3. The runtime only runs commands starting with a prefix in `commands.verify_test_commands`
-   (`.workflow/config.json`), without a shell (`&&`/pipe/redirect refused). Outside the allowlist →
+3. Use the argv prefixes in `meta.policy.test_command_prefixes` from prepare; commands must
+   start with one of them. Runtime executes without a shell (`&&`/pipe/redirect refused). Outside the allowlist →
    `not_verified`. Empty allowlist → tell the user and suggest the prefixes to add;
    a project without a test suite → there is no prefix to suggest, write `commands: []` (step 1).
 Gate: while the verify marker is active (before `.workflow/run verify`) ONLY these pass: `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
-(may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect), Read of `.workflow/config.json` + this session's tests.json, and Write of that tests.json. Reading src/test file contents → blocked; the file names from the diff are enough.
+(may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect), the plain runner call for `verify-prepare`, and Write of this session's tests.json. Legacy native Read exemptions for config/tests remain for compatibility; this flow uses runtime preparation instead. Reading src/test file contents → blocked; the file names from the diff are enough.
 No tests.json → verify becomes `incomplete` (gap `tests:`, exit nonzero). An explicit `commands: []` ≠ no tests.json. A failing test → blocking.
 Already ran them with `run.sh test` after the last edit? STILL list them in tests.json, with the EXACT
 same command text: the runtime reuses each recorded pass while its reuse identity is unchanged (Git-visible

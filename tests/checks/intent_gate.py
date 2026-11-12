@@ -260,6 +260,7 @@ def _check_verify_lane() -> None:
                 ("Bash", {"command": "git diff --stat HEAD~1 -- src"}),
                 ("Bash", {"command": "git diff --cached --name-status"}),
                 ("Bash", {"command": "bash .workflow/run.sh verify 't' 'm1'"}),
+                ("Bash", {"command": "bash .workflow/run.sh verify-prepare --session 'm1'"}),
                 ("Read", {"file_path": str(config)}),
                 ("Read", {"file_path": ".workflow/config.json"}),
                 ("Read", {"file_path": str(tests_json)}),

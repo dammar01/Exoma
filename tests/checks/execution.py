@@ -132,7 +132,31 @@ def _cli_speaks_the_error_contract() -> None:
                     f"execute-begin names the missing -y: {result}")
         _token(root, "cli-session")
         assert_true(main.run("execute-begin", "", "cli-session", str(root))["ok"], "and opens with it")
-        assert_true(main.run("execute-end", "", "cli-session", str(root))["ok"], "execute-end closes it")
+        config = root / ".workflow" / "config.json"
+        config.write_text('{"commands":{"auto_verify_after_execute":true,"verify_mode":"syntax"}}', encoding="utf-8")
+        result = main.run("execute-end", "", "cli-session", str(root))
+        closed = execution.current_execution(root, "cli-session")
+        assert_true(result["ok"] and all(result["meta"][key] == value for key, value in closed.items()),
+                    "execute-end preserves every existing execution field")
+        assert_true(result["meta"]["policy"] == {"auto_verify_after_execute": True, "verify_mode": "syntax"}
+                    and result["meta"]["next_step"] == {
+                        "action": "verify_prepare", "required": True, "session_id": "cli-session",
+                        "execution_id": closed["execution_id"], "automatic": False}
+                    and closed["verification"] == "not_run", "fresh policy directs the agent without dispatching verify")
+        assert_true("policy" not in closed and "next_step" not in closed, "response policy is not persisted as execution state")
+        _token(root, "cli-session")
+        assert_true(main.run("execute-begin", "", "cli-session", str(root))["ok"], "another execution opens")
+        config.write_text('{"commands":{"auto_verify_after_execute":false}}', encoding="utf-8")
+        result = main.run("execute-end", "", "cli-session", str(root))
+        assert_true(result["meta"]["next_step"]["action"] == "offer_verify"
+                    and result["meta"]["next_step"]["required"] is False, "policy is reread for each close")
+        _token(root, "cli-session")
+        main.run("execute-begin", "", "cli-session", str(root))
+        config.write_text("{", encoding="utf-8")
+        result = main.run("execute-end", "", "cli-session", str(root))
+        assert_true(result["ok"] and result["meta"]["config_warnings"]
+                    and result["meta"]["next_step"]["action"] == "offer_verify",
+                    "broken config cannot turn a successful close into a close failure")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

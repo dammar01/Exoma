@@ -592,6 +592,18 @@ def _test_init_upgrade_and_session_guard() -> None:
         def run(*args):
             return subprocess.run(argv + list(args), env=env, capture_output=True, text=True, **no_console())
 
+        missing_prepare = run("verify-prepare")
+        assert_true(missing_prepare.returncode == 2 and "MAIN_SESSION_ID" in missing_prepare.stderr,
+                    "prepare requires an explicit session through the generated runner")
+        prepare_marker = workflow_paths(root, "prepare-session")["runtime_dir"] / "delegated.marker"
+        prepare_marker.parent.mkdir(parents=True, exist_ok=True)
+        prepare_marker.write_text('{"command":"verify"}', encoding="utf-8")
+        prepared = run("verify-prepare", "--session", "prepare-session", "--main-host", "codex")
+        prepare_output = json.loads(prepared.stdout)
+        assert_true(prepared.returncode == 0 and prepare_output["meta"]["command"] == "verify-prepare"
+                    and prepare_output["meta"]["session_id"] == "prepare-session" and prepare_marker.exists(),
+                    "real runner dispatches local preparation and preserves the delegation marker")
+
         presented = run("execute-begin", "--session", "presentation-test", "--main-host", "codex")
         presentation = json.loads(presented.stdout)
         assert_true("$exoma-plan" in presentation["meta"]["next_action"],

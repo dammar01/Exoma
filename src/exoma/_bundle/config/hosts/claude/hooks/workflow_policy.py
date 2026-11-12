@@ -669,7 +669,7 @@ def runner_call(words, root, home, is_bash):
 
 # Standalone counterpart of runtime.scripts.SESSION_REQUIRED; tested for parity.
 SESSION_COMMANDS = frozenset(("explore", "plan", "analyze", "verify", "verify-browser", "sweep",
-                              "plan-record", "execute-begin", "execute-end", "test"))
+                              "plan-record", "execute-begin", "execute-end", "test", "verify-prepare"))
 
 
 def runner_invocation(command, root, home, is_bash):

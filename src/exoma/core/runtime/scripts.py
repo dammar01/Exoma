@@ -6,14 +6,14 @@ import os
 from exoma.utils import osutil
 from pathlib import Path
 
-# Commands that write one session's state: delegated calls (lock, logs, evidence), the sweep
-# report, and the plan -> execute chain. Without an explicit session they would land in a
+# Commands that read or write one session's state: delegated calls (lock, logs, evidence),
+# verification preparation, the sweep report, and the plan -> execute chain. Without an explicit session they would land in a
 # session nobody bound, so run.sh and the CLI refuse `default` for them. doctor, init,
 # upgrade, clean and provider work on the project; inspect only reads (inspect.sh runs it
 # with no session at all).
 SESSION_REQUIRED = (
     "explore", "plan", "analyze", "verify", "verify-browser",
-    "sweep", "plan-record", "execute-begin", "execute-end", "test",
+    "sweep", "plan-record", "execute-begin", "execute-end", "test", "verify-prepare",
 )
 
 

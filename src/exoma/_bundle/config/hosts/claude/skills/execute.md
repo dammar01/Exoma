@@ -48,25 +48,30 @@ normalized file keeps the identity) — a test that depends on them must be list
 `verify_reuse_files`, or simply not run through `run.sh test`.
 A test run is evidence, not verification: `verification` stays `not_run` until {{CMD:verify}}.
 
-## Post (read .workflow/config.json → commands.auto_verify_after_execute)
+## Post (runtime policy and next step)
 Close the execution first: bash '<work_dir>/.workflow/run.sh' execute-end{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'
 (status `implemented`, verification `not_run`; a finished {{CMD:verify}} writes its verdict here).
 Its `meta.changed_files` lists what changed since execute-begin (Git tree snapshots, so edits the tree
 already carried are not counted) and `meta.outside_scope` those outside the plan's `files` — Bash
 writes included. Non-empty `outside_scope` → name each file in [EXECUTION RESULT] and say why it
 changed; never omit it. `null` = no Git snapshot: changed files unknown, say so.
+Use fresh `meta.policy` and `meta.next_step` from this response; do NOT read config.json
+again. Report `meta.config_warnings`. `next_step` is bound to the returned execution/session
+and has `automatic: false`: runtime has not started verification.
 [EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status
-true  → auto-trigger {{CMD:verify}}. status: done|partial|blocked. Do NOT declare done before verify finishes.
+true / `next_step.action=verify_prepare` → call the local `verify-prepare` runner command,
+then follow the verify skill and invoke {{CMD:verify}}. status: done|partial|blocked.
+Do NOT declare done before verify finishes.
 false (default) → do NOT auto-run {{CMD:verify}} (avoid heavy tests nobody asked for). REQUIRED:
   verification: not_run
   status: implemented | partial | blocked  ← "done" is FORBIDDEN
   then offer "{{CMD:verify}} now?"
 "implemented" ≠ "done". Without verification you DO NOT KNOW it works — do not say you do.
 
-### Read this key EVERY time, never from memory
-`commands.auto_verify_after_execute` is read from `.workflow/config.json` at the end of EVERY
-{{CMD:execute}}. Key ABSENT = default `false` (config.json holds overrides only). A value from
-another session, another project, or your memory does NOT apply.
+### Use the policy returned for THIS execution
+`execute-end` reads `commands.auto_verify_after_execute` and `commands.verify_mode` fresh.
+An absent auto-verify key defaults to `false`; invalid types warn and also default to false.
+Use the returned policy/next_step, never a value from another execution or memory.
 `true` → the chain to {{CMD:verify}} is part of {{CMD:execute}}, not an optional step after it.
 Stopping before verify finishes = an unfinished {{CMD:execute}}, whatever the diff contains.
 
