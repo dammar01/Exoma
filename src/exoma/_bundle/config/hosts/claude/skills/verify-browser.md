@@ -3,14 +3,14 @@ description: Verification through a real Playwright browser. DELEGATED: draft sp
 argument-hint: [feature/flow]
 
 ## Trigger
-/.verify-browser [<feature/flow to test>]
-Different from /.verify: /.verify = code review (delegated|syntax). /.verify-browser = clicking and asserting in the running app.
-DELEGATED command: the Pre-flight gate applies. Before `.workflow/run verify-browser` runs, Read/Grep/Glob/Bash/MCP are FORBIDDEN (reading config.json included) — the `intent-gate-check` hook blocks them. Writing request.json is allowed (it is not gathering). Division of work: second_agent = reasoning + writing the spec (stage 1) and reviewing the evidence (stage 3); runtime player = a child process the runtime starts to drive Playwright (stage 2). main_agent does not run the browser, and neither does the second_agent (read-only sandbox). A `ready` draft goes STRAIGHT to the run — asking "run it or not" is FORBIDDEN. What still stops it: `blocked`/`invalid` from the draft, `missing_env`, and proposed `read_only_requests` never allowed before (that is a permission decision, not a run gate).
+{{CMD:verify-browser}} [<feature/flow to test>]
+Different from {{CMD:verify}}: {{CMD:verify}} = code review (delegated|syntax). {{CMD:verify-browser}} = clicking and asserting in the running app.
+DELEGATED command: the Pre-flight gate applies. Before `.workflow/run verify-browser` runs, Read/Grep/Glob/Bash/MCP are FORBIDDEN (reading config.json included) — the host preflight gate blocks them. Writing request.json is allowed (it is not gathering). Division of work: second_agent = reasoning + writing the spec (stage 1) and reviewing the evidence (stage 3); runtime player = a child process the runtime starts to drive Playwright (stage 2). main_agent does not run the browser, and neither does the second_agent (read-only sandbox). A `ready` draft goes STRAIGHT to the run — asking "run it or not" is FORBIDDEN. What still stops it: `blocked`/`invalid` from the draft, `missing_env`, and proposed `read_only_requests` never allowed before (that is a permission decision, not a run gate).
 
 ## Prerequisites
-- Playwright: `exoma install --with-e2e`. /.doctor → `e2e_readiness`.
+- Playwright: `exoma install --with-e2e`. {{CMD:doctor}} → `e2e_readiness`.
 - The target app is ALREADY running at the URL the user names. The runtime does not start servers.
-- An old run script (that does not know `verify-browser`) answers with a job without a result / `unsupported command` → run /.upgrade first.
+- An old run script (that does not know `verify-browser`) answers with a job without a result / `unsupported command` → run {{CMD:upgrade}} first.
 
 ## STEP 0 — Draft first, the runtime reads the config (BEFORE asking anything)
 The `e2e` section of `<project>/.workflow/config.json` = the project's installed defaults, and the RUNTIME reads it during the draft — main_agent does not read it before the run (Pre-flight gate). It holds the same keys as the request settings, PLUS config-only keys a request may not name: `allow_remote`, `allowed_origins`, `existing_test_command`, `existing_test_allowlist`, `existing_test_timeout_s` (registry `CONFIG_ONLY_SETTINGS`). The request is written by an agent, so policy that allows a remote origin or a command to execute must not live in that same request.
@@ -21,8 +21,8 @@ The `e2e` section of `<project>/.workflow/config.json` = the project's installed
 A config value of the wrong type/unknown does NOT fail the run: it is dropped, the built-in default applies, and its name appears in `meta.e2e.config_warnings`. Relay that warning — an ignored knob reads the same as a broken one.
 Credentials NEVER go into config.json — they stay in `.workflow/e2e/secrets.json`.
 
-## STEP 1 — Interview (AskUserQuestion, main thread) — ONLY when the draft in STEP 3 says it is needed
-Fill from context first (diff, the user's message); ask ONLY what is still uncertain. Max 4 questions per call, header ≤12 chars.
+## STEP 1 — Interview ({{QUESTION_TOOL}}, main thread) — ONLY when the draft in STEP 3 says it is needed
+Fill from context first (diff, the user's message); ask ONLY what is still uncertain. {{ASK_USER}}
 1. The flow/feature under test + the outcome that counts as correct (claims). Open → options from context when there are any.
 2. base_url: `http://localhost:8000` | `http://127.0.0.1:8000` | a virtual host (e.g. `http://app.test`) → the user fills it in through "Other".
    Three classes, never mixed:
@@ -62,9 +62,9 @@ File: `<project>/.workflow/data/sessions/<MAIN_SESSION_ID>/e2e/request.json` (Wr
 Valid settings keys in a request: base_url browser headless slow_mo_ms nav_timeout_ms step_timeout_ms idle_timeout_s total_timeout_s probe_max_elements allow_side_effects allow_local_side_effects allowed_read_only_requests allowed_destructive_requests secrets_profile secrets_template_profiles fail_on_console_error max_retries ignore_repeat_brake keep_created_data artifact_max_mb. Another key/wrong type → `request_invalid` (`allowed_mutation_paths` → a migration error). A config-only key (`allow_remote` `allowed_origins` `existing_test_command` `existing_test_allowlist` `existing_test_timeout_s`) in the request → `request_invalid` telling you to move it to config.json; do NOT write it in the request. `base_url` stays allowed per run, but is judged by the config's origin policy. The same key in config.json: wrong type → ignored + a warning, not an error.
 Writing credential values into the request, the task, or a scenario is FORBIDDEN — only `${E2E_USER}`/`${E2E_PASS}`. The runtime matches the secrets.json values against the task, the draft, and request.json: a match is replaced by the placeholder (request.json rewritten), the run still goes ahead, and `meta.e2e.secret_literals` + `config_warnings` name the KEY. It appears → report it to the user as a leak that was patched, not a silent success. A `fill` into a password field without a placeholder → `spec_invalid`.
 
-## STEP 3 — Draft (background)
-Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' verify-browser --session '<MAIN_SESSION_ID>' --task '<task>'
-`run_in_background: true`, collect the result of the same task ID. <task> ≤3000 chars, holding: the flow + expected claims, base_url, the credential key names (`${E2E_USER}`...), side effects allowed or not, the changed files when known. Do NOT paste code.
+## STEP 3 — Draft
+Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' verify-browser{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<task>'
+{{DELEGATED_RUN}} <task> ≤3000 chars, holding: the flow + expected claims, base_url, the credential key names (`${E2E_USER}`...), side effects allowed or not, the changed files when known. Do NOT paste code.
 Result `meta.phase=draft`, `content` = [E2E DRAFT], details in `meta.e2e.draft` + the file `draft.json` in the same folder.
 - ok:false (stage 1 failed) → STOP rule [PROXY FAILED] as for any delegated command. Do NOT quietly invent a scenario yourself.
 - status `blocked` → preflight failed (playwright_missing | browser_missing | base_url_unreachable | spec_invalid URL policy). Report + fix, STOP.
@@ -73,7 +73,7 @@ Result `meta.phase=draft`, `content` = [E2E DRAFT], details in `meta.e2e.draft` 
 - `meta.e2e.knowledge.offered` > 0 → the draft read `e2e_knowledge.json` (earlier runs' results for the same origin: login/logout flows, routes, readiness, matching selectors). Say it in one line of the plan: "uses N knowledge entries from earlier runs". The draft still has to match selectors to the code.
 
 ## STEP 4 — Plan (show it, do NOT ask permission to run)
-Print the plan so the user knows what is running, then go STRAIGHT to STEP 5. There is no AskUserQuestion "Run | Cancel" — a user who invoked /.verify-browser already said they want it run.
+Print the plan so the user knows what is running, then go STRAIGHT to STEP 5. There is no {{QUESTION_TOOL}} "Run | Cancel" — a user who invoked {{CMD:verify-browser}} already said they want it run.
 [BROWSER TEST PLAN]
 target: <base_url> (loopback | .test | remote allow-listed: <origin>)
 display: headless | headed slow_mo <n> ms
@@ -90,10 +90,10 @@ retry: <n> attempts at most when a run ends incomplete because of the environmen
 knowledge: <N entries from earlier runs used by the draft> | none yet
 Two things — and only two — still stop this step. Both are about PERMISSION or missing material, not about "are you sure you want to run":
 - missing_env not empty → ask the user to fill in secrets.json (the profile in use) first; do not run until the user says it is done. Without credentials the run is bound to end `env_missing`.
-- read_only_requests not empty AND not yet covered by `allowed_read_only_requests` from the config/request → AskUserQuestion multiSelect, one entry per option (description = source_refs + reason). ONLY the checked ones are written into `allowed_read_only_requests` at STEP 5 as `"POST <endpoint>"`. Not checked = stays blocked. Adding an entry the draft did not propose or the user did not confirm is FORBIDDEN. Already covered by the config → do not ask again.
+- read_only_requests not empty AND not yet covered by `allowed_read_only_requests` from the config/request → {{MULTI_CHOICE}}, one entry per option (description = source_refs + reason). ONLY the checked ones are written into `allowed_read_only_requests` at STEP 5 as `"POST <endpoint>"`. Not checked = stays blocked. Adding an entry the draft did not propose or the user did not confirm is FORBIDDEN. Already covered by the config → do not ask again.
 The plan is wrong → the user says so themselves (Esc/a new instruction); do not fish for it with a question.
 
-The third one comes AFTER the run, not before, and is answered the same way: `meta.e2e.destructive_pending` not empty → the run met a DELETE or a `_method` request not yet allowed. AskUserQuestion multiSelect, one entry per endpoint (`method` + `endpoint`; description = the step that triggered it when known). Endpoints come as routes (`/api/items/:id`), not real ids — approving one approves that route, and say so when asking. Adding an entry that is not in `destructive_pending` is FORBIDDEN, and so is approving on the user's behalf.
+The third one comes AFTER the run, not before, and is answered the same way: `meta.e2e.destructive_pending` not empty → the run met a DELETE or a `_method` request not yet allowed. {{MULTI_CHOICE}}, one entry per endpoint (`method` + `endpoint`; description = the step that triggered it when known). Endpoints come as routes (`/api/items/:id`), not real ids — approving one approves that route, and say so when asking. Adding an entry that is not in `destructive_pending` is FORBIDDEN, and so is approving on the user's behalf.
 
 The checked ones are written to **`.workflow/e2e/permissions.json`**, not to the request. That file sits beside `secrets.json` and survives across sessions — so an endpoint approved once is NOT asked again, in any session. Its shape:
 ```json
@@ -108,7 +108,7 @@ Write exactly the string in the `entry` field. When the file does not exist yet,
 
 That list also governs NAVIGATION, not only writes. Every `goto`, every top-level navigation in the guard, and every URL change (`framenavigated` — including `history.pushState`, meta refresh, and redirects Chromium follows itself without a new request) is checked against two policies: origin (`allowed_origins`/`allow_remote`) and the deny list. Only the origin used to be asked, so a redirect from an allowed origin to a denied path on the same origin passed both. A `goto` is refused before sending anything; a landing only discovered after it happened fails its step with `navigation_blocked` + which policy refused it. A method-specific entry does not block navigation: `DELETE /api/users/:id` forbids deleting that record, opening its address is still a read — only `GET` and `*` entries apply.
 
-## STEP 5 — Run (background, right after STEP 4)
+## STEP 5 — Run (right after STEP 4)
 Rewrite request.json: `"phase": "run"`, the same settings (or those the user changed), with `"scenario"`, `"existing_tests"`, `"spec_notes"` copied from draft.json (the edited scenario when there is one). Call the same run script with the same <task>.
 Headed (default) → a browser appears on the user's screen; tell them before dispatching, once, without waiting for an answer.
 
@@ -117,9 +117,9 @@ The run proposes `data-e2e` for elements that were actually used. The proposals 
 Proposal limits (enforced by the runtime, not negotiable): step `passed`, the winning selector has provenance `source`, and `selector_provenance.ref` names a `path:line` — a template file inside the project, not git-ignored, a line holding EXACTLY ONE opening tag and no markup in comments (`<div><button>` is refused, not guessed as the div), not yet carrying `data-e2e`. A heuristic/runtime_probe selector has no address → no proposal. Patching from the DOM (`page.content()`) is FORBIDDEN: that is framework output, not project source.
 Flow:
 1. Show the `status: ready` entries as a diff (`old_line` → `new_line`) plus the `skipped` entries with their `reason` — a skipped one usually means the draft's `ref` has drifted from the code.
-2. ONE AskUserQuestion for the whole batch: Write all | Pick some | Skip.
+2. ONE {{QUESTION_TOOL}} for the whole batch: Write all | Pick some | Skip.
 3. Approved → edit each file with the `old_line`/`new_line` EXACTLY from the plan. A line changed since the plan was made → skip that line, do not overwrite it. A path that became a symlink out of the project is refused too — the check is repeated at write time, not trusted from the plan.
-4. Once written → offer /.promote with one claim per tag (`e2e-tag-<tag>`, the new `path:line` anchor). `/.promote` verifies the anchor and the branch gate; do not write knowledge from here.
+4. Once written → offer {{CMD:promote}} with one claim per tag (`e2e-tag-<tag>`, the new `path:line` anchor). `{{CMD:promote}}` verifies the anchor and the branch gate; do not write knowledge from here.
 Zero `ready` entries → skip STEP 6 silently, do not ask.
 
 ## Browser knowledge (automatic, on a par with facts)
@@ -130,7 +130,7 @@ Selector order in a draft: a `data-e2e` already in the code → label → find t
 - A failed step weakens the matching entry; 2 in a row → the entry retires (no longer offered). `--command clean` drops retired entries and those whose `path:line` anchor is gone; an anchor that merely moved follows along.
 - Content is always in placeholder form (`${E2E_USER}`), literal `fill` values are dropped. No credentials.
 - Relay the run's `meta.e2e.knowledge`: `added | confirmed | weakened | retired`. Never claim knowledge was "used" when `offered` is 0.
-- Promote: an anchored entry proven in ≥3 runs can be raised into Git-tracked knowledge through `/.promote` (claim `e2e-<kind>-<id>`). Offer it only when the user asks for flow documentation; `/.promote` verifies the anchor and the branch gate.
+- Promote: an anchored entry proven in ≥3 runs can be raised into Git-tracked knowledge through `{{CMD:promote}}` (claim `e2e-<kind>-<id>`). Offer it only when the user asks for flow documentation; `{{CMD:promote}}` verifies the anchor and the branch gate.
 
 ## Output (RELAY)
 The run result = the canonical [VERIFICATION] (meta.command=verify, meta.invocation=verify-browser). Relay as is:
@@ -148,7 +148,7 @@ verdict (pass | fail | incomplete) | browser_verdict | reason | cleanup (`meta.e
 - Automatic retry (`settings.max_retries`, default 2) only for an environment-caused `incomplete`: harness_error, unknown_origin, stuck, timeout, output_truncated, launch_failed. A `fail` with origin=app is NEVER retried — repeating a real bug until it hides is exactly what this package prevents. Two consecutive attempts with identical per-step results → stop, marked `stable`. Every retry writes artifacts to `retry<n>/`; `meta.e2e.attempts` summarizes them. State the number of attempts when relaying.
 - `allow_side_effects: true` → retry is OFF entirely. A write action is not repeated on timeout (the first request may already have been processed by the server). Do not suggest "run it again automatically"; check the data first.
 - Screenshots + traces are not taken when the scenario uses `${ENV}` (cannot be scrubbed); HTML is not kept either when a credential value is < 4 characters (`meta.e2e.secrets.unscrubbable`). Do not ask to open a screenshot when the structured evidence is enough.
-- fail origin=app → an app bug, offer /.analyze or a fix. origin scenario → the scenario was wrong; origin harness/unknown → environment/runtime or not yet distinguishable. None of the three is proof of a bug.
+- fail origin=app → an app bug, offer {{CMD:analyze}} or a fix. origin scenario → the scenario was wrong; origin harness/unknown → environment/runtime or not yet distinguishable. None of the three is proof of a bug.
 - A `mutation_blocked` failure with detail `a delete needs its exact endpoint in settings.allowed_destructive_requests` → NOT a final refusal but a question. Follow the `destructive_pending` flow in STEP 4. Do not offer `allow_side_effects: true` as the way out — that switch does not open DELETE.
 - A `mutation_blocked` failure (origin scenario) → the guard blocked a write. Not an app bug. Detail `allow_side_effects is false, settings.allow_local_side_effects does not cover this host` → the host is not a development host, OR `allow_local_side_effects` was turned off. Offer: a POST that only reads → redo the draft so it is proposed in `read_only_requests` with handler proof | turn `allow_local_side_effects` back on when the host really is local | enable side effects (local app only) | change the flow to read-only. Detail `writes go only to a loopback or .test host, or one preflight approved and pinned` → a write to a non-local host; it cannot be allowed. Detail `redirect re-sends the body to ...` / `redirect navigates off policy` → the server redirected a write to a forbidden destination; the body was NOT re-sent. A `navigation_blocked` failure with `followed by the browser` → a navigation redirect off the origin was already followed by the browser before it was detected; the step is failed, not prevented.
 - Verdict `incomplete` with the gap `passed only on attempt N` → passed only after a retry. Do NOT relay it as pass: it may be a flaky environment or an app bug that shows up now and then. Detail `allowed_read_only_requests covers the endpoint, but the body is ...` → a GraphQL write body; not a read-only candidate. A `mutation_blocked` observation (beacon/async) = a warning only.

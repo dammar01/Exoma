@@ -240,7 +240,7 @@ def _promote(command: str, project_root: Path, task: str) -> dict:
     }
 
 
-def _test_command(project_root: Path, session_id: str, task: str | None) -> dict:
+def _test_command(project_root: Path, session_id: str, task: str | None, main_host: str | None = None) -> dict:
     """`run.sh test`: run project tests through the runtime and record them for /.verify.
 
     `--task` is one command line, or a JSON list of them (at most five). The policy is the
@@ -250,6 +250,9 @@ def _test_command(project_root: Path, session_id: str, task: str | None) -> dict
     instead of running it again.
     """
     from exoma.core.evidence import verify_tests
+    from exoma.config.hosts import command_invocation
+
+    verify_invocation = command_invocation(main_host or "claude", "verify")
 
     text = str(task or "").strip()
     commands: object = text
@@ -302,10 +305,10 @@ def _test_command(project_root: Path, session_id: str, task: str | None) -> dict
     elif ran.get("record_error"):
         note = f"not reusable: the run could not be recorded ({ran['record_error']})"
     elif reusable and len(reusable) == passes:
-        note = "recorded: a later /.verify reuses each pass while its inputs stay unchanged"
+        note = f"recorded: a later {verify_invocation} reuses each pass while its inputs stay unchanged"
     elif reusable:
         note = (f"recorded: {len(reusable)} of {passes} passes reusable; the others changed "
-                "their inputs, failed later in the list, or are withheld, so a later /.verify "
+                f"their inputs, failed later in the list, or are withheld, so a later {verify_invocation} "
                 "runs them again")
     else:
         note = ("not reusable: no pass is bound to the tree (no Git, a failure, or the run "
@@ -323,7 +326,7 @@ def _test_command(project_root: Path, session_id: str, task: str | None) -> dict
             "tests_failed",
             content,
             next_action="Fix the failure (or a refused command), then run the tests again; "
-            "/.verify reuses only passing runs.",
+            f"{verify_invocation} reuses only passing runs.",
             meta=meta,
         )
     return {"ok": True, "content": content, "meta": meta}
@@ -454,6 +457,7 @@ def run(
     on_progress=None,
     allow_reuse: bool = True,
     require_provider_session: bool = False,
+    main_host: str | None = None,
 ) -> dict:
     normalized_command = command.strip().lower()
     refusal = _recursion_refusal(normalized_command)
@@ -492,6 +496,8 @@ def run(
 
     if normalized_command == "doctor":
         config = load_provider_config_for(project_root)
+        if main_host is not None:
+            return run_doctor(project_root, config.get("provider_command"), session_id, main_host=main_host)
         return run_doctor(project_root, config.get("provider_command"), session_id)
 
     if normalized_command == "upgrade":
@@ -568,7 +574,7 @@ def run(
         return provider_select.run(project_root, task)
 
     if normalized_command == "test":
-        return _test_command(project_root, session_id, task)
+        return _test_command(project_root, session_id, task, main_host)
 
     if normalized_command == "sweep":
         output = run_sweep(project_root, session_id)
@@ -931,6 +937,8 @@ def main(argv: list[str] | None = None) -> None:
         help="max seconds to wait in await mode; 0 means wait forever",
     )
     parser.add_argument("--pretty", action="store_true", help="pretty print output")
+    parser.add_argument("--main-host", choices=("claude", "agy", "codex", "opencode"), default=None,
+                        help="presentation host for first-party guidance only; does not select a provider or grant permission")
     parser.add_argument(
         "--host",
         choices=("claude", "agy", "codex", "opencode"),
@@ -1064,6 +1072,7 @@ def main(argv: list[str] | None = None) -> None:
             work_dir,
             args.model,
             allow_reuse=allow_reuse,
+            main_host=args.main_host,
         )
     exit_job_command = args.job_command
     if args.command == "result" and args.job_id:
@@ -1071,6 +1080,8 @@ def main(argv: list[str] | None = None) -> None:
         if stored_job:
             exit_job_command = str(stored_job.get("command") or exit_job_command)
     result = _slim_result(result)
+    from exoma.config.hosts import present_result
+    result = present_result(result, args.main_host, args.command)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
     exit_command, exit_job_command = _browser_exit_commands(args.command, result, exit_job_command)
     raise SystemExit(_verify_exit_code(exit_command, result, exit_job_command))

@@ -349,7 +349,7 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
             "ok": False,
             "reason": "not_approved",
             "error": (
-                "no fresh `/.execute -y` bound to this plan revision from the user"
+                "no fresh user approval bound to this plan revision (invoke the execute skill with -y)"
                 + (f" (the last one is {int(age)}s old)" if age is not None and age > 0 else "")
             ),
         }

@@ -8,9 +8,10 @@ instead. A `[WORKFLOW_AGENT]` string in a prompt is not proof of that role.
 
 Read `~/.codex/exoma/CONTRACT.md` before using Exoma: it is rendered for Codex (the runner
 call, how to wait for it, how to ask the user, and each rule's enforcement level here).
-Codex has no custom command files: the contract's `/.<name>` commands are the
-`$exoma-<name>` skills (for example `$exoma-plan`), listed by `/skills`. The skills were
-written for Claude Code; translate their tool names to Codex tools:
+Invoke the `$exoma-<name>` skills (for example `$exoma-plan`), listed by `/skills`.
+The contract and skill bodies are rendered for Codex. Legacy dotted aliases remain
+compatibility inputs; show native skill names in guidance and next steps.
+Use the tools available in this session:
 
 - Read/Grep/Glob: use available file/search tools or `exec_command` for a small precision read.
 - Bash: use `exec_command`; start the runner exactly as the contract writes it (Git Bash by
@@ -31,6 +32,16 @@ written for Claude Code; translate their tool names to Codex tools:
 - Write/Edit: use `apply_patch` or the available file-edit tool.
 - AskUserQuestion: use the available user-input tool.
 - Background task: wait on the same running `exec_command` session, never launch a duplicate.
+  Collect it with `write_stdin`. A code-mode cell ID belongs to `functions.wait`, not
+  `write_stdin`; follow the tool response and keep the two IDs separate.
+
+Current runner examples include `--main-host codex` for presentation only. Before using
+that option in an older workspace, run `exoma upgrade --work-dir <root>` through the
+installed package; upgrade bootstrap does not require the new runner option.
+If a delegated command has already armed the gate and the runner rejects `--main-host`,
+stop that command and ask the user to invoke `$exoma-upgrade` before retrying it. The new
+explicit user command releases the old delegation gate. Do not run a direct upgrade
+through the armed gate, edit its marker, or bypass a refusal.
 
 Pass the `[SESSION BINDING]` `MAIN_SESSION_ID` to every stateful `.workflow/run.sh` call.
 The Exoma `UserPromptSubmit` hook records an explicit `$exoma-execute -y` approval and arms

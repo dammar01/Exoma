@@ -667,6 +667,85 @@ def runner_call(words, root, home, is_bash):
     return i < len(words) and runner_target(local_path(words[i], home), root)
 
 
+# Standalone counterpart of runtime.scripts.SESSION_REQUIRED; tested for parity.
+SESSION_COMMANDS = frozenset(("explore", "plan", "analyze", "verify", "verify-browser", "sweep",
+                              "plan-record", "execute-begin", "execute-end", "test"))
+
+
+def runner_invocation(command, root, home, is_bash):
+    """Parse one recognized run.sh call. Task contents remain opaque data."""
+    line = (command or "").strip()
+    cd = _CD_THEN.fullmatch(line)
+    if cd and inside_root(cd.group(1) if cd.group(1) is not None else cd.group(2), root, home):
+        line = cd.group(3)
+    if line.startswith("& "):
+        line = line[2:].lstrip()
+    words = plain_words(line)
+    malformed = words is None
+    if malformed:
+        # Identify only the executable, runner and subcommand before refusing malformed
+        # arguments. Otherwise a trailing operator would turn a recognized runner into
+        # an unchecked shell call when no delegated marker is armed.
+        words, pos = [], 0
+        for _ in range(3):
+            while pos < len(line) and line[pos] in " \t":
+                pos += 1
+            if pos >= len(line):
+                break
+            if line[pos] == "'":
+                end = line.find("'", pos + 1)
+                if end < 0:
+                    break
+                words.append(line[pos + 1:end])
+                pos = end + 1
+            else:
+                token = _BARE_WORD.match(line, pos)
+                if not token:
+                    break
+                words.append(token.group(0))
+                pos = token.end()
+    if not words or not runner_call(words, root, home, is_bash):
+        return None
+    index = 1 if is_bash(words[0]) else 0
+    if not same_path(local_path(words[index], home), os.path.join(root, ".workflow", "run.sh"), root):
+        return None
+    args = words[index + 1:]
+    result = {"command": args[0] if args else None, "session": None, "invalid": False}
+    if malformed:
+        result["invalid"] = True
+        return result
+    args = args[1:]
+    if args and args[0].startswith("--"):
+        options = {}
+        allowed = {"--session", "--task", "--task-file", "--main-host"}
+        if len(args) % 2:
+            result["invalid"] = True
+        else:
+            for key, value in zip(args[::2], args[1::2]):
+                if key not in allowed or key in options or value in allowed:
+                    result["invalid"] = True
+                options[key] = value
+            result["invalid"] |= ("--task" in options and "--task-file" in options)
+            result["invalid"] |= ("--main-host" in options and options["--main-host"] not in
+                                  {"claude", "codex", "agy", "opencode"})
+        result["session"] = options.get("--session")
+    else:
+        result["invalid"] = len(args) > 2
+        result["session"] = args[1] if len(args) > 1 else None
+    return result
+
+
+def runner_session_refusal(command, ctx):
+    expected = ctx.get("expected_session")
+    if not expected:
+        return None
+    parsed = runner_invocation(command, ctx["root"], ctx["home"], ctx["is_bash"])
+    if parsed and (parsed["command"] in SESSION_COMMANDS or parsed["command"] is None):
+        if parsed["invalid"] or parsed["session"] != expected:
+            return "session_binding"
+    return None
+
+
 def evidence_runner_call(command, ctx):
     """Only a plain, root-bound evidence call: its task is data, never a test command.
 
@@ -703,10 +782,11 @@ def evidence_runner_call(command, ctx):
             return False
         options = {}
         for key, value in zip(args[::2], args[1::2]):
-            if key not in {"--session", "--task", "--task-file"} or key in options or not value.strip():
+            if key not in {"--session", "--task", "--task-file", "--main-host"} or key in options or not value.strip():
                 return False
             options[key] = value
-        return "--session" in options and len(options) == 2
+        return ("--session" in options and (("--task" in options) != ("--task-file" in options))
+                and ("--main-host" not in options or options["--main-host"] in {"claude", "codex", "agy", "opencode"}))
     except Exception:
         return False  # uncertainty never exempts a command from the commit check
 
@@ -762,7 +842,7 @@ def preflight_refusal(kind, target, command, marker, ctx):
         words = plain_words(command)
         if words is not None:
             if runner_call(words, root, home, ctx["is_bash"]):
-                return None
+                return runner_session_refusal(command, ctx)
             if cmd == "verify" and diff_words(words, root, home):
                 return None
         one = shell_read_one(command)
@@ -1131,28 +1211,44 @@ def set_delegated_marker(resolved, rt_dir, provenance):
             pass
 
 
-def intent_hint(hinted, root, main_id, runner=None):
+def format_command(name, profile=None):
+    profile = profile or {}
+    prefix = profile.get("command_prefix")
+    if not isinstance(prefix, str) or not prefix:
+        prefix = "$exoma-" if profile.get("host") == "codex" else "/."
+    return prefix + str(name)
+
+
+def format_guidance(message, profile=None):
+    return re.sub(r"(?<![\w/~])/\.(analyze|caveman|commit|doctor|execute|explore|help|init|local|memory|plan|promote|provider|sweep|upgrade|verify-browser|verify)\b",
+                  lambda m: format_command(m.group(1), profile), message)
+
+
+def intent_hint(hinted, root, main_id, runner=None, profile=None):
     """`runner`: the host's runner call up to its command (runner_command); Claude Code's
     bare `bash` when not given."""
     runner = runner or "bash '%s/.workflow/run.sh'" % root.replace("\\", "/")
     return (
-        "[INTENT HINT] This prompt resembles /.%s under the workflow NL map. If it "
-        "is that request, delegate first: %s %s --session '%s' --task '<task>'. "
+        "[INTENT HINT] This prompt resembles %s under the workflow NL map. If it "
+        "is that request, delegate first: %s %s%s --session '%s' --task '<task>'. "
         "If it is a question or a remark, answer it. Nothing is blocked: the gate "
-        "arms only on an explicit /.%s."
-    ) % (hinted, runner, hinted, main_id, hinted)
+        "arms only on an explicit %s."
+    ) % (format_command(hinted, profile), runner, hinted,
+         " --main-host codex" if (profile or {}).get("host") == "codex" else "", main_id,
+         format_command(hinted, profile))
 
 
-def session_binding(main_id, root, source, reused):
+def session_binding(main_id, root, source, reused, profile=None):
     return (
         "[SESSION BINDING - authoritative]\n"
         "MAIN_SESSION_ID=%s\n"
         "MAIN_SESSION_PROJECT_ROOT=%s\n"
         "source=%s\n"
         "second_agent_thread=%s\n"
-        "Use this MAIN_SESSION_ID for all /.explore /.plan /.analyze /.verify /.sweep "
+        "Use this MAIN_SESSION_ID for all %s "
         "invocations. Overrides .workflow/state.json session.id."
-    ) % (main_id, root, source, "REUSE (continue)" if reused else "NEW")
+    ) % (main_id, root, source, "REUSE (continue)" if reused else "NEW",
+         " ".join(format_command(name, profile) for name in ("explore", "plan", "analyze", "verify", "sweep")))
 
 
 # --- end of turn: the [EXECUTION RESULT] claim --------------------------------------

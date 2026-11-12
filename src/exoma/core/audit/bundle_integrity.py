@@ -587,7 +587,9 @@ def _host_status(home: Path | None = None) -> dict:
         events = hooks.get("hooks") if isinstance(hooks, dict) else None
         if not codex_hook_events_present(events, home):
             missing.append("~/.codex/hooks.json (Exoma lifecycle hooks)")
-        result["hosts"]["codex"] = {"missing": missing, "hook_trust": "check with /hooks"}
+        result["hosts"]["codex"] = {"missing": missing, "hook_trust": "check with /hooks",
+                                    "registration_status": "incomplete" if missing else "complete",
+                                    "trust_status": "unknown", "observation_status": "unconfirmed"}
     if "opencode" in chosen:
         opencode = home / ".config" / "opencode"
         missing = []

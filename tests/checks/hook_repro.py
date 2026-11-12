@@ -49,7 +49,8 @@ class _Repro:
         shutil.rmtree(self.base, ignore_errors=True)
 
     def env(self, **extra) -> dict:
-        env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home), **extra}
+        env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+               "AGENT_HOME": str(self.home), **extra}
         for key in ("WORKFLOW_LOCAL_MODE", "CLAUDE_HOOK_RAW", "CLAUDE_CONFIG_DIR"):
             env.pop(key, None)
         return env

@@ -48,7 +48,9 @@ def _test_codex_host_contract():
         sid = "codex-thread-1"
         start = _hook(home, "SessionStart", {"session_id": sid, "cwd": str(root), "source": "startup"})
         binding = start["hookSpecificOutput"]["additionalContext"]
+        main = binding.split("MAIN_SESSION_ID=")[1].splitlines()[0]
         assert_true("MAIN_SESSION_ID=" in binding, "Codex SessionStart injects the main session binding")
+        assert_true("$exoma-plan" in binding and "/.plan" not in binding, "startup binding uses native commands")
         resumed = _hook(home, "SessionStart", {"session_id": sid, "cwd": str(root), "source": "resume"})
         assert_true(resumed["hookSpecificOutput"]["additionalContext"].split("MAIN_SESSION_ID=")[1].splitlines()[0]
                     == binding.split("MAIN_SESSION_ID=")[1].splitlines()[0], "resume reuses the main session")
@@ -58,10 +60,25 @@ def _test_codex_host_contract():
         prompt = {"session_id": sid, "cwd": str(root), "turn_id": "turn-1", "prompt": "$exoma-plan add a feature"}
         _hook(home, "UserPromptSubmit", prompt)
         from exoma.installer.base import runner_prefix
-        runner = f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' plan --session 'main' --task 'task'"
+        runner = f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' plan --session '{main}' --task 'task'"
         accepted = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                                  "tool_name": "exec_command", "tool_input": {"cmd": runner}})
         assert_true(accepted == {}, f"the Codex runner call passes the armed gate: {accepted}")
+        for suffix in ("--session 'wrong' --task 'task'", "--session 'default'", "--task 'task'",
+                       f"--session '{main}' --session '{main}'", f"--session '{main}' --task '--session'",
+                       f"--session '{main}' --task 'x' extra",
+                       f"--session '{main}' --task 'x'; Write-Output extra"):
+            candidate = runner.split(" plan ")[0] + " plan " + suffix
+            refused = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
+                           "tool_name": "exec_command", "tool_input": {"cmd": candidate}})
+            assert_true(refused.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                        f"invalid or mismatched session is refused: {suffix}")
+        for suffix in (f"--main-host codex --task 'text --session wrong' --session '{main}'",
+                       f"--task-file 'request with spaces.txt' --session '{main}'", f"'task' '{main}'"):
+            candidate = runner.split(" plan ")[0] + " plan " + suffix
+            passed = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
+                          "tool_name": "exec_command", "tool_input": {"cmd": candidate}})
+            assert_true(passed == {}, f"matching session with opaque task data passes: {suffix}")
         denied_command = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                                        "tool_name": "exec_command", "tool_input": {"cmd": "rg TODO ."}})
         assert_true(denied_command.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
@@ -98,12 +115,38 @@ def _test_codex_host_contract():
         allowed = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
                                                 "tool_input": {"command": "rg TODO ."}})
         assert_true(allowed == {}, "a later ordinary prompt clears the delegation marker")
+        no_marker = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
+                         "tool_input": {"command": runner.replace(main, "wrong")}})
+        assert_true(no_marker.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "binding validation applies without a delegated marker")
+        compound = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
+                         "tool_input": {"command": runner + "; Write-Output extra"}})
+        assert_true(compound.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "malformed recognized runner calls do not evade binding validation without a marker")
+        _hook(home, "UserPromptSubmit", {**prompt, "prompt": "$exoma-plan add a feature"})
+        upgrade_command = "exoma upgrade --work-dir '%s'" % root.as_posix()
+        upgrade_payload = {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
+                           "tool_input": {"command": upgrade_command}}
+        refused_upgrade = _hook(home, "PreToolUse", upgrade_payload)
+        assert_true(refused_upgrade.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "old-runner recovery does not bypass an armed delegation gate")
+        _hook(home, "UserPromptSubmit", {**prompt, "prompt": "$exoma-upgrade"})
+        assert_true(_hook(home, "PreToolUse", upgrade_payload) == {},
+                    "an explicit user upgrade command releases the old gate for bootstrap recovery")
         _hook(home, "UserPromptSubmit", {**prompt, "turn_id": "turn-2a"})
         _hook(home, "UserPromptSubmit", {**prompt, "turn_id": "turn-2b", "prompt": "normal question"},
               intent_map=False)
         allowed_without_map = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                                           "tool_name": "Bash", "tool_input": {"command": "rg TODO ."}})
         assert_true(allowed_without_map == {}, "a missing intent map clears the previous turn's delegation marker")
+        profile_path = home / ".codex/exoma/hooks/host-profile.json"
+        profile_path.write_text(json.dumps({"auto_intent": False}), encoding="utf-8")
+        no_hint = _hook(home, "UserPromptSubmit", {**prompt, "prompt": "analisis source ini"})
+        assert_true(no_hint == {}, "command-only mode disables natural-language hints")
+        _hook(home, "UserPromptSubmit", {**prompt, "prompt": "[$exoma-plan](skill://exoma-plan) add a feature"})
+        rt = root / ".workflow/data/sessions" / main / "runtime"
+        assert_true((rt / "delegated.marker").exists(), "command-only mode still supports explicit linked invocation")
+        profile_path.unlink()
         patch_text = "*** Begin Patch\n*** Update File: .workflow/run.sh\n@@\n-x\n+y\n*** End Patch"
         blocked = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "apply_patch",
                                                 "tool_input": {"command": patch_text}})
@@ -117,7 +160,15 @@ def _test_codex_host_contract():
                                                           "tool_input": {"patch": relative_patch}})
         assert_true(blocked_relative.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
                     "a patch from a subfolder cannot edit the runner")
-        _hook(home, "UserPromptSubmit", {**prompt, "turn_id": "turn-3", "prompt": "$exoma-execute -y"})
+        for data in ('"$exoma-execute -y"', '```\n$exoma-execute -y\n```', '> $exoma-execute -y',
+                     'explain <command-name>.execute</command-name><command-args>-y</command-args>',
+                     '<skill><command-name>.execute</command-name><command-args>-y</command-args></skill>',
+                     'explain $exoma-execute -y', '$exoma-execute'):
+            _hook(home, "UserPromptSubmit", {**prompt, "prompt": data})
+            token_path = root / ".workflow" / "data" / "sessions" / main / "runtime" / "execute.token"
+            assert_true(not token_path.exists(), f"examples and unapproved invocations do not authorize: {data}")
+        _hook(home, "UserPromptSubmit", {**prompt, "turn_id": "turn-3",
+              "prompt": "  [$exoma-execute](skill://exoma-execute) -y"})
         main = binding.split("MAIN_SESSION_ID=")[1].splitlines()[0]
         token = root / ".workflow" / "data" / "sessions" / main / "runtime" / "execute.token"
         assert_true(token.is_file(), "Codex explicit execute approval reaches the runtime token")
@@ -551,6 +602,21 @@ def _test_codex_host_install():
         checked = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
                                  text=True, capture_output=True, timeout=30, **no_console())
         assert_true(checked.returncode == 0, "public install passes --check: " + checked.stdout[-500:])
+        skill_path = codex / "skills/exoma-analyze/SKILL.md"
+        installed_skill = skill_path.read_text(encoding="utf-8")
+        assert_true("$exoma-analyze" in installed_skill and "/.analyze" not in installed_skill
+                    and "Claude only" not in installed_skill, "public install renders the entire native skill")
+        skill_path.write_text(installed_skill + "\n/.analyze stale payload\n", encoding="utf-8")
+        agents = codex / "AGENTS.md"
+        agents.write_text("User-owned instructions.\n" + agents.read_text(encoding="utf-8"), encoding="utf-8")
+        for _ in range(2):
+            refreshed = subprocess.run([sys.executable, "-m", "exoma.install", "--no-input"], cwd=home, env=env,
+                                       text=True, capture_output=True, timeout=60, **no_console())
+            assert_true(refreshed.returncode == 0, "flagless refresh preserves Codex selection: " + refreshed.stdout[-500:])
+            assert_true(skill_path.read_text(encoding="utf-8") == installed_skill,
+                        "refresh repairs a stale payload and is idempotent")
+            assert_true(agents.read_text(encoding="utf-8").startswith("User-owned instructions."),
+                        "refresh preserves text outside managed instruction blocks")
         retired = subprocess.run([sys.executable, "-m", "exoma.install", "both", "--dry-run"], cwd=home, env=env,
                                  text=True, capture_output=True, timeout=30, **no_console())
         assert_true(retired.returncode == 2, "the 0.x `both` host choice is gone in 1.0")

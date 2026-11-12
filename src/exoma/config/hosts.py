@@ -52,6 +52,7 @@ class HostProfile:
     ask_user: str
     skill_path: str
     read_range_keys: dict = field(default_factory=lambda: dict(_RANGE_KEYS))
+    command_prefix: str = "/."
 
 
 PROFILES: dict[str, HostProfile] = {
@@ -95,12 +96,16 @@ PROFILES: dict[str, HostProfile] = {
     ),
     "codex": HostProfile(
         name="codex",
+        command_prefix="$exoma-",
         runner_form="resolved",
         shell_tool="`exec_command`",
-        background="blocking",
+        background="auto_async",
         delegated_run=(
-            "Run it with `exec_command` and a long timeout (10 minutes): the runner blocks until it prints "
-            "its JSON. Follow the CURRENT host permissions, not a sandbox assumed by this contract. "
+            "Run it with `exec_command` using the parameters available in the current tool schema. "
+            "When it returns a session_id, collect that same process through `write_stdin` until JSON arrives. "
+            "In code mode, `functions.exec` may separately return a cell ID: resume that cell with "
+            "`functions.wait`; a cell ID is not an exec_command session_id. Follow the CURRENT host "
+            "permissions, not a sandbox assumed by this contract. "
             "If the runner is allowed normally, omit escalation arguments. With approval_policy=never "
             "or when the host forbids escalation, omit `sandbox_permissions`, `justification`, and "
             "`prefix_rule`; report a blocked boundary if normal execution is unavailable. Only when "
@@ -175,19 +180,21 @@ def runner_call(host: str, root: str = "<work_dir>") -> str:
     return f"{runner_prefix(host)} '{root}/.workflow/run.sh'"
 
 
-def hook_profile(host: str) -> dict:
+def hook_profile(host: str, auto_intent: bool = True) -> dict:
     """What a host's hooks read from host-profile.json."""
     profile = PROFILES[host]
     return {
         "host": host,
+        "auto_intent": auto_intent,
         "runner_prefix": runner_prefix(host),
         "background": profile.background,
+        "command_prefix": profile.command_prefix,
         "read_range_keys": {k: list(v) for k, v in profile.read_range_keys.items()},
     }
 
 
-def hook_profile_text(host: str) -> str:
-    return json.dumps(hook_profile(host), indent=2, ensure_ascii=False) + "\n"
+def hook_profile_text(host: str, auto_intent: bool = True) -> str:
+    return json.dumps(hook_profile(host, auto_intent), indent=2, ensure_ascii=False) + "\n"
 
 
 _HOST_SECTION = re.compile(
@@ -196,7 +203,55 @@ _HOST_SECTION = re.compile(
     re.DOTALL,
 )
 RULE_MARKER = re.compile(r"<!--\s*rule:(?P<id>[a-z0-9_.-]+)\s*-->")
-PLACEHOLDERS = ("{{RUNNER}}", "{{SHELL_TOOL}}", "{{DELEGATED_RUN}}", "{{ASK_USER}}", "{{SKILL_PATH}}")
+PLACEHOLDERS = ("{{RUNNER}}", "{{SHELL_TOOL}}", "{{DELEGATED_RUN}}", "{{ASK_USER}}", "{{SKILL_PATH}}",
+                "{{CMD_PREFIX}}", "{{HOST_CONFIG}}", "{{MAIN_HOST_OPTION}}")
+COMMAND_IDS = frozenset(("analyze", "caveman", "commit", "doctor", "execute", "explore", "help", "init",
+                         "local", "memory", "plan", "promote", "provider", "sweep", "upgrade", "verify", "verify-browser"))
+COMMAND_TOKEN = re.compile(r"\{\{CMD:([a-z][a-z0-9_-]*)\}\}")
+
+
+def command_invocation(host: str, command_id: str) -> str:
+    """User-facing invocation; runner/protocol command IDs remain bare."""
+    if command_id not in COMMAND_IDS:
+        raise ValueError(f"unknown workflow skill: {command_id}")
+    return PROFILES[host].command_prefix + command_id
+
+
+def render_commands(text: str, host: str) -> str:
+    text = COMMAND_TOKEN.sub(lambda m: command_invocation(host, m.group(1)), text)
+    return text.replace("{{CMD_PREFIX}}", PROFILES[host].command_prefix)
+
+
+def format_guidance(text: str, host: str) -> str:
+    """Format authored guidance only; callers must never pass delegated evidence."""
+    # Template expansion belongs to source rendering, never runtime strings. Paths and
+    # diagnostics may legitimately contain literal {{CMD:...}} text, including unknown IDs.
+    return re.sub(r"(?<![\w/~])/\.([a-z][a-z0-9_-]*)\b",
+                  lambda m: command_invocation(host, m.group(1)) if m.group(1) in COMMAND_IDS else m.group(0), text)
+
+
+def present_result(result: dict, host: str | None, command: str) -> dict:
+    """Copy only first-party guidance fields. Evidence, IDs and verdicts are opaque."""
+    if host is None:
+        return result
+    def guidance(value):
+        if isinstance(value, str):
+            return format_guidance(value, host)
+        if isinstance(value, list):
+            return [guidance(item) if isinstance(item, (str, list)) else item for item in value]
+        return value
+    shown = dict(result)
+    for key in ("next_action",):
+        if key in shown:
+            shown[key] = guidance(shown[key])
+    # All content is opaque, including local-command content: it may embed subprocess
+    # output, command lines, paths or user diagnostics even when there is no digest.
+    if isinstance(shown.get("meta"), dict):
+        shown["meta"] = dict(shown["meta"])
+        for key in ("next_action",):
+            if key in shown["meta"]:
+                shown["meta"][key] = guidance(shown["meta"][key])
+    return shown
 
 
 def _host_section(match: "re.Match", host: str) -> str:
@@ -237,7 +292,15 @@ def render_contract(text: str, host: str) -> str:
         "{{DELEGATED_RUN}}": profile.delegated_run,
         "{{ASK_USER}}": profile.ask_user,
         "{{SKILL_PATH}}": profile.skill_path,
+        "{{CMD_PREFIX}}": profile.command_prefix,
+        "{{HOST_CONFIG}}": {"claude": "~/.claude", "codex": "~/.codex",
+                            "agy": "~/.gemini/antigravity-cli", "opencode": "~/.config/opencode"}[host],
+        "{{MAIN_HOST_OPTION}}": " --main-host codex" if host == "codex" else "",
+        "{{QUESTION_TOOL}}": "AskUserQuestion" if host == "claude" else "the available user-input tool",
+        "{{MULTI_CHOICE}}": "AskUserQuestion multiSelect" if host == "claude" else
+                            "the available user-input tool (ask per endpoint or accept an explicit list)",
     }
     for name, value in values.items():
         text = text.replace(name, value)
+    text = render_commands(text, host)
     return RULE_MARKER.sub(lambda m: f"<!-- rule:{m.group('id')} | {host}: {level_of(m.group('id'), host)} -->", text)

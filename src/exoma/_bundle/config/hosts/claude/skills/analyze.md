@@ -1,22 +1,22 @@
 # Skill: analyze
-description: Deep analysis via second_agent (1-call). --local: Claude only.
+description: Deep analysis via second_agent (1-call). --local: main_agent local mode.
 argument-hint: [--local] <topic>
 
 ## Trigger
-/.analyze <topic>          → 1-call
-/.analyze --local <topic>  → Claude directly (skips the proxy)
+{{CMD:analyze}} <topic>          → 1-call
+{{CMD:analyze}} --local <topic>  → main_agent directly (skips the proxy)
 
 ## Run (1-call)
-Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' analyze --session '<MAIN_SESSION_ID>' --task '<topic>'
+Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' analyze{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<topic>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation). Reuse LAST_EXPLORE_RESULT when relevant.
 The task touches an external library → name the library; the proxy reads the context7 docs first → findings in external (not a guessed API).
 FAILED (ok:false | invalid_evidence | content is a menu/refusal) → STOP rule (yours to hold, no hook blocks it):
-  STOP → "[PROXY FAILED] <reason>. Continue with /.local? (yes/no)" → WAIT for the user. Do NOT auto-fallback, do NOT reason from garbage.
---local or [LOCAL_MODE]=true → skip the run, /.local flow (not a silent fallback — an explicit user mode).
+  STOP → "[PROXY FAILED] <reason>. Continue with {{CMD:local}}? (yes/no)" → WAIT for the user. Do NOT auto-fallback, do NOT reason from garbage.
+--local or [LOCAL_MODE]=true → skip the run, {{CMD:local}} flow (not a silent fallback — an explicit user mode).
 
 ## Output [ANALYSIS RESULT]
 Relay the digest + fill from content. confidence (3 parts) + uncertainties REQUIRED.
-source: second_agent (1-call) | claude (local)
+source: second_agent (1-call) | main_agent (local)
 confidence: { problem_understanding, root_cause, solution_path } — each low|medium|high — <reason>
 findings: <from content, grounded/assumption attribution> | (empty: reason)
 implications: <impact> | (empty: reason)

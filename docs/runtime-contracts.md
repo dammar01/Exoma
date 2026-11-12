@@ -165,6 +165,30 @@ reported from the tool result; Exoma cannot return JSON for a process that never
 No shell/prefix substitution or weaker policy is a recovery path for an explicit denial.
 See [reference, Hosts](reference.md#hosts) for authorization and failure distinctions.
 
+Codex contracts and skills display `$exoma-<command>` throughout their rendered body and
+metadata. Shared source command tokens are rendered before skill frontmatter; command-only
+selection also applies to help. Hook hint/binding helpers accept an optional host profile,
+with legacy defaults for existing callers. Codex supplies its own profile explicitly.
+
+`run.sh ... --main-host codex` forwards an optional presentation context to the CLI.
+The CLI formats an allowlist of first-party guidance fields, leaving delegated content,
+digests and protocol identities untouched. This option neither selects the child provider
+nor grants permissions. Upgrade an older workspace through `exoma upgrade --work-dir <root>`
+before using it. In Codex, continue an `exec_command` session with `write_stdin`; a code-mode
+cell ID is instead resumed with `functions.wait`. The tool schema determines available
+wait parameters; no fixed initial ten-minute tool timeout is assumed.
+
+On the bound Codex hook path, stateful runner calls must supply the authoritative session,
+even without an armed delegated marker. Named and legacy positional arguments are parsed
+before dispatch; task text is never interpreted as options. Duplicate or missing session
+options fail the binding check. Other hosts keep their existing behavior through optional
+expected-session context. This check cannot establish enforcement on paths where hooks are
+absent, untrusted, disabled, or not delivered.
+
+Rule levels describe capabilities. Registration checks, `trust_status: unknown`, and
+`observation_status: unconfirmed` remain separate facts. Warn mode reports without blocking.
+Neither complete registration nor the absence of recorded failures proves active protection.
+
 Knowledge retrieval verifies current sources per claim before injection, retaining separate
 document applicability. Unusable claims and their summary text are excluded; working-tree
 edits invalidate committed-source shortcuts. Applicability includes staged, unstaged, and

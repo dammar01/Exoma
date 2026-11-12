@@ -3,15 +3,15 @@ description: Structured planning — evidence (1-call) + main_agent reasoning. C
 argument-hint: <task>
 
 ## Trigger
-/.plan <task>
+{{CMD:plan}} <task>
 
 ## STEP 1 — Evidence
 Reuse LAST_EXPLORE_RESULT when it is in context. Otherwise 1-call:
-  Every OS (Bash tool): bash '<work_dir>/.workflow/run.sh' plan --session '<MAIN_SESSION_ID>' --task '<task>'
+  Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' plan{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<task>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation).
 - FAILED (ok:false | invalid_evidence | content is a menu/refusal) → STOP rule (yours to hold, no hook blocks it):
-  STOP → "[PROXY FAILED] <reason>. Continue the plan via /.local or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.
-- [LOCAL_MODE]=true → skip the run, use the /.local flow as evidence.
+  STOP → "[PROXY FAILED] <reason>. Continue the plan via {{CMD:local}} or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.
+- [LOCAL_MODE]=true → skip the run, use the {{CMD:local}} flow as evidence.
 - The proxy is scope-bounded to the files you name. Cross-system concerns (balances, UX, perf, security) are NOT seen by the proxy unless you inject them into the task. Inject them explicitly OR mark them not_investigated. Connecting them is your job, not the proxy's.
 - Instruct the proxy to trace REVERSE deps (who consumes/calls the change target) → `dependents`. Every other affected feature/module MUST go into `risks` with [proxy:file:line] proof of the coupling.
 - The task touches an external library/framework → NAME the library in the task; the proxy MUST read the docs through context7 FIRST (version + official API) → findings in `external`. Never let a guessed library API into the plan.
@@ -26,18 +26,12 @@ gets an [ANCHOR CHECK] note at the end of the turn.
 
 [PLAN]
 task:            <restatement>
-evidence_source: second_agent (1-call) | graphify+claude (local) | none
+evidence_source: second_agent (1-call) | graphify+main_agent (local) | none
 assumptions:     - <statement + attribution> | (none: reason)
 open_questions:  - question: <N>. <an architecture/implementation decision ONLY the user can make; BLOCKING> | <option A> :: <description A> | <option B> :: <description B>   | (none: reason)
                  Numbered, options separated by " | ", an optional description after " :: ". The answer is a choice → options REQUIRED.
                  Present them as interactive questions, one per question — do not make the user read raw structure.
-                 Renderer = the AskUserQuestion tool. Its limits are hard; break one = the call is refused:
-                   - MAX 4 questions per call, 2-4 options per question. More → split into the next call, do not cram.
-                   - Each question's `header` MAX 12 characters. Long text goes in `question`, not the header.
-                   - Multi-choice → `multiSelect: true`. Single choice → false. Do not use multiSelect for a yes/no question.
-                   - The " :: " part becomes the option's `description`; without one the user guesses what the label means.
-                   - The user always gets a free "Other" option — do not add an "other" option yourself.
-                   - AskUserQuestion is NOT available in subagents. Render in the main thread; do NOT delegate asking the user to a Task/subagent.
+                 {{ASK_USER}}
 resolvable_uncertainties: - uncertainty: <N>. <can be closed> → how: <what read/grep/explore> | (none)
                  NON-blocking. Do NOT ask the user — state the assumption, continue.
 steps:           1. <concrete + attribution> 2. ...
@@ -80,12 +74,12 @@ Record the plan in the runtime — every time a [PLAN] is issued or changes (inc
   write `<work_dir>/.workflow/data/sessions/<MAIN_SESSION_ID>/runtime/plan.input.json`:
   {"task", "decision", "confidence": {problem_understanding, root_cause, solution_path},
    "open_questions": [...], "options": [{"name", "plus", "minus", "recommended"}], "files": [<execution scope>]}
-  then: bash '<work_dir>/.workflow/run.sh' plan-record --session '<MAIN_SESSION_ID>' --task '<that path>'
+  then: bash '<work_dir>/.workflow/run.sh' plan-record{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<that path>'
 The runtime REFUSES a `proceed` that still has open_questions, solution_path < high, empty
 `files`, an option without `minus`, or a recommendation count ≠ one (`plan_invalid`). Refused → it is not
-proceed: fix the plan or write decision clarify. /.execute -y only opens a recorded plan.
-decision=proceed → "Agree? Run /.execute -y". clarify → ask the open_questions. Do NOT auto-execute.
+proceed: fix the plan or write decision clarify. {{CMD:execute}} -y only opens a recorded plan.
+decision=proceed → "Agree? Run {{CMD:execute}} -y". clarify → ask the open_questions. Do NOT auto-execute.
 open_questions answers arrive → update [PLAN] (assumptions, confidence, decision) → new decision
-proceed → "Agree? Run /.execute -y" → STOP. Those answers are NOT execution approval;
-zero edits until the user gives /.execute -y.
+proceed → "Agree? Run {{CMD:execute}} -y" → STOP. Those answers are NOT execution approval;
+zero edits until the user gives {{CMD:execute}} -y.
 The user picks a non-recommended option → CARRY OUT their choice, do not argue it again. You already named its minus; the decision is theirs.

@@ -2,7 +2,7 @@
 description: 3-step verification — logic, falsification, reality. Depth from commands.verify_mode.
 
 ## Trigger
-/.verify (automatic after /.execute -y when `commands.auto_verify_after_execute=true`)
+{{CMD:verify}} (automatic after {{CMD:execute}} -y when `commands.auto_verify_after_execute=true`)
 
 ## Mode (the runtime reads .workflow/config.json → commands.verify_mode)
 delegated (default) → full second_agent verification, Protocol below.
@@ -84,6 +84,6 @@ confidence: low|medium|high — <reason>
 For an empty section write exactly `- none`. Describe what was checked clean in `checks_run`.
 Legacy neutral sentinel explanations remain supported only by a bounded grammar; arbitrary
 parenthetical prose or continuation findings are meaningful and cannot be discarded.
-NEEDS FIX → fix the blocking ones first → re-run /.verify. Do NOT output a final before done.
+NEEDS FIX → fix the blocking ones first → re-run {{CMD:verify}}. Do NOT output a final before done.
 Do NOT drop escalations + notes — show them; the user decides whether to work on them now or later.
 The runtime verdict (`meta.verdict`) is written automatically into the session's execution (`runtime/execution.json`): pass | fail | incomplete, and `syntax_only` for syntax mode — parse OK is never recorded as pass.

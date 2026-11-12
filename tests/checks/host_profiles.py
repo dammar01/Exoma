@@ -83,6 +83,47 @@ def _test_contract_renders_per_host():
                 assert_true("If the runner is allowed normally, omit escalation arguments" in text
                             and "approval_policy=never" in text and "Exoma cannot override host review" in text,
                             "Codex guidance respects current permissions and cannot promise approval")
+                assert_true("$exoma-plan" in text and "[NEXT] $exoma-" in text,
+                            "Codex contract and next steps use native skill invocation")
+                assert_true("long timeout (10 minutes)" not in text and "write_stdin" in text,
+                            "Codex waits through the available session transport")
+
+    from exoma.installer import base
+    for only_command in (False, True):
+        from exoma.config.hosts import present_result
+        evidence = {"ok": True, "content": "[EVIDENCE] example /.plan", "digest": {"summary": "try /.verify"},
+                    "meta": {"command": "verify", "next_action": "Run /.local", "verdict": "incomplete"}}
+        shown = present_result(evidence, "codex", "verify")
+        assert_true(shown["content"] == evidence["content"] and shown["digest"] == evidence["digest"]
+                    and shown["meta"]["command"] == "verify" and shown["meta"]["verdict"] == "incomplete",
+                    "presentation preserves evidence, digest and machine identities")
+        assert_true(shown["meta"]["next_action"] == "Run $exoma-local"
+                    and evidence["meta"]["next_action"] == "Run /.local", "only authored guidance is copied/formatted")
+        opaque = {"ok": False, "content": "[TESTS]\npython check.py --expect /.plan\ntail: {{CMD:unknown}} /.plan",
+                  "meta": {"outcomes": [{"command": "python check.py --expect /.plan {{CMD:unknown}}"}],
+                           "next_action": "Retry /.verify; preserve {{CMD:unknown}}"}}
+        for command in ("test", "plan-record", "execute-begin", "doctor", "upgrade"):
+            displayed = present_result(opaque, "codex", command)
+            assert_true(displayed["content"] == opaque["content"]
+                        and displayed["meta"]["outcomes"] == opaque["meta"]["outcomes"],
+                        f"{command}: local content and commands remain opaque without a digest")
+            assert_true(displayed["meta"]["next_action"] == "Retry $exoma-verify; preserve {{CMD:unknown}}",
+                        "runtime guidance never expands template-like data")
+        for source, _, key in base._codex_targets():
+            if not key.startswith(base.CODEX_SKILLS_PREFIX):
+                continue
+            text = base._render_text(source, key, None, only_command)
+            leaks = [word for word in ("AskUserQuestion", "run_in_background", "~/.claude/skills",
+                                      "Claude only", "task ID", "{{CMD:", "{{CMD_PREFIX}}") if word in text]
+            assert_true(not leaks, f"{key}: unresolved host mechanics or command tokens: {leaks}")
+            assert_true(not re.search(r"\{\{(?:CMD|HOST_CONFIG|MAIN_HOST_OPTION|QUESTION_TOOL|MULTI_CHOICE|ASK_USER|DELEGATED_RUN|SHELL_TOOL|RUNNER|SKILL_PATH)", text),
+                        f"{key}: host template placeholder left unresolved")
+            legacy = r"/\.(?:" + "|".join(re.escape(name) for name in hosts.COMMAND_IDS) + r")\b"
+            assert_true(not re.search(legacy, text), f"{key}: actionable legacy invocation leaked")
+            assert_true("$exoma-" in text, f"{key}: native invocation missing from skill body")
+            if source.stem == "help" and only_command:
+                assert_true("auto-detected and runs directly" not in text,
+                            "command-only help does not advertise auto routing")
 
 
 def _test_host_sections_whitespace():
@@ -160,6 +201,8 @@ def _test_runner_call_single_source():
             rendered = base._render_text(HOOKS / "host-profile.json", key, None)
             (hook_dir / "host-profile.json").write_text(rendered, encoding="utf-8")
             wp = _policy(hook_dir)
+            from exoma.core.runtime.scripts import SESSION_REQUIRED
+            assert_true(wp.SESSION_COMMANDS == frozenset(SESSION_REQUIRED), "standalone session policy matches runtime")
             profile = wp.load_host_profile(str(hook_dir))
             assert_true(profile.get("host") == host and profile.get("runner_prefix") == hosts.runner_prefix(host),
                         f"{host}: host-profile.json is the profile: {profile}")

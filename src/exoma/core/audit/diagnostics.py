@@ -220,11 +220,15 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
 
 
 def run_doctor(
-    project_root: Path, provider_command: str, session_id: str | None = None
+    project_root: Path, provider_command: str, session_id: str | None = None, main_host: str | None = None
 ) -> dict:
+    from exoma.config.hosts import command_invocation
     from exoma.core.runtime.config_defaults import validate_config
     from exoma.core.runtime.scripts import script_drift
     from exoma.core.runtime.upgrade import needs_upgrade, resolve_runtime, workspace_versions
+
+    def invoke(name):
+        return command_invocation(main_host or "claude", name)
 
     paths = workflow_paths(project_root, session_id)
     issues: list[str] = []
@@ -461,7 +465,7 @@ def run_doctor(
         # would make doctor cry wolf on every branch. It is reported so that a later
         # refusal from promote-write is something the user was already told about.
         recommended_fixes.append(
-            f"/.promote only writes from {expected_branch!r}"
+            f"{invoke('promote')} only writes from {expected_branch!r}"
             + (f"; currently on {current_branch!r}" if current_branch else "; currently on no branch")
         )
 
@@ -545,7 +549,7 @@ def run_doctor(
     if not test_allowlist:
         recommended_fixes.append(
             "WARNING: commands.verify_test_commands in .workflow/config.json is empty, so "
-            "/.verify runs no test and every verify reports that gap — list the test command "
+            f"{invoke('verify')} runs no test and every verify reports that gap — list the test command "
             'prefixes the runtime may run, e.g. ["python -m pytest", "npm test"]'
         )
 
@@ -628,7 +632,7 @@ def run_doctor(
             provider_warnings.append(
                 "free-tier model(s) selected: "
                 + ", ".join(f"{where}={model}" for where, model in free_models)
-                + " — often an old seed default rather than a choice; re-pick with /.provider"
+                + f" — often an old seed default rather than a choice; re-pick with {invoke('provider')}"
             )
         provider_config["warnings"] = provider_warnings or "none"
         checks["provider_config"] = provider_config
@@ -676,7 +680,7 @@ def run_doctor(
                 f"WARNING: second_agent provider '{active}' can read every file in this project "
                 f"(`.env` and key files included), {exposure}, and receives the full "
                 "environment — it is treated as a trusted provider. Switch to opencode with "
-                "/.provider if the project's secrets must stay unreadable to the second agent"
+                f"{invoke('provider')} if the project's secrets must stay unreadable to the second agent"
             )
         elif active:
             checks["second_agent_read_boundary"] = {"provider": active, "status": "enforceable"}
@@ -691,7 +695,7 @@ def run_doctor(
                     f"WARNING: second_agent provider '{active}' can WRITE to this project — "
                     "no sandbox or permission map stops it, and the working-tree guard only "
                     "detects a write after it happened. Review `git status` after delegated "
-                    "calls, or switch to codex/opencode with /.provider"
+                    f"calls, or switch to codex/opencode with {invoke('provider')}"
                 )
         from exoma.config.settings import legacy_env_in_use
 
@@ -745,7 +749,7 @@ def run_doctor(
                 "refused (provider_config_missing); there is no machine-wide fallback"
             )
             recommended_fixes.append(
-                "Run --command init to create it from the tool seed, then /.provider to "
+                f"Run --command init to create it from the tool seed, then {invoke('provider')} to "
                 "choose provider and model"
             )
         elif project_file.exists() and resolved.get("source") != "project":
@@ -833,13 +837,13 @@ def run_doctor(
     except Exception:
         active_provider = None
 
-    session_id = None
-    try:
-        session_block = read_json_file(paths["state"]).get("session")
-        if isinstance(session_block, dict):
-            session_id = session_block.get("id")
-    except (ValueError, OSError):
-        session_id = None
+    if not session_id:
+        try:
+            session_block = read_json_file(paths["state"]).get("session")
+            if isinstance(session_block, dict):
+                session_id = session_block.get("id")
+        except (ValueError, OSError):
+            session_id = None
 
     if not session_id:
         checks["session_continuation"] = "no active session (state.json)"
@@ -903,6 +907,8 @@ def run_doctor(
         "configuration_status": "disabled" if mode == "off" else "enabled" if mode in ("hybrid", "warn") else "unknown",
         # No skips is not evidence that a hook ran, was trusted, or enforced a decision.
         "observation_status": "unavailable_reported" if failures else "unconfirmed",
+        "trust_status": "unknown",
+        "blocking_configured": mode == "hybrid",
         "recent_fail_open": failures,
     }
     actionable_skips = {reason: count for reason, count in (skips or {}).get("by_reason", {}).items()

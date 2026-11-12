@@ -2,7 +2,7 @@
 description: Refresh .workflow in place while preserving project state and sessions.
 
 ## Trigger
-/.upgrade
+{{CMD:upgrade}}
 
 ## Run (local)
 The entry point is the `exoma` CLI (`exoma --version`; fallback `<python> -m exoma`). If neither
@@ -11,7 +11,7 @@ The workspace is always repointed at the build running the command. A workspace 
 agent-workflow (its `runtime` names a checkout's `main.py`) is taken over: those paths are
 removed and the scripts call `<python> -m exoma`.
 
-Every OS (Bash tool): exoma upgrade --work-dir "<work_dir>" --pretty
+Every OS ({{SHELL_TOOL}}): exoma upgrade --work-dir "<work_dir>" --pretty
 <python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.11. Upgrade also removes
 the old `run.ps1`/`inspect.ps1`/`check.ps1`: the runners are `.sh` only now, on every OS.
 

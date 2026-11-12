@@ -521,7 +521,7 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None, "request_missing", [f"{path} does not exist; /.verify-browser writes it before calling the runtime"]
+        return None, "request_missing", [f"{path} does not exist; the verify-browser skill writes it before calling the runtime"]
     except (OSError, ValueError) as exc:
         return None, "request_invalid", [f"{path}: {type(exc).__name__}: {exc}"]
     if not isinstance(data, dict):

@@ -224,8 +224,11 @@ exoma install --dry-run          # optional: read what it will change first
 exoma install                    # asks the host and its second agent, then installs
 ```
 
-Then, in a project, run `/.init` in the primary agent (or `exoma init --work-dir .`), and `/.doctor`.
-A project that already has a `.workflow/` from agent-workflow is taken over by `/.upgrade`.
+Then, in a project, invoke the init and doctor skills. In Codex use `$exoma-init` and
+`$exoma-doctor`; Claude Code uses `/.init` and `/.doctor`. The CLI equivalent is
+`exoma init --work-dir . --host codex` for a Codex workspace.
+A project that already has a `.workflow/` is refreshed by `$exoma-upgrade` in Codex
+(`/.upgrade` in Claude Code), or `exoma upgrade --work-dir .`.
 Details, modes and undo: [installation guide](docs/installation.md).
 To update later, run `exoma update` from inside a project; it refreshes the package and
 global configuration, plus that project's `.workflow/` when present.

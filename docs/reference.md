@@ -296,6 +296,37 @@ hook file, and skills; hook trust remains a separate `/hooks` review. OpenCode c
 OpenCode loads the plugin only when it starts. These are file checks; what only a session in the
 host can see is the Agy `/.doctor` STEP 3 ("Hosts", "Probe").
 
+### Native command rendering and Codex migration
+
+Workflow command IDs are bare names such as `plan` and `verify-browser`. Shared templates
+use `{{CMD:plan}}` and `{{CMD_PREFIX}}`; `config/hosts.py` renders them for the main host.
+Codex guidance uses `$exoma-plan`, `$exoma-execute -y`, and `$exoma-verify`. Legacy dotted
+aliases remain compatibility inputs. Claude Code retains `/.plan`; other hosts retain
+their existing invocation surfaces. The second-agent provider does not select this format.
+
+Rendering applies to skill descriptions and bodies before native frontmatter is built,
+as well as the contract, help, next steps, and hook guidance. Host sections select question
+and process-wait instructions; command-only mode applies to help and skills too. The registry
+validators understand command tokens, and generated Claude wrappers receive rendered metadata.
+Source templates are never refreshed from files in an installed home.
+
+For first-party CLI guidance, `--main-host codex` is an optional presentation context on
+the CLI and generated runner. It is separate from init's `--host`, provider selection,
+and permissions. Only authored guidance fields are formatted; evidence, digests, command IDs,
+verdicts and exit behavior are preserved. Without the option the existing presentation remains.
+
+When updating an older workspace, bootstrap with `exoma upgrade --work-dir <root>`
+before using runner examples containing `--main-host`. This bootstrap does not need the new
+runner option. Refresh global host files with the installer; workspace upgrade and global
+host refresh are separate operations. Review changed hooks through `/hooks` in Codex.
+
+The bound Codex hook checks explicit session arguments on stateful runner calls before
+dispatch, including when no delegated marker is armed. Missing, default, duplicate,
+ambiguous, or different session arguments are refused in blocking mode. Task contents are data.
+The check depends on hook delivery and the configured enforcement mode; standalone CLI calls
+without a host binding retain their existing session behavior. Doctor prioritizes its explicit
+session argument and consults cached state only when none was supplied.
+
 `AGENT_HOME` (env) replaces `~` as the target home — used by tests and the installer e2e to
 install into a temporary HOME. The runtime reads the interpreter pin (`.claude/hooks/python.path`)
 from the same home, so `.workflow/*.sh` generated under `AGENT_HOME` name the interpreter that

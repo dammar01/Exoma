@@ -222,7 +222,7 @@ def _ask_choices(args, host_choice, apply: bool, plan, interactive: bool, intent
     if not intent_stated:
         print()
         print("  Intent mode: auto-intent maps plain sentences to workflow commands;")
-        print("  command-only requires the /. prefix and drops the intent hook.")
+        print("  command-only requires explicit host-native invocation (Codex: $exoma-<name>); NL hints are disabled.")
         args.only_command = not _ask_yes_no(
             f"use auto-intent? (current: {'command-only' if args.only_command else 'auto-intent'})",
             not args.only_command,
@@ -630,8 +630,8 @@ def main() -> int:
         "--only-command",
         action="store_true",
         help="install the main-agent block WITHOUT natural-language auto-intent: commands "
-        "must be invoked by their /. prefix, and the UserPromptSubmit intent hook is not "
-        "registered",
+        "must be invoked explicitly using the host's native syntax (Codex: $exoma-<name>). "
+        "Natural-language routing is disabled; Codex retains its explicit approval hooks",
     )
     parser.add_argument(
         "--auto-intent",

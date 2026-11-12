@@ -2,7 +2,7 @@
 description: Stage + commit message (Conventional Commits). Local.
 
 ## Trigger
-/.commit
+{{CMD:commit}}
 
 ## Execution
 1. Stage. `git diff --cached --name-only` already has entries → use them as they are, add nothing.
@@ -27,8 +27,8 @@ description: Stage + commit message (Conventional Commits). Local.
    paths staged in step 1 (works in a repo with no commits too), STOP.
    Do NOT commit without yes.
    The `execution-gate` hook blocks `git commit` in a turn where the user did not ask to commit.
-   Permission comes ONLY from a user prompt that asks for a commit (/.commit, or a sentence with
+   Permission comes ONLY from a user prompt that asks for a commit ({{CMD:commit}}, or a sentence with
    the word "commit" that does not negate it). A bare "yes"/"ya"/"ok" only KEEPS that permission
    into the next turn — it never creates it — and any other prompt revokes it.
-   So: a commit proposed outside the /.commit flow (e.g. after a prompt that did not ask to commit)
-   → do NOT ask for "yes"; ask the user to type /.commit or "commit".
+   So: a commit proposed outside the {{CMD:commit}} flow (e.g. after a prompt that did not ask to commit)
+   → do NOT ask for "yes"; ask the user to type {{CMD:commit}} or "commit".

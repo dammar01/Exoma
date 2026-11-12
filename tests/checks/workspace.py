@@ -592,6 +592,60 @@ def _test_init_upgrade_and_session_guard() -> None:
         def run(*args):
             return subprocess.run(argv + list(args), env=env, capture_output=True, text=True, **no_console())
 
+        presented = run("execute-begin", "--session", "presentation-test", "--main-host", "codex")
+        presentation = json.loads(presented.stdout)
+        assert_true("$exoma-plan" in presentation["meta"]["next_action"],
+                    "generated runner forwards the presentation host without choosing a provider")
+        legacy_presentation = json.loads(run("execute-begin", "--session", "presentation-test").stdout)
+        assert_true("/.plan" in legacy_presentation["meta"]["next_action"],
+                    "legacy runner invocation preserves default guidance")
+
+        # Exercise the real output boundary: failed test output and its command are
+        # evidence, including text that resembles a source-template instruction.
+        original_config = config_path.read_text(encoding="utf-8")
+        test_config = json.loads(original_config)
+        test_config.setdefault("commands", {})["verify_test_commands"] = ["python check.py"]
+        config_path.write_text(json.dumps(test_config), encoding="utf-8")
+        (root / "check.py").write_text(
+            "import sys\nassert sys.argv[1:] == ['--expect', '/.plan', '--template', '{{CMD:unknown}}']\n"
+            "print('opaque /.plan {{CMD:unknown}}')\nraise SystemExit(1)\n", encoding="utf-8")
+        literal_command = "python check.py --expect /.plan --template {{CMD:unknown}}"
+        try:
+            failed_test = run("test", "--session", "opaque-test", "--main-host", "codex", "--task", literal_command)
+            failed_payload = json.loads(failed_test.stdout)
+            assert_true(not failed_payload["ok"] and "opaque /.plan {{CMD:unknown}}" in failed_payload["content"],
+                        "a literal unknown template in failed output preserves JSON and original evidence")
+            assert_true(failed_payload["meta"]["outcomes"][0]["command"] == literal_command
+                        and literal_command in failed_payload["content"], "shown command matches the executed command")
+            assert_true("$exoma-verify" in failed_payload["meta"]["next_action"],
+                        "authored test guidance is native while subprocess evidence stays opaque")
+        finally:
+            config_path.write_text(original_config, encoding="utf-8")
+
+        from exoma.core.audit.diagnostics import run_doctor
+        from unittest.mock import patch
+        explicit = "doctor-explicit"
+        explicit_paths = workflow_paths(root, explicit)
+        explicit_paths["state"].parent.mkdir(parents=True, exist_ok=True)
+        record = explicit_paths["provider_sessions_dir"] / (explicit + ".json")
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"provider_session_id": "thread-explicit"}), encoding="utf-8")
+        isolated_home = str(root / "doctor-home")
+        with patch.dict(os.environ, {"AGENT_HOME": isolated_home, "HOME": isolated_home,
+                                    "USERPROFILE": isolated_home, "CODEX_HOME": str(root / "doctor-home/.codex")}):
+            for state in ({}, {"session": {"id": "wrong-state-session"}}):
+                explicit_paths["state"].write_text(json.dumps(state), encoding="utf-8")
+                diagnosed = run_doctor(root, "opencode", explicit, main_host="codex")
+                report = json.loads(Path(diagnosed["meta"]["doctor_report"]).read_text(encoding="utf-8"))
+                assert_true(diagnosed["meta"]["recommended_fixes"] == report["recommended_fixes"],
+                            "doctor JSON and saved report share the same authored guidance")
+                assert_true(any("$exoma-verify" in fix for fix in report["recommended_fixes"]),
+                            "doctor authors native test guidance before writing the report")
+                assert_true("linked: doctor-explicit" in report["checks"]["session_continuation"],
+                            "doctor retains explicit authority over missing or different cached state")
+                assert_true(report["checks"]["execution_gate"]["trust_status"] == "unknown",
+                            "registration or lack of skip reports does not imply hook trust")
+
         # A local command that reads or writes session state is refused without one too: a
         # dropped argument must not land a plan or an execution in a session nobody bound.
         for args in (["sweep"], ["execute-begin", "", "default"], ["plan-record", "--task", "p.json"]):

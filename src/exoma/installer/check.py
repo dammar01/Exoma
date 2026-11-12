@@ -356,6 +356,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             installed_missing.append(CODEX_HOST_HOOKS)
         elif not codex_hook_events_present(codex_current.get("hooks")):
             installed_drift.append(CODEX_HOST_HOOKS)
+        print("  Codex hooks: registration checked; trust unknown (review /hooks); active delivery unconfirmed")
         # The job store grant (installer/base.py `_install_codex_grant`). A table of the user's
         # own is theirs: an install would not touch it either, so it is not drift.
         config = codex_config_dest()

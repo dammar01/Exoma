@@ -3,7 +3,7 @@ description: Propose a memory update to the personal knowledge files.
 argument-hint: <note>
 
 ## Trigger
-/.memory <note>
+{{CMD:memory}} <note>
 
 ## Execution
 1. Evaluate: does it affect future decisions? new ownership/architecture? a recurring landmine?

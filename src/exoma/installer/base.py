@@ -494,7 +494,8 @@ def _host_contract(text: str, host: str) -> str:
 def _host_skill(text: str, host: str) -> str:
     """A Claude skill's runner call and skill path, as `host` spells them."""
     text = _BARE_RUNNER.sub(host_profiles.runner_prefix(host) + " ", text)
-    return text.replace("~/.claude/skills/<name>.md", host_profiles.PROFILES[host].skill_path)
+    text = text.replace("~/.claude/skills/<name>.md", host_profiles.PROFILES[host].skill_path)
+    return host_profiles.render_contract(text, host)
 
 
 def _skill_md(text: str, name: str) -> str:
@@ -597,12 +598,14 @@ def _render_text(src: Path, key: str, project_root: Path | None, only_command: b
     host = key.split("/", 2)[1] if key.startswith("hosts/") else "claude"
     if key.endswith("/hooks/" + host_profiles.HOST_PROFILE_FILE) and host in host_profiles.PROFILES:
         # What this host's hooks read: written from the profile, not copied from the source.
-        return host_profiles.hook_profile_text(host)
+        return host_profiles.hook_profile_text(host, auto_intent=not only_command)
     text = _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
     # The host a skill is installed for, so /.init can name it (`exoma init --host`).
     text = text.replace("{{HOST}}", host)
-    if key in (CLAUDE_INSTRUCTIONS, AGY_CONTRACT, CODEX_CONTRACT, OPENCODE_CONTRACT):
+    if key in (CLAUDE_INSTRUCTIONS, AGY_CONTRACT, CODEX_CONTRACT, OPENCODE_CONTRACT) or "/skills/" in key:
         text = _apply_intent_mode(text, only_command)
+    if key.startswith(CLAUDE_HOST + "/skills/"):
+        text = _host_skill(text, "claude")
     if key == CLAUDE_INSTRUCTIONS:
         text = host_profiles.render_contract(text, "claude")
     if key.startswith(AGY_HOST + "/"):

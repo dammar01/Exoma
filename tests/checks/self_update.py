@@ -157,7 +157,8 @@ def _test_self_update() -> None:
             cwd=broken, env=env, capture_output=True, text=True, timeout=60, **no_console(),
         )
         assert_true(installed.returncode == 1 and "workspace not upgraded" in installed.stdout,
-                    "a workspace upgrade failure returns nonzero after the global install report")
+                    "a workspace upgrade failure returns nonzero after the global install report: "
+                    + installed.stdout[-1200:] + installed.stderr[-500:])
 
         uv_dir = root / "uv-tools"
         with patch.object(self_update.shutil, "which", return_value="uv"), \

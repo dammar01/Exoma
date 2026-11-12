@@ -6,7 +6,7 @@ what lives here is the fact the prose cannot keep honest across hosts: whether s
 blocks it on a given host.
 
 Levels:
-- enforced: a hook or the runtime refuses the call on this host;
+- enforced: a hook or the runtime can refuse the covered call on this host;
 - detected: recorded or reported after the fact (execute-end, the end of a turn), not blocked;
 - advised: nothing checks it on this host; it is the agent's responsibility.
 
@@ -15,6 +15,9 @@ Each rule names what makes its level true, so a test can hold the registry to th
   where the rule is enforced or detected on that host;
 - `runtime`: (module, attribute) — host-independent, the runtime itself refuses or records.
 A level above `advised` must be backed by one of the two (tests/checks/host_profiles.py).
+Levels describe capability, not session observation. Hooks also require registration,
+trust, an applicable mode and trigger, and delivery on the tool path. A configured warn
+mode reports rather than blocks; absent observations do not establish trust or activity.
 """
 
 from __future__ import annotations

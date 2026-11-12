@@ -36,7 +36,7 @@ COMMANDS_DIR = REPO_ROOT / "src" / "exoma" / "_bundle" / "config" / "hosts" / "c
 
 # Registry lines list every command as `/.name` (with an optional trailing flag like -y).
 _REGISTRY_RE = re.compile(r"^(?:LOCAL|DELEGATED):", re.MULTILINE)
-_COMMAND_RE = re.compile(r"/\.([a-z][a-z0-9_-]*)")
+_COMMAND_RE = re.compile(r"(?:/\.|\{\{CMD:)([a-z][a-z0-9_-]*)(?:\}\})?")
 
 
 def _registry_commands(claude_text: str) -> set[str]:
@@ -59,7 +59,11 @@ def _skill_header(name: str) -> dict[str, str]:
         key, sep, value = line.partition(":")
         if sep and key in ("description", "argument-hint") and value.strip():
             meta[key] = value.strip()
-    return meta
+    # Descriptions are shared templates too; Claude wrappers must contain rendered text.
+    if str(REPO_ROOT / "src") not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+    from exoma.config.hosts import render_contract
+    return {key: render_contract(value, "claude") for key, value in meta.items()}
 
 
 def render_wrapper(name: str) -> str:
