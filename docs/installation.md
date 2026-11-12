@@ -163,6 +163,26 @@ last and returns a nonzero status when any step fails. Without `.workflow/`, no 
 is created. A missing, unreadable, or malformed workspace `config.json` is reported before
 the package is changed. Global configuration keeps the last host, mode, and provider choices.
 
+The updater announces preflight, manager detection and each update step. Manager output
+appears as it is written. While a step runs, a message on stderr every 15 seconds shows
+the elapsed wait; it does not prove the child is making progress. Each package, refresh
+and check step has its own 900-second deadline. For a slow connection or workspace, set
+a larger positive finite limit, for example:
+
+```bash
+exoma update --timeout 1800
+```
+
+Output and heartbeat messages do not reset that deadline. uv manager detection has a
+separate 10-second deadline; if it times out, update stops without falling back to pip.
+Optional dependency installation reports the detection timeout explicitly and does not
+suggest pip setup from an inconclusive result.
+These deadlines cover the child processes, not the total command or filesystem preflight.
+On timeout, Exoma attempts to stop the process tree and skips later steps. Cleanup may
+take additional time and is best-effort where OS permissions or Windows job assignment
+prevent descendant access. Ctrl+C follows the same cleanup path and returns status 130.
+Children receive no interactive input; update retains the stored installer choices.
+
 If install or check fails after the package step, update reports that the result is incomplete.
 It names any new install receipt and the exact command to undo that receipt's global writes.
 Repair the reported error, then rerun `exoma install` and `exoma install --check`.
@@ -173,6 +193,21 @@ The manual sequence remains available: update the package with its manager, then
 `exoma install` from the project to refresh the global configuration and that
 workspace in one pass. Use `exoma upgrade --work-dir <project>` when only the workspace
 needs refreshing.
+
+If an older updater hangs, first stop it and confirm its package-manager child has exited
+before starting another upgrade. Run the manager directly for that installation, for example:
+
+```bash
+uv tool upgrade exoma --verbose     # uv installation; pipx installations use pipx upgrade exoma
+exoma --version
+exoma install --no-input
+exoma install --check
+```
+
+For a pip installation, use its own Python with `-m pip install --upgrade exoma` instead.
+An interrupted package command can leave package state uncertain; inspect its output and
+installed version before retrying. A newly installed updater supervises the next invocation:
+the invocation that upgraded it still runs the old parent code.
 
 In every other project, open the primary agent and run `/.upgrade`. It refuses while a delegated
    command is running in that project; wait for it to finish. Do not skip it: the skills of a new

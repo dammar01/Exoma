@@ -619,7 +619,7 @@ E2E_BROWSER = "chromium"
 
 def _detect_method() -> tuple[str, str | None]:
     # One indirection so tests choose the install method without a real uv or pipx.
-    return install_method.detect()
+    return install_method.detect(raise_on_timeout=True)
 
 
 def _requirement_lines(requirements: Path) -> list[str]:
@@ -642,11 +642,16 @@ def _pip_install(plan: Plan, apply: bool, requirements: Path, empty_detail: str)
     if not body:
         plan.add("skip", "pip install", empty_detail)
         return "empty", None
-    method, tool = _detect_method()
+    detection_failure = None
+    try:
+        method, tool = _detect_method()
+    except install_method.DetectionTimeout as exc:
+        method, tool = "unknown", None
+        detection_failure = str(exc)
     argv = install_method.add_command(method, tool, requirements, body)
-    manual = install_method.manual_command(method, body)
+    manual = "exoma install --with-e2e" if detection_failure else install_method.manual_command(method, body)
     if argv is None:
-        reason = (
+        reason = detection_failure or (
             f"this Exoma runs under {method} without a usable package command "
             f"({'pipx is not on PATH' if method == 'pipx' else 'no pip, uv tool or pipx environment'})"
         )

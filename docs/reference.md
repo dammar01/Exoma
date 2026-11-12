@@ -1,4 +1,4 @@
-# Exoma v1.0.1
+# Exoma v1.0.2
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.0.1)
+## Install (v1.0.2)
 
 ### New team member — full sequence from scratch
 
@@ -173,6 +173,7 @@ exoma install --rollback --apply          # rollback after a hash preflight
 exoma install --uninstall                 # dry run: what would be removed
 exoma install --uninstall --apply         # remove, with a receipt (can be rolled back)
 exoma update                              # update package, global config, and current workspace
+exoma update --timeout 1800               # allow up to 1800 seconds for each child step
 ```
 
 `exoma update` detects the manager of the environment Exoma runs in: a uv tool installation
@@ -188,6 +189,20 @@ install it runs passes `--no-input`: every stored choice stands.
 If that directory has a missing, unreadable, or malformed `config.json`, update stops before
 changing the package. A later install or check failure reports an incomplete update and names
 any new global install receipt for an explicit rollback; workspace changes are outside it.
+
+Update streams manager stdout/stderr directly and reports stage start, elapsed completion,
+and a waiting heartbeat on stderr every 15 seconds. A heartbeat indicates waiting, not
+child progress. `--timeout SECONDS` accepts a positive finite number and defaults to 900
+seconds independently for package, refresh and check; output never resets that deadline.
+Manager detection via `uv tool dir` has a separate 10-second limit. A detection timeout
+refuses update instead of selecting pip; optional installation preserves that timeout's
+reason and refuses to install without a confirmed manager.
+The limits apply to child execution, not total preflight/filesystem work. Timeout attempts
+process-tree cleanup and skips subsequent steps; cleanup can outlast the deadline and
+remains best-effort under OS access restrictions. Ctrl+C cleans up and exits 130. An
+interrupted package step reports uncertain package state; a refresh/check interruption
+retains the incomplete-update receipt and workspace recovery advice. Update children
+receive no interactive input. See [manual recovery](installation.md#update) for older updaters.
 Use `--manager uv`, `--manager pipx` or `--manager pip` to select the package manager
 explicitly; `uv` and `pipx` are refused when this environment is not theirs.
 
@@ -1478,7 +1493,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.0.1):
+Reliability keys (v1.0.2):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -2068,7 +2083,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.0.1)
+### Liveness worker (v1.0.2)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

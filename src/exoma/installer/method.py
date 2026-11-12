@@ -11,16 +11,22 @@ Stdlib only, like the rest of the runtime.
 
 import importlib.util
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-from exoma.utils.osutil import hidden_run_kwargs
+from exoma.utils.osutil import run_bounded
+
+DETECTION_TIMEOUT_SECONDS = 10
+
+
+class DetectionTimeout(TimeoutError):
+    """The environment's package manager could not be determined within its deadline."""
+
 
 # pipx writes this file at the root of every environment it creates.
 PIPX_METADATA = "pipx_metadata.json"
 
-# Methods `detect` names. `unknown`: no uv tool, no pipx environment, and no pip module.
+# Methods `detect` names. `unknown`: no usable manager, or inconclusive detection.
 METHODS = ("uv", "pipx", "pip", "unknown")
 
 
@@ -30,13 +36,17 @@ def uv_tool() -> str | None:
     if not uv:
         return None
     try:
-        result = subprocess.run([uv, "tool", "dir"], capture_output=True, text=True,
-                                **hidden_run_kwargs())
+        code, out, _err = run_bounded([uv, "tool", "dir"], DETECTION_TIMEOUT_SECONDS)
     except OSError:
         return None
-    if result.returncode or not result.stdout.strip():
+    if code is None:
+        raise DetectionTimeout(
+            f"uv tool dir timed out after {DETECTION_TIMEOUT_SECONDS}s; "
+            "package manager not determined (no fallback to pip)"
+        )
+    if code or not out.strip():
         return None
-    tools_dir = Path(result.stdout.strip()).resolve()
+    tools_dir = Path(out.strip()).resolve()
     return uv if Path(sys.prefix).resolve() == (tools_dir / "exoma").resolve() else None
 
 
@@ -49,14 +59,20 @@ def has_pip() -> bool:
     return importlib.util.find_spec("pip") is not None
 
 
-def detect() -> tuple[str, str | None]:
+def detect(*, raise_on_timeout: bool = False) -> tuple[str, str | None]:
     """(method, manager executable) for the environment this interpreter runs in.
 
     `("uv", <uv>)`, `("pipx", <pipx or None when it is not on PATH>)`, `("pip", None)`, or
     `("unknown", None)`. uv is asked first because it answers from its own tool directory;
-    pipx is recognised by the metadata file it leaves in the environment.
+    pipx is recognised by the metadata file it leaves in the environment. Callers that
+    report installation failures can request the original detection timeout exception.
     """
-    uv = uv_tool()
+    try:
+        uv = uv_tool()
+    except DetectionTimeout:
+        if raise_on_timeout:
+            raise
+        return "unknown", None
     if uv:
         return "uv", uv
     if pipx_venv():

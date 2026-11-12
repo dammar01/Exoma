@@ -229,21 +229,28 @@ def detached_popen_kwargs() -> dict:
     return {"start_new_session": True}
 
 
-def hidden_run_kwargs() -> dict:
+def hidden_run_kwargs(*, inherit_console: bool = False) -> dict:
     """Kwargs to run a foreground subprocess without flashing a console (Windows).
 
     On Windows the child is also placed in its own process group so the whole tree
     can be terminated later — `opencode` is a `.cmd` shim that spawns node, and
     killing only the shim leaves the node process orphaned (RAM leak per timeout).
+    `inherit_console=True` shares an existing parent console; a caller without a
+    console still hides the child. The default remains hidden execution everywhere.
     """
     if IS_WINDOWS:
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        if inherit_console:
+            import ctypes
+
+            if ctypes.windll.kernel32.GetConsoleCP():
+                flags &= ~subprocess.CREATE_NO_WINDOW
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = subprocess.SW_HIDE
         return {
             "startupinfo": startupinfo,
-            "creationflags": subprocess.CREATE_NO_WINDOW
-            | subprocess.CREATE_NEW_PROCESS_GROUP,
+            "creationflags": flags,
         }
     # POSIX: own process group so killpg reaches grandchildren too.
     return {"start_new_session": True}
@@ -483,7 +490,7 @@ def terminate_tree(
                         timeout=20,
                         **hidden_run_kwargs(),
                     ).returncode == 0
-                except OSError:
+                except (OSError, subprocess.TimeoutExpired):
                     ok = False
                 if not ok:
                     method = "winapi"
@@ -539,7 +546,8 @@ class _WinJob:
     """A Windows job object holding a child and everything it spawns afterwards.
 
     `taskkill /T` walks the tree from a live parent; once the direct child has exited, its
-    orphans are out of reach by pid. The job still holds them. Best-effort and fail-open:
+    orphans need the native traversal with the Popen-pinned root PID. The job still
+    holds them even after intermediate parents exit. Best-effort and fail-open:
     any failure leaves `handle` None and the caller falls back to taskkill. A descendant
     spawned in the instant between Popen and the assignment is not in the job.
     """
@@ -588,7 +596,10 @@ class _WinJob:
 def _kill_leftovers(proc: "subprocess.Popen", job: _WinJob) -> None:
     """Kill what is left of an EXITED child's tree: descendants still holding its pipes."""
     if IS_WINDOWS:
-        job.terminate()
+        if not job.terminate():
+            # Popen still pins the exited parent's PID. Native Toolhelp traversal can
+            # find its descendants even when taskkill cannot walk an exited root.
+            terminate_tree(proc)
         return
     import signal
 
@@ -633,6 +644,8 @@ def run_bounded(
     drain_seconds: float = 5,
     on_tick=None,
     tick_seconds: float = 20.0,
+    *,
+    inherit_output: bool = False,
 ) -> tuple[int | None, str, str]:
     """Run `args` to completion or `timeout`; (returncode, stdout, stderr). None = timed out.
 
@@ -650,6 +663,10 @@ def run_bounded(
 
     `on_tick(elapsed_seconds)`, when given, is called about every `tick_seconds` while the
     child runs, so a caller can keep a heartbeat alive; an exception from it is ignored.
+
+    With `inherit_output=True`, stdout/stderr go directly to the caller's handles. No
+    pipes are captured or drained, and the returned output strings are empty. Deadline,
+    heartbeat and process-tree cleanup still apply. Cleanup can outlast the deadline.
     """
     import time
 
@@ -657,9 +674,9 @@ def run_bounded(
         args,
         cwd=cwd,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        **hidden_run_kwargs(),
+        stdout=None if inherit_output else subprocess.PIPE,
+        stderr=None if inherit_output else subprocess.PIPE,
+        **hidden_run_kwargs(inherit_console=inherit_output),
     )
     job = _WinJob(proc)
     out_chunks: list[bytes] = []
@@ -670,7 +687,9 @@ def run_bounded(
         return decoded.replace("\r\n", "\n").replace("\r", "\n")
 
     try:
-        readers = [_pipe_reader(proc.stdout, out_chunks), _pipe_reader(proc.stderr, err_chunks)]
+        readers = [] if inherit_output else [
+            _pipe_reader(proc.stdout, out_chunks), _pipe_reader(proc.stderr, err_chunks)
+        ]
         started = time.monotonic()
         deadline = started + timeout
         next_tick = started + tick_seconds
@@ -697,7 +716,10 @@ def run_bounded(
             terminate_tree(proc)
             _join_readers(readers, drain_seconds)
             return None, text(out_chunks), text(err_chunks)
-        if not _join_readers(readers, drain_seconds):
+        if inherit_output:
+            # No pipes to drain, but an exited child may still have live descendants.
+            _kill_leftovers(proc, job)
+        elif not _join_readers(readers, drain_seconds):
             # Exited, but something it started still holds a pipe: kill it, then give the
             # readers a moment to see EOF. One outside the tree keeps its pipe; given up on.
             _kill_leftovers(proc, job)

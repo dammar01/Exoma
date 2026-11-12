@@ -11,6 +11,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 1.0.2 (candidate) | [docs/releases/v1.0.2.md](docs/releases/v1.0.2.md) | Bounded updater waits, live manager output, elapsed heartbeat, cancellation recovery and Windows cleanup fallback; release gates pending |
 | 1.0.1 (candidate) | [docs/releases/v1.0.1.md](docs/releases/v1.0.1.md) | Python 3.11 minimum, automatic Codex reviewer context, runtime and verification hardening, bounded research and metric interpretation; final-candidate release gates pending |
 | 1.0.0 | [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) | Stable release: `exoma install <host>` writes without `--apply`, OpenCode as a main-agent host, Claude Code as a second agent, one second-agent question for every host from the live model catalog, `exoma session export` for studies on real work, OpenCode subagents renamed `exm-*`, `run.sh test` passes reused by verify, tree snapshots on plan and execution, Codex hooks that launch on Windows, pre-flight escape files guarded, install under pipx and uv |
 | 1.0.0b1 | [docs/releases/v1.0.0b1.md](docs/releases/v1.0.0b1.md) | Pre-release of 1.0.0 for trying it on real work; installed only when asked for (`exoma==1.0.0b1`, `--pre`); the version stamp reads pre-release suffixes |

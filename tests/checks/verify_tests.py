@@ -145,6 +145,8 @@ def _test_verify_runtime_tests() -> None:
     _check_unrunnable_commands_never_crash()
     _check_tests_beat_the_heartbeat()
     _check_exited_runner_is_not_held_by_its_orphan()
+    _check_inherited_output_deadlines()
+    _check_attached_windows_console()
 
 
 _REVIEW_NO_CHECKS = _REVIEW.replace("- traced the change and its callers", "- none")
@@ -354,6 +356,224 @@ def _check_exited_runner_is_not_held_by_its_orphan() -> None:
     # A real exit code survives the same path.
     code, _out, _err = osutil.run_bounded([sys.executable, "-c", "raise SystemExit(4)"], 30)
     assert_true(code == 4, f"a nonzero exit is returned as is: {code}")
+
+
+def _check_inherited_output_deadlines() -> None:
+    """Exercise live inherited handles and real descendant cleanup, including cancellation."""
+    import json
+    import subprocess
+
+    from exoma.utils import osutil
+
+    with tempfile.TemporaryDirectory(prefix="bounded-live-") as tmp:
+        root = Path(tmp)
+        # Success is held behind a file until this test observes both streams. The
+        # continuously writing case must still hit the overall deadline, not an idle timer.
+        for mode in ("success", "noisy", "silent", "cancel", "fallback", "exited-fallback"):
+            ready, release = root / (mode + ".json"), root / (mode + ".release")
+            stdout, stderr = root / (mode + ".out"), root / (mode + ".err")
+            child = (
+                "import json, os, pathlib, subprocess, sys, time\n"
+                "worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                f"pathlib.Path({str(ready)!r}).write_text(json.dumps([os.getpid(), worker.pid]))\n"
+                f"while not pathlib.Path({str(release)!r}).exists():\n"
+                + ("    print('live-out', flush=True); print('live-err', file=sys.stderr, flush=True)\n"
+                   if mode in ("success", "noisy") else "")
+                + "    time.sleep(0.03)\n"
+            )
+            supervisor = (
+                "import json, pathlib, sys\n"
+                "from exoma.utils import osutil\n"
+                + ("osutil._WinJob.__init__ = lambda self, proc: setattr(self, 'handle', None)\n"
+                   if mode in ("fallback", "exited-fallback") else "")
+                + "def beat(elapsed):\n"
+                "    print('heartbeat', file=sys.stderr, flush=True)\n"
+                f"    if {mode in ('cancel', 'fallback')!r} and pathlib.Path({str(ready)!r}).exists():\n"
+                "        raise KeyboardInterrupt\n"
+                "try:\n"
+                f"    result = osutil.run_bounded([sys.executable, '-c', {child!r}], "
+                f"{20 if mode in ('success', 'cancel', 'fallback', 'exited-fallback') else 3}, inherit_output=True, "
+                "on_tick=beat, tick_seconds=0.2)\n"
+                "    print('RESULT=' + json.dumps(result), flush=True)\n"
+                "except KeyboardInterrupt:\n"
+                "    print('cancelled', flush=True)\n"
+                "    sys.exit(130)\n"
+            )
+            started = time.monotonic()
+            identities = []
+            with stdout.open("wb") as out, stderr.open("wb") as err:
+                proc = subprocess.Popen([sys.executable, "-c", supervisor], stdout=out, stderr=err,
+                                        **osutil.hidden_run_kwargs())
+                try:
+                    deadline = time.monotonic() + 15
+                    while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    assert_true(ready.is_file(), f"{mode}: child started before the supervision deadline")
+                    # Atomic-enough fixture read: a filesystem reader may see the file
+                    # just after creation but before write_text has populated it.
+                    while not ready.read_text() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    pids = json.loads(ready.read_text())
+                    identities = [(pid, osutil.pid_create_time(pid), osutil.process_identity(pid)) for pid in pids]
+                    if mode == "success":
+                        while (b"live-out" not in stdout.read_bytes() or b"live-err" not in stderr.read_bytes()) \
+                                and time.monotonic() < deadline:
+                            time.sleep(0.02)
+                        assert_true(proc.poll() is None and b"live-out" in stdout.read_bytes()
+                                    and b"live-err" in stderr.read_bytes(),
+                                    "inherited stdout and stderr are visible while the child is still running")
+                    if mode in ("success", "exited-fallback"):
+                        release.touch()
+                    proc.wait(timeout=30)
+                    output, errors = stdout.read_text(), stderr.read_text()
+                    if mode in ("success", "exited-fallback"):
+                        assert_true(proc.returncode == 0 and 'RESULT=[0, "", ""]' in output,
+                                    "inherited mode returns the exit code and empty captured strings")
+                    elif mode in ("cancel", "fallback"):
+                        assert_true(proc.returncode == 130 and "cancelled" in output,
+                                    "cancellation cleans up then propagates to the caller")
+                    else:
+                        assert_true(proc.returncode == 0 and 'RESULT=[null, "", ""]' in output
+                                    and "heartbeat" in errors and time.monotonic() - started < 30,
+                                    f"{mode}: a heartbeat or continuous output does not reset the total deadline")
+                    # Native identities, not a best-effort CIM query: unavailable proof
+                    # must fail the assertion instead of being treated as a stopped child.
+                    for pid, created, identity in identities:
+                        until = time.monotonic() + 5
+                        while osutil.process_generation(pid, created, identity) == osutil.PROCESS_MATCHED \
+                                and time.monotonic() < until:
+                            time.sleep(0.05)
+                        assert_true(osutil.process_generation(pid, created, identity)
+                                    in (osutil.PROCESS_DEAD, osutil.PROCESS_REUSED),
+                                    f"{mode}: recorded descendant {pid} stopped")
+                finally:
+                    if proc.poll() is None:
+                        osutil.terminate_tree(proc)
+                    for pid, created, _identity in identities:
+                        if osutil.IS_WINDOWS and created is not None:
+                            osutil.terminate_tree(None, pid, expected_create_time=created)
+
+    # Existing captured-mode contract is unchanged, including normalized output and code.
+    code, out, err = osutil.run_bounded(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'a\\r\\nb\\r'); "
+         "sys.stderr.buffer.write(b'bad\\xff'); sys.exit(4)"], 15,
+    )
+    assert_true(code == 4 and out == "a\nb\n" and err == "bad\ufffd",
+                "capture defaults retain exit codes, newline normalization and replacement decoding")
+
+
+def _check_attached_windows_console() -> None:
+    """A hidden private console tests real console handles and OS-generated Ctrl+C."""
+    import json
+    import subprocess
+    import textwrap
+
+    from exoma.utils import osutil
+
+    if not osutil.IS_WINDOWS:
+        return
+    host = textwrap.dedent(r'''
+        import ctypes, json, os, signal, sys, threading, time
+        from ctypes import wintypes
+        from pathlib import Path
+        from unittest.mock import patch
+        root = Path(sys.argv[1])
+        os.environ['AGENT_HOME'] = str(root / 'home')
+        os.environ['EXOMA_HOME'] = str(root / 'state')
+        from exoma import self_update
+        from exoma.utils import osutil
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel.GetStdHandle.restype = wintypes.HANDLE
+        kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, wintypes.BOOL]
+        kernel.GenerateConsoleCtrlEvent.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        class Coord(ctypes.Structure):
+            _fields_ = [('x', wintypes.SHORT), ('y', wintypes.SHORT)]
+        kernel.ReadConsoleOutputCharacterW.argtypes = [
+            wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, Coord, ctypes.POINTER(wintypes.DWORD)]
+        handle = kernel.GetStdHandle(-11)
+        mode = wintypes.DWORD()
+        report = {'attached': bool(kernel.GetConsoleMode(handle, ctypes.byref(mode))),
+                  'stdout_live': False, 'stderr_live': False, 'signal_sent': False}
+        ready = root / 'ready.json'
+        # Construct output markers inside the child: the updater logs its argv,
+        # which must never satisfy the observer before the child writes anything.
+        child = (
+            "import json, os, pathlib, subprocess, sys, time\n"
+            "worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            f"pathlib.Path({str(ready)!r}).write_text(json.dumps([os.getpid(), worker.pid]))\n"
+            "print('ATTACHED-' + 'OUT-OK', flush=True)\n"
+            "print('ATTACHED-' + 'ERR-OK', file=sys.stderr, flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        identities = []
+        stop = threading.Event()
+        def observe():
+            try:
+                while not stop.wait(0.02):
+                    buf, count = ctypes.create_unicode_buffer(8192), wintypes.DWORD()
+                    if not kernel.ReadConsoleOutputCharacterW(handle, buf, len(buf), Coord(0, 0), ctypes.byref(count)):
+                        report['read_error'] = ctypes.get_last_error()
+                        return
+                    text = buf[:count.value]
+                    report['stdout_live'] = 'ATTACHED-OUT-OK' in text
+                    report['stderr_live'] = 'ATTACHED-ERR-OK' in text
+                    if report['stdout_live'] and report['stderr_live'] and ready.exists():
+                        try:
+                            pids = json.loads(ready.read_text())
+                        except ValueError:
+                            continue
+                        identities.extend((pid, osutil.pid_create_time(pid), osutil.process_identity(pid)) for pid in pids)
+                        # Broadcast only within this private console; this is a real
+                        # OS event, not a callback-raised KeyboardInterrupt.
+                        report['signal_sent'] = bool(kernel.GenerateConsoleCtrlEvent(0, 0))
+                        return
+            except Exception as exc:
+                report['observer_error'] = repr(exc)
+        try:
+            assert report['attached'], 'host stdout must be a real console handle'
+            assert kernel.SetConsoleCtrlHandler(None, False), 'enable console Ctrl+C'
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+            observer = threading.Thread(target=observe, daemon=True)
+            observer.start()
+            self_update.HEARTBEAT_SECONDS = 0.1
+            with patch.object(self_update, '_package_command', return_value=('pip', [sys.executable, '-c', child])), \
+                 patch.object(self_update.Path, 'cwd', return_value=root):
+                report['status'] = self_update.main(['--manager', 'pip', '--timeout', '8'])
+            stop.set()
+            observer.join(1)
+            report['descendants_stopped'] = bool(identities) and all(
+                osutil.process_generation(pid, created, identity) in (osutil.PROCESS_DEAD, osutil.PROCESS_REUSED)
+                for pid, created, identity in identities)
+        except BaseException as exc:
+            report['error'] = repr(exc)
+        finally:
+            stop.set()
+            (root / 'report.json').write_text(json.dumps(report), encoding='utf-8')
+    ''')
+    with tempfile.TemporaryDirectory(prefix="bounded-console-") as tmp:
+        root = Path(tmp).resolve()
+        script = root / "console_host.py"
+        script.write_text(host, encoding="utf-8")
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        proc = subprocess.Popen([sys.executable, str(script), str(root)],
+                                creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=startup)
+        try:
+            proc.wait(timeout=30)
+            report = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            assert_true(proc.returncode == 0 and report.get("attached") and report.get("stdout_live")
+                        and report.get("stderr_live") and report.get("signal_sent")
+                        and report.get("status") == 130 and report.get("descendants_stopped"),
+                        f"attached console output and OS Ctrl+C clean up the real update child tree: {report}")
+            evidence = os.environ.get("EXOMA_WINDOWS_CONSOLE_REPORT")
+            if evidence:
+                Path(evidence).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        finally:
+            if proc.poll() is None:
+                osutil.terminate_tree(proc)
 
 
 def _orphan_alive(marker: str) -> bool:

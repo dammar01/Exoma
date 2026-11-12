@@ -1,15 +1,19 @@
 """Update the installed Exoma package, global bundle, and current workspace."""
 
 import argparse
+import math
 import re
 import shutil
-import subprocess
 import sys
 import sysconfig
+import time
 from pathlib import Path
 
 from exoma.installer import method as install_method
-from exoma.utils.osutil import agent_home, hidden_run_kwargs
+from exoma.utils.osutil import agent_home, run_bounded
+
+STAGE_TIMEOUT_SECONDS = 900
+HEARTBEAT_SECONDS = 15
 
 
 def _workspace_root(cwd: Path) -> Path | None:
@@ -57,20 +61,39 @@ def _package_command(manager: str) -> tuple[str, list[str]]:
     return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", "exoma"]
 
 
-def _run_step(label: str, argv: list[str], cwd: Path, *, pip: bool = False) -> bool:
+def _run_step(label: str, argv: list[str], cwd: Path, *, pip: bool = False,
+              timeout: float = STAGE_TIMEOUT_SECONDS) -> bool:
     print(f"[UPDATE] {label}: {' '.join(argv)}", flush=True)
+    started = time.monotonic()
+
+    def waiting(elapsed: float) -> None:
+        print(f"[UPDATE] {label}: still waiting; elapsed {elapsed:.1f}s "
+              f"(limit {timeout:g}s)", file=sys.stderr, flush=True)
+
     try:
-        result = subprocess.run(argv, cwd=cwd, **hidden_run_kwargs())
+        code, _out, _err = run_bounded(
+            argv, timeout, cwd=str(cwd), inherit_output=True,
+            on_tick=waiting, tick_seconds=HEARTBEAT_SECONDS,
+        )
+    except KeyboardInterrupt:
+        print(f"[UPDATE] {label} interrupted after {time.monotonic() - started:.1f}s; "
+              "later steps skipped", file=sys.stderr, flush=True)
+        raise
     except OSError as exc:
-        print(f"[UPDATE] {label} failed: {exc}", file=sys.stderr)
+        print(f"[UPDATE] {label} failed: {exc}", file=sys.stderr, flush=True)
         return False
-    if result.returncode:
-        print(f"[UPDATE] {label} failed (exit {result.returncode}); later steps skipped", file=sys.stderr)
+    if code is None:
+        print(f"[UPDATE] {label} timed out after {timeout:g}s; process-tree cleanup attempted; "
+              "later steps skipped. Cleanup can take additional time.", file=sys.stderr, flush=True)
+        return False
+    if code:
+        print(f"[UPDATE] {label} failed (exit {code}); later steps skipped", file=sys.stderr, flush=True)
         if pip and _externally_managed():
             print("[UPDATE] this Python is managed by the OS (PEP 668), so pip may not change it. "
                   "Install Exoma with pipx (`pipx install exoma`) or uv (`uv tool install exoma`) "
                   "instead; `exoma update` then upgrades through that manager.", file=sys.stderr)
         return False
+    print(f"[UPDATE] {label} completed in {time.monotonic() - started:.1f}s", flush=True)
     return True
 
 
@@ -98,13 +121,36 @@ def _report_failed_refresh(stage: str, workspace: Path | None, before: set[str])
               file=sys.stderr)
 
 
+def _positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive finite number of seconds") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number of seconds")
+    return seconds
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="exoma update", description="Update Exoma and refresh its installed config and current workspace")
     parser.add_argument("--manager", choices=("auto", "uv", "pipx", "pip"), default="auto",
                         help="package manager for this Exoma installation "
                              "(default: detect uv tool, then pipx, otherwise pip)")
+    parser.add_argument("--timeout", type=_positive_seconds, default=STAGE_TIMEOUT_SECONDS,
+                        metavar="SECONDS", help="deadline for each package, refresh and check step "
+                        f"(default: {STAGE_TIMEOUT_SECONDS}s; cleanup can take additional time)")
     args = parser.parse_args(argv)
+    try:
+        return _update(args)
+    except KeyboardInterrupt:
+        print("[UPDATE] interrupted; inspect the last reported stage and installed version before retrying",
+              file=sys.stderr, flush=True)
+        return 130
+
+
+def _update(args: argparse.Namespace) -> int:
     cwd = Path.cwd().resolve()
+    print("[UPDATE] preflight: checking workspace and active jobs", flush=True)
     workspace = _workspace_root(cwd)
     if workspace:
         config = workspace / ".workflow" / "config.json"
@@ -130,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[UPDATE] {len(active)} active job(s) in {workspace}; finish them before updating",
                   file=sys.stderr)
             return 1
+    print(f"[UPDATE] detecting package manager ({args.manager}; "
+          f"uv detection limit {install_method.DETECTION_TIMEOUT_SECONDS}s)", flush=True)
     try:
         manager, package = _package_command(args.manager)
     except (OSError, ValueError) as exc:
@@ -138,17 +186,34 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[UPDATE] manager: {manager}; workspace: {workspace or 'none'}", flush=True)
     receipts_before = _receipt_names()
-    if not _run_step("package", package, cwd, pip=manager == "pip"):
-        return 1
+    package_ok = False
+    stage = "install"
+    try:
+        package_ok = _run_step("package", package, cwd, pip=manager == "pip", timeout=args.timeout)
+        if not package_ok:
+            _report_package_uncertain(manager)
+            return 1
 
-    fresh = [sys.executable, "-m", "exoma"]
-    # --no-input: an install from a terminal asks every choice, and an update is not the
-    # place to re-choose them; the stored choices stand.
-    if not _run_step("global config and current workspace", [*fresh, "install", "--no-input"], cwd):
-        _report_failed_refresh("install", workspace, receipts_before)
-        return 1
-    if not _run_step("check", [*fresh, "install", "--check"], cwd):
-        _report_failed_refresh("check", workspace, receipts_before)
-        return 1
-    print("[UPDATE] complete", flush=True)
-    return 0
+        fresh = [sys.executable, "-m", "exoma"]
+        # Stored choices stand: the new installer must not prompt during an update.
+        for stage, label, command in (
+            ("install", "global config and current workspace", [*fresh, "install", "--no-input"]),
+            ("check", "check", [*fresh, "install", "--check"]),
+        ):
+            if not _run_step(label, command, cwd, timeout=args.timeout):
+                _report_failed_refresh(stage, workspace, receipts_before)
+                return 1
+        print("[UPDATE] complete", flush=True)
+        return 0
+    except KeyboardInterrupt:
+        if package_ok:
+            _report_failed_refresh(stage, workspace, receipts_before)
+        else:
+            _report_package_uncertain(manager)
+        return 130
+
+
+def _report_package_uncertain(manager: str) -> None:
+    print(f"[UPDATE] {manager} did not complete successfully; package state is uncertain. "
+          "Check its output and installed version before retrying with that manager. "
+          "Global configuration and workspace refresh were not started.", file=sys.stderr, flush=True)

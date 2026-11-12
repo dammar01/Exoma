@@ -456,8 +456,12 @@ def main() -> int:
 
     if failures:
         print(f"\n{len(failures)} of {len(selected)} suite(s) failed:")
+        # Preserve stdout for callers, and keep failures at the end of runtime stderr
+        # tails even when expected error-path tests emitted their own diagnostics.
+        print(f"\n{len(failures)} of {len(selected)} suite(s) failed:", file=sys.stderr)
         for name, exc in failures:
             print(f"  - {name}: {type(exc).__name__}: {exc}")
+            print(f"  - {name}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         return 1
     print(f"\ntests: success ({len(selected)} suite(s))")
     return 0

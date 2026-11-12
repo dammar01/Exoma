@@ -84,6 +84,8 @@ def _test_process_generation_outcomes() -> None:
 
 
 def _test_worker_kill_is_fail_closed() -> None:
+    if osutil.IS_WINDOWS:
+        _check_taskkill_timeout_falls_back()
     root = Path(tempfile.mkdtemp(prefix="wf-kill-"))
     proc = _sleeper()
     try:
@@ -250,6 +252,34 @@ def _test_worker_kill_is_fail_closed() -> None:
             parent.wait(timeout=30)
             if child_pid and osutil.process_alive(child_pid):
                 osutil._windows_terminate_pid(child_pid)
+
+
+def _check_taskkill_timeout_falls_back() -> None:
+    """A taskkill timeout must take the same identity-aware fallback as access denied."""
+    script = (
+        "import subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        "print(child.pid, flush=True); time.sleep(60)"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE,
+                              text=True, **osutil.hidden_run_kwargs())
+    child_pid, created = None, None
+    try:
+        child_pid = int(parent.stdout.readline().strip())
+        created = osutil.pid_create_time(child_pid)
+        assert_true(created is not None, "the child has a native creation identity before cleanup")
+        with patch.object(osutil.subprocess, "run", side_effect=subprocess.TimeoutExpired(["taskkill"], 20)):
+            result = osutil.terminate_tree(parent)
+        assert_true(result == {"method": "winapi", "ok": True} and parent.poll() is not None,
+                    f"a timed-out taskkill still invokes native tree cleanup: {result}")
+        assert_true(osutil.process_generation(child_pid, created)
+                    in (osutil.PROCESS_DEAD, osutil.PROCESS_REUSED),
+                    "the recorded child generation exited; missing CIM access is not cleanup evidence")
+    finally:
+        osutil.terminate_tree(parent)
+        if child_pid and created is not None:
+            osutil.terminate_tree(None, child_pid, expected_create_time=created)
+        parent.stdout.close()
 
 
 def _test_byte_lock_excludes_handles_and_processes() -> None:
