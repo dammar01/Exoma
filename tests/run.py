@@ -266,7 +266,7 @@ SUITES: dict[str, tuple] = {
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
     "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
-    "self-update": (_test_self_update, "update refreshes the package and current workspace through a fresh CLI"),
+    "self-update": (_test_self_update, "update queries, Windows handoff/containment, synchronous refresh, and opt-in A-to-B wheel gate"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
@@ -407,6 +407,9 @@ def main() -> int:
         help="run just this suite; repeatable. Default runs `scenario`, which covers all.",
     )
     parser.add_argument("--list", action="store_true", help="print suite names and exit")
+    parser.add_argument("--traceback", action="store_true", help="include a traceback for failed checks")
+    parser.add_argument("--update-artifacts", choices=("handoff", "contained"),
+                        help="self-update wheel gate; contained tests stages inside a supervisor, not independence")
     parser.add_argument(
         "--keep-going",
         action="store_true",
@@ -423,6 +426,9 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.update_artifacts:
+        os.environ["EXOMA_UPDATE_HANDOFF_SMOKE"] = "1"
+        os.environ["EXOMA_UPDATE_CONTAINED_SMOKE"] = "1" if args.update_artifacts == "contained" else "0"
 
     if args.list:
         width = max(len(name) for name in SUITES)
@@ -445,6 +451,9 @@ def main() -> int:
             run()
         except BaseException as exc:  # noqa: BLE001 — a failed check is any exception
             failures.append((name, exc))
+            if args.traceback:
+                import traceback
+                traceback.print_exc()
             print(f"  FAIL  {name}  ({type(exc).__name__}: {exc})")
             if not args.keep_going:
                 break

@@ -900,7 +900,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="exoma", description="Exoma CLI",
-        epilog="Package commands: exoma install, exoma check, exoma update, exoma session export",
+        epilog="Package commands: exoma install, exoma check, exoma update [--check | --status], exoma session export",
     )
     parser.add_argument(
         "--command",

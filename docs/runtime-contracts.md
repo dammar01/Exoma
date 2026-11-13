@@ -1,5 +1,55 @@
 # Runtime contracts
 
+## Windows package self-update
+
+`exoma update` on Windows has an asynchronous acceptance boundary. Preflight describes the
+actual installation and verifies an independent stdlib Python runtime; the worker snapshot,
+journal and log files must remain outside the environment being replaced. The worker is
+spawned directly, outside inherited host jobs, without changing shared bounded-spawn or
+detached-job helpers. A host that prohibits breakaway causes refusal before package mutation.
+
+The worker owns a named mutex keyed by native user SID and canonical installation prefix,
+independent of cwd and `EXOMA_HOME`. It opens/query-verifies process handles using creation
+times, image paths and launcher ancestry before READY. Caller COMMIT precedes ACCEPTED;
+the package manager starts only after caller/proxy/launcher handles signal exit. Shells,
+editors and unrelated PID generations are never waited on or killed. Missing COMMIT aborts;
+lost acknowledgment after COMMIT leaves an unknown outcome, not a rollback claim.
+READY, ACCEPTED and COMMIT readers retry missing files and Windows access-denied reads
+within the existing monotonic phase deadline. Read contention does not reset that deadline,
+skip peer-exit checks or validate a mismatched token. Persistent denial retains its read
+diagnostic at timeout; corrupt JSON remains fatal. Journal polling uses the same bounded
+read-retry principle. An artifact failure after the real transition preserves that evidence
+separately from the overall gate result; a later failed no-op still fails the full gate.
+
+Each child is created suspended inside a worker-owned kill-on-close job using the Windows
+10+ job-list process attribute, is journaled, then resumes. Assignment is atomic with process
+creation, avoiding an orphaned suspended child if its owner crashes between create/assign.
+Unsupported containment fails before child execution. Stage timeout/failure stops the
+sequence; cleanup precedes reuse of the installation.
+A previous live child job blocks another updater. After package success, the worker probes
+the new target interpreter's distribution/version/import location, then runs install and
+check from the original cwd. Neither package rollback nor automatic crash replay is implied.
+
+Atomic operation state distinguishes preparing, accepted, waiting_callers, package, probe,
+install, check, succeeded, failed and interrupted. Status observation may be unknown; it does
+not rewrite the journal. Windows update exit 0 means accepted. Status exits 0/1/3/4 mean
+succeeded/failed/in-progress/unknown; argument errors remain 2. POSIX update remains synchronous.
+Status explicitly identifies its scope as the last published/admitted operation. Attempts
+rejected before admission do not replace the installation pointer; when available their
+logs stay separate. Early refusals may have no journal. They cannot overwrite an active
+operation or make an older success apply to a new refusal.
+Live progress should be read directly from state/log files rather than relaunching the
+executable being replaced. Metadata queries are advisory about public releases, independent
+of package-manager constraints/indexes and installation repair.
+Unsupported non-yanked public versions prevent a latest-stable/current claim; the latest
+comparable numeric release remains informational under a separate field.
+
+The Windows artifact gate installs fixture A containing the handoff, offers a different B,
+invokes A's console launcher, polls journal files independently and requires actual B
+installation, fresh import provenance, successful refresh/check and preserved user data.
+Historical recovery and package no-op cannot satisfy this gate. Protocol-only tests under
+a restrictive supervisor do not establish independent-worker survival.
+
 ## State and transport hardening
 
 Verification preparation is runtime-owned. `verify-prepare` reads effective policy and

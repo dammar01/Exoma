@@ -159,11 +159,47 @@ that requires 3.11+, and what it reports instead depends on the manager. Moving 
 release means installing Exoma under Python 3.11+ (see the troubleshooting table below). The command then runs
 the **new** Exoma process to refresh the global host configuration. If cwd is inside a
 project with `.workflow/`, it upgrades that workspace too. It runs `exoma install --check`
-last and returns a nonzero status when any step fails. Without `.workflow/`, no workspace
+last. On POSIX it returns a nonzero status when any step fails. Without `.workflow/`, no workspace
 is created. A missing, unreadable, or malformed workspace `config.json` is reported before
 the package is changed. Global configuration keeps the last host, mode, and provider choices.
 
-The updater announces preflight, manager detection and each update step. Manager output
+On Windows, upgrade runs in a standalone helper after the invoking interpreter and Exoma
+launcher have exited. The helper snapshot and its verified Python runtime are outside the
+environment being replaced. The installation lock spans workspaces and storage overrides.
+If an independent runtime or escape from a restrictive host job cannot be verified,
+handoff is refused before the package is touched. Use the manual sequence below from a
+normal terminal after the updater has exited.
+Automatic child containment uses the Windows 10+ job-list creation attribute; unsupported
+systems fail before executing a package-manager child and retain the manual update path.
+
+Windows exit 0 means **accepted, not complete**. Output names the operation and its log
+directory. Read `state.json` and stage logs directly while the upgrade is running: starting
+`exoma.exe` again can reopen the executable uv is trying to replace. Afterward:
+
+```bash
+exoma update --status
+exoma update --check
+```
+
+`--status` is offline and never repairs or rewrites state. Exit codes: 0 succeeded,
+1 failed/interrupted, 2 invalid arguments, 3 in progress, 4 missing/unknown. A stale/dead
+helper yields unknown rather than invented completion. Status covers the last operation
+admitted by preflight, not necessarily the last attempted command. A refusal before
+admission does not replace an active operation or its status; inspect the command's
+error and any printed log directory. Early preflight refusals may have no journal.
+The status output states this scope explicitly, so an earlier
+successful result is not evidence that a rejected attempt succeeded.
+`--check` queries the installed
+distribution and latest non-yanked stable public release; exit 0 means the query succeeded,
+including when a newer release exists. Unsupported version formats and checkout shadowing
+are explicitly unknown. A non-yanked public post-release or other unsupported format
+makes `latest_public` unknown; `latest_supported_stable` is only the newest comparable
+numeric release. Recognized alpha/beta/rc/dev previews are excluded from stable results.
+It does not resolve uv constraints, custom indexes or Python
+compatibility, so it cannot promise that the public release is installable. The flags
+are mutually exclusive; neither runs an installer or writes update state.
+
+The POSIX updater announces preflight, manager detection and each update step. Manager output
 appears as it is written. While a step runs, a message on stderr every 15 seconds shows
 the elapsed wait; it does not prove the child is making progress. Each package, refresh
 and check step has its own 900-second deadline. For a slow connection or workspace, set
@@ -182,6 +218,15 @@ On timeout, Exoma attempts to stop the process tree and skips later steps. Clean
 take additional time and is best-effort where OS permissions or Windows job assignment
 prevent descendant access. Ctrl+C follows the same cleanup path and returns status 130.
 Children receive no interactive input; update retains the stored installer choices.
+The Windows helper redirects stage output to separate logs and records a heartbeat in
+atomic state. It has separate bounded handoff/caller-exit waits; `--timeout` applies to
+each subsequent child stage. Child processes enter a worker-owned kill-on-close job
+before executing. Ctrl+C before COMMIT cancels the request. After COMMIT the helper may
+continue, even if the caller has not yet observed ACCEPTED; that interval is an unknown
+handoff outcome. After observed acceptance the independent helper continues.
+Lost acknowledgment after commit means an unknown outcome,
+so inspect state before retrying. Failed or interrupted package operations are never
+automatically replayed from the journal.
 
 If install or check fails after the package step, update reports that the result is incomplete.
 It names any new install receipt and the exact command to undo that receipt's global writes.

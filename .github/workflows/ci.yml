@@ -122,6 +122,21 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
+      - name: Windows self-update replaces A with B without recovery
+        if: matrix.os == 'windows-latest'
+        env:
+          EXOMA_UPDATE_HANDOFF_SMOKE: '1'
+          EXOMA_UPDATE_SMOKE_REPORT: ${{ runner.temp }}/exoma-handoff-report.json
+        run: python tests/run.py --only self-update --traceback --update-artifacts handoff
+
+      - name: Preserve Windows handoff evidence
+        if: always() && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: handoff-${{ matrix.python }}
+          path: ${{ runner.temp }}/exoma-handoff-report.json
+          if-no-files-found: warn
+
       - name: Wheel in a clean environment
         # RELEASE.md step 6 "the wheel in a clean environment", run instead of remembered.
         # Every home variable points at a temp dir so the dry run cannot read or describe
@@ -137,7 +152,7 @@ jobs:
           export HOME="$tmp/home" USERPROFILE="$tmp/home" AGENT_HOME="$tmp/home" EXOMA_HOME="$tmp/home"
           mkdir -p "$HOME" "$tmp/project"
           cd "$tmp"
-          "$bin/python" -c 'import exoma, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b; print("bundle", b)'
+          "$bin/python" -c 'import exoma, exoma._update_worker, exoma.update_metadata, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b; print("bundle", b)'
           "$bin/exoma" --version
           "$bin/exoma" install claude --no-input
           "$bin/exoma" init --work-dir "$tmp/project"
@@ -145,7 +160,7 @@ jobs:
           python -m venv "$tmp/sdist-venv"
           sdist_bin="$tmp/sdist-venv/bin"; [ -d "$sdist_bin" ] || sdist_bin="$tmp/sdist-venv/Scripts"
           "$sdist_bin/python" -m pip install --quiet "$artifacts"/exoma-*.tar.gz
-          "$sdist_bin/python" -c 'import exoma, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b'
+          "$sdist_bin/python" -c 'import exoma, exoma._update_worker, exoma.update_metadata, pathlib; b = pathlib.Path(exoma.__file__).parent / "_bundle"; assert (b / "manifest.json").is_file(), b'
           "$sdist_bin/exoma" --version
 
       - uses: actions/upload-artifact@v4

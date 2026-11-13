@@ -174,6 +174,8 @@ exoma install --uninstall                 # dry run: what would be removed
 exoma install --uninstall --apply         # remove, with a receipt (can be rolled back)
 exoma update                              # update package, global config, and current workspace
 exoma update --timeout 1800               # allow up to 1800 seconds for each child step
+exoma update --check                      # read-only installed/latest public metadata
+exoma update --status                     # last Windows handoff result, offline
 ```
 
 `exoma update` detects the manager of the environment Exoma runs in: a uv tool installation
@@ -190,7 +192,34 @@ If that directory has a missing, unreadable, or malformed `config.json`, update 
 changing the package. A later install or check failure reports an incomplete update and names
 any new global install receipt for an explicit rollback; workspace changes are outside it.
 
-Update streams manager stdout/stderr directly and reports stage start, elapsed completion,
+On Windows, update hands work to a standalone stdlib helper outside the target environment.
+The helper acquires an installation-scoped lock and pins verified process handles before
+acknowledging the request. It waits for the invoking interpreter/proxy and Exoma launcher
+to exit before starting the manager, then uses a fresh target interpreter for refresh/check.
+An unavailable independent runtime or prohibited job breakaway refuses handoff before
+package mutation. No visible helper terminal is opened. Existing POSIX execution remains
+synchronous.
+
+Windows update exit 0 means **accepted**, not completed. Read the printed journal and logs
+directly during replacement; invoking `exoma.exe` for live polling could lock it again.
+Afterward `--status` returns 0 for final success, 1 for failure/interruption, 3 while running,
+or 4 for absent/unknown outcomes. Invalid arguments return 2. Status never mutates state,
+acquires the updater lock, repairs an installation or calls a package manager.
+It reports the last operation admitted by preflight, not necessarily the last attempted
+command. A rejected attempt cannot overwrite an active operation; inspect its command
+error and any printed log directory. Early refusals may have no journal. Output labels
+this scope; an older success does not describe a newer refusal.
+`--check` queries public metadata with a timeout/size bound, independently of workspace
+preflight. It reports installed distribution provenance, checkout shadowing and numeric
+stable-release comparison. Other version formats are unknown. Non-yanked unsupported
+public releases, including post-releases, make `latest_public` and comparison unknown;
+the newest comparable numeric version is separately labeled `latest_supported_stable`.
+Recognized alpha/beta/rc/dev previews are excluded. Latest public is advisory;
+uv preserves installation constraints and may use another index or require another Python.
+Exit 0 means the query completed, not that an upgrade is necessary/possible; query errors
+return 1. `--check` and `--status` are mutually exclusive.
+
+POSIX update streams manager stdout/stderr directly and reports stage start, elapsed completion,
 and a waiting heartbeat on stderr every 15 seconds. A heartbeat indicates waiting, not
 child progress. `--timeout SECONDS` accepts a positive finite number and defaults to 900
 seconds independently for package, refresh and check; output never resets that deadline.
@@ -203,6 +232,11 @@ remains best-effort under OS access restrictions. Ctrl+C cleans up and exits 130
 interrupted package step reports uncertain package state; a refresh/check interruption
 retains the incomplete-update receipt and workspace recovery advice. Update children
 receive no interactive input. See [manual recovery](installation.md#update) for older updaters.
+Windows stage output/exit codes live in the operation journal. A worker-owned job contains
+children before execution and kills them if the helper crashes; unknown or abandoned state
+requires inspection, never automatic manager replay. Closing the original terminal after
+acceptance does not cancel an independent helper. A lost acknowledgment after commit is
+reported as unknown rather than claiming that the package was unchanged.
 Use `--manager uv`, `--manager pipx` or `--manager pip` to select the package manager
 explicitly; `uv` and `pipx` are refused when this environment is not theirs.
 
