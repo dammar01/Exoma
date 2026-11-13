@@ -19,8 +19,11 @@ def check_codex_auto_review():
     body = (base.DIST_CONFIG / codex_policy.TEMPLATE_KEY).read_text(encoding="utf-8")
     for banner, expected in (
         ('codex-cli 0.163.0', True), ('0.163.0', True),
+        ('codex-cli 0.168.0', True), ('0.168.0', True),
         ('codex-cli 0.163.0-beta', False), ('codex-cli 0.163.0+local', False),
         ('codex-cli 0.163.0.1', False), ('codex-cli 0.163.1', False),
+        ('codex-cli 0.168.0-beta', False), ('codex-cli 0.168.0+local', False),
+        ('codex-cli 0.168.0.1', False), ('codex-cli 0.168.1', False),
     ):
         with patch('exoma.core.provider.versions.read_version', return_value=banner):
             assert_true(codex_policy.cli_supported() is expected,

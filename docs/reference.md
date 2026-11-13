@@ -1829,7 +1829,7 @@ It does **not** mean the feature works or that behavior tests were run.
 ## Provider releases
 
 Each provider in `config/providers.py` names the CLI release this workflow version was tested on
-(`stable_version`): opencode `1.19.3`, codex `0.163.0`, agy `1.1.13`. The runtime reads
+(`stable_version`): opencode `1.19.3`, codex `0.168.0`, agy `1.1.13`. The runtime reads
 `<cli> --version` (`core/provider/versions.py`; the first line containing a semver, from stdout
 then stderr) at most once per process and stores it per user (`%LOCALAPPDATA%` or
 `$XDG_CACHE_HOME`/`~/.cache`, file `exoma/provider-versions.json`), keyed by the executable's path,
@@ -1868,9 +1868,26 @@ Codex releases 0.155.0 through 0.160.0 failed to resume threads on Windows with
 `sandbox_unavailable` while the resume sandbox was sent via `-c sandbox_mode`;
 the adapter now sends `exec --sandbox`, and resume works on the releases tested within that range
 (codex-cli 0.155.1 and 0.160.0).
-`stable_version` moves only to a release that passed the live probe: codex 0.163.0 passed
-`codex-write-probe` (writes refused on a new and a resumed thread) and opencode 1.19.3 refused
-writes on a new and a resumed session, both on Windows.
+`stable_version` moves only to a release that passed the live probe. On 2026-11-13,
+Codex `0.168.0` with `gpt-6.1-sol` passed `codex-write-probe` on Windows: shell and
+file-edit writes were refused on a new and a resumed thread, the thread identity was
+preserved, and JSONL usage remained available. The shipped `auto_review.extra_policy`
+was accepted as a string and refused as a number by the real CLI in a temporary home.
+The host reviewer-context allowlist retains the previously tested `0.163.0` alongside
+`0.168.0`; this is separate from the updater's single preferred baseline.
+
+The opt-in probe uses `WORKFLOW_CODEX_PROBE=1`; `CODEX_COMMAND` can select an isolated
+CLI, `WORKFLOW_CODEX_PROBE_MODEL` names its model, and `WORKFLOW_CODEX_PROBE_VERSION`
+requires its exact version. An enabled probe fails if the CLI is missing, the provider
+turn fails, or either write attempt lacks evidence. Shell attempts come from exec's
+structured events. A rejected patch omitted from those events is checked against the
+matching tool call/output in this probe's own thread journal, including Code Mode
+`tools.apply_patch` calls. Resume reads only newly appended records, so it cannot borrow
+the fresh turn's proof. Journal inspection reads neither user auth/config files nor
+other conversations; the live calls still use normal CLI sign-in.
+
+Earlier live probes established the Windows write boundary for Codex `0.163.0` and
+OpenCode `1.19.3` on fresh and resumed sessions.
 
 ---
 

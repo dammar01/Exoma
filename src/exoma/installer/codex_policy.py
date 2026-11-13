@@ -16,7 +16,7 @@ from collections.abc import Collection
 from pathlib import Path
 
 TEMPLATE_KEY = "hosts/codex/auto-review-policy.md"
-TESTED_CLI_VERSIONS = frozenset({"0.163.0"})
+TESTED_CLI_VERSIONS = frozenset({"0.163.0", "0.168.0"})
 START = "<!-- EXOMA-CODEX-AUTO-REVIEW:START"
 END = "<!-- EXOMA-CODEX-AUTO-REVIEW:END -->"
 META = "# EXOMA-CODEX-AUTO-REVIEW:OWNERSHIP "

@@ -1154,7 +1154,7 @@ def _test_provider_update() -> None:
             "npm": str(prefix / "npm.cmd"),
         }
         installed = {"codex": "codex-cli 0.150.0", "opencode": "1.10.0"}
-        registry_has = {"@openai/codex@0.163.0", "opencode-ai@1.19.3"}
+        registry_has = {"@openai/codex@0.168.0", "opencode-ai@1.19.3"}
         calls: list[list[str]] = []
         forgotten: list[str] = []
 
@@ -1165,7 +1165,7 @@ def _test_provider_update() -> None:
             if args[1] == "view":
                 return (0, args[2].rsplit("@", 1)[1] + "\n", "") if args[2] in registry_has else (1, "", "E404")
             if args[1] == "install" and "codex" in args[3]:
-                installed["codex"] = "codex-cli 0.163.0"
+                installed["codex"] = "codex-cli 0.168.0"
                 return 0, "", ""
             if args[1] == "install":
                 return 1, "", "npm error EACCES: permission denied"
@@ -1195,7 +1195,7 @@ def _test_provider_update() -> None:
             assert_true(entries["agy"]["action"] == "unsupported", f"agy declares no installer: {entries['agy']}")
             codex = entries["codex"]
             assert_true(
-                codex["action"] == "update" and codex["argv"][1:] == ["install", "-g", "@openai/codex@0.163.0"],
+                codex["action"] == "update" and codex["argv"][1:] == ["install", "-g", "@openai/codex@0.168.0"],
                 f"codex goes to its stable release, never latest: {codex}",
             )
             assert_true(codex["pin_back"] == "npm install -g @openai/codex@0.150.0", f"pin-back names the release before: {codex}")
@@ -1210,16 +1210,16 @@ def _test_provider_update() -> None:
                 f"planning reads each CLI on PATH fresh, past a day-old cached version: {fresh_reads}",
             )
 
-            registry_has.discard("@openai/codex@0.163.0")
+            registry_has.discard("@openai/codex@0.168.0")
             assert_true(plan()["codex"]["action"] == "skip", "no stable release on the registry, no update")
-            registry_has.add("@openai/codex@0.163.0")
+            registry_has.add("@openai/codex@0.168.0")
 
             paths["opencode"] = str(prefix / "opencode.cmd")
             entries = plan()
             assert_true(entries["opencode"]["action"] == "update", f"an npm-global opencode is updated: {entries['opencode']}")
             forgotten.clear()
             done = {e["provider"]: e for e in pu.apply_updates(list(entries.values()), run=run)}
-            assert_true(done["codex"]["result"] == "updated" and done["codex"]["after"] == "0.163.0", f"verified by --version: {done['codex']}")
+            assert_true(done["codex"]["result"] == "updated" and done["codex"]["after"] == "0.168.0", f"verified by --version: {done['codex']}")
             assert_true(
                 done["opencode"]["result"] == "failed" and "EACCES" in done["opencode"]["error"]
                 and done["opencode"]["pin_back"] == "npm install -g opencode-ai@1.10.0",
