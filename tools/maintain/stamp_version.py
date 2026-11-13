@@ -100,9 +100,12 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         # Provider CLI releases (config/providers.py stable_version), not ours.
         "(`stable_version`): opencode",
         "Codex releases 0.155.0 through",
-        # DEC-058: the probe that moved the pins, naming provider releases.
-        "passed the live probe: codex",
-        "(writes refused on a new and a resumed thread) and opencode",
+        # Live probes and reviewer-context support name provider releases, not ours.
+        "passed `codex-write-probe` on Windows: shell and",
+        "The host reviewer-context allowlist retains the previously tested",
+        "this is separate from the updater's single preferred baseline.",
+        "Earlier live probes established the Windows write boundary for Codex",
+        "on fresh and resumed sessions.",
         # v3.8.0 behavior described as history once 3.8.1 shipped.
         "and since 3.8.0 the template",
         "from the 3.8.0 draft)",
