@@ -205,6 +205,12 @@ def pre_tool_use(payload):
     marker = wp.read_json(os.path.join(rt, "delegated.marker"))
     local = os.environ.get("WORKFLOW_LOCAL_MODE") == "1" or os.path.isfile(os.path.join(root, ".workflow", "local_mode.flag"))
     refusal = None
+    if kind == "shell":
+        session_error = wp.runner_session_refusal(command, {
+            "root": root, "home": str(Path.home()), "is_bash": _is_bash, "expected_session": main_id})
+        if session_error:
+            refusal = (session_error, "Use exactly --session '%s' from the authoritative binding; "
+                       "missing, default, duplicate or different session arguments are refused." % main_id)
     for target in paths:
         resolved = target if os.path.isabs(target) else os.path.join(cwd, target)
         if wp.runner_file(resolved, root):
@@ -220,7 +226,7 @@ def pre_tool_use(payload):
     if refusal is None and marker and not local:
         profile = _profile()
         ctx = {"root": root, "home": str(Path.home()), "rt_dir": rt, "is_bash": _is_bash,
-               "host_read": _host_read, "limit": wp.read_limit(args, profile)}
+               "host_read": _host_read, "limit": wp.read_limit(args, profile), "expected_session": main_id}
         if kind == "read" and read_target and not os.path.isabs(read_target):
             read_target = os.path.join(cwd, read_target)
         line = command.strip()

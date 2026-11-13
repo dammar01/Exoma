@@ -55,6 +55,7 @@ def _policy(hook_dir):
 
 def _test_contract_renders_per_host():
     from exoma.config import hosts
+    from exoma.installer import base
 
     for only_command in (False, True):
         for host in hosts.HOSTS:
@@ -66,6 +67,14 @@ def _test_contract_renders_per_host():
                         f"{host}: the contract names the profile's runner call {hosts.runner_call(host)!r}")
             assert_true(f"Verify preparation is a local runner call: `{hosts.runner_call(host)} verify-prepare" in text,
                         f"{host}: preparation uses the configured runner prefix in the shared contract")
+            assert_true("HAS the same access" not in text and "load no MCP servers" in text,
+                        f"{host}: host choice never promises provider MCP capability")
+            source = BUNDLE / "hosts" / "claude" / "skills" / "execute.md"
+            key = next(key for src, _dest, key in base._targets((host,))
+                       if src == source)
+            execute = base._render_text(source, key, None, only_command)
+            assert_true("it owns the single" in execute and "→ call the local `verify-prepare`" not in execute,
+                        f"{host}: execute hands preparation to verify once")
             assert_true("not returned yet)" in text and "the call killed)" in text
                         and "orthe" not in text and ",the call" not in text,
                         f"{host}: an inline HOST section keeps the space before the text after it")
@@ -193,8 +202,8 @@ def _test_runner_call_single_source():
     from exoma.config import hosts
     from exoma.installer import base
 
-    root = "E:/work/proj"
     with tempfile.TemporaryDirectory(prefix="exoma-host-profile-") as tmp:
+        root = (Path(tmp) / "project space-\u00e9").resolve().as_posix()
         for host in hosts.HOSTS:
             hook_dir = Path(tmp) / host
             hook_dir.mkdir()
@@ -214,6 +223,9 @@ def _test_runner_call_single_source():
             assert_true(wp.runner_session_refusal(prepare_call.replace("'main_x'", "'other'"), context)
                         and wp.runner_session_refusal(prepare_call.split(" --session")[0], context),
                         f"{host}: prepare rejects wrong or missing authoritative session")
+            for invalid_call in (prepare_call.replace("'main_x'", "'other'"), prepare_call.split(" --session")[0]):
+                assert_true(wp.preflight_refusal("shell", "", invalid_call, {"command": "verify"}, context)
+                            == "session_binding", f"{host}: shared preflight validates the authoritative session")
             profile = wp.load_host_profile(str(hook_dir))
             assert_true(profile.get("host") == host and profile.get("runner_prefix") == hosts.runner_prefix(host),
                         f"{host}: host-profile.json is the profile: {profile}")

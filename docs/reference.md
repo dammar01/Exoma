@@ -1721,9 +1721,13 @@ So `auto_verify_after_execute: false` does not turn off `/.verify`; it only prev
   tree (process group + `taskkill /T` / `killpg`; on Windows a Toolhelp snapshot and process handles
   provide a fallback when `taskkill` is denied, killing a descendant only while its creation time
   still matches the snapshot), then output is collected for at most 5 s; a boolean
-  timeout value is ignored (default 900). The prompt line "jangan jalankan test runner" ("do not run the test runner") is only
-  sent when `verify_test_commands` is set; while it is empty, `doctor` gives a warning
-  (`checks.verify_test_commands: empty`) because verify runs no tests and cannot `pass`.
+  timeout value is ignored (default 900). Second-agent verification always reads and traces;
+  it never runs test runners, including when the allowlist is empty or E2E evidence is supplied.
+  The runtime owns test execution. An empty allowlist produces a doctor warning
+  (`checks.verify_test_commands: empty`); it does not alone prevent a review-based `pass`.
+  An explicit request with `commands: []` and a one-line reason records "no test requested",
+  which is not an executed check. A pass then requires actual review checks; a missing or
+  invalid request remains a verification gap.
   Under a verify intent, main_agent calls local `verify-prepare` for policy/request diagnostics,
   reads `git diff --name-only`/`--stat`, and writes `verify/tests.json` before delegated dispatch.
   Legacy native config/request read exemptions remain compatible but are no longer needed.

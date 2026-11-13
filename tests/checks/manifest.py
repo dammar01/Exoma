@@ -244,5 +244,69 @@ def _test_doctor_agrees_with_install_check() -> None:
         result = _bundle_integrity(dist, manifest, project)
         assert_true({"path": skill, "reason": "content_differs"} in result["drift"],
                     f"a real edit to a rendered file is still drift: {result}")
+
+        from unittest.mock import patch
+        from exoma.config.providers import PROVIDER_BUNDLES
+        from exoma.config.verification_policy import render_verification_routing
+        from exoma.installer.base import HOSTS, MARKERS
+
+        shipped_entries = {item["path"]: item for item in json.loads(
+            (REPO_ROOT / "src" / "exoma" / "_bundle" / "manifest.json").read_text(encoding="utf-8")
+        )["files"]}
+        instruction_cases = [
+            (f"providers/{name}/{bundle['instructions'][0]}", bundle.get("instructions_whole", False))
+            for name, bundle in PROVIDER_BUNDLES.items()
+        ] + [(rel, False) for rel in MARKERS if rel.startswith("hosts/")]
+        for only_command in (False, True):
+            for index, (rel, whole) in enumerate(instruction_cases):
+                rendered = _render_text(dist / rel, rel, project, only_command)
+                if rel.startswith("providers/"):
+                    assert_true(render_verification_routing() in rendered,
+                                f"{rel}: the installed fixture has rendered routing")
+                target = root / f"instructions-{index}.md"
+                target.write_text(rendered if whole else "user prose before\n" + rendered + "\nuser prose after\n",
+                                  encoding="utf-8")
+                manifest.write_text(json.dumps({
+                    "targets": {rel: target.as_posix()},
+                    "files": [shipped_entries[rel]],
+                }), encoding="utf-8")
+                with (
+                    patch("exoma.core.audit.bundle_integrity._installed_intent_mode", return_value=only_command),
+                    patch("exoma.core.audit.bundle_integrity._installed_hosts", return_value=set(HOSTS)),
+                    patch("exoma.core.audit.bundle_integrity._agy_refusal", return_value=None),
+                ):
+                    result = _bundle_integrity(dist, manifest, project)
+                    assert_true(result["drift"] == [], f"{rel}: rendered instructions are clean: {result}")
+                    if not whole:
+                        target.write_text("changed user prose\n" + rendered + "\nmore user prose\n", encoding="utf-8")
+                        result = _bundle_integrity(dist, manifest, project)
+                        assert_true(result["drift"] == [], f"{rel}: user prose is outside the managed block")
+                    target.write_text(rendered.replace("-->", "-->\nlocal edit", 1), encoding="utf-8")
+                    result = _bundle_integrity(dist, manifest, project)
+                    assert_true(any(item["path"] == rel and item["reason"] in ("locally_edited", "content_differs")
+                                    for item in result["drift"]),
+                                f"{rel}: edits inside rendered instructions remain drift: {result}")
+                    target.write_text("user prose only\n", encoding="utf-8")
+                    result = _bundle_integrity(dist, manifest, project)
+                    expected = "content_differs" if whole else "managed_block_absent"
+                    assert_true({"path": rel, "reason": expected} in result["drift"],
+                                f"{rel}: removed instructions are detected: {result}")
+                    raw = (dist / rel).read_text(encoding="utf-8")
+                    if rendered != raw:
+                        target.write_text(raw, encoding="utf-8")
+                        result = _bundle_integrity(dist, manifest, project)
+                        expected = "content_differs" if whole else "locally_edited"
+                        assert_true({"path": rel, "reason": expected} in result["drift"],
+                                    f"{rel}: a raw template is not an installed rendered contract: {result}")
+
+        merged_config = root / "merged-config.json"
+        merged_config.write_text('{"user_setting": true}\n', encoding="utf-8")
+        manifest.write_text(json.dumps({
+            "targets": {boundary: merged_config.as_posix()},
+            "files": [shipped_entries[boundary]],
+        }), encoding="utf-8")
+        result = _bundle_integrity(dist, manifest, project)
+        assert_true(result["drift"] == [] and result["checked"] == 1,
+                    f"merged configuration still preserves user settings: {result}")
     finally:
         shutil.rmtree(root, ignore_errors=True)

@@ -176,6 +176,25 @@ def _test_prompt_contract_blocks() -> None:
 def _test_verify_branch_carries_routing_contract() -> None:
     """The severity/origin/scope triple is the verify contract, not decoration."""
     prompt = _build(ROLE_VERIFICATION, "verify")
+    from exoma.config.providers import PROVIDER_BUNDLES
+    from exoma.config.verification_policy import render_verification_routing
+    from exoma.installer import base
+
+    routing = render_verification_routing()
+    assert_true(routing in prompt, "delegated verification carries the runtime routing policy")
+    for only_command in (False, True):
+        for host in base.HOSTS:
+            source, _dest, key = next(target for target in base._targets((host,))
+                                      if target[0].name == "verify.md")
+            rendered = base._render_text(source, key, None, only_command)
+            assert_true(routing in rendered and "{{VERIFICATION_ROUTING}}" not in rendered,
+                        f"{host}: verification skill shares runtime routing in mode {only_command}")
+        for provider, bundle in PROVIDER_BUNDLES.items():
+            key = f"providers/{provider}/{bundle['instructions'][0]}"
+            rendered = base._render_text(base.DIST_CONFIG / key, key, None, only_command)
+            assert_true(routing in rendered and "{{VERIFICATION_ROUTING}}" not in rendered
+                        and "only sends the OUTPUT_FORMAT skeleton" not in rendered,
+                        f"{provider}: second-agent contract shares runtime routing")
     for token in ("severity:", "origin:", "scope_relation:", "blocking_findings", "escalations"):
         assert_true(
             token in prompt,

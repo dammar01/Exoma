@@ -5,6 +5,7 @@ from exoma.config.roles import (
     VALID_ROLES,
 )
 from exoma.config.settings import DEFAULT_MAX_TASK_CHARS, DEFAULT_MAX_TASK_CHARS_NO_ARGV
+from exoma.config.verification_policy import render_verification_routing
 from exoma.utils import osutil
 
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
@@ -415,9 +416,6 @@ def build_prompt(
 
     # Only /.verify gets the severity-tiered contract; other routes use the terse fallback.
     if command == "verify":
-        from exoma.core.evidence import verify_tests
-
-        runtime_tests = bool(project_root) and verify_tests.configured(project_root)
         return "\n".join(
             [
                 *header,
@@ -429,18 +427,11 @@ def build_prompt(
                 "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion",
                 ANCHOR_PATH_RULE,
                 "- tag EVERY finding on its FIRST line: `severity: <critical|high|medium|low> | origin: <introduced|regression|pre_existing|unknown> | scope_relation: <in_scope|out_of_scope>` — a finding whose opening line lacks all three is rejected",
-                "- ROUTE BY TAGS, never by severity alone: introduced|regression + critical|high => blocking_findings; unknown + critical|high => blocking_findings (fail closed, until evidence moves it off `unknown`); pre_existing + critical|high => escalations; introduced|regression + out_of_scope + medium|low => escalations; everything else => notes",
+                "- ROUTE BY TAGS, never by severity alone; the runtime uses this same policy:",
+                render_verification_routing(),
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
                 "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
-                # Only where the runtime will run tests: with no allowlist it runs none, and
-                # forbidding the second agent's own runs would leave the change untested.
-                *(
-                    []
-                    if e2e_evidence or not runtime_tests
-                    else [
-                        "- tests: do NOT run test runners or suites — verify by reading and tracing; the runtime runs the tests main_agent chose for this change and adds their result to your verdict, so do not list unrun tests under not_verified",
-                    ]
-                ),
+                "- tests: do NOT run test runners or suites — verify by reading and tracing; the runtime runs the tests main_agent chose for this change and adds their result to your verdict, so do not list unrun tests under not_verified",
                 *(
                     [
                         "- [E2E EVIDENCE] above is runtime fact from a local browser run, not a claim to re-verify: judge whether its claims cover the change, whether a `pass` rests on assertions strong enough to catch the regression, and give each app-origin failure a temporal `origin` from the code and git scope; keep `app|harness|unknown` out of the `origin` tag",

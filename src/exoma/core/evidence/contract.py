@@ -6,6 +6,7 @@ rides at the top level for main_agent to relay.
 """
 import re
 
+from exoma.config.verification_policy import VERIFICATION_TAG_VALUES, expected_verification_section
 from exoma.core.evidence.fact_store import _FILELINE
 
 ERROR_TYPES = {
@@ -729,11 +730,7 @@ _NONE_ITEM = _NoneSentinel()
 RUNTIME_NO_TEST_ITEM = "runtime: no test requested"
 RUNTIME_GAP_PREFIX = "tests:"
 
-_VERIFY_TAG_VALUES = {
-    "severity": {"critical", "high", "medium", "low"},
-    "origin": {"introduced", "regression", "pre_existing", "unknown"},
-    "scope_relation": {"in_scope", "out_of_scope"},
-}
+_VERIFY_TAG_VALUES = VERIFICATION_TAG_VALUES
 
 
 # Horizontal whitespace only. `\s` includes the newline, and under re.MULTILINE a `\s*`
@@ -800,17 +797,8 @@ def _verification_tags(finding: str) -> tuple[dict[str, str], list[str]]:
 
 
 def _expected_verification_section(tags: dict[str, str]) -> str:
-    severity = tags.get("severity")
-    origin = tags.get("origin")
-    scope = tags.get("scope_relation")
-    severe = severity in {"critical", "high"}
-    if severe and origin in {"introduced", "regression", "unknown"}:
-        return "blocking_findings"
-    if (severe and origin == "pre_existing") or (
-        not severe and origin in {"introduced", "regression"} and scope == "out_of_scope"
-    ):
-        return "escalations"
-    return "notes"
+    # Kept for E2E normalization and existing callers of this private seam.
+    return expected_verification_section(tags)
 
 
 def validate_verification_contract(content: str) -> dict:

@@ -126,8 +126,8 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # A placeholder, and knowingly so. Codex loads NO project-root config layer — an
         # unknown key planted in a project's `.codex/config.toml` passes `--strict-config`
         # untouched, which is only possible if the file is never read. So there is no
-        # project boundary file to ship and never will be one; the read boundary is argv,
-        # asserted per call from core/secret_patterns.py.
+        # project boundary file to ship here. The effective read boundary is unbounded:
+        # argv permission declarations do not deny shell reads (see boundary below).
         #
         # The names stay because `installer/check.py` indexes this key positionally for
         # every bundle, and it guards the FILE with .exists() rather than the key. Dropping

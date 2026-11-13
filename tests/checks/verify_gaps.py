@@ -261,6 +261,44 @@ def _test_verification_routing() -> None:
             "confidence: medium — read only\n"
         )
 
+    # Golden outcomes for the pre-extraction policy, independent of the new ruleset.
+    from exoma.core.evidence.contract import _expected_verification_section
+    from exoma.core.evidence.e2e.normalize import _reviewer_sections
+
+    blocking, escalation, note = "blocking_findings", "escalations", "notes"
+    golden = (
+        ("critical", "introduced", (blocking, blocking)),
+        ("critical", "regression", (blocking, blocking)),
+        ("critical", "pre_existing", (escalation, escalation)),
+        ("critical", "unknown", (blocking, blocking)),
+        ("high", "introduced", (blocking, blocking)),
+        ("high", "regression", (blocking, blocking)),
+        ("high", "pre_existing", (escalation, escalation)),
+        ("high", "unknown", (blocking, blocking)),
+        ("medium", "introduced", (note, escalation)),
+        ("medium", "regression", (note, escalation)),
+        ("medium", "pre_existing", (note, note)),
+        ("medium", "unknown", (note, note)),
+        ("low", "introduced", (note, escalation)),
+        ("low", "regression", (note, escalation)),
+        ("low", "pre_existing", (note, note)),
+        ("low", "unknown", (note, note)),
+    )
+    for severity, origin, outcomes in golden:
+        for scope, expected in zip(("in_scope", "out_of_scope"), outcomes):
+            tags = {"severity": severity, "origin": origin, "scope_relation": scope}
+            finding = (f"severity: {severity} | origin: {origin} | scope_relation: {scope}"
+                       " — golden finding [app/main.py:1]")
+            assert_true(_expected_verification_section(tags) == expected, f"routing changed for {tags}")
+            report = _report(expected, finding)
+            if expected != blocking:
+                report = report.replace("verdict: NEEDS FIX", "verdict: DONE")
+            assessed = validate_verification_contract(report)
+            assert_true(assessed["verdict"] == ("fail" if expected == blocking else "pass")
+                        and not assessed["warnings"], f"contract changed for {tags}: {assessed}")
+            normalized = _reviewer_sections(_report("notes", finding))
+            assert_true(len(normalized[expected]) == 1, f"E2E routing changed for {tags}: {normalized}")
+
     note_class = (
         "severity: low | origin: introduced | scope_relation: in_scope — naming drift "
         "[core/executor.py:808]"

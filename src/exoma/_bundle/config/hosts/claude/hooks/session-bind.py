@@ -172,8 +172,8 @@ try:
         "MAIN_SESSION_PROJECT_ROOT=%s\n"
         "source=%s\n"
         "second_agent_thread=%s\n"
-        "Use this MAIN_SESSION_ID for all /.explore /.plan /.analyze /.verify /.sweep "
-        "invocations. Overrides .workflow/state.json session.id."
+        "Use this MAIN_SESSION_ID for every session-scoped runner invocation, including "
+        "verify-prepare, tests, plan recording and execution. Overrides .workflow/state.json session.id."
     ) % (main_id, root, source, verb)
 
     out = {

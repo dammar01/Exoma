@@ -59,17 +59,8 @@ def _installed_path_for(
 # bytes legitimately differ from dist: content outside the markers is the user's, and
 # {{HOME}}/{{PROJECT_ROOT}} inside the block are resolved at install time. Comparing whole
 # files here reported drift on every single run, which trained the reader to ignore it.
-_SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END")
 # The Agy /.doctor fragment: appended to the Agy doctor skill at install (installer/base.py).
 _RENDERED_INTO_ANOTHER_FILE = {f"{host_dir('agy')}/doctor.agy.md"}
-_MANAGED_MARKERS = {
-    f"{host_dir('claude')}/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
-    **{
-        f"{provider_dir(name)}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
-        for name, bundle in PROVIDER_BUNDLES.items()
-        if not bundle.get("instructions_whole")
-    },
-}
 
 
 def _is_agent_roster_path(rel) -> bool:
@@ -272,6 +263,13 @@ def _bundle_integrity(
     Also flags a manifest that no longer describes its bundle sources (stale) and any
     missing required hook.
     """
+    from exoma.installer.base import MARKERS
+
+    whole_instructions = {
+        f"{provider_dir(name)}/{bundle['instructions'][0]}"
+        for name, bundle in PROVIDER_BUNDLES.items()
+        if bundle.get("instructions_whole")
+    }
     result: dict = {
         "manifest": str(manifest_path),
         "checked": 0,
@@ -371,10 +369,10 @@ def _bundle_integrity(
         if str(rel).endswith(".template.json"):
             result["checked"] += 1
             continue
-        # Same reasoning for anything the manifest marks as merged rather than copied: the
-        # installed file is dist merged INTO the user's, so it matches the shipped bytes only
-        # while the user has added nothing. Hashing it reports drift for using the file.
-        if entry.get("merge") == "merge":
+        # Merged configuration retains user settings. Instruction files still require
+        # content checks: managed blocks ignore only prose outside their owned markers,
+        # and whole instruction files must match the installer's rendered output.
+        if entry.get("merge") == "merge" and rel not in MARKERS and rel not in whole_instructions:
             result["checked"] += 1
             continue
         try:
@@ -385,11 +383,11 @@ def _bundle_integrity(
             continue
         result["checked"] += 1
 
-        if rel in _MANAGED_MARKERS:
+        if rel in MARKERS:
             # Compare the managed block alone, against a dist copy put through the same
             # placeholder substitution the installer applies. What is left after that is
             # a genuine local edit.
-            start, end = _MANAGED_MARKERS[rel]
+            start, end = MARKERS[rel]
             source = dist_config_dir / rel
             try:
                 expected = source.read_text(encoding="utf-8")
@@ -399,17 +397,15 @@ def _bundle_integrity(
             expected = expected.replace("{{HOME}}", home)
             if project_root:
                 expected = expected.replace("{{PROJECT_ROOT}}", str(project_root))
-            if rel == f"{host_dir('claude')}/CLAUDE.md":
-                # The contract is rendered for the host at install (config/hosts.py:
-                # host sections, placeholders, rule labels): compare against the
-                # installer's own render, the one `install --check` uses.
-                try:
-                    from exoma.installer.base import _render_text
+            # Use the same marker ownership and rendered text as the installer for
+            # every host and provider, even when they share an installed file.
+            try:
+                from exoma.installer.base import _render_text
 
-                    root = Path(project_root) if project_root else None
-                    expected = _render_text(source, rel, root, only_command)
-                except Exception:
-                    expected = _select_intent_section(expected, only_command)
+                root = Path(project_root) if project_root else None
+                expected = _render_text(source, rel, root, only_command)
+            except Exception:
+                expected = _select_intent_section(expected, only_command)
             want = _marker_block(expected, start, end)
             got = _marker_block(text, start, end)
             if got is None:
@@ -420,9 +416,11 @@ def _bundle_integrity(
                 result["drift"].append({"path": rel, "reason": "locally_edited"})
             continue
 
-        if hashlib.sha256(text.encode("utf-8")).hexdigest() != entry.get(
-            "sha256"
-        ) and not _matches_rendered(dist_config_dir, rel, text, project_root, only_command):
+        matches_source = (
+            rel not in whole_instructions
+            and hashlib.sha256(text.encode("utf-8")).hexdigest() == entry.get("sha256")
+        )
+        if not matches_source and not _matches_rendered(dist_config_dir, rel, text, project_root, only_command):
             result["mismatched"].append(rel)
             result["drift"].append({"path": rel, "reason": "content_differs"})
 

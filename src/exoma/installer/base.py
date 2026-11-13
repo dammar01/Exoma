@@ -17,6 +17,7 @@ from exoma.config import hosts as host_profiles
 from exoma.config.bundle_keys import host_dir, provider_dir
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.config.settings import BUNDLE_CONFIG_DIR, BUNDLE_DIR, BUNDLE_MANIFEST
+from exoma.config.verification_policy import render_verification_guidance
 from exoma.utils.osutil import agent_home
 
 DIST = BUNDLE_DIR
@@ -600,6 +601,7 @@ def _render_text(src: Path, key: str, project_root: Path | None, only_command: b
         # What this host's hooks read: written from the profile, not copied from the source.
         return host_profiles.hook_profile_text(host, auto_intent=not only_command)
     text = _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
+    text = render_verification_guidance(text)
     # The host a skill is installed for, so /.init can name it (`exoma init --host`).
     text = text.replace("{{HOST}}", host)
     if key in (CLAUDE_INSTRUCTIONS, AGY_CONTRACT, CODEX_CONTRACT, OPENCODE_CONTRACT) or "/skills/" in key:

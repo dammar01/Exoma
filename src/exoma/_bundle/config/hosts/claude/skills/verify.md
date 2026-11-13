@@ -16,7 +16,8 @@ Call `bash '<work_dir>/.workflow/run.sh' verify-prepare{{MAIN_HOST_OPTION}} --se
 This protocol command needs no task and is not a skill. Read `meta.policy`, `meta.request`,
 `meta.config_warnings`, and `meta.next_step`; do NOT read config.json or tests.json directly
 to reconstruct them. It does not call a provider, run tests, consume a request, clear the
-delegated marker, or publish a verdict. The normal delegated verify call is still required.
+delegated marker, or publish a verdict. Invoke verify afterwards; the runtime selects
+syntax or delegated mode from the current policy.
 `policy.verify_mode=syntax` → invoke verify directly; do not request tests.
 For delegated mode, a missing request needs test selection; an invalid one needs correction.
 A valid pending request may be used if it still covers the change. Preparation is a snapshot;
@@ -36,8 +37,14 @@ The second agent only reads and traces; the runtime runs the tests. You choose t
    start with one of them. Runtime executes without a shell (`&&`/pipe/redirect refused). Outside the allowlist →
    `not_verified`. Empty allowlist → tell the user and suggest the prefixes to add;
    a project without a test suite → there is no prefix to suggest, write `commands: []` (step 1).
-Gate: while the verify marker is active (before `.workflow/run verify`) ONLY these pass: `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
-(may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect), the plain runner call for `verify-prepare`, and Write of this session's tests.json. Legacy native Read exemptions for config/tests remain for compatibility; this flow uses runtime preparation instead. Reading src/test file contents → blocked; the file names from the diff are enough.
+While the verify marker is active, select tests from existing evidence and
+`git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
+(may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect).
+Use the plain `verify-prepare` runner call and Write this session's tests.json.
+The gate also permits other valid runner calls, host-readable contract/skill files,
+legacy native config/request reads, and precision reads within the marker's quota.
+Those exemptions describe hook behavior, not an instruction to gather broadly:
+use preparation for policy/request diagnostics and delegate source inspection.
 No tests.json → verify becomes `incomplete` (gap `tests:`, exit nonzero). An explicit `commands: []` ≠ no tests.json. A failing test → blocking.
 Already ran them with `run.sh test` after the last edit? STILL list them in tests.json, with the EXACT
 same command text: the runtime reuses each recorded pass while its reuse identity is unchanged (Git-visible
@@ -68,13 +75,8 @@ high     = a feature's normal path broken | an existing caller regresses | a con
 medium   = edge case | degradation | a defect with a workaround
 low      = naming/style/doc drift | hypothetical with no trigger
 
-SEVERITY ALONE DOES NOT DECIDE BLOCKING. Route with the table:
-introduced/regression + in_scope     + critical|high → BLOCKING
-introduced/regression + out_of_scope + critical|high → BLOCKING (+ scope violation)
-introduced/regression + out_of_scope + medium|low    → ESCALATION
-unknown               + anything     + critical|high → BLOCKING (fail closed)
-pre_existing          + anything     + critical|high → ESCALATION
-anything else                                        → NOTE
+SEVERITY ALONE DOES NOT DECIDE BLOCKING. The runtime and rendered prompts share this policy:
+{{VERIFICATION_ROUTING}}
 
 `unknown` is not an exit: moving off unknown REQUIRES naming the proof (diff/git history/previous version). Cannot → it still blocks.
 An ESCALATION does not change the verdict BUT is NOT a note — a real critical/high the user must decide on. Hiding it in notes is FORBIDDEN.

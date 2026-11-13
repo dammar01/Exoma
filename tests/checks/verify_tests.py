@@ -923,21 +923,21 @@ def _check_submit_claims_only_for_a_new_job() -> None:
 
 
 def _check_prompt_tests_line_follows_allowlist() -> None:
-    """The second agent is told not to run tests only where the runtime runs them."""
+    """Runtime owns test execution for every verification call."""
     from exoma.core.prompt.prompt_builder import build_prompt
     from exoma.config.roles import ROLE_VERIFICATION
 
     line = "do NOT run test runners"
-    for prefixes, expected in (([f'"{sys.executable}" -c'], True), ([], False)):
+    for prefixes in ([f'"{sys.executable}" -c'], []):
         root = _workspace(prefixes)
         try:
-            prompt = build_prompt(
-                role=ROLE_VERIFICATION, task="t", session_id="s1", command="verify", project_root=str(root)
-            )
-            assert_true(
-                (line in prompt) == expected,
-                f"tests line present={line in prompt} with allowlist {prefixes}",
-            )
+            for evidence in (None, "[E2E EVIDENCE]\nbrowser_verdict: pass"):
+                prompt = build_prompt(
+                    role=ROLE_VERIFICATION, task="t", session_id="s1", command="verify",
+                    project_root=str(root), e2e_evidence=evidence,
+                )
+                assert_true(line in prompt,
+                            f"runtime owns tests with allowlist {prefixes}, E2E evidence {evidence}")
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

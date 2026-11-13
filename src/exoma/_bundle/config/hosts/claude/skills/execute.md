@@ -59,8 +59,8 @@ Use fresh `meta.policy` and `meta.next_step` from this response; do NOT read con
 again. Report `meta.config_warnings`. `next_step` is bound to the returned execution/session
 and has `automatic: false`: runtime has not started verification.
 [EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status
-true / `next_step.action=verify_prepare` → call the local `verify-prepare` runner command,
-then follow the verify skill and invoke {{CMD:verify}}. status: done|partial|blocked.
+true / `next_step.action=verify_prepare` → follow the verify skill; it owns the single
+local preparation step and the subsequent {{CMD:verify}} invocation. status: done|partial|blocked.
 Do NOT declare done before verify finishes.
 false (default) → do NOT auto-run {{CMD:verify}} (avoid heavy tests nobody asked for). REQUIRED:
   verification: not_run

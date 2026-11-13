@@ -101,7 +101,8 @@ def _test_opencode_host_contract() -> None:
         assert_true(token.is_file(), "an expanded /exoma-execute -y records the execute approval")
         commit_sid = "ses_commit"
         for text in ("gas commit", "gas commit menggunakan $exoma-commit", "tolong commit perubahan ini"):
-            _opencode_hook(home, "UserPromptSubmit", {"session_id": commit_sid, "cwd": str(project), "prompt": text})
+            commit_bound = _opencode_hook(home, "UserPromptSubmit", {
+                "session_id": commit_sid, "cwd": str(project), "prompt": text})
             approved = _opencode_hook(home, "PreToolUse", {"session_id": commit_sid, "cwd": str(project),
                                                            "tool_name": "bash", "tool_input": {"command": "git commit -m x"}})
             assert_true(approved == {}, "OpenCode recognizes a direct commit request: " + text)
@@ -110,7 +111,9 @@ def _test_opencode_host_contract() -> None:
                                                             "tool_name": "bash", "tool_input": {"command": "git commit -m x"}})
         assert_true("deny" in denied_commit, "OpenCode revokes commit intent on negation")
         from exoma.installer.base import runner_prefix
-        evidence = f"{runner_prefix()} '{project.as_posix()}/.workflow/run.sh' plan --session 'test' --task 'Explain git commit'"
+        commit_main = commit_bound["context"].split("MAIN_SESSION_ID=")[1].split()[0]
+        evidence = (f"{runner_prefix()} '{project.as_posix()}/.workflow/run.sh' plan "
+                    f"--session '{commit_main}' --task 'Explain git commit'")
         accepted = _opencode_hook(home, "PreToolUse", {"session_id": commit_sid, "cwd": str(project),
                                                       "tool_name": "bash", "tool_input": {"command": evidence}})
         assert_true(accepted == {}, "OpenCode forwards the runner context so a task mention is data")
@@ -130,6 +133,47 @@ def _test_opencode_host_contract() -> None:
         second = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "grep",
                                                      "tool_input": {"pattern": "X"}}, role="second_agent")
         assert_true(second == {}, "a second-agent process is never gated")
+
+        marker = project / ".workflow" / "data" / "sessions" / main_id / "runtime" / "delegated.marker"
+
+        def check_runner_sessions(armed):
+            before = marker.read_bytes() if armed else None
+            for command in ("verify-prepare", "verify"):
+                runner = f"'{project.resolve().as_posix()}/.workflow/run.sh' {command}"
+                for suffix, allowed in (
+                    (f" --session '{main_id}'", True),
+                    ("", False), (" --session 'wrong'", False), (" --session 'default'", False),
+                    (f" --session '{main_id}' --session '{main_id}'", False),
+                ):
+                    decision = _opencode_hook(home, "PreToolUse", {
+                        "session_id": sid, "cwd": str(project), "tool_name": "bash",
+                        "tool_input": {"command": runner + suffix},
+                    })
+                    assert_true((decision == {}) if allowed else ("deny" in decision and main_id in decision["deny"]),
+                                f"OpenCode validates session with marker={armed}, {command}{suffix}: {decision}")
+                    after = marker.read_bytes() if marker.is_file() else None
+                    assert_true(after == before, "hook decisions never consume or change the delegated marker")
+
+        _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "hello"})
+        assert_true(not marker.exists(), "normal prompts leave delegation unarmed")
+        check_runner_sessions(False)
+        ordinary = _opencode_hook(home, "PreToolUse", {
+            "session_id": sid, "cwd": str(project), "tool_name": "bash", "tool_input": {"command": "python --version"},
+        })
+        assert_true(ordinary == {}, "session binding does not restrict ordinary shell commands")
+        _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "/.verify"})
+        assert_true(marker.is_file(), "verify arms the delegated marker")
+        check_runner_sessions(True)
+        local_flag = project / ".workflow" / "local_mode.flag"
+        local_flag.touch()
+        try:
+            check_runner_sessions(True)
+        finally:
+            local_flag.unlink()
+        still_armed = _opencode_hook(home, "PreToolUse", {
+            "session_id": sid, "cwd": str(project), "tool_name": "grep", "tool_input": {"pattern": "X"},
+        })
+        assert_true("deny" in still_armed, "preparation leaves source gathering gated")
 
         plugin = (BUNDLE / "hosts" / "opencode" / "exoma.js").read_text(encoding="utf-8")
         assert_true('"tool.execute.before"' in plugin and "WORKFLOW_AGENT_ROLE" in plugin
