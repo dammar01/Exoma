@@ -1,11 +1,15 @@
 """The per-invocation request behind /.verify-browser.
 
-The skill interviews the user, then writes one JSON file for the session:
+The skill writes one JSON file for the session; it interviews only when preparation
+reports missing target or flow information:
 
   .workflow/data/sessions/<session>/e2e/request.json
-  {"version": 1, "phase": "draft" | "run", "settings": {...},
+  {"version": 1, "phase": "auto" | "draft" | "run", "settings": {...},
    "scenario": {...}, "existing_tests": [...], "spec_notes": [...]}
 
+`auto` prepares and validates a fresh spec, then runs the player and review under the same
+invocation and lock. It stops for invalid preparation, missing credentials or unapproved
+read-only proposals; it never accepts a supplied scenario or reads a persisted draft.
 `draft` asks second_agent for a spec and stops before any browser starts; `run` executes
 the scenario the user confirmed. Settings resolve in three layers, each overriding the one
 before it: the shipped defaults below, the project's `e2e` section in `.workflow/config.json`
@@ -44,7 +48,7 @@ from exoma.core.workspace.workspace_paths import read_json_file
 from exoma.core.workspace.workspace_paths import workflow_paths
 
 REQUEST_VERSION = 1
-PHASES = ("draft", "run")
+PHASES = ("auto", "draft", "run")
 SECRETS_FILE = "secrets.json"
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SECRET_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -433,8 +437,13 @@ def endpoint_error(entry: str) -> str | None:
         return "exact path only, no wildcard, query, fragment or whitespace"
     if entry.startswith("/"):
         return "'//' is a scheme-relative URL, write the full http(s) URL" if entry.startswith("//") else None
-    parts = urlsplit(entry)
-    if parts.scheme not in ("http", "https") or not parts.netloc or not parts.path.startswith("/"):
+    try:
+        parts = urlsplit(entry)
+        # Parsing the URL alone does not validate a numeric/range-correct port.
+        parts.port
+    except ValueError:
+        return "a valid http(s)://host/path URL with a valid port"
+    if parts.scheme not in ("http", "https") or not parts.hostname or not parts.path.startswith("/"):
         return "a path starting with '/' or a full http(s)://host/path URL"
     return None
 
@@ -552,6 +561,8 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
     blocked = permissions["blocked_requests"]
     if phase == "run" and not isinstance(data.get("scenario"), dict):
         errors.append("phase run needs the confirmed scenario object")
+    if phase == "auto" and any(key in data for key in ("scenario", "existing_tests", "spec_notes")):
+        errors.append("phase auto prepares its own scenario, existing_tests and spec_notes; use phase run to supply them")
     for key in ("existing_tests", "spec_notes"):
         if key in data and not isinstance(data[key], list):
             errors.append(f"{key} must be a list")

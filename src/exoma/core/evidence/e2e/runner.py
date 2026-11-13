@@ -3,6 +3,9 @@
 Every run reads one request (`core/evidence/e2e/request.py`), which itself starts from the
 project's pinned `e2e` section in config.json. The request's phase decides how far it goes:
 
+  auto   prepares a fresh draft, then runs stages 2 and 3 under this invocation's lock.
+         Invalid/blocked preparation, missing credentials and unapproved read-only
+         proposals stop before the player. A persisted draft is never an input.
   draft  preflight  → a draft with status `blocked` and the failing check
          stage 1    → second_agent writes `[E2E SPEC]`; a proxy failure is returned as-is
                       so main_agent sees [PROXY FAILED]; the spec is validated and written
@@ -33,6 +36,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 from exoma.core.evidence.e2e import existing_tests as e2e_existing
 from exoma.core.evidence.e2e import knowledge as e2e_knowledge
@@ -388,7 +392,7 @@ def _draft_result(
     missing_env: list[str] | tuple = (),
     secret_values: dict | None = None,
 ) -> dict:
-    """The draft the user confirms. Placeholder form only; written for the run phase to copy."""
+    """Preparation in placeholder form; auto uses this invocation's value, never the file."""
     parsed = parsed or {}
     if secret_values:
         # Last line before disk: whatever reached here typed out goes back to `${NAME}`.
@@ -484,7 +488,13 @@ def _draft_diagnosis(status: str, reason: str | None, errors: list, repair: dict
         return None
     repair = repair or {}
     initial = list(repair.get("errors") or errors)
-    if status == "blocked":
+    if reason == "env_missing":
+        cause, next_step = "draft_secrets", "fix_environment"
+        hint = "Fill the missing credential names in the selected secrets.json profile, then invoke phase auto again. Never put credential values in the request."
+    elif reason == "read_only_approval_required":
+        cause, next_step = "draft_blocked", "approve_read_only_requests"
+        hint = "Ask the user to approve the read_only_pending endpoints, add only approved entries to settings.allowed_read_only_requests, then invoke phase auto again."
+    elif status == "blocked":
         cause, next_step = "draft_blocked", "fix_environment"
         hint = "Preflight refused the draft before stage 1: fix what the reason names (Playwright, the browser, the base URL, or its policy), then draft again."
     elif reason == "secrets_invalid":
@@ -577,6 +587,34 @@ def _run_signature(report: dict) -> tuple:
         report["reason"],
         tuple((row.get("step_id"), row.get("status"), row.get("error")) for row in report["trail"]),
     )
+
+
+def _pending_read_only_requests(proposals: list[dict], config: dict) -> list[dict]:
+    """Compare proposals with standing approvals using the player's exact endpoint rules."""
+
+    def endpoint(method: str, target: str) -> tuple | None:
+        try:
+            parts = urlsplit(urljoin(config["base_url"], target))
+            scheme = parts.scheme.lower()
+            return (
+                method,
+                scheme,
+                (parts.hostname or "").lower(),
+                parts.port or {"http": 80, "https": 443}.get(scheme),
+                parts.path or "/",
+            )
+        except ValueError:
+            return None
+
+    allowed = {
+        key
+        for entry in config.get("allowed_read_only_requests") or []
+        if (key := endpoint(*e2e_request.read_only_request_target(entry))) is not None
+    }
+    return [
+        proposal for proposal in proposals
+        if endpoint(proposal["method"], proposal["endpoint"]) not in allowed
+    ]
 
 
 def run(
@@ -750,7 +788,7 @@ def run(
         e2e_meta["network"] = network
     if not pre["ok"]:
         e2e_meta["reason"] = pre["reason"]
-        if phase == "draft":
+        if phase in ("draft", "auto"):
             return _draft_result(project_root, session_id, e2e_meta, status="blocked", errors=[f"{pre['reason']}: {pre['detail']}"])
         # Counted, though no browser ever started. The loop the brake exists to break is
         # precisely this one: the run never reaches the browser report below, which used to
@@ -879,14 +917,29 @@ def run(
             + "; replaced by their ${NAME} placeholders — write placeholders, never values"
         )
 
-    if phase == "draft":
-        return _draft(executor, project_root, session_id, session, task, work_dir, on_progress, session_manager, lock_claim, config, e2e_meta, stages, lookup, secret_errors)
-
-    # ---- the confirmed spec ------------------------------------------------------
-    scenario = request["scenario"]
-    parsed = {"scenario": scenario, "existing_tests": request["existing_tests"], "uncertainties": request["spec_notes"]}
-    e2e_meta["spec_source"] = "request"
-    stages.append({"stage": 1, "command": None, "source": "request"})
+    if phase in ("draft", "auto"):
+        prepared = _draft(executor, project_root, session_id, session, task, work_dir, on_progress, session_manager, lock_claim, config, e2e_meta, stages, lookup, secret_errors)
+        if phase == "draft" or not prepared.get("ok"):
+            return prepared
+        draft = e2e_meta.get("draft") or {}
+        if draft.get("status") != "ready":
+            return prepared
+        # Preparation and review now share an invocation, but their provider usage
+        # still belongs to different stages. Record the draft snapshots once before
+        # starting a run, then let ordinary finalisation record only the review. This
+        # also leaves an incomplete run with no review free of phantom provider usage.
+        executor._record_usage(prepared, project_root, INVOCATION, task, session_id)
+        executor._call_metas = []
+        executor._last_call_meta = None
+        # Preparation belongs to this invocation and this lock. draft.json is an audit
+        # artifact, not an input: neither a stale file nor another session can replace it.
+        scenario = draft["scenario"]
+        parsed = {"scenario": scenario, "existing_tests": draft["existing_tests"], "uncertainties": draft["spec_notes"]}
+    else:
+        scenario = request["scenario"]
+        parsed = {"scenario": scenario, "existing_tests": request["existing_tests"], "uncertainties": request["spec_notes"]}
+        e2e_meta["spec_source"] = "request"
+        stages.append({"stage": 1, "command": None, "source": "request"})
     run_state["scenario"] = scenario
     errors, runnable_tests, skipped_tests = _spec_errors(scenario, parsed["existing_tests"], config, project_root)
     if errors:
@@ -1322,7 +1375,7 @@ def _draft(
     lookup: dict,
     secret_errors: list[str],
 ) -> dict:
-    """Stage 1 only: second_agent proposes, the runtime validates, the user decides."""
+    """Stage 1: validate preparation; auto can continue only when all its gates pass."""
     spec_route = executor._router_for(project_root).route("e2e_spec")
     # What earlier runs against this origin proved. A sidecar, not prompt text: the draft
     # reads it the way it reads facts, and an empty store offers nothing rather than an
@@ -1355,7 +1408,7 @@ def _draft(
             on_progress, session_manager, prompt=spec_continuation_prompt(gap), prompt_meta={}, lock_claim=lock_claim,
             record_failure=False,
         )
-        stages.append({"stage": 1, "command": "e2e_spec", "continuation": True, "ok": bool(follow_up.get("ok"))})
+        stages.append({"stage": 1, "command": "e2e_spec", "prompt_id": (executor._last_call_meta or {}).get("prompt_id"), "continuation": True, "ok": bool(follow_up.get("ok"))})
         if follow_up.get("ok"):
             content = content.rstrip() + "\n\n" + (follow_up.get("content") or "")
             gap = spec_gap(content)
@@ -1389,7 +1442,7 @@ def _draft(
                 on_progress, session_manager, prompt=spec_repair_prompt(repair_errors), prompt_meta={}, lock_claim=lock_claim,
                 record_failure=False,
             )
-            stages.append({"stage": 1, "command": "e2e_spec", "repair": True, "ok": bool(fixed.get("ok"))})
+            stages.append({"stage": 1, "command": "e2e_spec", "prompt_id": (executor._last_call_meta or {}).get("prompt_id"), "repair": True, "ok": bool(fixed.get("ok"))})
             candidate = (fixed.get("content") or "") if fixed.get("ok") else ""
             if candidate and spec_gap(candidate) is None:
                 content, gap = candidate, None
@@ -1420,11 +1473,24 @@ def _draft(
         e2e_meta["reason"] = "spec_invalid"
     elif secret_errors:
         e2e_meta["reason"] = "secrets_invalid"
+    status = "invalid" if errors else "ready"
+    if not errors and e2e_meta.get("phase") == "auto":
+        pending = _pending_read_only_requests(parsed.get("read_only_requests") or [], config)
+        if pending:
+            e2e_meta["read_only_pending"] = pending
+        if missing:
+            status = "blocked"
+            e2e_meta["reason"] = "env_missing"
+            e2e_meta["next_action"] = "Fill the missing credential names in the selected secrets.json profile, then invoke phase auto again."
+        elif pending:
+            status = "blocked"
+            e2e_meta["reason"] = "read_only_approval_required"
+            e2e_meta["next_action"] = "Ask the user which read_only_pending endpoints to approve; add only approved entries to settings.allowed_read_only_requests, then invoke phase auto again."
     return _draft_result(
         project_root,
         session_id,
         e2e_meta,
-        status="invalid" if errors else "ready",
+        status=status,
         parsed=parsed,
         errors=errors,
         env_names=names,

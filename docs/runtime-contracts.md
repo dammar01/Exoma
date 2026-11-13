@@ -232,9 +232,22 @@ The request is `.workflow/data/sessions/<session>/e2e/request.json` (`.workflow/
 (`core/evidence/e2e/request.py`):
 
 ```json
-{"version": 1, "phase": "draft" | "run", "settings": {...},
- "scenario": {...}, "existing_tests": [...], "spec_notes": [...]}
+{"version": 1, "phase": "auto", "settings": {...}}
 ```
+
+`auto` is the skill's default: one invocation prepares a fresh spec, validates it, then
+continues through the player and review under the same runtime lock. It consumes the
+preparation directly in memory, never a persisted draft. `scenario`, `existing_tests` and
+`spec_notes` are refused on an auto request, so an old manual handoff cannot replace the
+current preparation. Invalid/blocked preparation, missing credentials (`env_missing`) and
+unapproved read-only proposals (`read_only_approval_required`, with `meta.e2e.read_only_pending`)
+return a draft without starting the player or review. Approved endpoints are compared using
+the player's normalized scheme, host, port and exact path. After supplying missing material
+or approvals, invoke auto again: it prepares afresh rather than replaying an earlier draft.
+
+Explicit `draft` and `run` remain compatible: draft prepares only, while run takes a required
+`scenario` object and optional `existing_tests`/`spec_notes` lists. They are not the normal
+skill handoff any more.
 
 Settings resolve in three layers, each overriding the one before it: the shipped defaults
 in `default_settings()`, the project's `e2e` section in `.workflow/config.json`
@@ -279,14 +292,15 @@ what replaced it. Hybrid review is not a setting: it always runs.
 
 | Phase | Stage | Command / route | Reply contract | Ends when |
 | --- | --- | --- | --- | --- |
-| both | request | — | — | missing or malformed → `incomplete: request_missing | request_invalid` (not recorded) |
-| both | preflight | — | — | `base_url` policy, write policy (`allow_side_effects` with a write host that is not loopback or `.test` and resolves public, link-local or nowhere → `spec_invalid`), Playwright, browser, or URL reachability fails → draft `blocked`, run `incomplete` with that reason |
+| all | request | — | — | missing or malformed → `incomplete: request_missing | request_invalid` (not recorded) |
+| all | preflight | — | — | `base_url` policy, write policy (`allow_side_effects` with a write host that is not loopback or `.test` and resolves public, link-local or nowhere → `spec_invalid`), Playwright, browser, or URL reachability fails → draft/auto `blocked`, explicit run `incomplete` with that reason |
+| auto | 1 | `e2e_spec` | validated preparation | ready and all input/permission gates clear → stages below in the same invocation; otherwise return `[E2E DRAFT]` without a verification verdict |
 | draft | 1 | `e2e_spec` (internal route, role exploration; refused by `main.run()` and absent from the CLI) | standard `[EVIDENCE]` … `[DIGEST]` with an `[E2E SPEC]` section inside | a proxy failure (returned as-is); otherwise always — `[E2E DRAFT]` with status `ready` or `invalid` (spec missing after one targeted continuation, still invalid after one repair, refused by policy, ungrounded) |
 | run | spec | the request's `scenario` | — | refused by validation → `incomplete: spec_invalid`; malformed secrets.json, an unknown profile, or several profiles and none selected → `secrets_invalid`; an unresolved `${ENV}` → `env_missing` |
-| run | existing tests | `config.json e2e.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
-| run | 2 | runtime player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `request`, `cleanup`, `observation`, `artifact`, `harness`, `heartbeat`, `result`; shapes in `classify.py`) | never by itself — its report decides; skipped when the scenario has no steps; retried under the rules below |
-| run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
-| run | normalise | — | canonical `[VERIFICATION]` on `result.content`; `meta.verdict` set before `_finalize_verify_result` | — |
+| auto/run | existing tests | `config.json e2e.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
+| auto/run | 2 | runtime player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `request`, `cleanup`, `observation`, `artifact`, `harness`, `heartbeat`, `result`; shapes in `classify.py`) | never by itself — its report decides; skipped when the scenario has no steps; retried under the rules below |
+| auto/run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
+| auto/run | normalise | — | canonical `[VERIFICATION]` on `result.content`; `meta.verdict` set before `_finalize_verify_result` | — |
 
 Stage 1 gets at most two follow-ups in the same provider thread, each at most once. A reply
 with evidence and no `[E2E SPEC]` gets the targeted continuation (`spec.spec_continuation_prompt`).
@@ -480,7 +494,8 @@ fails the job with `worker_died`, `meta.reason: not_recoverable`, and releases t
 
 A draft's `meta.command` is `verify-browser`: it carries no verdict, exits like any
 non-verify command, is finalised under its own name (never counted as a verification),
-and writes `draft.json` beside the request for the run to copy. A run's `meta.command` is
+and writes `draft.json` beside the request as an audit artifact. Auto consumes that
+invocation's preparation in memory; it never reads the file back. A run's `meta.command` is
 `verify` with `meta.invocation: verify-browser`, so its verdict, exit code, and acceptance
 metrics are the ones every verification uses.
 

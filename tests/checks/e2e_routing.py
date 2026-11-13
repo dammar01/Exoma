@@ -20,6 +20,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import quote
 
 from exoma.core.evidence.contract import validate_verification_contract
@@ -318,6 +319,159 @@ def _scenario(reply: str = _SPEC_REPLY) -> dict:
     return parse_spec(reply)["scenario"]
 
 
+def _check_auto_browser_flow(workspace) -> None:
+    """One invocation owns preparation, gates, player and review, without file handoff."""
+    root = workspace("e2e-auto-current-")
+    adapter = _adapter(spec=_SPEC_REPLY.replace('"/login"', '"/current-login"'))
+    _write_request(root, "auto", settings={"base_url": "http://app.test"})
+    request_before = request_path(root, _SESSION_ID).read_bytes()
+    config_before = workflow_paths(root)["config"].read_bytes()
+    stale = {"status": "ready", "scenario": _scenario(), "existing_tests": [], "spec_notes": []}
+    other_draft = draft_path(root, "other-session")
+    other_draft.parent.mkdir(parents=True, exist_ok=True)
+    other_draft.write_text(json.dumps(stale), encoding="utf-8")
+    other_before = other_draft.read_bytes()
+    saved_draft = draft_path(root, _SESSION_ID)
+    saved_draft.write_text(json.dumps(stale), encoding="utf-8")
+    original_draft = e2e_runner._draft
+    original_delegate = Executor._run_delegated
+    tokens = []
+
+    def prepare_then_replace_artifact(*args, **kwargs):
+        prepared = original_draft(*args, **kwargs)
+        # Stronger than seeding an old file: even a file replaced AFTER preparation
+        # cannot change the scenario that this invocation sends to the player.
+        saved_draft.write_text(json.dumps(stale), encoding="utf-8")
+        return prepared
+
+    def observe_lock(executor, *args, **kwargs):
+        tokens.append((kwargs.get("lock_claim") or {}).get("token"))
+        return original_delegate(executor, *args, **kwargs)
+
+    network = {"hosts": ["app.test"], "write_hosts": ["app.test"], "pins": {"app.test": "127.0.0.1"}}
+    with patch.object(e2e_runner, "_draft", side_effect=prepare_then_replace_artifact), \
+            patch.object(Executor, "_run_delegated", observe_lock), \
+            patch.object(e2e_runner, "preflight", return_value={"ok": True, "checks": [], "network": network}), \
+            patch.object(e2e_runner, "run_player", wraps=e2e_runner.run_player) as player:
+        result = _execute(root, adapter, "verify-browser", env={"E2E_USER": "operator@example.test"})
+    meta = result["meta"]
+    assert_true(meta.get("command") == "verify" and meta.get("phase") == "run" and meta.get("verdict") == "pass",
+                f"auto returns the final verification, not its draft: {meta}")
+    assert_true(_verify_exit_code("verify", result) == 0 and player.call_count == 1, "one auto invocation starts one player on a clean pass")
+    payload = json.loads(player.call_args.kwargs["stdin_payload"])
+    assert_true(payload["scenario"]["steps"][0]["url"] == "/current-login", "the player uses this invocation's preparation, never stale disk state")
+    assert_true(payload["config"]["host_pins"] == network["pins"] and payload["config"]["write_hosts"] == network["write_hosts"],
+                "auto keeps the preflight decision and resolver pins")
+    assert_true(_commands(adapter) == ["e2e_spec", "verify"] and len(tokens) == 2 and tokens[0] and tokens[0] == tokens[1],
+                "preparation and review share one runtime lock")
+    assert_true([stage.get("stage") for stage in meta["e2e"]["stages"]] == [1, 2, 3], "auto retains all three stages")
+    assert_true(request_path(root, _SESSION_ID).read_bytes() == request_before and workflow_paths(root)["config"].read_bytes() == config_before,
+                "auto never rewrites the request into a run or changes project settings")
+    assert_true(other_draft.read_bytes() == other_before, "another session's preparation is untouched")
+    assert_true(len(_e2e_rows(root)) == 1 and _e2e_rows(root)[0]["spec_source"] == "e2e_spec", "one auto execution records one run with its actual spec source")
+
+    proposal = _SPEC_REPLY.replace(
+        "coverage_gap:\n- login-valid-user\n",
+        "coverage_gap:\n- login-valid-user\n\nread_only_requests:\n- method: POST | endpoint: /api/search | source_refs: src/pages/Login.tsx:3 | reason: reads only\n",
+    )
+    for kind, spec, reason in (
+        ("invalid", _SPEC_REPLY.replace('"role": "textbox", "name": "Email"', '"testid": "email"'), "spec_invalid"),
+        ("credentials", _SPEC_REPLY, "env_missing"),
+        ("approval", proposal, "read_only_approval_required"),
+        ("proposal-port", proposal.replace("endpoint: /api/search", "endpoint: http://localhost:bad/api/search"), "spec_invalid"),
+        ("secrets", _SPEC_REPLY, "secrets_invalid"),
+        ("preflight", _SPEC_REPLY, "base_url_unreachable"),
+        ("provider", _SPEC_REPLY, None),
+    ):
+        root = workspace(f"e2e-auto-{kind}-")
+        _write_request(root, "auto")
+        if kind == "secrets":
+            target = secrets_path(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('{"profiles": "invalid"}', encoding="utf-8")
+        adapter = _adapter(spec=spec, fail={"e2e_spec"} if kind == "provider" else None)
+        with patch.dict(os.environ), patch.object(e2e_runner, "run_player") as player:
+            os.environ.pop("E2E_USER", None)
+            preflight_patch = patch.object(e2e_runner, "preflight", return_value={"ok": False, "checks": [], "reason": reason, "detail": "fixture"}) if kind == "preflight" else contextlib.nullcontext()
+            with preflight_patch:
+                result = _execute(root, adapter, "verify-browser", env=None if kind == "credentials" else {"E2E_USER": "operator@example.test"})
+        assert_true(player.call_count == 0 and "verify" not in _commands(adapter), f"{kind} stops before player and review")
+        assert_true(not _e2e_rows(root) and "verdict" not in result["meta"], f"{kind} preparation never records a completed verification")
+        if reason:
+            assert_true(result["meta"]["e2e"].get("reason") == reason and _draft_info(result).get("status") != "ready",
+                        f"{kind} names the pending material or invalid preparation: {result['meta']}")
+        else:
+            assert_true(not result.get("ok") and len(_usage_rows(root)) == 1, "failed preparation is returned and billed once")
+        if kind == "approval":
+            assert_true(result["meta"]["e2e"]["read_only_pending"][0]["endpoint"] == "/api/search", "pending endpoint remains an explicit user decision")
+            assert_true("allowed_read_only_requests" not in json.loads(request_path(root, _SESSION_ID).read_text(encoding="utf-8"))["settings"], "auto never approves a proposal")
+
+    root = workspace("e2e-auto-standing-approval-")
+    config_path = workflow_paths(root)["config"]
+    config = read_json_file(config_path)
+    config["e2e"] = {"allowed_read_only_requests": ["POST http://LOCALHOST:8000/api/search"]}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    _write_request(root, "auto")
+    result = _execute(root, _adapter(spec=proposal), "verify-browser", env={"E2E_USER": "operator@example.test"})
+    assert_true(result["meta"].get("verdict") == "pass" and not result["meta"]["e2e"].get("read_only_pending"),
+                "a relative proposal covered by a normalized absolute config approval runs without asking again")
+
+    # Malformed ports are rejected at the request boundary, rather than crashing auto.
+    for endpoint in ("http://localhost:bad/api/search", "http://localhost:70000/api/search", "http://[invalid/api/search"):
+        root = workspace("e2e-auto-invalid-approval-")
+        _write_request(root, "auto", settings={"allowed_read_only_requests": [f"POST {endpoint}"]})
+        with patch.object(e2e_runner, "run_player") as player:
+            result = _execute(root, _adapter(), "verify-browser", env={"E2E_USER": "operator@example.test"})
+        assert_true(result["meta"]["e2e"].get("reason") == "request_invalid" and player.call_count == 0,
+                    "malformed endpoint URLs return a request diagnosis before preparation/player")
+
+    root = workspace("e2e-auto-invalid-standing-approval-")
+    config_path = workflow_paths(root)["config"]
+    config = read_json_file(config_path)
+    config["e2e"] = {"allowed_read_only_requests": ["POST http://localhost:bad/api/search"]}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    _write_request(root, "auto")
+    result = _execute(root, _adapter(spec=proposal), "verify-browser", env={"E2E_USER": "operator@example.test"})
+    assert_true(result["meta"]["e2e"].get("reason") == "read_only_approval_required"
+                and any("allowed_read_only_requests" in warning for warning in result["meta"]["e2e"].get("config_warnings") or []),
+                "a malformed config approval is warned and dropped; it neither crashes nor approves the proposal")
+
+    # A missing review produces DONE + an explicit verification gap: the existing
+    # contract keeps exit 0 for that incomplete result, while fail/INCOMPLETE exit 2.
+    for fake, fail, verdict, exit_code in (("app_fail", None, "fail", 2), ("pass", {"verify"}, "incomplete", 0), ("harness_fail", None, "incomplete", 2)):
+        root = workspace("e2e-auto-verdict-")
+        _write_request(root, "auto", settings={"max_retries": 0})
+        adapter = _adapter(fail=fail)
+        result = _execute(root, adapter, "verify-browser", fake=fake, env={"E2E_USER": "operator@example.test"})
+        assert_true(result["meta"].get("command") == "verify" and result["meta"].get("verdict") == verdict and _verify_exit_code("verify", result) == exit_code,
+                    f"auto preserves {fake}/{fail} verdict and exit: {result['meta'].get('verdict')} / {_verify_exit_code('verify', result)}")
+        assert_true(len(_usage_rows(root)) == len(adapter.calls), "auto bills failed reviews once and never bills a review that did not run")
+
+    root = workspace("e2e-auto-usage-")
+    adapter = _MeteredAdapter({"e2e_spec": [_EVIDENCE_ONLY, _SPEC_ONLY.replace("```json\n", "").replace("\n```", ""), _SPEC_ONLY], "verify": [_REVIEW_CLEAN]})
+    _write_request(root, "auto")
+    result = _execute(root, adapter, "verify-browser", env={"E2E_USER": "operator@example.test"})
+    rows = _usage_rows(root)
+    assert_true(result["meta"].get("verdict") == "pass" and result["meta"]["e2e"]["repair"]["recovered"], "auto continues after bounded preparation repair")
+    assert_true(len(rows) == len(adapter.calls) and [row.get("actual_input_tokens") for row in rows] == [usage["input_tokens"] for usage in adapter.usage],
+                "auto retains every preparation, repair and review usage record exactly once")
+    assert_true([row.get("e2e_stage") for row in rows] == ["draft", "draft", "draft", "run"],
+                f"auto retains the stage of each usage record: {[row.get('e2e_stage') for row in rows]}")
+    assert_true(len(_e2e_rows(root)) == 1 and sum(row.get("browser_seconds") is not None for row in rows) == 1,
+                "auto records run and browser duration once")
+    from exoma.core.audit.telemetry import e2e_metrics
+
+    tokens = e2e_metrics(root)["by_run_kind"]["fake"]["tokens_per_run"]
+    expected_tokens = sum(usage["input_tokens"] + usage["output_tokens"] for usage in adapter.usage)
+    assert_true(tokens["mean"] == expected_tokens and tokens["measured_runs"] == 1 and tokens["unmeasured_runs"] == 0,
+                f"the run cost includes preparation, continuation, repair and review exactly once: {tokens} vs {expected_tokens}")
+
+    _write_request(root, "auto", scenario=_scenario())
+    loaded, reason, errors = load_request(root, _SESSION_ID)
+    assert_true(loaded is None and reason == "request_invalid" and any("prepares its own" in error for error in errors),
+                "auto refuses a scenario supplied by an old manual handoff")
+
+
 class _MeteredAdapter(_StageAdapter):
     """A `_StageAdapter` whose every invocation reports its own provider token counts.
 
@@ -405,6 +559,7 @@ def _test_e2e_routing() -> None:
     real_display = e2e_runner.display_available
     e2e_runner.display_available = lambda: True
     try:
+        _check_auto_browser_flow(workspace)
         # --- pass: draft (stage 1) → confirmed run → fake player → stage 3 clean → pass ---
         root = workspace("e2e-pass-")
         config_before = workflow_paths(root)["config"].read_bytes()

@@ -119,8 +119,8 @@
     },
     {
       "path": "hosts/claude/skills/verify-browser.md",
-      "sha256": "2d81366d82c4181bab3677bcc9ddc49a3553c68b741a8b2c13434dcd0fc03ae1",
-      "bytes": 32804,
+      "sha256": "1aecb8a1e6082cf4d665c63e04432a5e2377bfedb72c3f95830f21fd990a7e03",
+      "bytes": 34193,
       "merge": "replace",
       "component": "prompt_bundle"
     },
