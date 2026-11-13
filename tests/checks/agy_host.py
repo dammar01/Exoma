@@ -154,7 +154,7 @@ def _test_agy_host_contract() -> None:
 
         # Under verify: the test request, the config and a file-name diff, as skills/verify.md asks.
         _run(home, "PreInvocation", _payload(root, cid, "/.verify hasil tadi", invocationNum=0))
-        prepare = f"{runner_prefix()} '{root.as_posix()}/.workflow/run.sh' verify-prepare --session 'main_x'"
+        prepare = f"{runner_prefix()} '{root.as_posix()}/.workflow/run.sh' verify-prepare --session '{main_id}'"
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=prepare))
         assert_true(out == {"decision": "allow"} and (rt / "delegated.marker").exists(),
                     "verify preparation passes the gate without clearing it")

@@ -538,6 +538,26 @@ def _test_init_upgrade_and_session_guard() -> None:
             "-m exoma" in run_sh and "main.py" not in run_sh,
             "the regenerated runner calls `-m exoma`, never a checkout's main.py",
         )
+        # A release can change generated content without changing the version stamps.
+        # Explicit migration must still replace stale runners and keep user/session data.
+        before_same_version_config = config_path.read_text(encoding="utf-8")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        overrides = {"verify_mode": "delegated", "verify_test_commands": ["python check.py"],
+                     "verify_test_timeout_seconds": 29}
+        config.setdefault("commands", {}).update(overrides)
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        sentinel = workflow_paths(root, "prepare-session")["runtime_dir"] / "keep.txt"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("session survives migration", encoding="utf-8")
+        runner = workflow_paths(root)["workflow_dir"] / "run.sh"
+        runner.write_text("#!/usr/bin/env bash\nexit 97\n", encoding="utf-8")
+        assert_true(not needs_upgrade(root), "stale runner fixture retains current version stamps")
+        upgrade_workflow_workspace(root)
+        migrated_config = json.loads(config_path.read_text(encoding="utf-8"))
+        assert_true(runner.read_text(encoding="utf-8") == run_sh
+                    and all(migrated_config["commands"][key] == value for key, value in overrides.items())
+                    and sentinel.read_text(encoding="utf-8") == "session survives migration",
+                    "same-version migration refreshes runner content and preserves policy/session data")
         inspected = subprocess.run(
             [osutil.find_bash() or "bash", str(workflow_paths(root)["workflow_dir"] / "inspect.sh")],
             capture_output=True,
@@ -603,6 +623,11 @@ def _test_init_upgrade_and_session_guard() -> None:
         assert_true(prepared.returncode == 0 and prepare_output["meta"]["command"] == "verify-prepare"
                     and prepare_output["meta"]["session_id"] == "prepare-session" and prepare_marker.exists(),
                     "real runner dispatches local preparation and preserves the delegation marker")
+        assert_true(prepare_output["meta"]["policy"]["test_command_prefixes"] == [["python", "check.py"]]
+                    and prepare_output["meta"]["policy"]["test_timeout_seconds"] == 29
+                    and sentinel.read_text(encoding="utf-8") == "session survives migration",
+                    "the migrated runner prepares verification using preserved policy overrides")
+        config_path.write_text(before_same_version_config, encoding="utf-8")
 
         presented = run("execute-begin", "--session", "presentation-test", "--main-host", "codex")
         presentation = json.loads(presented.stdout)

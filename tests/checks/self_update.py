@@ -24,6 +24,7 @@ def _test_self_update() -> None:
         _check_installed_upgrade()
         return
     _check_update_deadlines_and_interruption()
+    _check_update_migrates_workflow()
     with tempfile.TemporaryDirectory(prefix="exoma-update-") as tmp:
         # update resolves its cwd; Windows runners hand out 8.3 short temp paths that differ.
         root = Path(tmp).resolve()
@@ -340,6 +341,118 @@ def _check_update_deadlines_and_interruption() -> None:
                     "successful steps report elapsed completion without a stale heartbeat")
 
 
+def _seed_migration_user_data(home: Path, project: Path) -> None:
+    instructions = home / ".claude/CLAUDE.md"
+    instructions.write_text(instructions.read_text(encoding="utf-8") + "\nUser prose survives migration.\n",
+                            encoding="utf-8")
+    settings_path = home / ".claude/settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    settings["migration_user_setting"] = {"keep": True}
+    settings.setdefault("hooks", {}).setdefault("Stop", []).append({
+        "matcher": "UserOnly", "hooks": [{"type": "command", "command": "echo user-owned-hook"}],
+    })
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    config_path = project / ".workflow/config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.setdefault("commands", {}).update(verify_mode="delegated",
+                                             verify_test_commands=["python check.py"],
+                                             verify_test_timeout_seconds=37)
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    sentinel = project / ".workflow/data/sessions/migration-session/runtime/keep.txt"
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text("keep session data", encoding="utf-8")
+
+
+def _assert_migrated_user_data(run, home: Path, project: Path) -> None:
+    from exoma.utils.osutil import find_bash
+
+    assert_true("User prose survives migration." in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8"),
+                "migration preserves prose outside managed instructions")
+    settings = json.loads((home / ".claude/settings.json").read_text(encoding="utf-8"))
+    assert_true(settings["migration_user_setting"] == {"keep": True}
+                and any(entry.get("matcher") == "UserOnly"
+                        and entry.get("hooks") == [{"type": "command", "command": "echo user-owned-hook"}]
+                        for entry in settings["hooks"]["Stop"]),
+                "migration preserves user settings and foreign hooks")
+    runtime = project / ".workflow/data/sessions/migration-session/runtime"
+    assert_true((runtime / "keep.txt").read_text(encoding="utf-8") == "keep session data",
+                "migration preserves session files")
+    marker = runtime / "delegated.marker"
+    marker.write_text('{"command":"verify"}', encoding="utf-8")
+    output = json.loads(run([find_bash() or "bash", project / ".workflow/run.sh",
+                             "verify-prepare", "--session", "migration-session", "--main-host", "claude"]))
+    meta = output["meta"]
+    assert_true(output["ok"] and meta["command"] == "verify-prepare"
+                and meta["session_id"] == "migration-session" and meta["request"]["status"] == "missing"
+                and meta["next_step"]["action"] == "select_tests"
+                and meta["policy"]["test_command_prefixes"] == [["python", "check.py"]]
+                and meta["policy"]["test_timeout_seconds"] == 37 and marker.exists(),
+                "the migrated runner enters the new preparation flow with preserved policy and marker")
+
+
+def _check_update_migrates_workflow() -> None:
+    """Simulate only package installation; run the actual fresh installer/check in a sandbox."""
+    with tempfile.TemporaryDirectory(prefix="exoma-update-migration-") as tmp:
+        root = Path(tmp).resolve()
+        home, project = root / "home", root / "project"
+        home.mkdir()
+        project.mkdir()
+        env = {key: value for key, value in os.environ.items()
+               if not key.upper().startswith(("EXOMA_", "WORKFLOW_", "AGENT_", "CLAUDE_", "GEMINI_", "OPENCODE_"))
+               and key.upper() not in ("PYTHONPATH", "PYTHONHOME", "CODEX_HOME", "MAIN_SESSION_ID")}
+        env.update(HOME=str(home), USERPROFILE=str(home), AGENT_HOME=str(home),
+                   CODEX_HOME=str(home / ".codex"), EXOMA_HOME=str(root / "data"),
+                   PYTHONPATH=str(REPO / "src"))
+        real_run = self_update.run_bounded
+
+        def run(argv):
+            code, out, err = real_run([str(item) for item in argv], 120, cwd=str(project))
+            assert_true(code == 0, f"migration command exited zero: {argv}\n{out}\n{err}")
+            return out
+
+        calls = []
+
+        def package_only_mock(argv, timeout, **kwargs):
+            calls.append(argv)
+            if argv[1:4] == ["-m", "pip", "install"]:
+                return 0, "package installation simulated", ""
+            return real_run(argv, timeout, **kwargs)
+
+        with patch.dict(os.environ, env, clear=True):
+            run([sys.executable, "-m", "exoma", "install", "claude", "--provider", "opencode", "--no-input"])
+            run([sys.executable, "-m", "exoma", "init", "--work-dir", project, "--host", "claude"])
+            _seed_migration_user_data(home, project)
+            instructions = home / ".claude/CLAUDE.md"
+            artifacts = [instructions, home / ".claude/skills/verify.md",
+                         home / ".claude/hooks/session-bind.py", project / ".workflow/run.sh"]
+            expected = {path: path.read_bytes() for path in artifacts}
+            instructions.write_text("<!-- WORKFLOW-MAIN-AGENT:START -->\nstale owned instructions\n"
+                                    "<!-- WORKFLOW-MAIN-AGENT:END -->\nUser prose survives migration.\n",
+                                    encoding="utf-8")
+            for path in artifacts[1:]:
+                path.write_text("stale artifact\n", encoding="utf-8")
+            with patch.object(self_update.Path, "cwd", return_value=project), \
+                    patch.object(self_update, "run_bounded", side_effect=package_only_mock):
+                assert_true(self_update.main(["--manager", "pip"]) == 0,
+                            "update refreshes real installed artifacts after the simulated package stage")
+            assert_true(len(calls) == 3 and "--no-input" in calls[1] and "--check" in calls[2],
+                        "migration uses package, real install, and real check in order")
+            # Marker splicing may normalize whitespace outside the block; check owned
+            # instruction content through install --check and user prose separately.
+            assert_true("stale owned instructions" not in instructions.read_text(encoding="utf-8")
+                        and all(path.read_bytes() == expected[path] for path in artifacts[1:]),
+                        "update replaces stale instructions, skills, hooks and runner even at the same version")
+            _assert_migrated_user_data(run, home, project)
+            snapshot = {path: path.read_bytes() for path in [*artifacts, home / ".claude/settings.json",
+                                                            project / ".workflow/config.json"]}
+            with patch.object(self_update.Path, "cwd", return_value=project), \
+                    patch.object(self_update, "run_bounded", side_effect=package_only_mock):
+                assert_true(self_update.main(["--manager", "pip"]) == 0, "repeat update completes refresh/check")
+            assert_true(all(path.read_bytes() == content for path, content in snapshot.items()),
+                        "repeated migration leaves current artifacts and user settings unchanged")
+            _assert_migrated_user_data(run, home, project)
+
+
 def _check_installed_upgrade() -> None:
     """Opt-in artifact test: published baseline -> local wheel, with every write isolated."""
     from exoma.utils import osutil
@@ -397,6 +510,7 @@ def _check_installed_upgrade() -> None:
             assert_true("1.0.1" in run([exe, "--version"]), "temporary launcher starts the published baseline")
             run([exe, "install", "claude", "--provider", "opencode", "--no-input"])
             run([exe, "init", "--work-dir", project, "--host", "claude"])
+            _seed_migration_user_data(home, project)
             shutil.copyfile(candidate, wheels / candidate.name)
             old_code, transition, old_error = osutil.run_bounded([str(exe), "update"], 120, cwd=str(project))
             assert_true(old_code is not None, "the published updater returned within the harness deadline")
@@ -416,10 +530,12 @@ def _check_installed_upgrade() -> None:
             receipts = list((home / ".claude/backups").glob("install_*/install_receipt.json"))
             assert_true(receipts and all(json.loads(path.read_text(encoding="utf-8"))["complete"] for path in receipts),
                         "isolated installs have complete receipts")
+            _assert_migrated_user_data(run, home, project)
             second = run([exe, "update", "--timeout", "60"])
             assert_true("completed in" in second and "[UPDATE] complete" in second,
                         "a second invocation exercises the newly installed supervisor")
             run([exe, "install", "--check"])
+            _assert_migrated_user_data(run, home, project)
             installed_python = root / "tools/exoma" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             smoke = run([installed_python, "-c", "import exoma, sys; print(exoma.__file__); print(sys.executable)"])
             assert_true(str(root / "tools/exoma") in smoke, "imports and interpreter come from the isolated tool")
@@ -428,6 +544,7 @@ def _check_installed_upgrade() -> None:
             "python": sys.version.split()[0], "platform": sys.platform,
             "old_updater_exit": old_code, "manual_recovery_checked": bool(old_code),
             "new_updater_exit": 0, "install_check_exit": 0,
+            "user_data_preserved": True, "post_upgrade_prepare_checked": True,
             "baseline_sha256": baseline_hash,
             "candidate_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
         }

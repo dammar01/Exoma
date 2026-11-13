@@ -237,10 +237,19 @@ def _check_verify_preparation() -> None:
                         and effective["auto_verify_after_execute"] is auto_verify_after_execute(root) is False
                         and effective["test_command_prefixes"] == [] and effective["test_timeout_seconds"] == 900
                         and invalid_meta["config_warnings"], "malformed config uses consistent typed defaults")
-        config_path.write_text('{"commands":{"verify_test_commands":["python",9]}}', encoding="utf-8")
-        assert_true(verify_tests._policy(root)[0] == [], "a malformed allowlist permits no commands")
-        config_path.write_text('{"commands":{"verify_test_commands":["python", "bad | prefix"]}}', encoding="utf-8")
-        assert_true(verify_tests._policy(root)[0] == [], "an invalid prefix cannot leave a partially valid policy")
+        for prefixes in (["python", 9], ["python", "bad | prefix"]):
+            config_path.write_text(json.dumps({"commands": {"verify_test_commands": prefixes}}), encoding="utf-8")
+            _request(root, {"commands": ["python check.py"], "reason": "check effective policy"})
+            before = snapshot()
+            with patch.object(verify_tests.osutil, "run_bounded", side_effect=AssertionError("invalid policy ran a test")):
+                invalid_meta = verify_tests.prepare(root, "s1")["meta"]
+                outcomes = verify_tests.run_tests(root, {"commands": ["python check.py"]})
+            assert_true(invalid_meta["policy"]["test_command_prefixes"] == []
+                        and invalid_meta["config_warnings"] and invalid_meta["request"]["status"] == "invalid"
+                        and invalid_meta["next_step"]["action"] == "fix_request"
+                        and outcomes[0]["status"] == "refused",
+                        "a partially invalid allowlist warns during prepare and refuses execution")
+            assert_true(snapshot() == before, "invalid policy inspection and refusal preserve requests and markers")
         config_path.write_text("{", encoding="utf-8")
         assert_true(verify_tests.prepare(root, "s1")["meta"]["config_warnings"], "broken config JSON is diagnosed")
         config_path.unlink()
@@ -946,22 +955,31 @@ def _check_doctor_verify_warnings() -> None:
     """doctor warns on an empty test allowlist and on an old install's header left outside
     the managed block of ~/.claude/CLAUDE.md; neither is an issue."""
     from exoma.core.audit.diagnostics import run_doctor
+    from exoma.installer import base
 
     home = Path(tempfile.mkdtemp(prefix="doctor-home-"))
-    saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE")}
-    os.environ["HOME"] = os.environ["USERPROFILE"] = str(home)
+    saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE", "AGENT_HOME")}
+    saved_installer = base.HOME, base._ENV_CACHE
+    os.environ["HOME"] = os.environ["USERPROFILE"] = os.environ["AGENT_HOME"] = str(home)
+    base.HOME, base._ENV_CACHE = home, {}
     (home / ".claude").mkdir()
     claude_md = home / ".claude" / "CLAUDE.md"
     header = "# Claude Code — Personal Global Config (v3.4.0)"
-    managed = f"<!-- WORKFLOW-MAIN-AGENT:START -->\n{header}\nbody\n<!-- WORKFLOW-MAIN-AGENT:END -->\n"
     try:
-        for prefixes, text, empty, leftover in (
-            ([], managed, True, False),
-            ([f'"{sys.executable}" -c'], f"{header}\nold\n\n{managed}", False, True),
+        for prefixes, empty, leftover in (
+            ([], True, False),
+            ([f'"{sys.executable}" -c'], False, True),
         ):
-            claude_md.write_text(text, encoding="utf-8")
             root = _workspace(prefixes)
             try:
+                # Doctor now audits the owned block against the actual installed rendering.
+                # Use the same project and isolated home for both the fixture and its audit.
+                rel = "hosts/claude/CLAUDE.md"
+                rendered = base._render_text(base.DIST_CONFIG / rel, rel, root)
+                managed = base._managed_block(rendered, *base.MARKERS[rel])
+                assert_true(managed is not None, "rendered Claude instructions include the installer-owned block")
+                text = f"{header}\nold\n\n{managed}" if leftover else managed
+                claude_md.write_text(text, encoding="utf-8")
                 meta = run_doctor(root, "does-not-exist", "doctor-verify")["meta"]
                 fixes = meta["recommended_fixes"]
                 allow = [f for f in fixes if f.startswith("WARNING: commands.verify_test_commands")]
@@ -978,6 +996,7 @@ def _check_doctor_verify_warnings() -> None:
             finally:
                 shutil.rmtree(root, ignore_errors=True)
     finally:
+        base.HOME, base._ENV_CACHE = saved_installer
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
