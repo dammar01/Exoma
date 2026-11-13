@@ -593,13 +593,112 @@ class _WinJob:
         self.handle = None
 
 
-def _kill_leftovers(proc: "subprocess.Popen", job: _WinJob) -> None:
+class _WindowsDescendants:
+    """Pin observed descendants while their intermediate parents still exist.
+
+    Only used without a job object. Polling is best-effort, not containment: a branch
+    that disappears between samples can still be missed. A second snapshot after
+    opening handles proves each pinned PID's current parent before accepting it.
+    """
+
+    def __init__(self, proc: "subprocess.Popen"):
+        self.pid = proc.pid
+        self.handles: dict[int, tuple[int, int]] = {}
+        try:
+            self.created = _windows_handle_create_time(int(proc._handle))
+        except Exception:
+            self.created = None
+
+    def sample(self) -> None:
+        if self.created is None:
+            return
+        pending: dict[int, tuple[int, int]] = {}
+        try:
+            roots = {self.pid: self.created, **{pid: item[1] for pid, item in self.handles.items()}}
+            rows = _windows_process_rows()
+            children: dict[int, list[int]] = {}
+            for row in rows:
+                children.setdefault(row["ParentProcessId"], []).append(row["ProcessId"])
+            seen = set(roots)
+            stack = list(roots)
+            while stack:
+                for pid in children.get(stack.pop(), ()):
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
+                    stack.append(pid)
+                    handle, _gone = _windows_open(pid)
+                    if handle:
+                        created = _windows_handle_create_time(handle)
+                        if created is None:
+                            _windows_kernel32().CloseHandle(handle)
+                        else:
+                            pending[pid] = (handle, created)
+            # PIDs can be reused between the first snapshot and OpenProcess. All
+            # candidates are now pinned; recheck ancestry and creation ordering before
+            # granting permission to terminate them. Unproven handles are just closed.
+            parents = {row["ProcessId"]: row["ParentProcessId"] for row in _windows_process_rows()}
+            while pending:
+                accepted = []
+                for pid, (handle, created) in pending.items():
+                    parent = parents.get(pid)
+                    if parent in roots and created >= roots[parent]:
+                        self.handles[pid] = (handle, created)
+                        roots[pid] = created
+                        accepted.append(pid)
+                if not accepted:
+                    break
+                for pid in accepted:
+                    del pending[pid]
+        except Exception:
+            pass  # unavailable ancestry never grants permission to kill
+        finally:
+            for handle, _created in pending.values():
+                _windows_kernel32().CloseHandle(handle)
+
+    def terminate(self) -> bool:
+        import time
+
+        if not self.handles:
+            return True
+        kernel32 = _windows_kernel32()
+        ok = True
+        for handle, _created in reversed(list(self.handles.values())):
+            try:
+                ok = _windows_kill_handle(handle) and ok
+            except Exception:
+                ok = False
+        # A successful TerminateProcess is a request, not proof of completed exit.
+        # Wait at most five seconds across all observed processes, not per process.
+        deadline = time.monotonic() + 5
+        for handle, _created in self.handles.values():
+            wait_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            try:
+                ok = (kernel32.WaitForSingleObject(handle, wait_ms) == 0) and ok
+            except Exception:
+                ok = False
+        return ok
+
+    def close(self) -> None:
+        for handle, _created in self.handles.values():
+            try:
+                _windows_kernel32().CloseHandle(handle)
+            except Exception:
+                pass
+        self.handles.clear()
+
+
+def _kill_leftovers(proc: "subprocess.Popen", job: _WinJob, descendants=None) -> None:
     """Kill what is left of an EXITED child's tree: descendants still holding its pipes."""
     if IS_WINDOWS:
         if not job.terminate():
+            if descendants is not None:
+                descendants.sample()
             # Popen still pins the exited parent's PID. Native Toolhelp traversal can
             # find its descendants even when taskkill cannot walk an exited root.
             terminate_tree(proc)
+            if descendants is not None:
+                descendants.terminate()
         return
     import signal
 
@@ -679,6 +778,7 @@ def run_bounded(
         **hidden_run_kwargs(inherit_console=inherit_output),
     )
     job = _WinJob(proc)
+    descendants = _WindowsDescendants(proc) if IS_WINDOWS and not job.handle else None
     out_chunks: list[bytes] = []
     err_chunks: list[bytes] = []
 
@@ -695,11 +795,15 @@ def run_bounded(
         next_tick = started + tick_seconds
         timed_out = False
         while True:
+            if descendants is not None:
+                descendants.sample()
             now = time.monotonic()
             if now >= deadline:
                 timed_out = True
                 break
             wake = min(deadline, next_tick) if on_tick is not None else deadline
+            if descendants is not None:
+                wake = min(wake, now + 0.02)
             try:
                 proc.wait(timeout=max(0.01, wake - now))
                 break
@@ -712,24 +816,34 @@ def run_bounded(
                     pass
                 next_tick += tick_seconds
         if timed_out:
+            if descendants is not None:
+                descendants.sample()
             job.terminate()
             terminate_tree(proc)
+            if descendants is not None:
+                descendants.terminate()
             _join_readers(readers, drain_seconds)
             return None, text(out_chunks), text(err_chunks)
         if inherit_output:
             # No pipes to drain, but an exited child may still have live descendants.
-            _kill_leftovers(proc, job)
+            _kill_leftovers(proc, job, descendants)
         elif not _join_readers(readers, drain_seconds):
             # Exited, but something it started still holds a pipe: kill it, then give the
             # readers a moment to see EOF. One outside the tree keeps its pipe; given up on.
-            _kill_leftovers(proc, job)
+            _kill_leftovers(proc, job, descendants)
             _join_readers(readers, drain_seconds)
         return proc.returncode, text(out_chunks), text(err_chunks)
     except BaseException:
+        if descendants is not None:
+            descendants.sample()
         job.terminate()
         terminate_tree(proc)
+        if descendants is not None:
+            descendants.terminate()
         raise
     finally:
+        if descendants is not None:
+            descendants.close()
         job.close()
 
 

@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v1.0.2, do not edit manually -->
-# OpenCode Second Agent — v1.0.2
+<!-- WORKFLOW-SECOND-AGENT:START — v1.1.0, do not edit manually -->
+# OpenCode Second Agent — v1.1.0
 
 ## Scope
 This block applies ONLY when the request's instructions — inline, or in the file attached

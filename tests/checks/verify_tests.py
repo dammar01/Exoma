@@ -476,12 +476,17 @@ def _check_inherited_output_deadlines() -> None:
         root = Path(tmp)
         # Success is held behind a file until this test observes both streams. The
         # continuously writing case must still hit the overall deadline, not an idle timer.
-        for mode in ("success", "noisy", "silent", "cancel", "fallback", "exited-fallback"):
+        for mode in ("success", "noisy", "silent", "cancel", "fallback", "exited-fallback", "captured-fallback", "timed-fallback"):
             ready, release = root / (mode + ".json"), root / (mode + ".release")
+            worker_ready = root / (mode + ".worker")
             stdout, stderr = root / (mode + ".out"), root / (mode + ".err")
+            worker = (
+                "import os,pathlib,time; "
+                f"pathlib.Path({str(worker_ready)!r}).write_text(str(os.getpid())); time.sleep(60)"
+            )
             child = (
                 "import json, os, pathlib, subprocess, sys, time\n"
-                "worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                f"worker = subprocess.Popen([sys.executable, '-c', {worker!r}])\n"
                 f"pathlib.Path({str(ready)!r}).write_text(json.dumps([os.getpid(), worker.pid]))\n"
                 f"while not pathlib.Path({str(release)!r}).exists():\n"
                 + ("    print('live-out', flush=True); print('live-err', file=sys.stderr, flush=True)\n"
@@ -491,15 +496,33 @@ def _check_inherited_output_deadlines() -> None:
             supervisor = (
                 "import json, pathlib, sys\n"
                 "from exoma.utils import osutil\n"
+                "original_terminate_tree = osutil.terminate_tree\n"
+                "def traced_terminate_tree(proc, *args, **kwargs):\n"
+                f"    recorded = json.loads(pathlib.Path({str(ready)!r}).read_text()) if pathlib.Path({str(ready)!r}).exists() else []\n"
+                f"    worker_file = pathlib.Path({str(worker_ready)!r})\n"
+                "    if worker_file.exists() and worker_file.read_text(): recorded.append(int(worker_file.read_text()))\n"
+                "    root_pid = proc.pid if proc is not None else kwargs.get('pid')\n"
+                "    def snapshot():\n"
+                "        rows = {row['ProcessId']: row for row in osutil._windows_process_rows()} if osutil.IS_WINDOWS else {}\n"
+                "        ancestry = {}\n"
+                "        for pid in [root_pid, *recorded]:\n"
+                "            while pid in rows and pid not in ancestry:\n"
+                "                ancestry[pid] = rows[pid]; pid = rows[pid]['ParentProcessId']\n"
+                "        return {'root': root_pid, 'tree': osutil.process_tree(root_pid), 'ancestry': ancestry, 'states': {pid: osutil.process_state(pid) for pid in recorded}}\n"
+                "    print('CLEANUP_BEFORE=' + json.dumps(snapshot()), flush=True)\n"
+                "    result = original_terminate_tree(proc, *args, **kwargs)\n"
+                "    print('CLEANUP_AFTER=' + json.dumps({'result': result, **snapshot()}), flush=True)\n"
+                "    return result\n"
+                "osutil.terminate_tree = traced_terminate_tree\n"
                 + ("osutil._WinJob.__init__ = lambda self, proc: setattr(self, 'handle', None)\n"
-                   if mode in ("fallback", "exited-fallback") else "")
+                   if mode in ("fallback", "exited-fallback", "captured-fallback", "timed-fallback") else "")
                 + "def beat(elapsed):\n"
                 "    print('heartbeat', file=sys.stderr, flush=True)\n"
                 f"    if {mode in ('cancel', 'fallback')!r} and pathlib.Path({str(ready)!r}).exists():\n"
                 "        raise KeyboardInterrupt\n"
                 "try:\n"
                 f"    result = osutil.run_bounded([sys.executable, '-c', {child!r}], "
-                f"{20 if mode in ('success', 'cancel', 'fallback', 'exited-fallback') else 3}, inherit_output=True, "
+                f"{20 if mode in ('success', 'cancel', 'fallback', 'exited-fallback', 'captured-fallback') else 3}, inherit_output={mode != 'captured-fallback'!r}, "
                 "on_tick=beat, tick_seconds=0.2)\n"
                 "    print('RESULT=' + json.dumps(result), flush=True)\n"
                 "except KeyboardInterrupt:\n"
@@ -521,7 +544,14 @@ def _check_inherited_output_deadlines() -> None:
                     while not ready.read_text() and time.monotonic() < deadline:
                         time.sleep(0.01)
                     pids = json.loads(ready.read_text())
+                    while (not worker_ready.exists() or not worker_ready.read_text()) and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    assert_true(worker_ready.exists() and bool(worker_ready.read_text()), f"{mode}: worker interpreter acknowledged startup")
+                    pids = list(dict.fromkeys([*pids, int(worker_ready.read_text())]))
                     identities = [(pid, osutil.pid_create_time(pid), osutil.process_identity(pid)) for pid in pids]
+                    if osutil.IS_WINDOWS:
+                        assert_true(all(created is not None for _pid, created, _identity in identities),
+                                    f"{mode}: capture native generation identities before releasing any process")
                     if mode == "success":
                         while (b"live-out" not in stdout.read_bytes() or b"live-err" not in stderr.read_bytes()) \
                                 and time.monotonic() < deadline:
@@ -529,13 +559,13 @@ def _check_inherited_output_deadlines() -> None:
                         assert_true(proc.poll() is None and b"live-out" in stdout.read_bytes()
                                     and b"live-err" in stderr.read_bytes(),
                                     "inherited stdout and stderr are visible while the child is still running")
-                    if mode in ("success", "exited-fallback"):
+                    if mode in ("success", "exited-fallback", "captured-fallback"):
                         release.touch()
                     proc.wait(timeout=30)
                     output, errors = stdout.read_text(), stderr.read_text()
-                    if mode in ("success", "exited-fallback"):
+                    if mode in ("success", "exited-fallback", "captured-fallback"):
                         assert_true(proc.returncode == 0 and 'RESULT=[0, "", ""]' in output,
-                                    "inherited mode returns the exit code and empty captured strings")
+                                    "the completed parent preserves its exit code and the fixture's empty captured strings")
                     elif mode in ("cancel", "fallback"):
                         assert_true(proc.returncode == 130 and "cancelled" in output,
                                     "cancellation cleans up then propagates to the caller")
@@ -547,12 +577,27 @@ def _check_inherited_output_deadlines() -> None:
                     # must fail the assertion instead of being treated as a stopped child.
                     for pid, created, identity in identities:
                         until = time.monotonic() + 5
-                        while osutil.process_generation(pid, created, identity) == osutil.PROCESS_MATCHED \
-                                and time.monotonic() < until:
+                        while True:
+                            generation = osutil.process_generation(pid, created, identity)
+                            stopped = generation in (osutil.PROCESS_DEAD, osutil.PROCESS_REUSED)
+                            native = None
+                            if osutil.IS_WINDOWS:
+                                handle, gone = osutil._windows_open(pid)
+                                try:
+                                    native = {"gone": gone, "created": osutil._windows_handle_create_time(handle) if handle else None,
+                                              "wait": osutil._windows_kernel32().WaitForSingleObject(handle, 0) if handle else None}
+                                finally:
+                                    if handle:
+                                        osutil._windows_kernel32().CloseHandle(handle)
+                                stopped = gone or (native["created"] is not None
+                                                   and (native["created"] != created or native["wait"] == 0))
+                            if stopped or time.monotonic() >= until:
+                                break
                             time.sleep(0.05)
-                        assert_true(osutil.process_generation(pid, created, identity)
-                                    in (osutil.PROCESS_DEAD, osutil.PROCESS_REUSED),
-                                    f"{mode}: recorded descendant {pid} stopped")
+                        assert_true(stopped,
+                                    f"{mode}: recorded descendant {pid} stopped; generation={generation}, "
+                                    f"state={osutil.process_state(pid)}, expected_created={created}, native={native}, "
+                                    f"supervisor stdout={output[-7000:]}, stderr={errors[-1000:]}")
                 finally:
                     if proc.poll() is None:
                         osutil.terminate_tree(proc)

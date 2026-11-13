@@ -40,6 +40,7 @@ def _dead_pid() -> int:
 
 
 def _test_process_generation_outcomes() -> None:
+    _check_retained_windows_descendants()
     me = os.getpid()
     assert_true(
         osutil.process_generation(_dead_pid(), None, "anything") == osutil.PROCESS_DEAD,
@@ -81,6 +82,92 @@ def _test_process_generation_outcomes() -> None:
         )
     finally:
         osutil.process_identity = original
+
+
+def _check_retained_windows_descendants() -> None:
+    """An exited intermediate cannot hide a pinned leaf or license a recycled PID."""
+    from types import SimpleNamespace
+
+    def row(pid, parent):
+        return {"ProcessId": pid, "ParentProcessId": parent, "Name": "fixture"}
+
+    class Kernel:
+        def __init__(self):
+            self.closed, self.killed = [], []
+            self.wait_result = 0
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+
+        def TerminateProcess(self, handle, code):
+            self.killed.append(handle)
+            return True
+
+        def WaitForSingleObject(self, handle, milliseconds):
+            return self.wait_result
+
+    def fixture(snapshots, times, opened=None):
+        kernel = Kernel()
+        opened = opened or (lambda pid: (pid * 100, False))
+        return kernel, (
+            patch.object(osutil, "_windows_process_rows", side_effect=snapshots),
+            patch.object(osutil, "_windows_open", side_effect=opened),
+            patch.object(osutil, "_windows_handle_create_time", side_effect=lambda handle: times.get(handle)),
+            patch.object(osutil, "_windows_kernel32", return_value=kernel),
+        )
+
+    from contextlib import ExitStack
+
+    full = [row(2, 1), row(3, 2)]
+    orphaned = [row(3, 2), row(4, 3)]
+    kernel, patches = fixture([full, full, orphaned, orphaned], {100: 10, 200: 20, 300: 30, 400: 40})
+    with ExitStack() as stack:
+        for patcher in patches:
+            stack.enter_context(patcher)
+        descendants = osutil._WindowsDescendants(SimpleNamespace(pid=1, _handle=100))
+        try:
+            descendants.sample()
+            descendants.sample()  # root and intermediate are absent from this snapshot
+            assert_true(set(descendants.handles) == {2, 3, 4}, "observed ancestry survives an intermediate exit and reaches a leaf's new child")
+            assert_true(descendants.terminate() and set(kernel.killed) == {200, 300, 400},
+                        "cleanup reaches the pinned generations after root ancestry disappears")
+        finally:
+            descendants.close()
+        assert_true(sorted(kernel.closed) == [200, 300, 400] and 100 not in kernel.closed,
+                    "all owned handles close exactly once; Popen keeps ownership of its root")
+
+    for label, snapshots, times, opened in (
+        ("reused between snapshot and open", [[row(2, 1)], [row(2, 99)]], {100: 10, 200: 20}, None),
+        ("older than parent", [[row(2, 1)], [row(2, 1)]], {100: 10, 200: 5}, None),
+        ("identity unavailable", [full, full], {100: 10, 300: 30}, None),
+        ("access denied", [full, full], {100: 10, 300: 30}, lambda pid: (None, False) if pid == 2 else (300, False)),
+        ("second snapshot unavailable", [[row(2, 1)], OSError("snapshot unavailable")], {100: 10, 200: 20}, None),
+    ):
+        kernel, patches = fixture(snapshots, times, opened)
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            descendants = osutil._WindowsDescendants(SimpleNamespace(pid=1, _handle=100))
+            try:
+                descendants.sample()
+                assert_true(not descendants.handles and descendants.terminate() and not kernel.killed,
+                            f"{label}: an unproven process is never accepted or terminated")
+            finally:
+                descendants.close()
+            expected = [300] if label == "access denied" else ([200, 300] if label == "identity unavailable" else [200])
+            assert_true(sorted(kernel.closed) == expected, f"{label}: rejected candidate handles are not leaked")
+
+    kernel, patches = fixture([[row(2, 1)], [row(2, 1)]], {100: 10, 200: 20})
+    with ExitStack() as stack:
+        for patcher in patches:
+            stack.enter_context(patcher)
+        descendants = osutil._WindowsDescendants(SimpleNamespace(pid=1, _handle=100))
+        try:
+            descendants.sample()
+            kernel.wait_result = 258  # WAIT_TIMEOUT: the successful kill request has not completed
+            assert_true(not descendants.terminate(), "a successful TerminateProcess request alone is not confirmed exit")
+        finally:
+            descendants.close()
 
 
 def _test_worker_kill_is_fail_closed() -> None:
