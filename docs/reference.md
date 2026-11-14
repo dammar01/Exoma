@@ -2410,6 +2410,28 @@ fixtures remain a different gate and cannot attest independence. Native operatio
 are needed to diagnose Windows membership refusals and macOS stalls; source checks or WSL
 results do not replace those platform results.
 
+`tools/maintain/native_update_gate.py` collects and checks those results for a release
+candidate. `matrix --python-311 <exe> --python-313 <exe> [--output <dir>]` requires a clean
+git checkout and native interpreters of the stated versions on this host (a WSL or
+cross-OS interpreter is refused). It runs the strict handoff gate once per manager
+(`uv`, `pipx`, `pip`) under each interpreter and writes one report per cell, named
+`<platform>-py<minor>-<manager>.json`, under `<output>/<commit>/<attempt>/`; the default
+output is the git-ignored `.workflow/release-evidence/`. Every cell is attempted, the
+checkout is re-checked afterwards, and the exit status is nonzero when any cell is missing,
+failed or unqualified. `validate <dir> --commit <sha> [--platform <p>]` checks a directory
+of reports without running anything.
+
+A strict report now names its `kind` (`exoma-update-handoff`), `schema_version`, `mode`
+(`strict` or `contained`), `commit`, `commit_dirty`, `platform`, `machine`,
+`python_version` and `manager`, before any fixture work. A report qualifies only when it
+is a current strict report for exactly the validated commit from a clean checkout; the
+platform and Python/manager cell are as expected and unique; the transition, independent
+worker and no-op are all verified without manual recovery or a recorded error; and its
+state shows a succeeded phase, confirmed cleanup and caller exit before the package stage
+(on Windows also `host_job.in_job` false). Contained, legacy and smoke-test reports never
+qualify. The tool reads what the checkout reported about itself; it does not authenticate
+the host, and it does not enforce anything at tagging or publication.
+
 `.github/workflows/publish.yml` runs on a pushed `v*` tag: it calls `ci.yml`, refuses a tag
 whose name does not match the built wheel's version, and uploads that same artifact to PyPI
 through Trusted Publishing (`id-token: write`, environment `pypi`, no stored token).

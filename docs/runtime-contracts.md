@@ -66,7 +66,11 @@ exercise stages but cannot attest independence. Windows CI may select supported 
 labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`. On GitHub-hosted
 Windows, whose runners keep the helper inside an outer job, CI skips only the real
 handoff step. The handoff on a native Windows host is a mandatory release-staging gate
-(`RELEASE.md`); `publish.yml` cannot enforce it. Restrictive-host refusal is never
+(`RELEASE.md`); `publish.yml` cannot enforce it. `tools/maintain/native_update_gate.py`
+makes that run reproducible: one command executes all six manager/Python cells with
+commit-bound reports, and its validator accepts only complete, clean, strict receipts
+(see `docs/reference.md`). Receipts are not host-authenticated and stay out of Git, so
+the gate remains a maintainer-run check before tagging. Restrictive-host refusal is never
 converted into a positive gate, and production admission is unchanged.
 
 The artifact poller treats `cleanup_pending` as a failed acceptance gate immediately,

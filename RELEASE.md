@@ -94,6 +94,16 @@ accident.
    **The handoff on a native Windows host (all three managers, both Python versions) is a
    mandatory release-staging gate**: run the command above there before tagging and record
    the result. `publish.yml` cannot enforce it, so it depends on this step being followed.
+   Run the whole matrix on each native host from a clean checkout of the exact commit to tag:
+
+   ```powershell
+   python tools/maintain/native_update_gate.py matrix --python-311 <python3.11> --python-313 <python3.13>
+   ```
+
+   It runs the command above for uv, pipx and pip under both interpreters, writes one
+   commit-bound report per cell under the git-ignored `.workflow/release-evidence/`, and
+   exits nonzero if any cell is missing or does not qualify. Keep that directory with the
+   release record; `native_update_gate.py validate <dir> --commit <sha>` rechecks it later.
    `--update-artifacts contained` exercises the real package/refresh/check transition in
    disposable fixtures under a restrictive test supervisor. It relaxes only that fixture's
    inherited-job assertion; it does not verify independent-worker survival and cannot

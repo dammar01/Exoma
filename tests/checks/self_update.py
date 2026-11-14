@@ -1551,8 +1551,12 @@ def _artifact_evidence(report_path):
     """Keep completed transition evidence even if the later no-op or cleanup fails."""
     from exoma import _update_worker as worker
 
-    evidence = {"passed": False, "platform": sys.platform, "actual_version_transition": False,
-                "independent_worker_verified": False, "no_op_verified": False}
+    import platform as host
+    evidence = {"kind": "exoma-update-handoff", "schema_version": 1,
+                "mode": "contained" if os.environ.get("EXOMA_UPDATE_CONTAINED_SMOKE") == "1" else "strict",
+                "passed": False, "platform": sys.platform, "machine": host.machine(),
+                "python_version": host.python_version(),
+                "actual_version_transition": False, "independent_worker_verified": False, "no_op_verified": False}
     failed = False
     try:
         yield evidence
@@ -1568,6 +1572,16 @@ def _artifact_evidence(report_path):
                 if not failed:
                     raise
                 print(f"Artifact report unavailable: {exc}", file=sys.stderr)
+
+
+def _checkout_identity():
+    """Commit and cleanliness of the tested checkout, bound into the report before any fixture work."""
+    try:
+        run = lambda *argv: subprocess.run(["git", *argv], cwd=REPO, capture_output=True, text=True,
+                                           check=True, timeout=30, **no_console()).stdout.strip()
+        return run("rev-parse", "HEAD"), bool(run("status", "--porcelain"))
+    except (OSError, subprocess.SubprocessError):
+        return None, None
 
 
 def _mark_handoff_passed(report, contained):
@@ -1586,6 +1600,13 @@ def _check_artifact_reporting():
                     "all platforms require lifecycle evidence; contained/missing proof never attests independence")
     with tempfile.TemporaryDirectory(prefix="exoma-artifact-evidence-") as tmp:
         report_path = Path(tmp) / "report.json"
+        with _artifact_evidence(report_path) as report:
+            assert_true(report["kind"] == "exoma-update-handoff" and report["schema_version"] == 1
+                        and report["mode"] in {"strict", "contained"} and report["python_version"]
+                        and report["platform"] == sys.platform and report["machine"],
+                        "report names its kind, schema, mode, Python and platform before any fixture work")
+        assert_true(json.loads(report_path.read_text(encoding="utf-8"))["passed"] is False,
+                    "a report that never reached acceptance stays unpassed")
         try:
             with _artifact_evidence(report_path) as report:
                 report.update(actual_version_transition=True, independent_worker_verified=True,
@@ -1626,6 +1647,8 @@ def _check_handoff_wheel_upgrade() -> None:
     assert_true(uv is not None, "uv is required for the A-to-B artifact gate")
     with _artifact_evidence(os.environ.get("EXOMA_UPDATE_SMOKE_REPORT")) as report, \
          _preserved_handoff_temp(report) as tmp:
+        report["commit"], report["commit_dirty"] = _checkout_identity()
+        report["manager"] = os.environ.get("EXOMA_UPDATE_SMOKE_MANAGER", "uv")
         root = Path(tmp).resolve()
         stage, wheels, home, project = root / "built", root / "index", root / "home", root / "project"
         for folder in (stage, wheels, home, project):

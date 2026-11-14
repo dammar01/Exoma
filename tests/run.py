@@ -73,6 +73,7 @@ from tests.checks.continuation import (  # noqa: E402
 )
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E402
 from tests.checks.self_update import _test_self_update, _check_windows_update_observer  # noqa: E402
+from tests.checks.native_update_gate import _test_native_update_gate  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.promote import _test_promote_boundaries  # noqa: E402
 from tests.checks.knowledge_retrieve import _test_knowledge_retrieval  # noqa: E402
@@ -267,6 +268,7 @@ SUITES: dict[str, tuple] = {
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
     "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
+    "native-update-gate": (_test_native_update_gate, "native update-gate matrix collector accepts only complete, clean, commit-bound strict receipts"),
     "self-update": (_test_self_update, "shared updater lifecycle, native containment, queries, and opt-in A-to-B/no-op wheel gate"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
