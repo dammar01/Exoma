@@ -7,6 +7,7 @@ worker/job cleanup helpers have different lifetime guarantees.
 
 import ctypes
 from ctypes import wintypes as w
+import errno
 import hashlib
 import json
 import math
@@ -756,20 +757,44 @@ def guardian():
                     cleanup_failed("exit_observation", exc)
             # Reap ONLY after the last group signal. Holding a waitable child pins
             # the group leader's PID even when it already exited successfully.
+            # Only EPERM is deferred: Darwin reports it for a group holding just the
+            # already-exited, unreaped leader. It is discarded below solely when exit
+            # was observed before this signal, the reap succeeded, and a signal-0
+            # probe proves the group gone. Any other outcome keeps the failure.
+            kill_denied = None
+            exit_before_kill = bool(lifecycle["exit_observed"])
             try:
                 lifecycle["signals_attempted"].append("SIGKILL")
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except OSError as exc:
-                cleanup_failed("signal_kill", exc)
+                # EACCES and every other errno are plain failures, never deferred.
+                if exc.errno == errno.EPERM:
+                    kill_denied = exc
+                else:
+                    cleanup_failed("signal_kill", exc)
             lifecycle["reap_outcome"] = "pending"
+            reap_error = None
             try:
                 code = child.wait(timeout=5)
                 lifecycle.update(child_returncode=code, reap_outcome="reaped")
             except (OSError, subprocess.TimeoutExpired) as exc:
-                cleanup_failed("child_reap", exc)
+                reap_error = exc
                 lifecycle["reap_outcome"] = "failed"
+            if kill_denied is not None:
+                group_absent = False
+                if reap_error is None and exit_before_kill:
+                    try:
+                        os.killpg(child.pid, 0)  # signal 0: never destructive
+                    except ProcessLookupError:
+                        group_absent = True
+                    except OSError:
+                        pass
+                if not group_absent:
+                    cleanup_failed("signal_kill", kill_denied)
+            if reap_error is not None:
+                cleanup_failed("child_reap", reap_error)
         if owner:
             try:
                 owner.cleanup()

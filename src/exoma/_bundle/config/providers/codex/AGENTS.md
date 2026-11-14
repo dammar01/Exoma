@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v1.1.0, do not edit manually -->
-# Codex Second Agent — v1.1.0
+<!-- WORKFLOW-SECOND-AGENT:START — v1.1.1, do not edit manually -->
+# Codex Second Agent — v1.1.1
 
 ## Scope
 This block governs Exoma second-agent processes marked `WORKFLOW_AGENT_ROLE=second_agent`

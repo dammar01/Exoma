@@ -1385,6 +1385,18 @@ def _check_guardian_cleanup_attempts():
     cases = (
         {"denied": {"SIGKILL"}, "exit": 0},
         {"denied": {"SIGKILL"}, "exit": 7},
+        # Darwin: EPERM on a group holding only the exited, unreaped leader is
+        # forgiven solely after observed exit + reap + signal-0 ESRCH.
+        {"denied": {"SIGKILL"}, "exit": 0, "probe": "absent"},
+        {"denied": {"SIGKILL"}, "exit": 7, "probe": "absent"},
+        {"denied": {"SIGKILL"}, "exit": 0, "probe": "denied"},
+        {"denied": {"SIGKILL"}, "exit": 0, "probe": "error"},
+        {"denied": {"SIGKILL"}, "wait_error": "timeout", "probe": "absent"},
+        {"denied": {"SIGKILL"}, "observation_error": True, "probe": "absent"},
+        {"denied": {"SIGKILL"}, "owner_error": True, "probe": "absent"},
+        {"denied": {"SIGTERM", "SIGKILL"}, "term": True, "probe": "absent"},
+        {"kill_error": True, "probe": "absent"},
+        {"kill_eacces": True, "probe": "absent"},
         {"denied": {"SIGKILL"}, "wait_error": "timeout"},
         {"denied": {"SIGKILL"}, "wait_error": "oserror", "owner_error": True},
         {"denied": {"SIGTERM"}, "term": True},
@@ -1404,10 +1416,24 @@ def _check_guardian_cleanup_attempts():
             elif term:
                 monitor.exited.side_effect = [False, True]
             def killpg(pid, sig):
+                if sig == 0:
+                    events.append("PROBE")
+                    kind = case.get("probe", "present")
+                    if kind == "absent":
+                        raise ProcessLookupError(3, "fixture group absent")
+                    if kind == "denied":
+                        raise PermissionError(1, "fixture probe denied")
+                    if kind == "error":
+                        raise OSError(5, "fixture probe failed")
+                    return
                 name = "SIGTERM" if sig == signal.SIGTERM else "SIGKILL"
                 events.append(name)
                 if case.get("gone"):
                     raise ProcessLookupError(3, "fixture group absent")
+                if name == "SIGKILL" and case.get("kill_error"):
+                    raise OSError(5, "fixture kill failed")
+                if name == "SIGKILL" and case.get("kill_eacces"):
+                    raise PermissionError(13, "fixture kill access denied")
                 if name in case.get("denied", set()):
                     raise PermissionError(1, "fixture signal denied")
             def reap(timeout):
@@ -1451,7 +1477,10 @@ def _check_guardian_cleanup_attempts():
                 expected_errors.append("signal_term")
             if case.get("observation_error"):
                 expected_errors.append("exit_observation")
-            if "SIGKILL" in case.get("denied", set()):
+            probe_expected = ("SIGKILL" in case.get("denied", set()) and not case.get("wait_error") and
+                              not case.get("observation_error"))
+            if case.get("kill_error") or case.get("kill_eacces") or ("SIGKILL" in case.get("denied", set()) and not (
+                    probe_expected and case.get("probe") == "absent")):
                 expected_errors.append("signal_kill")
             if case.get("wait_error"):
                 expected_errors.append("child_reap")
@@ -1462,7 +1491,7 @@ def _check_guardian_cleanup_attempts():
             diagnostic = receipt["diagnostics"]
             lifecycle = diagnostic["child"]
             signals = ["SIGTERM", "SIGKILL"] if term else ["SIGKILL"]
-            assert_true(events == signals + ["wait", "owner", "close"],
+            assert_true(events == signals + ["wait"] + (["PROBE"] if probe_expected else []) + ["owner", "close"],
                         f"signal/observation failures cannot skip the final signal, reap or owner cleanup: {events}")
             assert_true([e["site"] for e in diagnostic["cleanup_errors"]] == expected_errors,
                         "ordered errors retain each distinct failure boundary")
@@ -1474,7 +1503,8 @@ def _check_guardian_cleanup_attempts():
                         "actual child exit remains observable even when cleanup is negative")
             assert_true(bool(diagnostic["stage_error"]) is bool(term), "cleanup failures preserve the original stage error")
             for error in diagnostic["cleanup_errors"]:
-                if error["site"] in {"signal_term", "signal_kill"}:
+                if error["site"] in {"signal_term", "signal_kill"} and not (
+                        case.get("kill_error") or case.get("kill_eacces")):
                     assert_true(error["type"] == "PermissionError" and error["errno"] == 1,
                                 "EPERM remains an explicit failed signal, never missing-group evidence")
 

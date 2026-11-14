@@ -1,4 +1,4 @@
-# Exoma v1.1.0
+# Exoma v1.1.1
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.1.0)
+## Install (v1.1.1)
 
 ### New team member — full sequence from scratch
 
@@ -241,7 +241,10 @@ last group-signal attempt or the subsequent five-second child wait. The child PI
 stays pinned until the final signal attempt. Signal, reap and ownership errors retain their
 order in diagnostics; failed observation/monitor cleanup is also recorded. Successful reap,
 including an observed child exit of zero, does not clear a signal error or authorize a
-positive cleanup receipt. Unconfirmed cleanup still retains admission and recovery limits.
+positive cleanup receipt. The one exception is an EPERM from the final SIGKILL: it is
+discarded only when exit was observed before the signal, the reap succeeded and a later
+signal-0 probe of the group raises ESRCH (macOS, exited unreaped leader). Anything else
+keeps the failure. Unconfirmed cleanup still retains admission and recovery limits.
 
 Diagnostic selection is limited to 8 rejected PIDs, 32 process records, 8 parent hops per
 snapshot and 256 characters per new string. The whole serialized receipt, including its
@@ -1602,7 +1605,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.1.0):
+Reliability keys (v1.1.1):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -2260,7 +2263,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.1.0)
+### Liveness worker (v1.1.1)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

@@ -90,7 +90,10 @@ accident.
    do not replace the artifact gate. The gate builds disposable A/B wheels containing the
    candidate updater, polls journal files after A exits, and requires B plus refresh/check
    and preserved user data. Manual recovery or a package no-op cannot satisfy it. CI runs
-   this gate on Windows/Linux/macOS for both CI Python versions and uv/pipx/pip venvs; operation logs are preserved with the result artifact. Set the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER` to supported Windows runner labels if hosted restrictions prevent full breakaway.
+   this gate on Linux/macOS for both CI Python versions and uv/pipx/pip venvs; operation logs are preserved with the result artifact. On GitHub-hosted Windows CI skips only this handoff step (the runner keeps the helper inside an outer job); setting the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER` to supported Windows runner labels re-enables it there.
+   **The handoff on a native Windows host (all three managers, both Python versions) is a
+   mandatory release-staging gate**: run the command above there before tagging and record
+   the result. `publish.yml` cannot enforce it, so it depends on this step being followed.
    `--update-artifacts contained` exercises the real package/refresh/check transition in
    disposable fixtures under a restrictive test supervisor. It relaxes only that fixture's
    inherited-job assertion; it does not verify independent-worker survival and cannot

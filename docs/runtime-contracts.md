@@ -51,14 +51,23 @@ Guardian exit observation, each group signal, bounded child wait and remaining-d
 verification have independent error boundaries. A failed signal cannot suppress the final
 group-signal attempt or reap; the PID/PGID remains pinned until that last attempt. Ordered
 errors and observed return/reap evidence survive all steps. A successful reap never clears
-EPERM or makes an unconfirmed cleanup positive, even when the child return code is zero.
+a signal error or makes an unconfirmed cleanup positive, even when the child return code is
+zero, with one narrow exception: an EPERM from the final SIGKILL (macOS reports it for a
+group that holds only an exited, unreaped leader) is discarded only when the child's exit
+was observed before that signal, the reap succeeded, and a following signal-0 probe of the
+group raises ESRCH. A present group, a denied or failed probe, a failed reap, a missing
+exit observation or any non-EPERM signal error keeps the negative receipt. Signal 0 is the
+only signal sent after the reap.
 
 The mandatory artifact matrix covers Windows/Linux/macOS, Python 3.11/3.13 and uv/pipx/pip
 venvs: real candidate A-to-B, fresh provenance, install/check, user data and separate no-op.
 Console and module entrypoints use the same state/order assertions. Contained fixtures
 exercise stages but cannot attest independence. Windows CI may select supported runner
-labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`; restrictive-host
-refusal remains mandatory and is never converted into a positive gate or a skip.
+labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`. On GitHub-hosted
+Windows, whose runners keep the helper inside an outer job, CI skips only the real
+handoff step. The handoff on a native Windows host is a mandatory release-staging gate
+(`RELEASE.md`); `publish.yml` cannot enforce it. Restrictive-host refusal is never
+converted into a positive gate, and production admission is unchanged.
 
 The artifact poller treats `cleanup_pending` as a failed acceptance gate immediately,
 while production observation still reports that operation as unknown (exit 4). It must

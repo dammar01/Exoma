@@ -128,6 +128,11 @@ jobs:
         run: uv tool install pipx
 
       - name: Shared self-update replaces A with B without recovery
+        # GitHub-hosted Windows keeps the helper inside an outer job, so real breakaway
+        # cannot be proven there. Only that handoff step is skipped; the native Windows
+        # run is a mandatory RELEASE.md staging gate. A runner override (variable
+        # EXOMA_WINDOWS_UPDATE_RUNNER) re-enables it automatically.
+        if: matrix.os != 'windows-latest' || vars.EXOMA_WINDOWS_UPDATE_RUNNER != ''
         env:
           EXOMA_UPDATE_HANDOFF_SMOKE: '1'
           EXOMA_UPDATE_SMOKE_MANAGER: ${{ matrix.manager }}
