@@ -690,9 +690,11 @@ def _check_attached_windows_console() -> None:
             observer = threading.Thread(target=observe, daemon=True)
             observer.start()
             self_update.HEARTBEAT_SECONDS = 0.1
-            with patch.object(self_update, '_package_command', return_value=('pip', [sys.executable, '-c', child])), \
-                 patch.object(self_update.Path, 'cwd', return_value=root):
-                report['status'] = self_update.main(['--manager', 'pip', '--timeout', '8'])
+            report['stage'] = 'native-stage-execution'
+            try:
+                report['status'] = 0 if self_update._run_step('console', [sys.executable, '-c', child], root, timeout=8) else 1
+            except KeyboardInterrupt:
+                report['status'] = 130
             stop.set()
             observer.join(1)
             report['descendants_stopped'] = bool(identities) and all(

@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "bd7e2d7ed0be73b867336e8ed483edf729caa78581570f4bad9950154ded0c09",
-      "bytes": 41090,
+      "sha256": "5bf4acc1d926928813e9190393d71c01c9c691e4a45ab4d3a5f9576262ed7b4d",
+      "bytes": 41450,
       "merge": "merge",
       "component": "prompt_bundle"
     },

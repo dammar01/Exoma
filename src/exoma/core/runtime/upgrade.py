@@ -138,7 +138,10 @@ def upgrade_workflow_workspace(
     if not _capacity_guarded:
         from exoma.core.jobs.job_manager import JobManager
 
-        with JobManager().capacity_guard():
+        admission = JobManager()
+        with admission.capacity_guard():
+            admission.assert_update_admission()
+            admission.assert_cleanup_admission(project_root)
             return upgrade_workflow_workspace(
                 project_root, agent_workflow_path, _capacity_guarded=True
             )
@@ -295,13 +298,16 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
 
         manager = JobManager()
         target = str(Path(project_root).resolve())
-        out: list[dict] = []
+        out: list[dict] = manager.retained_cleanup_claims(project_root)
+        retained_ids = {job.get("job_id") for job in out}
         for path in manager.job_dir.glob("job_*.json"):
             try:
                 job = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if not isinstance(job, dict):
+                continue
+            if job.get("job_id") in retained_ids:
                 continue
             status = job.get("status")
             if not isinstance(status, str) or status not in {"pending", "running", "recovering"}:
@@ -326,8 +332,8 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
                 continue
             out.append(job)
         return out
-    except Exception:
-        return []
+    except Exception as exc:
+        raise ValueError("cannot establish workspace cleanup admission") from exc
 
 def ensure_root_gitignore_entry(project_root: Path) -> bool:
     gitignore_path = project_root / ".gitignore"

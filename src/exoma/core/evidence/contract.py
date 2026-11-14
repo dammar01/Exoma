@@ -10,6 +10,9 @@ from exoma.config.verification_policy import VERIFICATION_TAG_VALUES, expected_v
 from exoma.core.evidence.fact_store import _FILELINE
 
 ERROR_TYPES = {
+    "cancelled",
+    "cancellation_pending",
+    "cleanup_pending",
     "permission_denied",
     "empty_output",
     "job_already_running",

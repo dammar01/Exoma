@@ -85,7 +85,7 @@ PROFILES: dict[str, HostProfile] = {
             "Agy moves a long `run_command` to the background by itself: when it does, wait for that task's "
             "completion notice and read its output; the runner still blocks until it prints its JSON. Never "
             "start a second runner call for the same task, and never read `.workflow/data` by hand while it "
-            "runs."
+            "runs. For live diagnosis use the bound `.workflow/inspect.sh --session <MAIN_SESSION_ID>` snapshot."
         ),
         ask_user=(
             "Renderer = `ask_question`, one call per open question, each with its options and their "
@@ -124,7 +124,7 @@ PROFILES: dict[str, HostProfile] = {
             "override host review, and a prefix rule does not guarantee approval. If the session yields "
             "before it returns, wait on that same `exec_command` "
             "session; never start a second runner call for the same task, and never read `.workflow/data` "
-            "by hand while it runs."
+            "by hand while it runs. For live diagnosis use `.workflow/inspect.sh --session <MAIN_SESSION_ID>`; it only reads a bounded snapshot and does not start another provider."
         ),
         ask_user=(
             "Renderer = the user-input tool when Codex offers one, otherwise ask in the reply: one question "
@@ -141,7 +141,7 @@ PROFILES: dict[str, HostProfile] = {
         delegated_run=(
             "OpenCode cannot run a call in the background: run the runner in the foreground with a long timeout "
             "(600000 ms) and wait; it blocks until it prints its JSON. Never start a second runner call for "
-            "the same task, and never read `.workflow/data` by hand while it runs. No output at all means the "
+            "the same task, and never read `.workflow/data` by hand while it runs. For live diagnosis use `.workflow/inspect.sh --session <MAIN_SESSION_ID>`; it only reads a bounded snapshot and does not start another provider. No output at all means the "
             "call did not reach Git Bash: check that it starts with the exact prefix above."
         ),
         ask_user=(

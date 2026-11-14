@@ -165,6 +165,8 @@ def _verify_exit_code(
 ) -> int:
     """Return nonzero when a completed verification is not a clean pass."""
     effective_command = job_command if command in {"await", "result"} else command
+    if isinstance(result, dict) and (result.get("meta") or {}).get("error_type") == "cancelled":
+        return 130
     # `provider` refuses by writing nothing, and a caller that only checks the exit
     # status would read that refusal as a successful apply. Its own branch rather than a
     # general "ok:false -> 2" rule: every other command here has a settled exit contract

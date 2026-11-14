@@ -125,7 +125,7 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         + python_path
-        + f'exec "{sh_py}" -m exoma --command inspect --work-dir "{root}" --pretty\n'
+        + f'exec "{sh_py}" -m exoma.core.jobs.diagnostics --work-dir "{root}" --pretty "$@"\n'
     )
     # Attach to an existing job by id (recovery after a foreground timeout). Passes through
     # flags like --wait --result to `exoma check`, which polls without spawning a new run.

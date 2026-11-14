@@ -232,10 +232,10 @@ A project that already has a `.workflow/` is refreshed by `$exoma-upgrade` in Co
 Details, modes and undo: [installation guide](docs/installation.md).
 To update later, run `exoma update` from inside a project; it refreshes the package and
 global configuration, plus that project's `.workflow/` when present.
-On Windows it hands the work to an independent helper and exits once the request is
-accepted; this does **not** mean the update completed. Watch the reported state/log files
-without restarting `exoma.exe` during replacement, then use `exoma update --status` for
-the result. `exoma update --check` queries installed/latest public version information
+All three OSes hand work to the same standalone updater. Exit 3 means accepted/running,
+not completed. Use the printed external observer command to wait without reopening the
+installation being replaced; afterward `exoma update --status` reports the terminal result.
+`exoma update --check` queries installed/latest public version information
 without upgrading; package-manager constraints still decide eligibility.
 
 Ask in natural language; the primary agent routes it (shown in Claude Code):

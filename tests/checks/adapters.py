@@ -256,6 +256,76 @@ def _check_transport_boundaries() -> None:
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _test_stream_observations():
+    import json
+    import tempfile
+    import time
+    from exoma.adapters.shared.stream import StreamTracker, MAX_EVENT
+    now = [0.0]
+    with tempfile.TemporaryDirectory(prefix="provider-stream-") as tmp:
+        for provider, start, work in (
+            ("codex", {"type": "thread.started"}, {"type": "item.completed", "item": {"type": "command_execution"}}),
+            ("claude", {"type": "system"}, {"type": "assistant", "message": {"content": [{"text": "answer"}]}}),
+            ("opencode", {"type": "step_start"}, {"type": "step_finish"}),
+            ("agy", {"step_update": {}}, {"step_update": {"step_type": "agent_response", "text_delta": "answer"}}),
+        ):
+            now[0] = 0
+            tracker = StreamTracker(provider, tmp, clock=lambda: now[0])
+            tracker.feed("stdout", json.dumps(start) + "\n")
+            now[0] = 50
+            tracker.feed("stderr", "WebSocket disconnected; retrying\n")
+            snap = tracker.snapshot()
+            assert_true(snap["work_idle_seconds"] == 50 and snap["retry_count"] == 1,
+                        f"{provider}: retry output is not work progress")
+            tracker.feed("stdout", json.dumps(work) + "\n")
+            assert_true(tracker.snapshot()["work_idle_seconds"] == 0 and tracker.snapshot()["work_events"] == 1,
+                        f"{provider}: a recognized work event advances activity")
+            tracker.feed("stdout", json.dumps({"type": "error", "api_key": "tiny", "text": _SECRET}) + "\n")
+            tracker.feed("stdout", "x" * (MAX_EVENT + 1))
+            tracker.feed("stdout", _SECRET + "\n")
+            tracker.feed("stdout", '{"type":"unknown","password":"split')
+            tracker.feed("stdout", 'credential"}\n')
+            until = time.monotonic() + 2
+            while not list(tracker.sink.path.glob("*.jsonl")) and time.monotonic() < until:
+                time.sleep(0.01)
+            assert_true(bool(list(tracker.sink.path.glob("*.jsonl"))), "diagnostics are on disk before provider exit")
+            tracker.close()
+            text = "".join(p.read_text(encoding="utf-8") for p in tracker.sink.path.glob("*.jsonl"))
+            assert_true(_SECRET not in text and "splitcredential" not in text and '"tiny"' not in text,
+                        "decoded, short named and fragmented credentials are redacted before persistence")
+            assert_true(tracker.snapshot()["diagnostics"]["oversized_events"] > 0,
+                        "oversized fragments are discarded with an explicit count")
+        bad = Path(tmp) / "not-a-directory"
+        bad.write_text("occupied", encoding="utf-8")
+        tracker = StreamTracker("codex", bad)
+        tracker.feed("stderr", "retry\n")
+        tracker.close()
+        assert_true(tracker.snapshot()["diagnostics"]["error"] is not None,
+                    "sink failure is visible without failing provider capture")
+        from exoma.core.evidence.provider_stream import DiagnosticSink
+        flood = DiagnosticSink(tmp, byte_limit=65536)
+        for sequence in range(1000):
+            flood.emit({"sequence": sequence, "payload": "x" * 4096})
+        flood.close()
+        assert_true(sum(path.stat().st_size for path in flood.path.glob("*.jsonl")) <= 65536
+                    and (flood.dropped or flood.truncated), "flood capture stays bounded with visible loss")
+        tracker = StreamTracker("codex")
+        tracker.feed("stdout", json.dumps({"type": "item.completed", "item": {
+            "type": "command_execution", "aggregated_output": 'turn.failed WebSocket error'}}) + "\n")
+        assert_true(not tracker.snapshot()["terminal_error"] and tracker.snapshot()["diagnostic"] is None,
+                    "quoted tool errors do not become terminal provider errors")
+        tracker.close()
+        import sys
+        adapter = codex_adapter.CodexAdapter()
+        adapter.poll_interval = 0.05
+        started = time.monotonic()
+        out = adapter._popen_capture([sys.executable, "-c",
+            "import json,time; print(json.dumps({'type':'turn.failed','error':{'message':'provider failed'}}),flush=True); time.sleep(60)"],
+            "prompt", None, 60, "run", None)
+        assert_true(time.monotonic() - started < 15 and adapter.last_call_meta["terminal_error"]
+                    and out["returncode"] != 0, "terminal provider event ends waiting and cleans the process before its deadline")
 _MAKE_ERROR_LITERAL = re.compile(r'make_error\(\s*"([a-z_]+)"')
 
 

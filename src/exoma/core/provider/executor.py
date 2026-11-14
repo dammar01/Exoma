@@ -998,6 +998,7 @@ class Executor:
             self.adapter.poll_interval = route["poll_interval_seconds"]
         # Only the adapter's poll loop can emit liveness while opencode blocks.
         self.adapter.on_progress = on_progress
+        self.adapter.diagnostic_dir = handoff["paths"]["logs_dir"] / handoff["meta"]["prompt_id"]
 
         # Resume only a thread the selected provider issued. Bound here, after late adapter
         # binding and before the session is copied for the adapter, because this is the

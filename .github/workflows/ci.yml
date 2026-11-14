@@ -97,8 +97,8 @@ jobs:
         run: python tests/run.py --keep-going --only atomic-helpers --only codex-auto-review-context
 
   dist:
-    name: dist (${{ matrix.os }} / Python ${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
+    name: dist (${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.manager }})
+    runs-on: ${{ matrix.os == 'windows-latest' && fromJSON(vars.EXOMA_WINDOWS_UPDATE_RUNNER || '"windows-latest"') || matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -110,6 +110,7 @@ jobs:
         # The package floor (pyproject requires-python) and the newest tested Python: the
         # built wheel and sdist must install and run on the oldest interpreter they admit.
         python: ['3.11', '3.13']
+        manager: ['uv', 'pipx', 'pip']
     steps:
       - uses: actions/checkout@v4
 
@@ -122,19 +123,25 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
-      - name: Windows self-update replaces A with B without recovery
-        if: matrix.os == 'windows-latest'
+      - name: Install pipx for its native update gate
+        if: matrix.manager == 'pipx'
+        run: uv tool install pipx
+
+      - name: Shared self-update replaces A with B without recovery
         env:
           EXOMA_UPDATE_HANDOFF_SMOKE: '1'
+          EXOMA_UPDATE_SMOKE_MANAGER: ${{ matrix.manager }}
           EXOMA_UPDATE_SMOKE_REPORT: ${{ runner.temp }}/exoma-handoff-report.json
         run: python tests/run.py --only self-update --traceback --update-artifacts handoff
 
-      - name: Preserve Windows handoff evidence
-        if: always() && matrix.os == 'windows-latest'
+      - name: Preserve native handoff evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: handoff-${{ matrix.python }}
-          path: ${{ runner.temp }}/exoma-handoff-report.json
+          name: handoff-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.manager }}
+          path: |
+            ${{ runner.temp }}/exoma-handoff-report.json
+            ${{ runner.temp }}/exoma-handoff-report.logs
           if-no-files-found: warn
 
       - name: Wheel in a clean environment
@@ -156,7 +163,7 @@ jobs:
           "$bin/exoma" --version
           "$bin/exoma" install claude --no-input
           "$bin/exoma" init --work-dir "$tmp/project"
-          bash "$tmp/project/.workflow/inspect.sh"
+          bash "$tmp/project/.workflow/inspect.sh" --session dist-smoke
           python -m venv "$tmp/sdist-venv"
           sdist_bin="$tmp/sdist-venv/bin"; [ -d "$sdist_bin" ] || sdist_bin="$tmp/sdist-venv/Scripts"
           "$sdist_bin/python" -m pip install --quiet "$artifacts"/exoma-*.tar.gz
@@ -165,7 +172,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         # One publish artifact: upload-artifact@v4 refuses a second upload under the same name.
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13' && matrix.manager == 'uv'
         with:
           name: dist
           path: dist/

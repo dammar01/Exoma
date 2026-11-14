@@ -559,7 +559,7 @@ def _test_init_upgrade_and_session_guard() -> None:
                     and sentinel.read_text(encoding="utf-8") == "session survives migration",
                     "same-version migration refreshes runner content and preserves policy/session data")
         inspected = subprocess.run(
-            [osutil.find_bash() or "bash", str(workflow_paths(root)["workflow_dir"] / "inspect.sh")],
+            [osutil.find_bash() or "bash", str(workflow_paths(root)["workflow_dir"] / "inspect.sh"), "--session", "prepare-session"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -641,12 +641,17 @@ def _test_init_upgrade_and_session_guard() -> None:
         # evidence, including text that resembles a source-template instruction.
         original_config = config_path.read_text(encoding="utf-8")
         test_config = json.loads(original_config)
-        test_config.setdefault("commands", {})["verify_test_commands"] = ["python check.py"]
+        import shlex
+        import sys
+        # The output-boundary test does not require an optional `python` alias
+        # (minimal POSIX installations may provide only python3).
+        test_prefix = shlex.join([sys.executable, "check.py"])
+        test_config.setdefault("commands", {})["verify_test_commands"] = [test_prefix]
         config_path.write_text(json.dumps(test_config), encoding="utf-8")
         (root / "check.py").write_text(
             "import sys\nassert sys.argv[1:] == ['--expect', '/.plan', '--template', '{{CMD:unknown}}']\n"
             "print('opaque /.plan {{CMD:unknown}}')\nraise SystemExit(1)\n", encoding="utf-8")
-        literal_command = "python check.py --expect /.plan --template {{CMD:unknown}}"
+        literal_command = test_prefix + " --expect /.plan --template {{CMD:unknown}}"
         try:
             failed_test = run("test", "--session", "opaque-test", "--main-host", "codex", "--task", literal_command)
             failed_payload = json.loads(failed_test.stdout)

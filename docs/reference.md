@@ -175,7 +175,7 @@ exoma install --uninstall --apply         # remove, with a receipt (can be rolle
 exoma update                              # update package, global config, and current workspace
 exoma update --timeout 1800               # allow up to 1800 seconds for each child step
 exoma update --check                      # read-only installed/latest public metadata
-exoma update --status                     # last Windows handoff result, offline
+exoma update --status                     # last admitted update result, offline
 ```
 
 `exoma update` detects the manager of the environment Exoma runs in: a uv tool installation
@@ -192,23 +192,39 @@ If that directory has a missing, unreadable, or malformed `config.json`, update 
 changing the package. A later install or check failure reports an incomplete update and names
 any new global install receipt for an explicit rollback; workspace changes are outside it.
 
-On Windows, update hands work to a standalone stdlib helper outside the target environment.
-The helper acquires an installation-scoped lock and pins verified process handles before
-acknowledging the request. It waits for the invoking interpreter/proxy and Exoma launcher
-to exit before starting the manager, then uses a fresh target interpreter for refresh/check.
-An unavailable independent runtime or prohibited job breakaway refuses handoff before
-package mutation. No visible helper terminal is opened. Existing POSIX execution remains
-synchronous.
+`exoma update` uses the same asynchronous handoff on Windows, Linux and macOS.
+A verified Python runtime and immutable worker snapshot outside the target installation
+own one operation: preflight/reservation, READY/COMMIT/ACCEPTED, caller exit, package,
+fresh-target import/version probe, install, check, and terminal journal. The update lock
+spans cwd and storage overrides. New delegated jobs are refused while update admission is
+reserved; the owning installer can refresh its workspace without blocking itself.
 
-Windows update exit 0 means **accepted**, not completed. Read the printed journal and logs
-directly during replacement; invoking `exoma.exe` for live polling could lock it again.
-Afterward `--status` returns 0 for final success, 1 for failure/interruption, 3 while running,
-or 4 for absent/unknown outcomes. Invalid arguments return 2. Status never mutates state,
-acquires the updater lock, repairs an installation or calls a package manager.
-It reports the last operation admitted by preflight, not necessarily the last attempted
-command. A rejected attempt cannot overwrite an active operation; inspect its command
-error and any printed log directory. Early refusals may have no journal. Output labels
-this scope; an older success does not describe a newer refusal.
+Launch exit **3 means accepted/running, not complete**, with an operation ID and
+`completed:false`. This replaces both Windows acceptance-0 and POSIX synchronous update.
+Use the printed `observer_argv` with its external runtime and copied snapshot to wait
+for completion without reopening the target executable. `cancel_argv` records an explicit
+cancellation request; interrupting observation merely stops observing. Terminal observer
+codes are 0 succeeded, 1 failed, 4 unknown, and 130 confirmed cancellation; arguments use 2.
+After replacement, `exoma update --status` reads the last admitted operation offline.
+Unacknowledged COMMIT, stale helpers and cleanup-pending state must not imply success.
+Never replay an uncertain package stage automatically.
+
+Only native lifecycle primitives differ. Windows pins process generations and launcher
+ancestry, requires the helper outside inherited Job Objects, and creates manager children
+atomically in its own kill-on-close job. Runtime discovery re-probes the native executable
+image so a uv/Python redirector is not mistaken for an independent interpreter. Remaining
+job membership refuses before mutation. POSIX uses native file ownership locks, process
+identities, isolated stage groups and a control-pipe guardian that retains the lock.
+Linux adopts and reaps orphaned descendants, including children in another session.
+macOS refuses to confirm cleanup if new processes cannot be attributed safely; it does
+not kill unrelated processes. A durable installation claim blocks later updates across
+storage overrides when a guardian acknowledgment is missing or cleanup is uncertain.
+The reported `recovery_argv` requires a dead supervisor and a durable cleanup receipt,
+or a changed native boot generation; dead leaders alone never prove descendant cleanup.
+Session detachment does not
+escape arbitrary cgroup/container termination. Neither platform changes host job limits.
+If no independent runtime can be proved, finish/exit Exoma and use its manager manually.
+
 `--check` queries public metadata with a timeout/size bound, independently of workspace
 preflight. It reports installed distribution provenance, checkout shadowing and numeric
 stable-release comparison. Other version formats are unknown. Non-yanked unsupported
@@ -219,16 +235,16 @@ uv preserves installation constraints and may use another index or require anoth
 Exit 0 means the query completed, not that an upgrade is necessary/possible; query errors
 return 1. `--check` and `--status` are mutually exclusive.
 
-POSIX update streams manager stdout/stderr directly and reports stage start, elapsed completion,
-and a waiting heartbeat on stderr every 15 seconds. A heartbeat indicates waiting, not
-child progress. `--timeout SECONDS` accepts a positive finite number and defaults to 900
+All platforms journal stage output and heartbeat in the reported operation directory.
+A heartbeat indicates waiting, not child progress. `--timeout SECONDS` accepts a positive finite number and defaults to 900
 seconds independently for package, refresh and check; output never resets that deadline.
 Manager detection via `uv tool dir` has a separate 10-second limit. A detection timeout
 refuses update instead of selecting pip; optional installation preserves that timeout's
 reason and refuses to install without a confirmed manager.
 The limits apply to child execution, not total preflight/filesystem work. Timeout attempts
 process-tree cleanup and skips subsequent steps; cleanup can outlast the deadline and
-remains best-effort under OS access restrictions. Ctrl+C cleans up and exits 130. An
+remains best-effort under OS access restrictions. Explicit observer cancellation returns
+130 only after confirmed cleanup; Ctrl+C while observing detaches the observer. An
 interrupted package step reports uncertain package state; a refresh/check interruption
 retains the incomplete-update receipt and workspace recovery advice. Update children
 receive no interactive input. See [manual recovery](installation.md#update) for older updaters.

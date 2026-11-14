@@ -36,6 +36,7 @@ os.environ["PYTHONPATH"] = os.pathsep.join(
 
 from tests.checks.adapters import (  # noqa: E402
     _test_adapter_error_normalization,
+    _test_stream_observations,
     _test_stdin_failure_reaches_call_meta,
     _test_adapter_redaction_is_shared,
     _test_error_types_are_registered,
@@ -71,7 +72,7 @@ from tests.checks.continuation import (  # noqa: E402
     _test_continuation_prompt_is_bounded,
 )
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E402
-from tests.checks.self_update import _test_self_update  # noqa: E402
+from tests.checks.self_update import _test_self_update, _check_windows_update_observer  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.promote import _test_promote_boundaries  # noqa: E402
 from tests.checks.knowledge_retrieve import _test_knowledge_retrieval  # noqa: E402
@@ -131,7 +132,7 @@ from tests.checks.installer import (  # noqa: E402
     _test_installer_text_merging,
     _test_provider_update,
 )
-from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation  # noqa: E402
+from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation, _test_job_cancellation_and_diagnostics  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
     _test_agy_guard_gitlinks,
@@ -266,7 +267,7 @@ SUITES: dict[str, tuple] = {
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
     "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
-    "self-update": (_test_self_update, "update queries, Windows handoff/containment, synchronous refresh, and opt-in A-to-B wheel gate"),
+    "self-update": (_test_self_update, "shared updater lifecycle, native containment, queries, and opt-in A-to-B/no-op wheel gate"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "fact-selection": (_test_fact_selection, "every cited anchor must hold, relevance ignores grammar, eviction keeps what is used"),
@@ -322,6 +323,9 @@ SUITES: dict[str, tuple] = {
     "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
     "graph-refresh": (_test_graph_refresh_hook, "the Stop hook prunes, returns before graphify, and readers wait out the refresh lock"),
     "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),
+    "provider-stream": (_test_stream_observations, "semantic work progress and bounded redacted live diagnostics"),
+    "update-observer-windows": (_check_windows_update_observer, "native production observer Ctrl+C/detach/cancel in a contained Windows fixture"),
+    "job-cancellation": (_test_job_cancellation_and_diagnostics, "explicit cancellation, late completion and read-only snapshots"),
     "adapters-shared": (_test_adapter_redaction_is_shared, "no adapter carries a private copy of the redaction helpers"),
     "adapters-stdin": (_test_stdin_failure_reaches_call_meta, "a failed stdin handover names its cause in the call meta"),
     "error-types": (_test_error_types_are_registered, "every literal make_error type is registered, so no failure path raises"),
@@ -407,9 +411,14 @@ def main() -> int:
         help="run just this suite; repeatable. Default runs `scenario`, which covers all.",
     )
     parser.add_argument("--list", action="store_true", help="print suite names and exit")
+    parser.add_argument("--wsl-distro", help="run these same selected suites using python3 in a Windows WSL distribution")
     parser.add_argument("--traceback", action="store_true", help="include a traceback for failed checks")
     parser.add_argument("--update-artifacts", choices=("handoff", "contained"),
                         help="self-update wheel gate; contained tests stages inside a supervisor, not independence")
+    parser.add_argument("--update-report", help="persist update gate report and bounded operation logs")
+    parser.add_argument("--windows-observer-report", help="persist the native Windows production observer report")
+    parser.add_argument("--update-manager", choices=("uv", "pipx", "pip"), help="manager for the real update artifact gate")
+    parser.add_argument("--tool-bin", help="prepend a test-tool directory to PATH (in the selected native environment)")
     parser.add_argument(
         "--keep-going",
         action="store_true",
@@ -426,9 +435,41 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.wsl_distro:
+        if os.name != "nt" or args.record:
+            parser.error("--wsl-distro requires Windows and cannot be combined with --record")
+        import subprocess
+        from tests.checks.support import no_console
+        prefix = ["wsl", "--distribution", args.wsl_distro, "--exec"]
+        converted = subprocess.run([*prefix, "wslpath", "-u", str(REPO_ROOT)],
+                                   capture_output=True, text=True, encoding="utf-8", check=True, **no_console()).stdout.strip()
+        forwarded = list(sys.argv[1:])
+        if "--wsl-distro" in forwarded:
+            index = forwarded.index("--wsl-distro")
+            del forwarded[index:index + 2]
+        else:
+            forwarded = [item for item in forwarded if not item.startswith("--wsl-distro=")]
+        completed = subprocess.run([*prefix, "env", "-u", "EXOMA_HOME", "-u", "PYTHONPATH", "python3",
+                                    converted + "/tests/run.py", *forwarded],
+                                   capture_output=True, **no_console())
+        # WSL does not reliably relay inherited anonymous handles from a hidden
+        # Windows process. Capture then forward so failures retain their evidence.
+        sys.stdout.buffer.write(completed.stdout)
+        sys.stdout.flush()
+        sys.stderr.buffer.write(completed.stderr)
+        sys.stderr.flush()
+        return completed.returncode
     if args.update_artifacts:
         os.environ["EXOMA_UPDATE_HANDOFF_SMOKE"] = "1"
         os.environ["EXOMA_UPDATE_CONTAINED_SMOKE"] = "1" if args.update_artifacts == "contained" else "0"
+    if args.update_report:
+        os.environ["EXOMA_UPDATE_SMOKE_REPORT"] = args.update_report
+    if args.windows_observer_report:
+        os.environ["WORKFLOW_WINDOWS_OBSERVER_REPORT"] = args.windows_observer_report
+    if args.update_manager:
+        os.environ["EXOMA_UPDATE_SMOKE_MANAGER"] = args.update_manager
+    if args.tool_bin:
+        os.environ["PATH"] = str(Path(args.tool_bin).resolve()) + os.pathsep + os.environ.get("PATH", "")
 
     if args.list:
         width = max(len(name) for name in SUITES)

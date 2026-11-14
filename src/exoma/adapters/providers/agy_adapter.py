@@ -662,6 +662,9 @@ class AgyAdapter:
         truncated: dict[str, bool] = {"stdout": False, "stderr": False}
         read_failed = {"value": False}
         last_output = {"at": started}
+        from exoma.adapters.shared.stream import StreamTracker
+        self._stream_tracker = tracker = StreamTracker(
+            getattr(self, "stream_provider", "agy"), getattr(self, "diagnostic_dir", None))
         seen_session = {"done": False}
 
         def _drain(stream, key: str) -> None:
@@ -671,6 +674,7 @@ class AgyAdapter:
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
+                    tracker.feed(key, line)
                     # Both streams: the id is on stdout today, and a build that banners to
                     # stderr would otherwise lose the session with nothing to show for it.
                     if on_session and not seen_session["done"]:
@@ -725,6 +729,7 @@ class AgyAdapter:
             drain_deadline = time.monotonic() + 2
             for reader in readers:
                 reader.join(timeout=max(0, drain_deadline - time.monotonic()))
+            tracker.close()
         drained = not read_failed["value"] and not any(t.is_alive() for t in readers)
         try:
             proc.wait(timeout=10)
@@ -754,6 +759,7 @@ class AgyAdapter:
                 "kill": kill_info or None,
                 "output_complete": drained,
                 "capture_truncated": any(truncated.values()),
+                **tracker.snapshot(),
                 "idle_seconds": outcome["idle_seconds"],
                 "stderr_tail": outcome["stderr"][-2000:],
             }
@@ -770,6 +776,7 @@ class AgyAdapter:
                     "phase": phase,
                     "elapsed_seconds": round(elapsed, 1),
                     "idle_seconds": round(idle, 1),
+                    **(self._stream_tracker.snapshot() if getattr(self, "_stream_tracker", None) else {}),
                 }
             )
         except Exception:

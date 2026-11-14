@@ -847,6 +847,9 @@ class CodexAdapter:
         truncated: dict[str, bool] = {"stdout": False, "stderr": False}
         read_failed = {"value": False}
         last_output = {"at": started}
+        from exoma.adapters.shared.stream import StreamTracker
+        self._stream_tracker = tracker = StreamTracker(
+            getattr(self, "stream_provider", "codex"), getattr(self, "diagnostic_dir", None))
         seen_session = {"done": False}
 
         def _drain(stream, key: str) -> None:
@@ -856,6 +859,7 @@ class CodexAdapter:
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
+                    tracker.feed(key, line)
                     # Both streams. `--json` puts the id on stdout and leaves stderr empty,
                     # but scanning only stdout meant a build that banners to stderr lost the
                     # session with nothing to show for it — and the cost of looking is one
@@ -923,6 +927,9 @@ class CodexAdapter:
             while True:
                 if proc.poll() is not None:
                     break
+                if tracker.snapshot()["terminal_error"]:
+                    kill_info = osutil.terminate_tree(proc)
+                    break
                 if timeout and (time.monotonic() - started) >= timeout:
                     timed_out = True
                     kill_info = osutil.terminate_tree(proc)
@@ -938,6 +945,7 @@ class CodexAdapter:
             drain_deadline = time.monotonic() + 2
             for reader in [feeder, *readers]:
                 reader.join(timeout=max(0, drain_deadline - time.monotonic()))
+            tracker.close()
         drained = not read_failed["value"] and not any(t.is_alive() for t in [feeder, *readers])
         try:
             proc.wait(timeout=10)
@@ -967,6 +975,7 @@ class CodexAdapter:
                 "kill": kill_info or None,
                 "output_complete": drained,
                 "capture_truncated": any(truncated.values()),
+                **tracker.snapshot(),
                 "idle_seconds": outcome["idle_seconds"],
                 "stderr_tail": outcome["stderr"][-2000:],
                 # Carried into THIS dict rather than written when they are learned, because
@@ -994,6 +1003,7 @@ class CodexAdapter:
                     "phase": phase,
                     "elapsed_seconds": round(elapsed, 1),
                     "idle_seconds": round(idle, 1),
+                    **(self._stream_tracker.snapshot() if getattr(self, "_stream_tracker", None) else {}),
                 }
             )
         except Exception:

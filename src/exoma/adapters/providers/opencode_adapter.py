@@ -526,6 +526,9 @@ class OpenCodeAdapter:
         truncated: dict[str, bool] = {"stdout": False, "stderr": False}
         read_failed = {"value": False}
         last_output = {"at": started}
+        from exoma.adapters.shared.stream import StreamTracker
+        self._stream_tracker = tracker = StreamTracker(
+            getattr(self, "stream_provider", "opencode"), getattr(self, "diagnostic_dir", None))
 
         def _drain(stream, key: str) -> None:
             # Bounded capture: a runaway or pathological opencode run must not grow the
@@ -538,6 +541,7 @@ class OpenCodeAdapter:
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
+                    tracker.feed(key, line)
                     while sizes[key] > MAX_CAPTURE_CHARS and len(buf) > 1:
                         sizes[key] -= len(buf.pop(0))
                         truncated[key] = True
@@ -585,6 +589,7 @@ class OpenCodeAdapter:
             drain_deadline = time.monotonic() + 2
             for reader in readers:
                 reader.join(timeout=max(0, drain_deadline - time.monotonic()))
+            tracker.close()
         drained = not read_failed["value"] and not any(t.is_alive() for t in readers)
         try:
             proc.wait(timeout=10)
@@ -614,6 +619,7 @@ class OpenCodeAdapter:
                 "kill": kill_info or None,
                 "output_complete": drained,
                 "capture_truncated": any(truncated.values()),
+                **tracker.snapshot(),
                 "idle_seconds": meta["idle_seconds"],
                 "stderr_tail": meta["stderr"][-2000:],
                 # Read from the captured stdout while it is still raw. Expected to be
@@ -641,6 +647,7 @@ class OpenCodeAdapter:
                     "phase": phase,
                     "elapsed_seconds": round(elapsed, 1),
                     "idle_seconds": round(idle, 1),
+                    **(self._stream_tracker.snapshot() if getattr(self, "_stream_tracker", None) else {}),
                 }
             )
         except Exception:

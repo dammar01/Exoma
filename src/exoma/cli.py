@@ -16,6 +16,13 @@ if sys.version_info < (3, 11):
 # Looks unused to a linter and is NOT: core/jobs/job_lifecycle.py reaches it as
 # `_main().subprocess`, and tests/scenario.py patches `main.subprocess.Popen` to
 # intercept worker spawn. Deleting it breaks both, silently and at runtime only.
+# Inspect must bypass eager managers, including when invoked through the public CLI.
+if (sys.argv[1:2] == ["inspect"] or "--command=inspect" in sys.argv[1:] or
+        any(sys.argv[index] in {"--command", "-c"} and sys.argv[index + 1] == "inspect"
+            for index in range(1, len(sys.argv) - 1))):
+    from exoma.core.jobs.diagnostics import main as diagnostic_main
+    raise SystemExit(diagnostic_main(sys.argv[2:] if sys.argv[1:2] == ["inspect"] else sys.argv[1:]))
+
 import subprocess  # noqa: F401
 from pathlib import Path
 
@@ -434,7 +441,7 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
 # security boundary — a child that can run commands can also unset it (docs/security.md).
 RECURSION_REFUSED_COMMANDS = frozenset({
     "explore", "plan", "analyze", "verify", "verify-browser",
-    "submit", "await", "worker",
+    "submit", "await", "worker", "cancel",
     "plan-record", "execute-begin", "execute-end", "test",
 })
 SECOND_AGENT_ROLE_ENV = "WORKFLOW_AGENT_ROLE"
@@ -739,51 +746,10 @@ def probe_second_agent(work_dir: str | None = None, model: str | None = None) ->
 
 
 def _inspect(project_root, session_id: str | None = None) -> dict:
-    """Human-readable snapshot: session, workflow stage, recent jobs, last response."""
-    import json as _json
+    from exoma.core.jobs.diagnostics import snapshot
+    return snapshot(project_root, session_id)
 
-    paths = workflow_paths(project_root, session_id)
-    lines: list[str] = [f"# .workflow inspect — {project_root}"]
 
-    try:
-        state = _json.loads(paths["state"].read_text(encoding="utf-8"))
-        session = (state.get("session") or {}).get("id")
-        stage = state.get("workflow", {}).get("stage")
-        lines.append(f"session: {session}")
-        lines.append(f"stage: {stage}")
-    except (OSError, ValueError):
-        lines.append("session: (state.json unavailable)")
-
-    job_files = sorted(
-        JOB_MANAGER.job_dir.glob("job_*.json"), key=lambda p: p.name, reverse=True
-    )[:5]
-    lines.append(f"recent jobs ({len(job_files)}):")
-    for path in job_files:
-        try:
-            job = _json.loads(path.read_text(encoding="utf-8"))
-            display_status = (
-                "recovering" if job.get("recovery_in_progress") else job["status"]
-            )
-            lines.append(
-                f"  - {job['job_id']} [{display_status}] {job['command']} "
-                f"pid={job.get('worker_pid')} recovery={job.get('recovery_attempt', 0)}"
-            )
-        except (OSError, ValueError, KeyError):
-            continue
-
-    last = ""
-    try:
-        last = paths["response_last"].read_text(encoding="utf-8")[:400]
-    except OSError:
-        pass
-    lines.append("last_response_preview:")
-    lines.append(last or "  (none)")
-
-    return {
-        "ok": True,
-        "content": "\n".join(lines),
-        "meta": {"project_root": str(project_root)},
-    }
 
 
 # Defined above the `__main__` block on purpose: that block runs top to bottom when the
@@ -834,6 +800,7 @@ COMMANDS = (
     "status",
     "result",
     "worker",
+    "cancel",
 )
 
 
@@ -992,7 +959,7 @@ def main(argv: list[str] | None = None) -> None:
         and not prompt
     ):
         raise SystemExit("--prompt or --prompt-file is required for this command")
-    if args.command in {"status", "result", "worker"} and not args.job_id:
+    if args.command in {"status", "result", "worker", "cancel"} and not args.job_id:
         raise SystemExit("--job-id is required for this command")
     # The local commands that read or write one session's state need that session named:
     # resolved from `default`, a plan or an execution lands in whichever session the cache
@@ -1070,6 +1037,9 @@ def main(argv: list[str] | None = None) -> None:
         result = get_status(args.job_id)
     elif args.command == "result":
         result = get_result(args.job_id)
+    elif args.command == "cancel":
+        result = JOB_MANAGER.cancel(args.job_id, args.session, args.work_dir or str(Path.cwd()),
+                                    reason=args.prompt or "requested by user")
     elif args.command == "worker":
         result = run_worker(args.job_id)
     elif should_run_in_background(args.command):

@@ -1,54 +1,82 @@
 # Runtime contracts
 
-## Windows package self-update
+## Cross-platform package self-update
 
-`exoma update` on Windows has an asynchronous acceptance boundary. Preflight describes the
-actual installation and verifies an independent stdlib Python runtime; the worker snapshot,
-journal and log files must remain outside the environment being replaced. The worker is
-spawned directly, outside inherited host jobs, without changing shared bounded-spawn or
-detached-job helpers. A host that prohibits breakaway causes refusal before package mutation.
+`exoma update` uses the same asynchronous handoff on Windows, Linux and macOS.
+A verified Python runtime and immutable worker snapshot outside the target installation
+own one operation: preflight/reservation, READY/COMMIT/ACCEPTED, caller exit, package,
+fresh-target import/version probe, install, check, and terminal journal. The update lock
+spans cwd and storage overrides. New delegated jobs are refused while update admission is
+reserved; the owning installer can refresh its workspace without blocking itself.
 
-The worker owns a named mutex keyed by native user SID and canonical installation prefix,
-independent of cwd and `EXOMA_HOME`. It opens/query-verifies process handles using creation
-times, image paths and launcher ancestry before READY. Caller COMMIT precedes ACCEPTED;
-the package manager starts only after caller/proxy/launcher handles signal exit. Shells,
-editors and unrelated PID generations are never waited on or killed. Missing COMMIT aborts;
-lost acknowledgment after COMMIT leaves an unknown outcome, not a rollback claim.
-READY, ACCEPTED and COMMIT readers retry missing files and Windows access-denied reads
-within the existing monotonic phase deadline. Read contention does not reset that deadline,
-skip peer-exit checks or validate a mismatched token. Persistent denial retains its read
-diagnostic at timeout; corrupt JSON remains fatal. Journal polling uses the same bounded
-read-retry principle. An artifact failure after the real transition preserves that evidence
-separately from the overall gate result; a later failed no-op still fails the full gate.
+Launch exit **3 means accepted/running, not complete**, with an operation ID and
+`completed:false`. This replaces both Windows acceptance-0 and POSIX synchronous update.
+Use the printed `observer_argv` with its external runtime and copied snapshot to wait
+for completion without reopening the target executable. `cancel_argv` records an explicit
+cancellation request; interrupting observation merely stops observing. Terminal observer
+codes are 0 succeeded, 1 failed, 4 unknown, and 130 confirmed cancellation; arguments use 2.
+After replacement, `exoma update --status` reads the last admitted operation offline.
+Unacknowledged COMMIT, stale helpers and cleanup-pending state must not imply success.
+Never replay an uncertain package stage automatically.
 
-Each child is created suspended inside a worker-owned kill-on-close job using the Windows
-10+ job-list process attribute, is journaled, then resumes. Assignment is atomic with process
-creation, avoiding an orphaned suspended child if its owner crashes between create/assign.
-Unsupported containment fails before child execution. Stage timeout/failure stops the
-sequence; cleanup precedes reuse of the installation.
-A previous live child job blocks another updater. After package success, the worker probes
-the new target interpreter's distribution/version/import location, then runs install and
-check from the original cwd. Neither package rollback nor automatic crash replay is implied.
+Only native lifecycle primitives differ. Windows pins process generations and launcher
+ancestry, requires the helper outside inherited Job Objects, and creates manager children
+atomically in its own kill-on-close job. Runtime discovery re-probes the native executable
+image so a uv/Python redirector is not mistaken for an independent interpreter. Remaining
+job membership refuses before mutation. POSIX uses native file ownership locks, process
+identities, isolated stage groups and a control-pipe guardian that retains the lock.
+Linux adopts and reaps orphaned descendants, including children in another session.
+macOS refuses to confirm cleanup if new processes cannot be attributed safely; it does
+not kill unrelated processes. A durable installation claim blocks later updates across
+storage overrides when a guardian acknowledgment is missing or cleanup is uncertain.
+The reported `recovery_argv` requires a dead supervisor and a durable cleanup receipt,
+or a changed native boot generation; dead leaders alone never prove descendant cleanup.
+Session detachment does not
+escape arbitrary cgroup/container termination. Neither platform changes host job limits.
+If no independent runtime can be proved, finish/exit Exoma and use its manager manually.
 
-Atomic operation state distinguishes preparing, accepted, waiting_callers, package, probe,
-install, check, succeeded, failed and interrupted. Status observation may be unknown; it does
-not rewrite the journal. Windows update exit 0 means accepted. Status exits 0/1/3/4 mean
-succeeded/failed/in-progress/unknown; argument errors remain 2. POSIX update remains synchronous.
-Status explicitly identifies its scope as the last published/admitted operation. Attempts
-rejected before admission do not replace the installation pointer; when available their
-logs stay separate. Early refusals may have no journal. They cannot overwrite an active
-operation or make an older success apply to a new refusal.
-Live progress should be read directly from state/log files rather than relaunching the
-executable being replaced. Metadata queries are advisory about public releases, independent
-of package-manager constraints/indexes and installation repair.
-Unsupported non-yanked public versions prevent a latest-stable/current claim; the latest
-comparable numeric release remains informational under a separate field.
+The mandatory artifact matrix covers Windows/Linux/macOS, Python 3.11/3.13 and uv/pipx/pip
+venvs: real candidate A-to-B, fresh provenance, install/check, user data and separate no-op.
+Console and module entrypoints use the same state/order assertions. Contained fixtures
+exercise stages but cannot attest independence. Windows CI may select supported runner
+labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`; restrictive-host
+refusal remains mandatory and is never converted into a positive gate or a skip.
 
-The Windows artifact gate installs fixture A containing the handoff, offers a different B,
-invokes A's console launcher, polls journal files independently and requires actual B
-installation, fresh import provenance, successful refresh/check and preserved user data.
-Historical recovery and package no-op cannot satisfy this gate. Protocol-only tests under
-a restrictive supervisor do not establish independent-worker survival.
+## Live provider diagnostics and explicit cancellation
+
+Provider heartbeat, stream activity and recognized work activity are separate observations.
+Session startup, retry and error output do not advance work activity. Supported event
+schemas use work-idle for stalled detection; unknown schemas retain output-idle fallback.
+The heartbeat carries last diagnostic, first/last error time, retry count and diagnostic
+location without turning transient transport text into an immediate termination decision.
+Existing total deadlines, bounded probes and backoff remain in force.
+
+Per-attempt provider diagnostic JSONL is written during capture, decoded/redacted before
+storage, bounded in memory/on disk, and records drops/truncation/storage failure. Oversized
+or incomplete events are discarded at fragment boundaries. First-error evidence is retained
+separately from the recent tail. These are redacted diagnostic events, not a byte-for-byte
+archive; `output.raw.md` and final evidence hashes/reuse retain their existing meaning.
+
+`bash .workflow/inspect.sh --session <id> [--job-id <id>]` reads a bounded snapshot while the
+same runner remains active. It bypasses eager managers, filters project/session ownership,
+creates no files or locks, and performs no probe, reap, recovery or provider call. Missing
+or concurrently published files are reported as unavailable. This inspection is permitted
+without selecting local fallback; a failed proxy still requires the existing fallback choice.
+
+`exoma cancel --job-id <id> --session <id> --work-dir <project>` records explicit intent
+before identity-aware termination. Completion and cancellation serialize on job mutation.
+The worker consumes durable intent through its progress callback, unwinds adapter cleanup,
+and acknowledges only after native ownership confirms descendants have stopped. The caller
+waits outside the mutation guard. Forced escalation records known process generations and
+keeps cancellation pending without that acknowledgment; a snapshot cannot exclude a racing spawn.
+Launcher registration is separate from the actual interpreter's authoritative worker identity.
+Native ownership is recorded before provider dispatch. Cleanup uncertainty on ordinary completion
+or exception also retains the session lock and blocks reclaim, recovery and update; it reports
+`cleanup_pending` without inventing cancellation provenance. The lock carries that requirement
+even if the job record becomes unreadable.
+Only confirmed cleanup publishes typed `cancelled` (exit 130) and releases ownership;
+unconfirmed cleanup remains active and blocks recovery/update. Completed jobs stay completed,
+late output cannot erase intent, and an unmarked external taskkill remains unattributed.
 
 ## State and transport hardening
 

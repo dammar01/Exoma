@@ -24,7 +24,7 @@ from exoma.config.settings import (
 )
 from exoma.core.evidence import verify_tests
 from exoma.core.evidence.contract import make_error
-from exoma.core.jobs.job_manager import DEAD
+from exoma.core.jobs.job_manager import DEAD, JobCancellation, WorkerOwnership
 from exoma.core.evidence.result_shaping import _finalize_verify_result
 from exoma.core.workspace.workspace_paths import detect_project_root, now_iso
 from exoma.utils import osutil
@@ -134,6 +134,11 @@ def submit(
 
     try:
         with _main().JOB_MANAGER.capacity_guard():
+            try:
+                _main().JOB_MANAGER.assert_update_admission()
+            except ValueError as exc:
+                return make_error("runtime_lock", str(exc),
+                                  next_action="Use the update operation observer; do not start another provider.")
             active = _main().JOB_MANAGER.active_job_for_session(session_id)
             if (
                 active
@@ -300,7 +305,7 @@ def submit(
         if not worker["ok"]:
             _main().JOB_MANAGER.fail_job(job["job_id"], worker["content"])
             return worker
-        _main().JOB_MANAGER.set_worker_pid(job["job_id"], worker["meta"]["pid"])
+        _main().JOB_MANAGER.set_launcher_pid(job["job_id"], worker["meta"]["pid"])
         return {
             "ok": True,
             "job_id": job["job_id"],
@@ -510,9 +515,28 @@ def await_job(
     last_probe_at: float | None = None
     probe_count = 0
     recheck = recheck_base
+    last_notice_at, last_diagnostic = started_at, None
 
     while True:
         result = get_result(job_id)
+        if result.get("status") in {"pending", "running", "recovering"}:
+            # Keep stdout a single final JSON result. Bounded stderr notices expose
+            # observed diagnosis while awaiting the SAME worker; no extra probe here.
+            try:
+                import json
+                from exoma.utils.redact import redact_value
+                progress = (_main().JOB_MANAGER.read_heartbeat(job_id) or {}).get("progress") or {}
+                notice_at = time.monotonic()
+                diagnostic = progress.get("diagnostic")
+                if (diagnostic and diagnostic != last_diagnostic) or notice_at - last_notice_at >= 30:
+                    notice = redact_value({"job_id": job_id, "status": result["status"],
+                        "elapsed_seconds": round(notice_at - started_at, 1),
+                        **{key: progress.get(key) for key in ("phase", "idle_seconds", "work_idle_seconds",
+                            "work_events", "diagnostic", "retry_count", "diagnostics")}})[0]
+                    print("[JOB] " + json.dumps(notice), file=sys.stderr, flush=True)
+                    last_notice_at, last_diagnostic = notice_at, diagnostic
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
         if (result.get("meta") or {}).get("error_type") == "worker_died" and (
             result.get("meta") or {}
         ).get("recoverable"):
@@ -525,6 +549,10 @@ def await_job(
                     "submitted_at": submitted.get("submitted_at"),
                 },
             }
+        if (result.get("meta") or {}).get("error_type") in {"cleanup_pending", "cancellation_pending"}:
+            return {"ok": False, "content": result.get("content"),
+                    "meta": {**(result.get("meta") or {}), "job_id": job_id,
+                             "submitted_at": submitted.get("submitted_at")}}
         if (result.get("meta") or {}).get("error_type") == "worker_stalled":
             now = time.monotonic()
             if probe_count < max_probes and (
@@ -632,8 +660,11 @@ def run_worker(job_id: str) -> dict:
         return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
 
     def _beat(progress: dict) -> None:
+        if (_main().JOB_MANAGER.get_job(job_id) or {}).get("cancellation"):
+            raise JobCancellation()
         _main().JOB_MANAGER.touch_heartbeat(job_id, progress)
 
+    owner = None
     try:
         # Registration can fail on the same storage faults as the call itself.
         _main().JOB_MANAGER.set_worker_pid(job_id, os.getpid())
@@ -645,7 +676,10 @@ def run_worker(job_id: str) -> dict:
                 next_action="Inspect the terminal job result; do not restart this worker.",
                 meta={"job_id": job_id, "status": running.get("status")},
             )
-        _main().JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
+        if os.environ.get("WORKFLOW_JOB_WORKER") == job_id:
+            owner = WorkerOwnership()  # Before any provider/bootstrap child can start.
+            _main().JOB_MANAGER.begin_worker_ownership(job_id)
+        _beat({"phase": "starting", "elapsed_seconds": 0})
         effective_task = job["task"]
         require_provider_session = int(job.get("recovery_attempt") or 0) > 0
         if require_provider_session and job.get("command") == "verify-browser":
@@ -661,6 +695,9 @@ def run_worker(job_id: str) -> dict:
                 ),
                 meta={"job_id": job_id, "reason": "not_recoverable", "command": "verify-browser"},
             )
+            if owner:
+                owner.cleanup()
+                _main().JOB_MANAGER.confirm_worker_cleanup(job_id)
             _main().JOB_MANAGER.fail_job(job_id, refused["content"], output=refused)
             return refused
         if require_provider_session:
@@ -682,15 +719,38 @@ def run_worker(job_id: str) -> dict:
                 allow_reuse=bool(job.get("allow_reuse", True)),
                 require_provider_session=require_provider_session,
             )
+        _beat({"phase": "finishing"})
+        if owner:
+            owner.cleanup()
+            _main().JOB_MANAGER.confirm_worker_cleanup(job_id)
         output.setdefault("meta", {}).setdefault("job_id", job_id)
         if output.get("ok"):
-            _main().JOB_MANAGER.complete_job(job_id, output)
+            finished = _main().JOB_MANAGER.complete_job(job_id, output)
         else:
-            _main().JOB_MANAGER.fail_job(
+            finished = _main().JOB_MANAGER.fail_job(
                 job_id, output.get("content") or "worker failed", output=output
             )
+        if isinstance(finished, dict) and finished.get("cancellation"):
+            raise JobCancellation()
         return output
-    except Exception as exc:
+    except JobCancellation:
+        cleanup = {"ok": False, "reason": "worker_ownership_unavailable"}
+        if owner:
+            try:
+                owner.cleanup()
+                _main().JOB_MANAGER.confirm_worker_cleanup(job_id)
+                cleanup = {"ok": True, "reason": "worker_owned_descendants_stopped"}
+            except Exception as exc:
+                cleanup = {"ok": False, "reason": str(exc)}
+                _main().JOB_MANAGER.retain_worker_cleanup(job_id, str(exc))
+        return _main().JOB_MANAGER.acknowledge_cancellation(job_id, cleanup)
+    except BaseException as exc:
+        if owner:
+            try:
+                owner.cleanup()
+                _main().JOB_MANAGER.confirm_worker_cleanup(job_id)
+            except Exception as cleanup_exc:
+                return _main().JOB_MANAGER.retain_worker_cleanup(job_id, str(cleanup_exc))
         # Guarded: this is the worker's last line. If recording the failure raises too (the
         # same disk that failed the run), letting it escape would lose the crash report the
         # caller is about to get. fail_job releases the session lock itself, even when its
@@ -728,6 +788,7 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
     # `-m exoma` must resolve to this very package, installed or a source checkout's
     # src/, whatever the child's cwd (the project) happens to contain.
     env = os.environ.copy()
+    env["WORKFLOW_JOB_WORKER"] = job_id
     env["PYTHONPATH"] = os.pathsep.join(
         part for part in (str(PACKAGE_PARENT), env.get("PYTHONPATH", "")) if part
     )

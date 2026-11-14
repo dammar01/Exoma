@@ -129,6 +129,7 @@ class ClaudeAdapter(CodexAdapter):
         return result
 
     _last_is_error = False
+    stream_provider = "claude"
 
     def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
         outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)

@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                         f"(default: {STAGE_TIMEOUT_SECONDS}s; cleanup can take additional time)")
     queries = parser.add_mutually_exclusive_group()
     queries.add_argument("--check", action="store_true", help="query installed/latest public version; advisory, no upgrade")
-    queries.add_argument("--status", action="store_true", help="read the last Windows update admitted by preflight; rejected commands report their own errors")
+    queries.add_argument("--status", action="store_true", help="read the last update admitted by preflight on this installation")
     args = parser.parse_args(argv)
     try:
         if args.check:
@@ -204,34 +204,7 @@ def _update(args: argparse.Namespace) -> int:
         return 2
 
     print(f"[UPDATE] manager: {manager}; workspace: {workspace or 'none'}", flush=True)
-    if IS_WINDOWS:
-        return _windows_handoff(manager, package, cwd, args.timeout)
-    receipts_before = _receipt_names()
-    package_ok = False
-    stage = "install"
-    try:
-        package_ok = _run_step("package", package, cwd, pip=manager == "pip", timeout=args.timeout)
-        if not package_ok:
-            _report_package_uncertain(manager)
-            return 1
-
-        fresh = [sys.executable, "-m", "exoma"]
-        # Stored choices stand: the new installer must not prompt during an update.
-        for stage, label, command in (
-            ("install", "global config and current workspace", [*fresh, "install", "--no-input"]),
-            ("check", "check", [*fresh, "install", "--check"]),
-        ):
-            if not _run_step(label, command, cwd, timeout=args.timeout):
-                _report_failed_refresh(stage, workspace, receipts_before)
-                return 1
-        print("[UPDATE] complete", flush=True)
-        return 0
-    except KeyboardInterrupt:
-        if package_ok:
-            _report_failed_refresh(stage, workspace, receipts_before)
-        else:
-            _report_package_uncertain(manager)
-        return 130
+    return _handoff(manager, package, cwd, args.timeout)
 
 
 def _report_package_uncertain(manager: str) -> None:
@@ -248,48 +221,25 @@ def _update_root() -> Path:
 
 def _status() -> int:
     """Read only: no directory creation, lock acquisition, manager spawn or repair."""
-    if not IS_WINDOWS:
-        print("[UPDATE] no Windows handoff outcome for this installation")
-        return 4
     from exoma import _update_worker as worker
-
     try:
-        api = worker.Win32()
+        api = worker.platform_api()
         key = worker.installation_key(sys.prefix, api.user())
         root = _update_root() / key
         latest = worker.read_json(root / "latest.json")["operation_id"]
         if not isinstance(latest, str) or not re.fullmatch(r"[a-f0-9]{32}", latest):
             raise ValueError("invalid operation ID")
-        state = worker.read_json(root / latest / "state.json")
-        if state.get("schema_version") != worker.SCHEMA or state.get("installation_key") != key or state.get("operation_id") != latest:
-            raise ValueError("unsupported or mismatched update state")
-        phase = state.get("phase")
-        if phase not in {*worker.TERMINAL, "preparing", "accepted", "waiting_callers", "package", "probe", "install", "check"}:
-            raise ValueError("unknown journal phase")
-        if phase == "succeeded":
-            if not all(state.get("stages", {}).get(stage, {}).get("exit_code") == 0
-                       for stage in ("package", "probe", "install", "check")):
-                raise ValueError("success state lacks successful stages")
-            code = 0
-        elif phase in ("failed", "interrupted"):
-            code = 1
-        else:
-            helper = state["helper"]
-            handle = api.open_identity(helper["pid"], helper)
-            try:
-                live = bool(handle) and not api.signaled(handle)
-            finally:
-                api.close(handle)
-            code = 3 if live and time.time() - float(state["heartbeat"]) < 30 else 4
-            if code == 4:
-                state = {**state, "observed_status": "unknown; inspect logs and process state before retrying"}
-        state = {**state, "status_scope": "last_published_operation",
-                 "status_notice": "This is the last update admitted by preflight, not necessarily the last attempted command. Preflight refusals do not replace an active update. Inspect the refusing command's error and any printed log directory."}
+        state, code = worker.outcome(root / latest, key)
+        state.update(status_scope="last_published_operation", status_notice=(
+            "This is the last update admitted by preflight, not necessarily the last attempted command. "
+            "Preflight refusals do not replace an active update. Inspect the refusing command's error and any printed log directory."))
         print(json.dumps(state, indent=2))
         return code
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         print(f"[UPDATE] status unavailable/unknown: {exc}", file=sys.stderr)
         return 4
+
+
 
 
 def _wait_for_handshake(operation, name, token, proc, timeout):
@@ -306,12 +256,15 @@ def _wait_for_handshake(operation, name, token, proc, timeout):
     worker.wait_for_token(operation / name, token, timeout, check_worker)
 
 
-def _windows_handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int:
+def _handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int:
     from exoma import _update_worker as worker
     from exoma.update_metadata import distribution_info
 
     committed = False
     operation = None
+    proc = None
+    reservation = None
+    cwd = cwd.resolve()
     try:
         from exoma.core.jobs.job_manager import DEAD, JobManager
 
@@ -321,14 +274,16 @@ def _windows_handoff(manager: str, package: list[str], cwd: Path, timeout: float
             if job.get("status") in ("pending", "running", "recovering") and jobs.liveness(job) != DEAD:
                 raise ValueError("active Exoma jobs exist in this user store; finish them before updating")
         descriptor = install_method.update_descriptor()
-        api = worker.Win32()
+        api = worker.platform_api()
         key = worker.installation_key(descriptor["prefix"], api.user())
         root = _update_root().resolve()
         if worker.inside(root, descriptor["prefix"]):
             raise ValueError("update state must be outside the target environment")
         targets = worker.callers(api, sys.executable, set(descriptor["entrypoints"]))
         manager_path = shutil.which(package[0]) or package[0]
-        package = [str(Path(manager_path).resolve()), *package[1:]]
+        # In a POSIX venv python is commonly a symlink. Resolving it would make
+        # `-m pip` mutate the base interpreter instead of the target environment.
+        package = [os.path.abspath(manager_path), *package[1:]]
         if not Path(package[0]).is_file():
             raise ValueError("package manager executable is unavailable")
         if manager != "pip" and worker.inside(package[0], descriptor["prefix"]):
@@ -339,6 +294,7 @@ def _windows_handoff(manager: str, package: list[str], cwd: Path, timeout: float
         snapshot = Path(worker.__file__).read_bytes()
         script = operation / "worker.py"
         script.write_bytes(snapshot)
+        reservation = jobs.reserve_update(operation, token)
         request = {"schema_version": worker.SCHEMA, "operation_id": operation_id,
                    "installation_key": key, "token": token, "prefix": descriptor["prefix"],
                    "python_relative": descriptor["python_relative"], "package": package,
@@ -347,16 +303,25 @@ def _windows_handoff(manager: str, package: list[str], cwd: Path, timeout: float
                    "version_before": distribution_info()["installed"],
                    "receipt_root": str(agent_home() / ".claude" / "backups"),
                    "receipts_before": sorted(_receipt_names()),
-                   "workspace": str(_workspace_root(cwd)) if _workspace_root(cwd) else None}
+                   "workspace": str(_workspace_root(cwd)) if _workspace_root(cwd) else None,
+                   "reservation": str(reservation), "runtime": descriptor["runtime"],
+                   "caller_job": api.job_snapshot() if os.name == "nt" else {"session": os.getsid(0)}}
         worker.atomic_json(operation / "request.json", request)
         # This worker must survive the caller. Shared bounded-spawn cleanup is unsuitable.
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-        if api.in_job():
-            flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
+        launch = {"start_new_session": True}
+        if os.name == "nt":
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            if api.in_job():
+                flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
+            launch = {"creationflags": flags}
+        worker.atomic_json(operation / "launch.json", {"options": launch, "runtime": descriptor["runtime"], "caller_job": request["caller_job"]})
         with (operation / "worker.log").open("ab") as log:
+            launch_env = os.environ.copy()
+            if launch_env.get("EXOMA_HOME"):
+                launch_env["EXOMA_HOME"] = str(Path(launch_env["EXOMA_HOME"]).resolve())
             proc = subprocess.Popen([descriptor["runtime"], "-I", "-S", "-B", str(script), str(operation)],
                                     cwd=operation, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                    close_fds=True, creationflags=flags)
+                                    env=launch_env, close_fds=True, **launch)
 
         _wait_for_handshake(operation, "ready.json", token, proc, worker.HANDSHAKE_SECONDS)
         # Mark ambiguous BEFORE writing COMMIT: replacement may succeed before fsync fails.
@@ -366,10 +331,19 @@ def _windows_handoff(manager: str, package: list[str], cwd: Path, timeout: float
         print(f"[UPDATE] accepted; not complete. Operation: {operation_id}", flush=True)
         print(f"[UPDATE] state: {operation / 'state.json'}", flush=True)
         print(f"[UPDATE] logs: {operation}", flush=True)
+        observer = [descriptor["runtime"], "-I", "-S", "-B", str(script), "--observe", str(operation), "--wait"]
+        print(json.dumps({"operation_id": operation_id, "accepted": True, "completed": False,
+                          "observer_argv": observer, "cancel_argv": [*observer, "--cancel"]}), flush=True)
         print("[UPDATE] let this launcher exit. Watch state/log files directly during upgrade; "
               "afterward use exoma update --status (0 succeeded, 1 failed, 3 running, 4 unknown).", flush=True)
-        return 0
+        return 3
     except (OSError, ValueError, KeyError, TypeError, KeyboardInterrupt) as exc:
+        if reservation and not committed and (proc is None or proc.poll() is not None):
+            try:
+                if worker.read_json(reservation).get("token") == token:
+                    reservation.unlink()
+            except FileNotFoundError:
+                pass
         outcome = "handoff outcome unknown; inspect state before retrying" if committed else "handoff refused before package mutation"
         print(f"[UPDATE] {outcome}: {exc}", file=sys.stderr, flush=True)
         if operation:
@@ -380,4 +354,4 @@ def _windows_handoff(manager: str, package: list[str], cwd: Path, timeout: float
                       "Inspect this attempt's log directory above.", file=sys.stderr)
         print("[UPDATE] after updater and manager children exit, run the installation manager directly, "
               "then exoma install --no-input and exoma install --check", file=sys.stderr)
-        return 130 if isinstance(exc, KeyboardInterrupt) else 1
+        return (4 if committed else 130) if isinstance(exc, KeyboardInterrupt) else (4 if committed else 1)

@@ -26,6 +26,73 @@ _CLAIM_STALE_SECONDS = 30.0
 _MUTATION_WAIT_SECONDS = 5.0
 # The recorded process is no longer the one the PID names: it exited, or the PID was reused.
 _GONE = frozenset({osutil.PROCESS_DEAD, osutil.PROCESS_REUSED})
+_CANCEL_WAIT_SECONDS = 10.0
+
+
+class JobCancellation(BaseException):
+    """Deliberate control flow through adapter finally blocks, never a callback error."""
+
+
+def _cleanup_unconfirmed(job):
+    return bool((job.get("cancellation") and not job["cancellation"].get("cleanup_confirmed")) or
+                (job.get("ownership") and not job["ownership"].get("cleanup_confirmed")))
+
+
+class WorkerOwnership:
+    """Owned descendants must be gone before a worker acknowledges cancellation."""
+    def __init__(self):
+        from exoma import _update_worker as native
+        self.native = native
+        if os.name == "nt":
+            self.api = native.Win32()
+            self.job = native.ChildJob(self.api, "worker-" + secrets.token_hex(16))
+            try:
+                self.api.require(self.api.k.AssignProcessToJobObject(self.job.handle, self.api.k.GetCurrentProcess()))
+            except BaseException:
+                self.job.close()
+                raise
+            # Do not close a job containing ourselves before publishing the result.
+            # The OS closes this non-inheritable handle on worker process exit.
+        else:
+            self.owner = native.DescendantOwner()
+
+    def cleanup(self):
+        if os.name != "nt":
+            self.owner.cleanup()
+            return
+        import ctypes
+        from ctypes import wintypes
+        deadline = time.monotonic() + 5
+        while self.job.active() > 1:
+            size = 8192
+            while True:
+                data = ctypes.create_string_buffer(size)
+                if self.api.k.QueryInformationJobObject(self.job.handle, 3, data, size, None):
+                    break
+                if ctypes.get_last_error() != 234 or size >= 1048576:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                size *= 2
+            count = wintypes.DWORD.from_buffer(data, 4).value
+            pids = (ctypes.c_size_t * count).from_buffer(data, 8)
+            for pid in pids:
+                if pid == os.getpid():
+                    continue
+                handle = self.api.k.OpenProcess(0x1000 | 0x100001, False, pid)
+                if not handle:
+                    # Terminating processes may deny OpenProcess while still
+                    # appearing in the accounting snapshot. Only active()==1
+                    # confirms cleanup; a persistent refusal times out below.
+                    continue
+                try:
+                    member = wintypes.BOOL()
+                    self.api.require(self.api.k.IsProcessInJob(handle, self.job.handle, ctypes.byref(member)))
+                    if member.value:  # The handle pins this job-owned generation.
+                        self.api.k.TerminateProcess(handle, 1)
+                finally:
+                    self.api.close(handle)
+            if time.monotonic() >= deadline:
+                raise OSError("worker-owned descendants did not terminate")
+            time.sleep(0.01)
 
 # --- What in this file is load-bearing, and for whom -------------------------------------
 #
@@ -70,7 +137,7 @@ class JobManager:
         idle_stall_seconds: int = DEFAULT_IDLE_STALL_SECONDS,
         max_global_workers: int = DEFAULT_MAX_GLOBAL_WORKERS,
     ) -> None:
-        self.job_dir = Path(job_dir)
+        self.job_dir = Path(job_dir).resolve()
         self.lock_dir = self.job_dir / "locks"
         self.beat_dir = self.job_dir / "beats"
         self.recovery_dir = self.job_dir / "recovery"
@@ -180,7 +247,7 @@ class JobManager:
             if not job:
                 self.release_recovery_claim(job_id)
                 return {"action": "missing", "job": None}
-            if job.get("status") not in {"pending", "running", "recovering"}:
+            if _cleanup_unconfirmed(job) or job.get("cancellation") or job.get("status") not in {"pending", "running", "recovering"}:
                 self.release_recovery_claim(job_id)
                 return {"action": "attach", "job": job}
             worker_pid = job.get("worker_pid")
@@ -241,6 +308,7 @@ class JobManager:
                     job["recovery_reason"] = "worker_died"
                 job["previous_worker_pid"] = job.get("worker_pid")
                 job["worker_pid"] = None
+                job["worker_registered"] = False
                 job["worker_create_time"] = None
                 job["worker_identity"] = None
                 job["reservation_owner_pid"] = os.getpid()
@@ -280,12 +348,59 @@ class JobManager:
             if job.get("status") not in {"pending", "running", "recovering"}:
                 return
             job["worker_pid"] = pid
+            job["worker_registered"] = True
             job["worker_create_time"] = osutil.pid_create_time(pid)
             job["worker_identity"] = osutil.process_identity(pid)
             job.pop("reservation_owner_pid", None)
             job.pop("reservation_owner_create_time", None)
             job.pop("reservation_owner_identity", None)
             self._save(job)
+
+    def set_launcher_pid(self, job_id, pid):
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("status") not in {"pending", "running", "recovering"}:
+                return job
+            job.update(launcher_pid=pid, launcher_create_time=osutil.pid_create_time(pid),
+                       launcher_identity=osutil.process_identity(pid))
+            if not job.get("worker_registered"):
+                job.update(worker_pid=pid, worker_create_time=job["launcher_create_time"],
+                           worker_identity=job["launcher_identity"])
+            self._save(job)
+            return job
+
+    def _worker_ownership(self, job_id, *, confirmed=False, error=None):
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("worker_pid") != os.getpid() or osutil.process_generation(
+                    os.getpid(), job.get("worker_create_time"), job.get("worker_identity")) != osutil.PROCESS_MATCHED:
+                raise ValueError("ownership update is not from the registered worker")
+            path = self._lock_path(job["session_id"])
+            with self._exclusive_file_guard(path.with_name(path.name + ".guard")):
+                claim = self._read_lock(path)
+                if not claim or claim.get("job_id") != job_id or claim.get("token") != job.get("lock_token"):
+                    raise ValueError("worker session ownership changed")
+                if not confirmed:
+                    # The lock retains proof even if a later job-record read fails.
+                    atomic_write_json(path, {**claim, "cleanup_required": True, "work_dir": job.get("work_dir")})
+                job["ownership"] = {"cleanup_confirmed": confirmed, "at": self._now(), "error": error}
+                self._save(job)
+                if confirmed:
+                    atomic_write_json(path, {**claim, "cleanup_required": False})
+            return job
+
+    def begin_worker_ownership(self, job_id):
+        return self._worker_ownership(job_id)
+
+    def confirm_worker_cleanup(self, job_id):
+        return self._worker_ownership(job_id, confirmed=True)
+
+    def retain_worker_cleanup(self, job_id, error):
+        from exoma.core.evidence.contract import make_error
+        job = self._worker_ownership(job_id, error=error)
+        return make_error("cleanup_pending", "Worker descendant cleanup is unconfirmed: " + str(error),
+                          next_action="Inspect owned processes; do not recover or restart automatically.",
+                          meta={"job_id": job_id, "recoverable": False, "ownership": job["ownership"]})
 
     def _kill_worker(self, job: dict) -> dict:
         """Terminate a worker by PID — only while the PID provably still hosts it.
@@ -360,7 +475,7 @@ class JobManager:
                 job = self._load(job_id)
                 if job.get("status") == "completed":
                     pass
-                elif job.get("reaped") or job.get("status") == "failed":
+                elif _cleanup_unconfirmed(job) or job.get("cancellation") or job.get("reaped") or job.get("status") == "failed":
                     job["late_output"] = output
                     self._save(job)
                 else:
@@ -383,6 +498,8 @@ class JobManager:
         some other job holds.
         """
         if job is not None:
+            if _cleanup_unconfirmed(job):
+                return  # Cleanup-unconfirmed cancellation still owns this session.
             self._release_session_lock(job)
             return
         for path in sorted(self.lock_dir.glob("*.lock")):
@@ -412,6 +529,10 @@ class JobManager:
     def _apply_failure(
         self, job: dict, error: str, output: dict | None, reaped: bool
     ) -> None:
+        if _cleanup_unconfirmed(job):
+            job["late_output"] = output
+            self._save(job)
+            return
         if job.get("status") == "completed":
             pass
         elif job.get("status") == "failed":
@@ -435,6 +556,95 @@ class JobManager:
                 job["reaped"] = True
             self._save(job)
 
+    def cancel(self, job_id: str, session_id: str, work_dir: str, reason="requested by user") -> dict:
+        """Serialize explicit intent with completion; release only after confirmed cleanup."""
+        from exoma.core.evidence.contract import make_error
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("session_id") != session_id or not job.get("work_dir") or (
+                    Path(job["work_dir"]).resolve() != Path(work_dir).resolve()):
+                return make_error("job_submit_error", "Cancellation ownership mismatch",
+                                  next_action="Use the job's bound project and session.")
+            if job.get("status") in {"completed", "failed"}:
+                return {"ok": True, "content": "Job already terminal; outcome preserved", "meta": {"job_id": job_id}}
+            request = job.setdefault("cancellation", {"source": "explicit_cli", "actor_pid": os.getpid(),
+                "requested_at": self._now(), "reason": reason, "cleanup_confirmed": False})
+            self._publish_cancellation(job, {"ok": False, "reason": "requested"})
+            # Intent and retained-lock proof are durable BEFORE any termination.
+            if not job.get("worker_pid"):
+                output = self._publish_cancellation(job, {"ok": True, "reason": "not_started"})
+                self._release_session_lock(job)
+                return output
+        # The worker needs its mutation guard to acknowledge adapter cleanup. Never
+        # hold that guard while waiting for it or while terminating processes.
+        deadline = time.monotonic() + _CANCEL_WAIT_SECONDS
+        while True:
+            current = self._load(job_id)
+            if (current.get("cancellation") or {}).get("cleanup_confirmed"):
+                return current["output"]
+            if osutil.process_generation(job["worker_pid"], job.get("worker_create_time"),
+                                         job.get("worker_identity")) != osutil.PROCESS_MATCHED:
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        with self._job_mutation(job_id):
+            current = self._load(job_id)
+            if current["cancellation"].get("cleanup_confirmed"):
+                return current["output"]
+            known = current["cancellation"].setdefault("targets", [])
+            if osutil.process_generation(job["worker_pid"], job.get("worker_create_time"),
+                                         job.get("worker_identity")) == osutil.PROCESS_MATCHED:
+                for row in osutil.process_tree(job["worker_pid"]):
+                    target = {"worker_pid": row["pid"], "worker_create_time": osutil.pid_create_time(row["pid"]),
+                              "worker_identity": osutil.process_identity(row["pid"])}
+                    if target not in known:
+                        known.append(target)
+            self._save(current)  # Preserve known generations for an explicit retry.
+        kills = [self._kill_worker(target) for target in reversed(known)]
+        kills.append(self._kill_worker(job))
+        with self._job_mutation(job_id):
+            current = self._load(job_id)
+            if current["cancellation"].get("cleanup_confirmed"):
+                return current["output"]
+            # A snapshot plus forced termination cannot exclude a concurrent spawn.
+            # Only the worker's lifecycle acknowledgment can release this session.
+            return self._publish_cancellation(current, {"ok": False, "reason": "worker_cleanup_unacknowledged", "kills": kills})
+
+    def _publish_cancellation(self, job, cleanup):
+        from exoma.core.evidence.contract import make_error
+        request = job["cancellation"]
+        request.update(cleanup=cleanup, cleanup_confirmed=cleanup.get("ok") is True)
+        output = make_error("cancelled" if request["cleanup_confirmed"] else "cancellation_pending",
+                            "Cancelled by explicit request" if request["cleanup_confirmed"] else "Cancellation requested; cleanup unconfirmed",
+                            next_action="Inspect the job snapshot; do not recover or restart it automatically.",
+                            meta={"job_id": job["job_id"], "cancellation": request})
+        if request["cleanup_confirmed"]:
+            job.update(status="failed", completed_at=self._now(), output=output, error=output["content"])
+        path = self._lock_path(job["session_id"])
+        with self._exclusive_file_guard(path.with_name(path.name + ".guard")):
+            claim = self._read_lock(path)
+            owned = claim and claim.get("job_id") == job["job_id"] and claim.get("token") == job.get("lock_token")
+            if owned and not request["cleanup_confirmed"]:
+                atomic_write_json(path, {**claim, "cleanup_required": True, "work_dir": job.get("work_dir")})
+            self._save(job)
+            if owned and request["cleanup_confirmed"]:
+                atomic_write_json(path, {**claim, "cleanup_required": False})
+        return output
+
+    def acknowledge_cancellation(self, job_id, cleanup):
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("worker_pid") != os.getpid() or osutil.process_generation(
+                    os.getpid(), job.get("worker_create_time"), job.get("worker_identity")) != osutil.PROCESS_MATCHED:
+                raise ValueError("cancellation acknowledgment is not from the registered worker")
+            if not job.get("cancellation"):
+                raise ValueError("no explicit cancellation was requested")
+            output = self._publish_cancellation(job, cleanup)
+            if cleanup.get("ok") is True:
+                self._release_session_lock(job)
+            return output
+
     def get_job(self, job_id: str) -> dict | None:
         path = self._path(job_id)
         if not path.exists():
@@ -445,6 +655,17 @@ class JobManager:
         job = self.get_job(job_id)
         if not job:
             return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
+
+        if job.get("cancellation") and job.get("status") in {"pending", "running", "recovering"}:
+            return {"ok": False, "job_id": job_id, "status": job["status"],
+                    "content": "Cancellation requested; cleanup unconfirmed",
+                    "meta": {"error_type": "cancellation_pending", "recoverable": False,
+                             "cancellation": job["cancellation"]}}
+        if job.get("ownership") and not job["ownership"].get("cleanup_confirmed") and (
+                job["ownership"].get("error") or self.liveness(job) == DEAD):
+            return {"ok": False, "job_id": job_id, "status": job["status"],
+                    "content": "Worker descendant cleanup is unconfirmed",
+                    "meta": {"error_type": "cleanup_pending", "recoverable": False, "ownership": job["ownership"]}}
 
         if job["status"] in {"pending", "running"}:
             state = self.liveness(job)
@@ -618,7 +839,18 @@ class JobManager:
         job_id = data.get("job_id") or ""
         if expected_job_id is not None and job_id != expected_job_id:
             return None
+        if job_id:
+            # Cancellation and completion use this same mutation guard. A reclaim
+            # decision made before taking it can race a durable cancellation intent.
+            with self._job_mutation(job_id):
+                return self._release_stale_owner(path, data, released_by, dead_worker_only)
+        return self._release_stale_owner(path, data, released_by, dead_worker_only)
+
+    def _release_stale_owner(self, path, data, released_by, dead_worker_only):
+        job_id = data.get("job_id") or ""
         job = self.get_job(job_id) if job_id else None
+        if job and _cleanup_unconfirmed(job):
+            return None
         if job is None:
             reason = "no_job_record"
         elif job.get("status") not in {"pending", "running", "recovering"}:
@@ -631,9 +863,10 @@ class JobManager:
             return None
         if reason == "worker_died":
             try:
-                self.fail_job(
-                    job_id,
+                self._apply_failure(
+                    job,
                     f"worker died and the session lock was released by {released_by}",
+                    output=None,
                     reaped=True,
                 )
             except OSError:
@@ -763,6 +996,10 @@ class JobManager:
         progress = (beat or {}).get("progress")
         if not isinstance(progress, dict):
             return None
+        if progress.get("semantic_progress_supported") is True:
+            semantic = progress.get("work_idle_seconds")
+            if isinstance(semantic, (int, float)) and semantic >= 0:
+                return float(semantic)
         idle = progress.get("idle_seconds")
         if idle is None:
             return None
@@ -854,10 +1091,17 @@ class JobManager:
         try:
             with self._job_mutation(job_id):
                 job = self._load(job_id)
+                if job.get("cancellation") and not job["cancellation"].get("cleanup_confirmed"):
+                    # A probe started before cancel must not publish a terminal
+                    # outcome or free ownership after cancellation wins the guard.
+                    return self.get_result(job_id)
                 if job.get("status") not in {"pending", "running", "recovering"}:
                     terminal = True
                 else:
-                    job["status"] = "failed"
+                    if job.get("ownership") and not job["ownership"].get("cleanup_confirmed"):
+                        job["ownership"]["error"] = message
+                    else:
+                        job["status"] = "failed"
                     job["reaped"] = True
                     job["completed_at"] = self._now()
                     job["error"] = message
@@ -1058,6 +1302,69 @@ class JobManager:
         with self._exclusive_file_guard(self.job_dir / ".capacity.guard"):
             yield
 
+    def assert_update_admission(self):
+        path = self.job_dir / ".update-reservation.json"
+        if path.exists():
+            claim = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(claim, dict) or not claim.get("token") or os.environ.get("WORKFLOW_UPDATE_OWNER") != claim["token"]:
+                raise ValueError("package update owns admission; inspect its operation before submitting jobs")
+
+    def retained_cleanup_claims(self, workspace=None):
+        """Shared mutation admission: lock proof survives missing job records."""
+        target = Path(workspace).resolve() if workspace is not None else None
+        def relevant(work_dir):
+            if target is None or not isinstance(work_dir, str) or not work_dir:
+                return True  # Unknown scope must not become permission to mutate.
+            try:
+                if not Path(work_dir).is_absolute():
+                    return True  # Stored relative paths belong to an earlier caller's cwd.
+                root = Path(work_dir).resolve()
+                return root == target or root.is_relative_to(target) or target.is_relative_to(root)
+            except (OSError, ValueError):
+                return True
+        def read(path):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return None  # A concurrent confirmed completion can remove its record.
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"cannot establish cleanup admission from {path}") from exc
+            if not isinstance(value, dict):
+                raise ValueError(f"unreadable cleanup admission record: {path}")
+            return value
+        retained = {}
+        for path in self.lock_dir.glob("*.lock"):
+            claim = read(path)
+            if claim and claim.get("cleanup_required") and relevant(claim.get("work_dir")):
+                key = claim.get("job_id") or path.name
+                retained[key] = {"job_id": key, "command": "cleanup_pending", "work_dir": claim.get("work_dir")}
+        for path in self.job_dir.glob("job_*.json"):
+            job = read(path)
+            if job and _cleanup_unconfirmed(job) and relevant(job.get("work_dir")):
+                retained[job.get("job_id") or path.stem] = job
+        return list(retained.values())
+
+    def assert_cleanup_admission(self, workspace=None):
+        retained = self.retained_cleanup_claims(workspace)
+        if retained:
+            raise ValueError("unconfirmed Exoma cleanup owns admission: " +
+                             ", ".join(str(row["job_id"]) for row in retained[:3]))
+
+    def reserve_update(self, operation, token):
+        with self.capacity_guard():
+            self.assert_update_admission()
+            self.assert_cleanup_admission()
+            for path in self.job_dir.glob("job_*.json"):
+                job = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(job, dict):
+                    raise ValueError("unreadable job admission record")
+                if _cleanup_unconfirmed(job) or job.get("status") in {"pending", "running", "recovering"} and (
+                        job.get("cancellation") or self.liveness(job) != DEAD):
+                    raise ValueError("active Exoma jobs exist; finish or confirm cleanup before updating")
+            path = self.job_dir / ".update-reservation.json"
+            atomic_write_json(path, {"token": token, "operation": str(operation), "owner_pid": os.getpid()})
+            return path
+
     @contextmanager
     def _job_mutation(self, job_id: str):
         path = self._mutation_path(job_id)
@@ -1257,8 +1564,10 @@ class JobManager:
     ) -> bool:
         guard_path = path.with_name(f"{path.name}.guard")
         with self._exclusive_file_guard(guard_path):
+            current = self._read_lock(path)
+            if current and current.get("cleanup_required"):
+                return False
             if not force:
-                current = self._read_lock(path)
                 if not current or current.get("job_id") != expected_job_id:
                     return False
                 if expected_token and current.get("token") != expected_token:

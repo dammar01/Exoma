@@ -80,7 +80,7 @@ from tests.checks.research_regressions import (
     _test_research_parser_regressions,
     _test_research_gate_regressions,
 )
-from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation
+from tests.checks.jobs import _test_job_store_not_writable, _test_submit_admission, _test_worker_log_preservation, _test_job_cancellation_and_diagnostics
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
     _test_script_drift_path_spelling,
@@ -232,6 +232,7 @@ from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_p
 from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates
 from tests.checks.adapters import (
     _test_adapter_error_normalization,
+    _test_stream_observations,
     _test_error_types_are_registered,
     _test_stdin_failure_reaches_call_meta,
     _test_adapter_redaction_is_shared,
@@ -327,6 +328,8 @@ def run_tests() -> None:
     _test_secret_files()
     _test_no_code_in_messages()
     _test_adapter_error_normalization()
+    _test_stream_observations()
+    _test_job_cancellation_and_diagnostics()
     _test_error_types_are_registered()
     _test_key_pattern_needs_a_left_boundary()
     _test_adapter_redaction_is_shared()

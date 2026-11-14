@@ -77,9 +77,9 @@ accident.
    Then **the wheel in a clean environment**: `uv build`, install `dist/exoma-<version>-py3-none-any.whl`
    into a fresh venv, and run `exoma --version`, `exoma install --dry-run` (with `HOME`,
    `USERPROFILE`, `AGENT_HOME` and `EXOMA_HOME` pointed at a temp directory), `exoma init` in a
-   temp project, and its `.workflow/inspect.sh`.
+   temp project, and its `.workflow/inspect.sh --session dist-smoke`.
 
-   Windows self-update additionally requires an actual candidate A-to-B transition:
+   Self-update on all three OSes additionally requires an actual candidate A-to-B transition:
 
    ```powershell
    python tests/run.py --only self-update --traceback --update-artifacts handoff
@@ -90,7 +90,7 @@ accident.
    do not replace the artifact gate. The gate builds disposable A/B wheels containing the
    candidate updater, polls journal files after A exits, and requires B plus refresh/check
    and preserved user data. Manual recovery or a package no-op cannot satisfy it. CI runs
-   this gate on Windows for both CI Python versions and uploads its result artifact.
+   this gate on Windows/Linux/macOS for both CI Python versions and uv/pipx/pip venvs; operation logs are preserved with the result artifact. Set the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER` to supported Windows runner labels if hosted restrictions prevent full breakaway.
    `--update-artifacts contained` exercises the real package/refresh/check transition in
    disposable fixtures under a restrictive test supervisor. It relaxes only that fixture's
    inherited-job assertion; it does not verify independent-worker survival and cannot

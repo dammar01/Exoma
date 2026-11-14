@@ -30,155 +30,35 @@ def _test_self_update() -> None:
     _check_handshake_reads()
     _check_handoff_uncertainty()
     _check_handoff_polling()
+    _check_cleanup_publication()
     _check_worker_protocol()
-    # Existing tests cover the synchronous contract on every OS. Native Windows
-    # handoff is exercised separately, including real launcher/process lifetimes.
-    with patch.object(self_update, "IS_WINDOWS", False):
-        _check_synchronous_update()
+    _check_synchronous_update()
+    _check_update_deadlines_and_interruption()
 
 
 def _check_synchronous_update() -> None:
-    if os.environ.get("EXOMA_UPDATE_UPGRADE_SMOKE") == "1":
-        _check_installed_upgrade()
-        return
-    _check_update_deadlines_and_interruption()
-    _check_update_migrates_workflow()
+    """Frontend admission/manager tests; stages are tested through the shared worker."""
     with tempfile.TemporaryDirectory(prefix="exoma-update-") as tmp:
-        # update resolves its cwd; Windows runners hand out 8.3 short temp paths that differ.
         root = Path(tmp).resolve()
-        nested = root / "src" / "app"
-        nested.mkdir(parents=True)
-        (root / ".workflow").mkdir()
-        assert_true(self_update._workspace_root(nested) == root,
-                    "a workspace is found when update runs inside a project subdirectory")
-
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(self_update, "run_bounded") as not_called:
-            assert_true(self_update.main(["--manager", "pip"]) == 1,
-                        "update refuses an incomplete workspace before changing the package")
-            not_called.assert_not_called()
-        (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
-        (nested / ".workflow").mkdir()
-        assert_true(self_update._workspace_root(nested) == root,
-                    "an incomplete nested .workflow does not hide the configured workspace")
-
-        for invalid in ("{broken", "[]", '{"runtime": []}'):
-            (root / ".workflow" / "config.json").write_text(invalid, encoding="utf-8")
-            with patch.object(self_update.Path, "cwd", return_value=nested), \
-                 patch.object(self_update, "run_bounded") as not_called:
+        project = root / "project"
+        project.mkdir()
+        with patch.object(self_update.Path, "cwd", return_value=project), \
+             patch.object(self_update, "_package_command", return_value=("pip", [sys.executable, "-m", "pip"])), \
+             patch.object(self_update, "_handoff", return_value=3) as handoff:
+            for windows in (False, True):
+                with patch.object(self_update, "IS_WINDOWS", windows):
+                    assert_true(self_update.main(["--manager", "pip"]) == 3,
+                                "every platform delegates to the same accepted-not-complete handoff")
+            assert_true(handoff.call_count == 2, "no synchronous production fork remains")
+            (project / ".workflow").mkdir()
+            for invalid in (None, "{broken", "[]", '{"runtime":[]}'):
+                config = project / ".workflow/config.json"
+                if invalid is not None:
+                    config.write_text(invalid, encoding="utf-8")
+                handoff.reset_mock()
                 assert_true(self_update.main(["--manager", "pip"]) == 1,
-                            "invalid workspace config stops before the package update")
-                not_called.assert_not_called()
-        (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
-
-        from exoma.core.runtime import upgrade as workspace_upgrade
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(workspace_upgrade, "active_jobs_for_workspace", return_value=[{"job_id": "active"}]), \
-             patch.object(self_update, "run_bounded") as not_called:
-            assert_true(self_update.main(["--manager", "pip"]) == 1,
-                        "update refuses a workspace with an active job before touching the package")
-            not_called.assert_not_called()
-
-        calls = []
-
-        def fake_run(argv, timeout, **kwargs):
-            calls.append((argv, kwargs.get("cwd")))
-            return 0, "", ""
-
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(self_update, "run_bounded", side_effect=fake_run):
-            assert_true(self_update.main(["--manager", "pip"]) == 0, "update succeeds")
-        assert_true([argv[1:4] for argv, _cwd in calls] ==
-                    [["-m", "pip", "install"], ["-m", "exoma", "install"],
-                     ["-m", "exoma", "install"]],
-                    f"package, installer with workspace upgrade, and check run in order: {calls}")
-        assert_true(len(calls) == 3,
-                    f"update uses the installer's workspace upgrade only once: {calls}")
-        assert_true("--no-input" in calls[1][0] and "--check" in calls[2][0],
-                    f"the fresh installer asks nothing (an update is unattended): {calls}")
-        assert_true(all(Path(cwd) == nested for _argv, cwd in calls),
-                    f"every update step runs in the resolved workspace cwd: {calls}")
-
-        calls.clear()
-        def workspace_failure(argv, timeout, **kwargs):
-            calls.append(argv)
-            return (1 if argv[1:4] == ["-m", "exoma", "install"] and "--check" not in argv else 0), "", ""
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(self_update, "run_bounded", side_effect=workspace_failure):
-            assert_true(self_update.main(["--manager", "pip"]) == 1 and len(calls) == 2,
-                        "a failed installer workspace upgrade stops before the final check")
-
-        receipts_home = root / "receipt-home"
-        receipt = receipts_home / ".claude" / "backups" / "install_retry" / "install_receipt.json"
-        calls.clear()
-        def failed_with_receipt(argv, timeout, **kwargs):
-            calls.append(argv)
-            if argv[1:4] == ["-m", "exoma", "install"] and "--check" not in argv:
-                receipt.parent.mkdir(parents=True)
-                receipt.write_text("{}", encoding="utf-8")
-                return 1, "", ""
-            return 0, "", ""
-        errors = io.StringIO()
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(self_update, "agent_home", return_value=receipts_home), \
-             patch.object(self_update, "run_bounded", side_effect=failed_with_receipt), \
-             redirect_stderr(errors):
-            assert_true(self_update.main(["--manager", "pip"]) == 1 and len(calls) == 2,
-                        "failed install stops before check")
-        assert_true("--rollback install_retry --apply" in errors.getvalue()
-                    and str(receipt) in errors.getvalue()
-                    and "exoma upgrade --work-dir" in errors.getvalue(),
-                    "failed install names only its new global receipt and workspace recovery")
-
-        calls.clear()
-        errors = io.StringIO()
-        def failed_check(argv, timeout, **kwargs):
-            calls.append(argv)
-            return (1 if "--check" in argv else 0), "", ""
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(self_update, "agent_home", return_value=receipts_home), \
-             patch.object(self_update, "run_bounded", side_effect=failed_check), \
-             redirect_stderr(errors):
-            assert_true(self_update.main(["--manager", "pip"]) == 1 and len(calls) == 3,
-                        "failed check also reports an incomplete update")
-        assert_true("check failed" in errors.getvalue() and "--rollback" not in errors.getvalue(),
-                    "an older receipt is never offered as recovery for a later failure")
-
-        calls.clear()
-        with patch.object(self_update.Path, "cwd", return_value=nested), \
-             patch.object(self_update, "run_bounded", side_effect=lambda argv, timeout, **kw: (
-                 calls.append(argv) or (1, "", ""))):
-            assert_true(self_update.main(["--manager", "pip"]) == 1 and len(calls) == 1,
-                        "a failed package update stops before changing installed config")
-
-        with tempfile.TemporaryDirectory(prefix="exoma-update-plain-") as plain:
-            empty = Path(plain)
-            calls.clear()
-            with patch.object(self_update.Path, "cwd", return_value=empty), \
-                 patch.object(self_update, "run_bounded", side_effect=fake_run):
-                assert_true(self_update.main(["--manager", "pip"]) == 0
-                            and not any("upgrade" in argv for argv, _cwd in calls),
-                            "without .workflow, update skips the workspace step")
-
-        # The installer may finish global writes before the workspace rejects an upgrade.
-        # That partial result must have a failing exit code for update to stop here.
-        isolated = root / "isolated-home"
-        isolated.mkdir()
-        broken = root / "broken-project"
-        (broken / ".workflow").mkdir(parents=True)
-        (broken / ".workflow" / "config.json").write_text("{invalid", encoding="utf-8")
-        env = dict(os.environ)
-        env["AGENT_HOME"] = str(isolated)
-        env["PYTHONPATH"] = str(REPO / "src")
-        installed = subprocess.run(
-            [sys.executable, "-m", "exoma.install", "claude",
-             "--provider", "opencode"],
-            cwd=broken, env=env, capture_output=True, text=True, timeout=60, **no_console(),
-        )
-        assert_true(installed.returncode == 1 and "workspace not upgraded" in installed.stdout,
-                    "a workspace upgrade failure returns nonzero after the global install report: "
-                    + installed.stdout[-1200:] + installed.stderr[-500:])
-
+                            "invalid workspace refuses before any handoff")
+                handoff.assert_not_called()
         uv_dir = root / "uv-tools"
         with patch.object(self_update.shutil, "which", return_value="uv"), \
              patch.object(self_update.sys, "prefix", str(uv_dir / "exoma")), \
@@ -265,47 +145,26 @@ def _check_synchronous_update() -> None:
                     f"public CLI routes {spelling} to update help, pipx among the managers")
 
 
+
+
 def _check_update_deadlines_and_interruption() -> None:
     with tempfile.TemporaryDirectory(prefix="exoma-update-deadline-") as tmp:
         root = Path(tmp).resolve()
         (root / ".workflow").mkdir()
         (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
-        for failed_stage in range(3):
-            for failure, expected in ((None, 1), (KeyboardInterrupt(), 130), (OSError("blocked"), 1)):
-                calls = []
-
-                def run(argv, timeout, **kwargs):
-                    calls.append((argv, timeout, kwargs))
-                    if len(calls) - 1 == failed_stage:
-                        kwargs["on_tick"](0.1)
-                        if isinstance(failure, BaseException):
-                            raise failure
-                        return failure, "", ""
-                    return 0, "", ""
-
-                out, err = io.StringIO(), io.StringIO()
-                with patch.object(self_update.Path, "cwd", return_value=root), \
-                     patch.object(self_update, "run_bounded", side_effect=run), \
-                     patch.object(self_update, "_receipt_names", side_effect=[set(), {"install_timeout"}]), \
-                     redirect_stdout(out), redirect_stderr(err):
-                    status = self_update.main(["--manager", "pip", "--timeout", "0.25"])
-                assert_true(status == expected and len(calls) == failed_stage + 1,
-                            "timeout, launch failure and cancellation skip all later stages")
-                assert_true(all(timeout == 0.25 and kw["inherit_output"] for _, timeout, kw in calls),
-                            "the explicit deadline applies to every stage with live inherited output")
-                assert_true("still waiting; elapsed" in err.getvalue() and "[UPDATE] complete\n" not in out.getvalue(),
-                            "a waiting diagnostic never claims the failed update completed")
-                if failed_stage == 0:
-                    assert_true("package state is uncertain" in err.getvalue()
-                                and "--rollback" not in err.getvalue(),
-                                "an interrupted package command reports uncertain package state")
+        for failure in (None, KeyboardInterrupt(), OSError("blocked")):
+            def run(argv, timeout, **kwargs):
+                kwargs["on_tick"](0.1)
+                if isinstance(failure, BaseException):
+                    raise failure
+                return failure, "", ""
+            with patch.object(self_update, "run_bounded", side_effect=run):
+                try:
+                    result = self_update._run_step("package", ["unused"], root, timeout=0.25)
+                except KeyboardInterrupt:
+                    assert_true(isinstance(failure, KeyboardInterrupt), "interrupt propagates after native cleanup")
                 else:
-                    assert_true("update is incomplete" in err.getvalue()
-                                and "--rollback install_timeout --apply" in err.getvalue()
-                                and "exoma upgrade --work-dir" in err.getvalue(),
-                                "refresh/check failure and cancellation retain receipt/workspace recovery")
-                if failure is None:
-                    assert_true("timed out after 0.25s" in err.getvalue(), "timeouts name their stage deadline")
+                    assert_true(result is False, "deadline and spawn failures do not claim success")
 
         for invalid in ("0", "-1", "nan", "inf", "-inf", "text"):
             with patch.object(self_update, "run_bounded") as not_called, redirect_stderr(io.StringIO()):
@@ -653,7 +512,7 @@ def _check_release_queries() -> None:
                 pass
         with patch.object(self_update, "IS_WINDOWS", True), \
              patch.object(self_update, "_update_root", return_value=root), \
-             patch.object(worker, "Win32", return_value=API()), \
+             patch.object(worker, "platform_api", return_value=API()), \
              patch.object(self_update, "_update") as no_update, redirect_stdout(io.StringIO()), \
              redirect_stderr(io.StringIO()):
             for phase, expected in (("succeeded", 0), ("failed", 1), ("accepted", 3)):
@@ -832,8 +691,10 @@ def _check_handoff_uncertainty():
         jobs = MagicMock()
         jobs.job_dir = root / "jobs"
         jobs.job_dir.mkdir()
+        jobs.reserve_update.side_effect = lambda operation, token: root / "reservation.json"
         api = MagicMock()
         api.user.return_value, api.in_job.return_value = "fixture-user", False
+        api.job_snapshot.return_value = {"in_job": False}
         descriptor = {"prefix": str(root / "target"), "runtime": sys.executable,
                       "python_relative": "Scripts/python.exe", "entrypoints": []}
         for committed in (False, True):
@@ -842,17 +703,20 @@ def _check_handoff_uncertainty():
             errors = io.StringIO()
             with patch.object(job_manager, "JobManager", return_value=jobs), \
                  patch.object(self_update.install_method, "update_descriptor", return_value=descriptor), \
-                 patch.object(worker, "Win32", return_value=api), patch.object(worker, "callers", return_value=[]), \
+                 patch.object(worker, "platform_api", return_value=api), patch.object(worker, "callers", return_value=[]), \
                  patch.object(self_update, "_update_root", return_value=state_root), \
                  patch.object(update_metadata, "distribution_info", return_value={"installed": "fixture-A"}), \
                  patch.object(self_update, "_receipt_names", return_value=set()), \
                  patch.object(self_update, "_workspace_root", return_value=None), \
                  patch.object(self_update.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
                  patch.object(self_update.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True), \
-                 patch.object(self_update.subprocess, "Popen"), \
+                 patch.object(self_update.subprocess, "Popen") as spawn, \
+                 patch.dict(os.environ, {"EXOMA_HOME": "relative-update-home"}), \
                  patch.object(self_update, "_wait_for_handshake", side_effect=effects), redirect_stderr(errors):
-                code = self_update._windows_handoff("pip", [sys.executable, "-m", "pip"], root, 1)
-            assert_true(code == 1 and bool(list(state_root.rglob("commit.json"))) == committed,
+                code = self_update._handoff("pip", [sys.executable, "-m", "pip"], root, 1)
+            assert_true(spawn.call_args.kwargs["env"]["EXOMA_HOME"] == str(Path("relative-update-home").resolve()),
+                        "helper receives one absolute storage interpretation before its cwd changes")
+            assert_true(code == (4 if committed else 1) and bool(list(state_root.rglob("commit.json"))) == committed,
                         "only an acknowledged READY opens COMMIT publication")
             expected = "handoff outcome unknown" if committed else "refused before package mutation"
             assert_true(expected in errors.getvalue(), "post-COMMIT denial never claims the package was unchanged")
@@ -893,10 +757,13 @@ def _check_handoff_polling():
 
 def _check_worker_protocol() -> None:
     if os.name != "nt":
+        _check_posix_worker_protocol()
         return
     from exoma import _update_worker as worker
 
     api = worker.Win32()
+    _check_restricted_worker_job()
+    _check_windows_update_observer()
     own = api.process(os.getpid())
     handle = api.open_identity(os.getpid(), own)
     assert_true(not api.signaled(handle), "current generation can be waited without terminate rights")
@@ -1036,6 +903,21 @@ def _check_worker_protocol() -> None:
                     until = time.monotonic() + 10
                     while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < until:
                         time.sleep(0.01)
+                    if not (operation / "ready.json").exists() and process.poll() is not None:
+                        refused = worker.read_json(operation / "state.json")
+                        if "worker still belongs to a host job" in refused.get("error", ""):
+                            assert_true(not refused["stages"] and not (operation / "commit.json").exists(),
+                                        "successful spawn with residual membership refuses before mutation")
+                            snapshot = snapshot.replace("if api.in_job():", "if False:  # protocol-only contained fixture")
+                            script.write_text(snapshot, encoding="utf-8")
+                            request["worker_sha256"] = hashlib.sha256(script.read_bytes()).hexdigest()
+                            worker.atomic_json(operation / "request.json", request)
+                            with (operation / "worker.log").open("ab") as log:
+                                process = subprocess.Popen([sys._base_executable, "-I", "-S", "-B", str(script), str(operation)],
+                                                           stdout=log, stderr=log, **no_console())
+                            until = time.monotonic() + 10
+                            while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < until:
+                                time.sleep(0.01)
                     assert_true((operation / "ready.json").exists(), (operation / "worker.log").read_text())
                     if commit:
                         worker.atomic_json(operation / "commit.json", {"token": token})
@@ -1061,13 +943,265 @@ def _check_worker_protocol() -> None:
             caller.wait(timeout=10)
 
 
+def _check_windows_update_observer():
+    """Production observer + real OS Ctrl+C, with native contained worker cleanup."""
+    if os.name != "nt":
+        return
+    import textwrap
+    from exoma import _update_worker as worker
+    from exoma.utils import osutil
+
+    observer_entry = textwrap.dedent(r'''
+        import ctypes, runpy, signal, sys
+        from pathlib import Path
+        source, operation = sys.argv[1:3]
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        assert kernel.GetConsoleCP(), 'observer must share the private console'
+        assert kernel.SetConsoleCtrlHandler(None, False), 'enable inherited Ctrl+C processing'
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        def ready(frame, event, arg):
+            if (event == 'line' and frame.f_code.co_filename == source
+                    and frame.f_code.co_name == 'observe' and frame.f_locals.get('code') == 3):
+                Path(operation, 'observer-ready').touch()
+                sys.settrace(None)
+                return None
+            return ready
+        sys.argv = [source, '--observe', operation, '--wait']
+        sys.settrace(ready)
+        runpy.run_path(source, run_name='__main__')
+    ''')
+    controller = textwrap.dedent(r'''
+        import ctypes, hashlib, json, os, subprocess, sys, time
+        from ctypes import wintypes
+        from pathlib import Path
+        from exoma import _update_worker as worker
+        from exoma.utils import osutil
+        root = Path(sys.argv[1])
+        api = worker.Win32()
+        kernel = api.k
+        kernel.GetConsoleCP.restype = wintypes.UINT
+        kernel.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, wintypes.BOOL]
+        kernel.GenerateConsoleCtrlEvent.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        report = {'contained': True, 'independence_verified': False, 'production_observer': str(Path(worker.__file__).resolve())}
+        caller = process = observer = None
+        handles = []
+        try:
+            report['attached'] = bool(kernel.GetConsoleCP())
+            assert report['attached'], 'controller must own a private console'
+            assert kernel.SetConsoleCtrlHandler(None, True), 'controller ignores its own broadcast'
+            operation = root / 'updates' / 'observer-operation'
+            operation.mkdir(parents=True)
+            source = Path(worker.__file__).read_text(encoding='utf-8')
+            assert source.count('if api.in_job():') == 1
+            # Only the worker admission guard is waived in this contained fixture.
+            # The observer runs the original production file, never this copy.
+            source = source.replace('if api.in_job():', 'if False:  # contained observer fixture; no independence proof')
+            script = operation / 'worker.py'
+            script.write_text(source, encoding='utf-8')
+            python = sys._base_executable or sys.executable
+            marker = operation / 'package-ready.json'
+            stage = ('import json,os,pathlib,subprocess,sys,time\n'
+                     'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\n'
+                     'pathlib.Path(' + repr(str(marker)) + ').write_text(json.dumps([os.getpid(),p.pid]))\n'
+                     'time.sleep(60)\n')
+            caller = subprocess.Popen([python, '-c', 'import time; time.sleep(60)'], **osutil.hidden_run_kwargs())
+            identity = api.process(caller.pid)
+            identity['parent'] = api.parents()[caller.pid]
+            token = 'observer-fixture'
+            worker.atomic_json(operation / 'request.json', {
+                'schema_version': worker.SCHEMA, 'operation_id': operation.name,
+                'installation_key': worker.installation_key(root / 'target', api.user()),
+                'token': token, 'prefix': str(root / 'target'), 'python_relative': 'Scripts/python.exe',
+                'package': [python, '-c', stage], 'cwd': str(root), 'timeout': 20,
+                'callers': [identity], 'worker_sha256': hashlib.sha256(script.read_bytes()).hexdigest()})
+            with (root / 'worker.log').open('wb') as log:
+                process = subprocess.Popen([python, '-I', '-S', '-B', str(script), str(operation)],
+                                           stdout=log, stderr=log, **osutil.hidden_run_kwargs())
+            deadline = time.monotonic() + 8
+            while not (operation / 'ready.json').exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert (operation / 'ready.json').exists(), (root / 'worker.log').read_text(errors='replace')
+            worker.atomic_json(operation / 'commit.json', {'token': token})
+            caller.terminate()
+            caller.wait(timeout=5)
+            deadline = time.monotonic() + 8
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert marker.exists(), worker.read_json(operation / 'state.json')
+            identities = [api.process(pid) for pid in json.loads(marker.read_text())]
+            handles = [api.open_identity(row['pid'], row) for row in identities]
+            assert all(handles), 'pin each real stage/descendant generation'
+            observer = subprocess.Popen([python, '-I', '-S', '-B', str(root / 'observer.py'),
+                                         str(Path(worker.__file__).resolve()), str(operation)],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        text=True, encoding='utf-8', creationflags=0)
+            # creationflags=0 deliberately inherits this already-hidden console.
+            deadline = time.monotonic() + 8
+            while not (operation / 'observer-ready').exists() and observer.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert (operation / 'observer-ready').exists(), 'production observer did not enter wait'
+            report['signal_sent'] = bool(kernel.GenerateConsoleCtrlEvent(0, 0))
+            assert report['signal_sent'], ctypes.get_last_error()
+            stdout, stderr = observer.communicate(timeout=8)
+            detached = json.loads(stdout)
+            report['detach_status'] = observer.returncode
+            report['observer_detached'] = detached.get('observer_detached') is True
+            report['update_survived_detach'] = (process.poll() is None and not (operation / 'cancel.json').exists()
+                                                and all(not api.signaled(handle) for handle in handles))
+            assert report['detach_status'] == 3 and report['observer_detached'] and report['update_survived_detach'], stderr
+            cancelled = subprocess.run([python, '-I', '-S', '-B', str(Path(worker.__file__).resolve()),
+                                        '--observe', str(operation), '--wait', '--cancel'],
+                                       capture_output=True, text=True, encoding='utf-8', timeout=10,
+                                       **osutil.hidden_run_kwargs())
+            state = json.loads(cancelled.stdout)
+            report['cancel_status'] = cancelled.returncode
+            report['worker_status'] = process.wait(timeout=8)
+            report['descendants_stopped'] = all(api.signaled(handle) for handle in handles)
+            report['cleanup_confirmed'] = state.get('cleanup_confirmed') is True
+            report['terminal_interrupted'] = state.get('phase') == 'interrupted' and state.get('completed') is True
+            report['explicit_source'] = (state.get('cancellation') or {}).get('source') == 'explicit_observer'
+            report['later_stages_skipped'] = 'install' not in state['stages'] and 'probe' not in state['stages']
+            assert report['cancel_status'] == report['worker_status'] == 130, cancelled.stderr
+            assert all(report[key] for key in ('descendants_stopped', 'cleanup_confirmed', 'terminal_interrupted',
+                                               'explicit_source', 'later_stages_skipped')), state
+        except BaseException as exc:
+            report['error'] = repr(exc)
+        finally:
+            for child in (observer, process, caller):
+                if child and child.poll() is None:
+                    osutil.terminate_tree(child)
+            for handle in handles:
+                api.close(handle)
+            (root / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+        raise SystemExit(1 if 'error' in report else 0)
+    ''')
+    with tempfile.TemporaryDirectory(prefix="windows-update-observer-") as tmp:
+        root = Path(tmp).resolve()
+        (root / "observer.py").write_text(observer_entry, encoding="utf-8")
+        (root / "controller.py").write_text(controller, encoding="utf-8")
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        env = {**os.environ, "PYTHONPATH": str(REPO / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        with (root / "controller.log").open("wb") as log:
+            proc = subprocess.Popen([sys._base_executable or sys.executable, str(root / "controller.py"), str(root)],
+                                    env=env, stdout=log, stderr=log,
+                                    creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=startup)
+        try:
+            proc.wait(timeout=45)
+            report = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            evidence = os.environ.get("WORKFLOW_WINDOWS_OBSERVER_REPORT")
+            if evidence:
+                Path(evidence).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            assert_true(proc.returncode == 0 and not report.get("error"),
+                        "production Windows observer Ctrl+C/detach/cancel: " + repr(report))
+        finally:
+            if proc.poll() is None:
+                osutil.terminate_tree(proc)
+
+
 def uuid_hex():
     import uuid
     return uuid.uuid4().hex
 
 
+def _check_cleanup_publication():
+    from exoma import _update_worker as worker
+    with tempfile.TemporaryDirectory(prefix="update-cleanup-") as tmp:
+        root = Path(tmp)
+        operation = root / uuid_hex()
+        operation.mkdir()
+        reservation = root / "reservation.json"
+        worker.atomic_json(reservation, {"token": "fixture"})
+        worker.atomic_json(operation / "request.json", {"schema_version": worker.SCHEMA,
+            "operation_id": operation.name, "installation_key": "fixture", "token": "fixture",
+            "reservation": str(reservation)})
+        fake = MagicMock()
+        fake.process.return_value = {"pid": 123, "created": 1, "image": "fixture"}
+        fake.in_job.return_value = True
+        fake.job_snapshot.return_value = {"in_job": True}
+        unlink = Path.unlink
+        def denied(path, *args, **kwargs):
+            if path == reservation:
+                raise PermissionError("fixture reservation is not writable")
+            return unlink(path, *args, **kwargs)
+        with patch.object(worker, "platform_api", return_value=fake), patch.object(Path, "unlink", denied):
+            assert_true(worker.run_request(operation) == 4, "admission release failure cannot publish terminal completion")
+        state, code = worker.outcome(operation, "fixture")
+        assert_true(code == 4 and state["phase"] == "cleanup_pending" and not state["completed"]
+                    and reservation.exists() and not state["stages"], "unconfirmed cleanup remains unknown and reserved")
+    # Exercise conservative ancestry classification without pretending to run a
+    # Darwin kernel on this host. A new orphan is uncertain; a foreign live parent
+    # or unchanged generation is evidence that a process is outside our stage.
+    owner = worker.DescendantOwner.__new__(worker.DescendantOwner)
+    owner.subreaper = False
+    parent = os.getpid() + 1000000
+    owner.baseline = {parent: {"created": 1, "parent": 1}, 1: {"created": 1, "parent": 0}}
+    current = {**owner.baseline, parent + 1: {"created": 2, "parent": parent}}
+    with patch.object(owner, "inventory", return_value=current):
+        owner.cleanup()
+    inventory = MagicMock()
+    inventory.pid, inventory.returncode = 999999, 0
+    inventory.communicate.return_value = ("123456 1 Fri Nov 13 00:00:00 2026\n999999 99 Fri Nov 13 00:00:01 2026\n", "")
+    inventory.poll.return_value = 0
+    with patch.object(worker.subprocess, "Popen", return_value=inventory), \
+         patch.object(worker.Posix, "process", side_effect=ProcessLookupError):
+        observed = owner.inventory()
+    assert_true(123456 in observed and 999999 not in observed,
+                "a disappearing new parent retains ancestry uncertainty; only the reaped inventory child is excluded")
+    with patch.object(worker.sys, "platform", "darwin"), patch.object(worker.subprocess, "check_output",
+            side_effect=["{ sec = 123, usec = 456 } date in timezone A", "{ sec = 123, usec = 456 } date in timezone B"]):
+        assert_true(worker.boot_identity() == worker.boot_identity(),
+                    "timezone presentation cannot authorize recovery as a changed boot")
+    for current in (
+            {**owner.baseline, parent + 1: {"created": 2, "parent": 1}},
+            {1: owner.baseline[1], parent: {"created": 3, "parent": 1},
+             parent + 1: {"created": 2, "parent": parent}}):
+        with patch.object(owner, "inventory", return_value=current):
+            try:
+                owner.cleanup()
+            except OSError:
+                pass
+            else:
+                raise AssertionError("orphan or reused-parent generation was declared safely unrelated")
+
+
+def _check_restricted_worker_job():
+    """A disposable job proves refusal independently of the test host's ambient jobs."""
+    from exoma import _update_worker as worker
+    api = worker.Win32()
+    with tempfile.TemporaryDirectory(prefix="restricted-update-") as tmp:
+        root = Path(tmp)
+        operation = root / uuid_hex()
+        operation.mkdir()
+        script = operation / "worker.py"
+        script.write_bytes(Path(worker.__file__).read_bytes())
+        key = worker.installation_key(root / "target", api.user())
+        worker.atomic_json(operation / "request.json", {
+            "schema_version": worker.SCHEMA, "operation_id": operation.name,
+            "installation_key": key, "token": uuid_hex(), "prefix": str(root / "target"),
+            "python_relative": "Scripts/python.exe", "package": [sys.executable, "-c", "raise SystemExit('must not run')"],
+            "cwd": str(root), "timeout": 5, "callers": [],
+            "worker_sha256": hashlib.sha256(script.read_bytes()).hexdigest()})
+        job = worker.ChildJob(api, key)
+        try:
+            code = job.run([sys.executable, "-I", "-S", "-B", str(script), str(operation)],
+                           root, root / "restricted.log", 10, lambda child: None)
+        finally:
+            job.cleanup()
+            job.close()
+        state = worker.read_json(operation / "state.json")
+        assert_true(code == 1 and state["host_job"]["in_job"] and state["host_job"]["kill_on_close"]
+                    and not state["stages"] and not (operation / "ready.json").exists(),
+                    "controlled restrictive job refuses before READY and every mutative instruction")
+
+
 def _handoff_independence_verified(platform, contained, state):
-    return platform == "win32" and not contained and isinstance(state, dict) and state.get("phase") == "succeeded"
+    return (platform in {"win32", "linux", "darwin"} and not contained and isinstance(state, dict)
+            and state.get("phase") == "succeeded" and state.get("cleanup_confirmed") is True
+            and state.get("callers_exited_at", float("inf")) <= state.get("stages", {}).get("package", {}).get("started_at", -1)
+            and (platform != "win32" or state.get("host_job", {}).get("in_job") is False))
 
 
 @contextmanager
@@ -1095,13 +1229,13 @@ def _artifact_evidence(report_path):
 
 
 def _check_artifact_reporting():
-    assert_true(not _handoff_independence_verified("linux", False, {"phase": "succeeded"})
-                and not _handoff_independence_verified("darwin", False, {"phase": "succeeded"})
-                and not _handoff_independence_verified("win32", True, {"phase": "succeeded"})
-                and not _handoff_independence_verified("win32", False, None)
-                and not _handoff_independence_verified("win32", False, {"phase": "failed"})
-                and _handoff_independence_verified("win32", False, {"phase": "succeeded"}),
-                "only successful strict Windows handoff can attest independent worker survival")
+    proof = {"phase": "succeeded", "cleanup_confirmed": True, "callers_exited_at": 1,
+             "stages": {"package": {"started_at": 2}}, "host_job": {"in_job": False}}
+    for platform in ("win32", "linux", "darwin"):
+        assert_true(_handoff_independence_verified(platform, False, proof)
+                    and not _handoff_independence_verified(platform, True, proof)
+                    and not _handoff_independence_verified(platform, False, {"phase": "succeeded"}),
+                    "all platforms require lifecycle evidence; contained/missing proof never attests independence")
     with tempfile.TemporaryDirectory(prefix="exoma-artifact-evidence-") as tmp:
         report_path = Path(tmp) / "report.json"
         try:
@@ -1130,7 +1264,7 @@ def _check_handoff_wheel_upgrade() -> None:
     uv = shutil.which("uv")
     assert_true(uv is not None, "uv is required for the A-to-B artifact gate")
     with _artifact_evidence(os.environ.get("EXOMA_UPDATE_SMOKE_REPORT")) as report, \
-         tempfile.TemporaryDirectory(prefix="exoma-handoff-ü-") as tmp:
+         _preserved_handoff_temp(report) as tmp:
         root = Path(tmp).resolve()
         stage, wheels, home, project = root / "built", root / "index", root / "home", root / "project"
         for folder in (stage, wheels, home, project):
@@ -1172,7 +1306,7 @@ def _check_handoff_wheel_upgrade() -> None:
                       wheel_sha256=[hashlib.sha256(path.read_bytes()).hexdigest() for path in wheel_paths])
         env = {key: value for key, value in os.environ.items()
                if not key.upper().startswith(("EXOMA_", "WORKFLOW_", "AGENT_", "UV_", "PIP_", "XDG_",
-                                              "AI_PROXY_", "CLAUDE_", "GEMINI_", "OPENCODE_"))
+                                              "AI_PROXY_", "PIPX_", "CLAUDE_", "GEMINI_", "OPENCODE_"))
                and key.upper() not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "CODEX_HOME")}
         for key, directory in {"HOME": home, "USERPROFILE": home, "AGENT_HOME": home,
                                "EXOMA_HOME": root / "state", "APPDATA": home / "AppData/Roaming",
@@ -1183,39 +1317,57 @@ def _check_handoff_wheel_upgrade() -> None:
             env[key] = str(directory)
         env.update(UV_NO_CONFIG="1", UV_PYTHON_DOWNLOADS="never", UV_LINK_MODE="copy",
                    PATH=str(root / "bin") + os.pathsep + env.get("PATH", ""))
-        exe = root / "bin" / ("exoma.exe" if os.name == "nt" else "exoma")
-        def run(argv):
+        manager = os.environ.get("EXOMA_UPDATE_SMOKE_MANAGER", "uv")
+        assert_true(manager in {"uv", "pipx", "pip"}, "supported artifact manager")
+        target = root / ("pipx/venvs/exoma" if manager == "pipx" else "tools/exoma")
+        exe = (target / ("Scripts/exoma.exe" if os.name == "nt" else "bin/exoma")) if manager == "pip" else root / "bin" / ("exoma.exe" if os.name == "nt" else "exoma")
+        env.update(PIP_NO_INDEX="1", PIP_FIND_LINKS=str(wheels), PIPX_HOME=str(root / "pipx"),
+                   PIPX_BIN_DIR=str(root / "bin"), PIPX_DEFAULT_PYTHON=sys._base_executable)
+        def run(argv, accepted=False):
             result = subprocess.run([str(item) for item in argv], cwd=project, env=env,
-                                    capture_output=True, text=True, timeout=180, **no_console())
-            assert_true(result.returncode == 0, result.stdout + result.stderr)
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, **no_console())
+            expected = 3 if accepted else 0
+            assert_true(result.returncode == expected, result.stdout + result.stderr)
             return result.stdout
         shutil.copyfile(wheel_paths[0], wheels / wheel_paths[0].name)
-        run([uv, "tool", "install", "exoma", "--python", sys._base_executable,
-             "--no-index", "--find-links", wheels])
-        assert_true(versions[0] in run([exe, "--version"]), "launcher starts fixture A")
+        if manager == "uv":
+            run([uv, "tool", "install", "exoma", "--python", sys._base_executable,
+                 "--no-index", "--find-links", wheels])
+        elif manager == "pipx":
+            import shlex
+            pipx = shutil.which("pipx")
+            assert_true(pipx is not None, "pipx must be installed for its artifact gate")
+            # Modern pipx may select uv, which does not consume pip's index env.
+            # Persist explicit local-index args for BOTH install and later upgrade.
+            run([pipx, "install", "exoma", "--python", sys._base_executable,
+                 "--pip-args", "--no-index --find-links " + shlex.quote(str(wheels))])
+        else:
+            run([sys._base_executable, "-m", "venv", target])
+            run([target / ("Scripts/python.exe" if os.name == "nt" else "bin/python"), "-m", "pip", "install", "exoma"])
+        report["manager"] = manager
+        initial_version = run([exe, "--version"])
+        report["initial_version"] = initial_version.strip()
+        assert_true(versions[0] in initial_version, "launcher starts fixture A: " + initial_version)
         run([exe, "install", "claude", "--provider", "opencode", "--no-input"])
         run([exe, "init", "--work-dir", project, "--host", "claude"])
         _seed_migration_user_data(home, project)
         shutil.copyfile(wheel_paths[1], wheels / wheel_paths[1].name)
-        output = run([exe, "update", "--timeout", "120"])
-        state = None
-        if os.name == "nt":
-            assert_true("accepted; not complete" in output, "launcher reports acceptance without claiming completion")
-            state, state_path = _poll_handoff(root / "state", 480)
-            assert_true(state["version_before"] == versions[0] and state["version_after"] == versions[1],
-                        "actual installed distribution changes A to B")
-            assert_true(state["accepted_at"] <= state["callers_exited_at"] <= state["stages"]["package"]["started_at"]
-                        < state["stages"]["install"]["started_at"] < state["stages"]["check"]["started_at"],
-                        "caller exit precedes package, refresh and check")
-            assert_true(all(state["stages"][step]["exit_code"] == 0 for step in ("package", "probe", "install", "check")),
-                        "all upgrade stages succeeded without manual recovery")
-            package_log = (state_path.parent / "package.log").read_text(encoding="utf-8", errors="replace")
-            assert_true(versions[1] in package_log, "package step reports a real version transition")
-        else:
-            assert_true("[UPDATE] complete" in output, "POSIX retains synchronous completion")
-        interpreter = root / "tools/exoma" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        marker = run([interpreter, "-I", "-c", "import exoma._handoff_fixture as f; print(f.MARKER); print(f.__file__)"])
-        assert_true(versions[1] in marker and str(root / "tools/exoma") in marker,
+        output = run([exe, "update", "--timeout", "120", "--manager", manager], accepted=True)
+        assert_true("accepted; not complete" in output, "launcher reports acceptance without claiming completion")
+        state, state_path = _poll_handoff(root / "state", 480)
+        assert_true(state["version_before"] == versions[0] and state["version_after"] == versions[1],
+                    "actual installed distribution changes A to B")
+        assert_true(state["accepted_at"] <= state["callers_exited_at"] <= state["stages"]["package"]["started_at"]
+                    < state["stages"]["install"]["started_at"] < state["stages"]["check"]["started_at"],
+                    "caller exit precedes package, refresh and check")
+        assert_true(all(state["stages"][step]["exit_code"] == 0 for step in ("package", "probe", "install", "check")),
+                    "all upgrade stages succeeded without manual recovery")
+        package_log = (state_path.parent / "package.log").read_text(encoding="utf-8", errors="replace")
+        assert_true(versions[1] in package_log, "package step reports a real version transition")
+
+        interpreter = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        marker = json.loads(run([interpreter, "-I", "-c", "import json,exoma._handoff_fixture as f; print(json.dumps(dict(marker=f.MARKER,module=f.__file__)))"]))
+        assert_true(marker["marker"] == versions[1] and str(target) in marker["module"],
                     "B marker imports from upgraded target, not checkout")
         assert_true(versions[1] in run([exe, "--version"]), "console entrypoint starts B")
         _assert_migrated_user_data(run, home, project)
@@ -1224,13 +1376,347 @@ def _check_handoff_wheel_upgrade() -> None:
                       independent_worker_verified=_handoff_independence_verified(sys.platform, contained, state),
                       state=state)
         print(f"TRANSITION EVIDENCE: {versions[0]} -> {versions[1]}; refresh/check and user data checked; "
-              f"Windows independent worker={report['independent_worker_verified']}; full gate still awaits separate no-op", flush=True)
+              f"Independent worker={report['independent_worker_verified']}; full gate still awaits separate no-op", flush=True)
         # A no-op remains a separate case after the strict transition assertion.
-        run([exe, "update", "--timeout", "120"])
-        if os.name == "nt":
-            second, _ = _poll_handoff(root / "state", 300)
-            assert_true(second["version_before"] == second["version_after"] == versions[1], "explicit no-op case")
+        run([interpreter, "-m", "exoma", "update", "--timeout", "120", "--manager", manager], accepted=True)
+        second, _ = _poll_handoff(root / "state", 300)
+        assert_true(second["version_before"] == second["version_after"] == versions[1], "explicit no-op case")
         report.update(passed=True, no_op_verified=True)
         label = "CONTAINED WHEEL (not independence acceptance)" if contained else (
-            "HANDOFF WHEEL" if os.name == "nt" else "POSIX SYNCHRONOUS WHEEL (not Windows independence acceptance)")
+            "SHARED HANDOFF WHEEL")
         print(f"{label}: {versions[0]} -> {versions[1]}; no manual recovery; then separate no-op")
+
+
+@contextmanager
+def _preserved_handoff_temp(report):
+    """Archive bounded operation evidence before temporary-directory cleanup on failures."""
+    with tempfile.TemporaryDirectory(prefix="exoma-handoff-\u00fc-") as tmp:
+        try:
+            yield tmp
+        finally:
+            report_path = os.environ.get("EXOMA_UPDATE_SMOKE_REPORT")
+            if report_path:
+                destination = Path(report_path).with_suffix(".logs")
+                for source in (Path(tmp) / "state" / "updates").rglob("*"):
+                    if source.is_file() and source.suffix in {".json", ".log"}:
+                        relative = source.relative_to(Path(tmp) / "state" / "updates")
+                        target = destination / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with source.open("rb") as stream:
+                            raw = stream.read(262144)
+                        if source.suffix == ".json":
+                            try:
+                                value = json.loads(raw)
+                                value.pop("token", None)
+                                raw = json.dumps(value, indent=2).encode()
+                            except ValueError:
+                                raw = b"unreadable diagnostic metadata"
+                        target.write_bytes(raw)
+                report["operation_artifacts"] = str(destination)
+
+
+def _check_posix_worker_protocol():
+    from exoma import _update_worker as worker
+    api = worker.Posix()
+    own = api.process(os.getpid())
+    assert_true(not api.signaled(own), "POSIX current generation remains live")
+    assert_true(api.open_identity(os.getpid(), {**own, "created": "not-the-original"}) is None,
+                "POSIX reused generation is not waited on")
+    with tempfile.TemporaryDirectory(prefix="posix-update-") as tmp:
+        root = Path(tmp).resolve()
+        for commit, exit_caller in ((False, False), (True, False), (True, True)):
+            caller = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console())
+            process = None
+            try:
+                identity = api.process(caller.pid)
+                identity["parent"] = os.getpid()
+                operation = root / "updates" / uuid_hex()
+                operation.mkdir(parents=True)
+                script = operation / "worker.py"
+                script.write_text(Path(worker.__file__).read_text(encoding="utf-8").replace(
+                    "HANDSHAKE_SECONDS = 15", "HANDSHAKE_SECONDS = 1").replace(
+                    "CALLER_SECONDS = 60", "CALLER_SECONDS = 1"), encoding="utf-8")
+                token = uuid_hex()
+                marker = operation / "package-marker"
+                code = "from pathlib import Path; Path(" + repr(str(marker)) + ").write_text('started'); raise SystemExit(7)"
+                request = {"schema_version": worker.SCHEMA, "operation_id": operation.name,
+                           "installation_key": worker.installation_key(root / "target", api.user()),
+                           "token": token, "prefix": str(root / "target"), "python_relative": "bin/python",
+                           "package": [sys.executable, "-c", code], "cwd": str(root), "timeout": 5,
+                           "callers": [identity], "worker_sha256": hashlib.sha256(script.read_bytes()).hexdigest()}
+                worker.atomic_json(operation / "request.json", request)
+                with (operation / "worker.log").open("wb") as log:
+                    process = subprocess.Popen([sys.executable, "-I", "-S", "-B", str(script), str(operation)],
+                                               stdout=log, stderr=log, start_new_session=True, **no_console())
+                until = time.monotonic() + 5
+                while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < until:
+                    time.sleep(0.01)
+                assert_true((operation / "ready.json").exists(), (operation / "worker.log").read_text())
+                if commit:
+                    worker.atomic_json(operation / "commit.json", {"token": token})
+                if exit_caller:
+                    caller.terminate()
+                    caller.wait(timeout=5)
+                assert_true(process.wait(timeout=12) == 1, "failed or uncommitted update returns failure")
+                state = worker.read_json(operation / "state.json")
+                assert_true(state["phase"] == "failed" and state["cleanup_confirmed"], "terminal failure follows cleanup")
+                if exit_caller:
+                    assert_true(marker.exists() and state["stages"]["package"]["exit_code"] == 7 and
+                                "install" not in state["stages"] and
+                                state["callers_exited_at"] <= state["stages"]["package"]["started_at"],
+                                "same package/order/failure boundary as Windows")
+                else:
+                    assert_true(not marker.exists() and not state["stages"], "no mutation before COMMIT and caller exit")
+            finally:
+                for child in (process, caller):
+                    if child and child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=5)
+        # Kill the supervisor rather than the stage: the independent guardian must
+        # notice EOF and stop both the real stage and its sleeping grandchild.
+        ready = root / "guardian-ready.json"
+        stage = ("import subprocess,sys,time,json,pathlib,os; "
+                 "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+                 "pathlib.Path(" + repr(str(ready)) + ").write_text(json.dumps([os.getpid(),p.pid])); time.sleep(60)")
+        owner = root / "owner.py"
+        owner.write_text("import runpy,types,pathlib\n"
+                         "m=runpy.run_path(" + repr(worker.__file__) + ")\n"
+                         "f=open(" + repr(str(root / "lease")) + ",'a+b')\n"
+                         "m['PosixChildJob'](m['Posix'](),'fixture',types.SimpleNamespace(handle=f)).run(" +
+                         repr([sys.executable, "-c", stage]) + "," + repr(str(root)) + "," +
+                         repr(str(root / "stage.log")) + ",30,lambda child:None)\n", encoding="utf-8")
+        supervisor = subprocess.Popen([sys.executable, str(owner)], **no_console())
+        try:
+            until = time.monotonic() + 8
+            while not ready.exists() and supervisor.poll() is None and time.monotonic() < until:
+                time.sleep(0.02)
+            assert_true(ready.exists(), "guarded manager and grandchild start after registration")
+            identities = [api.process(pid) for pid in json.loads(ready.read_text())]
+            supervisor.kill()
+            supervisor.wait(timeout=5)
+            until = time.monotonic() + 8
+            while not all(api.signaled(identity) for identity in identities) and time.monotonic() < until:
+                time.sleep(0.02)
+            assert_true(all(api.signaled(identity) for identity in identities), "guardian EOF cleans real child tree after supervisor crash")
+        finally:
+            if supervisor.poll() is None:
+                supervisor.kill()
+                supervisor.wait(timeout=5)
+
+        # The manager exits normally after launching an independently-sessioned
+        # descendant. A process-group-only cleanup would report success and leak it.
+        from types import SimpleNamespace
+        detached_ready = root / "detached.json"
+        detached_stage = ("import subprocess,sys,pathlib,json,runpy; "
+                          "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); "
+                          "m=runpy.run_path(" + repr(worker.__file__) + "); "
+                          "pathlib.Path(" + repr(str(detached_ready)) + ").write_text(json.dumps(m['Posix']().process(p.pid)))")
+        for double_fork in (False, True):
+            detached_ready.unlink(missing_ok=True)
+            program = detached_stage
+            if double_fork:
+                program = ("import os\nparent=os.fork()\nif parent:\n"
+                           "    os.waitpid(parent,0)\n    raise SystemExit(0)\n" + program)
+            with (root / "detached-lease").open("a+b") as lease:
+                job = worker.PosixChildJob(api, "detached", SimpleNamespace(handle=lease))
+                try:
+                    code = job.run([sys.executable, "-c", program], root, root / "detached.log", 10, lambda child: None)
+                except OSError:
+                    assert_true(sys.platform == "darwin" and job.cleanup_unconfirmed,
+                                "unverifiable detached ancestry is never a successful cleanup")
+                else:
+                    assert_true(code == 0 and api.signaled(json.loads(detached_ready.read_text())),
+                                "normal stage exit cleans single/double-fork descendants before acknowledging success")
+                finally:
+                    if detached_ready.exists():
+                        identity = json.loads(detached_ready.read_text())
+                        try:
+                            if not api.signaled(identity):
+                                os.kill(identity["pid"], 9)
+                        except ProcessLookupError:
+                            pass
+
+        # Loss of the guardian is not a cleanup acknowledgement. Keep the stage outcome
+        # unknown instead of allowing a failed guardian to release update admission.
+        from types import SimpleNamespace
+        import signal
+        lost_ready = root / "guardian-loss.json"
+        lost_stage = stage.replace(str(ready), str(lost_ready))
+        owned = []
+        with (root / "loss-lease").open("a+b") as lease:
+            job = worker.PosixChildJob(api, "loss-fixture", SimpleNamespace(handle=lease))
+            def lose_guardian(identity):
+                if identity:
+                    owned.append(identity)
+                elif job.proc.poll() is None:
+                    until = time.monotonic() + 3
+                    while not lost_ready.exists() and time.monotonic() < until:
+                        time.sleep(0.01)
+                    assert_true(lost_ready.exists(), "stage started before guardian loss")
+                    job.proc.kill()
+            try:
+                job.run([sys.executable, "-c", lost_stage], root, root / "loss.log", 10, lose_guardian)
+            except OSError:
+                assert_true(job.cleanup_unconfirmed, "missing guardian acknowledgement leaves cleanup unconfirmed")
+            else:
+                raise AssertionError("guardian death was accepted as stage completion")
+            finally:
+                if owned and api.open_identity(owned[0]["pid"], owned[0]):
+                    os.killpg(owned[0]["pid"], signal.SIGKILL)
+
+        _check_posix_uncertain_installation(root, api, stage)
+        _check_posix_observer(root, api)
+
+
+def _check_posix_observer(root, api):
+    """OS Ctrl+C detaches observation; explicit cancel stops the production worker."""
+    from exoma import _update_worker as worker
+    import signal
+    operation = root / "observer" / uuid_hex()
+    operation.mkdir(parents=True)
+    script = operation / "worker.py"
+    source = Path(worker.__file__).read_text(encoding="utf-8")
+    source = source.replace("        time.sleep(0.2)\n\n\ndef callers", (
+        "        atomic_json(operation / 'observer-ready.json', {})\n"
+        "        time.sleep(0.2)\n\n\ndef callers"))
+    assert_true("observer-ready.json" in source, "observer readiness fixture is installed")
+    script.write_text(source, encoding="utf-8")
+    caller = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console())
+    process = observer = None
+    marker = operation / "package-ready"
+    try:
+        token = uuid_hex()
+        worker.atomic_json(operation / "request.json", {
+            "schema_version": worker.SCHEMA, "operation_id": operation.name,
+            "installation_key": worker.installation_key(root / "observer-target", api.user()),
+            "token": token, "prefix": str(root / "observer-target"), "python_relative": "bin/python",
+            "package": [sys.executable, "-c", "import pathlib,time; pathlib.Path(" + repr(str(marker)) + ").touch(); time.sleep(60)"],
+            "cwd": str(root), "timeout": 20, "callers": [api.process(caller.pid)],
+            "worker_sha256": hashlib.sha256(script.read_bytes()).hexdigest()})
+        with (operation / "worker.log").open("wb") as log:
+            process = subprocess.Popen([sys.executable, "-I", "-S", "-B", str(script), str(operation)],
+                                       stdout=log, stderr=log, start_new_session=True, **no_console())
+        deadline = time.monotonic() + 5
+        while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert_true((operation / "ready.json").exists(), "production observer fixture reaches READY")
+        worker.atomic_json(operation / "commit.json", {"token": token})
+        caller.terminate()
+        caller.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert_true(marker.exists(), "production worker starts the package stage")
+        argv = [sys.executable, "-I", "-S", "-B", str(script), "--observe", str(operation), "--wait"]
+        observer = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **no_console())
+        deadline = time.monotonic() + 5
+        while not (operation / "observer-ready.json").exists() and observer.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert_true((operation / "observer-ready.json").exists(), "observer is waiting before the OS signal")
+        observer.send_signal(signal.SIGINT)
+        stdout, stderr = observer.communicate(timeout=5)
+        assert_true(observer.returncode == 3 and json.loads(stdout)["observer_detached"]
+                    and not (operation / "cancel.json").exists() and process.poll() is None,
+                    "OS Ctrl+C detaches the observer and preserves the running updater: " + stderr)
+        cancelled = subprocess.run([*argv, "--cancel"], capture_output=True, text=True, timeout=10, **no_console())
+        assert_true(cancelled.returncode == 130 and process.wait(timeout=5) == 130,
+                    "explicit observer cancellation stops the production worker: " + cancelled.stderr)
+        state = json.loads(cancelled.stdout)
+        assert_true(state["phase"] == "interrupted" and state["completed"] and state["cleanup_confirmed"]
+                    and state["cancellation"]["source"] == "explicit_observer" and "install" not in state["stages"],
+                    "cancelled update reports terminal interruption only after cleanup and skips later stages")
+    finally:
+        for child in (observer, process, caller):
+            if child and child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+
+
+def _check_posix_uncertain_installation(root, api, stage):
+    """Full supervisor failure retains installation ownership across job stores."""
+    from exoma import _update_worker as worker
+    import signal
+    target = root / "uncertain-target"
+    key = worker.installation_key(target, api.user())
+    first = root / "uncertain" / uuid_hex()
+    first.mkdir(parents=True)
+    marker = root / "uncertain-children.json"
+    original_run = worker.PosixChildJob.run
+    identities = []
+    probe = worker.PosixLock(api, key)
+    claim_path = probe.claim_path
+    probe.close()
+
+    def request(operation, store, package):
+        store.mkdir()
+        reservation = store / ".update-reservation.json"
+        worker.atomic_json(reservation, {"token": "fixture"})
+        worker.atomic_json(operation / "commit.json", {"token": "fixture"})
+        worker.atomic_json(operation / "request.json", {
+            "schema_version": worker.SCHEMA, "operation_id": operation.name,
+            "installation_key": key, "token": "fixture", "prefix": str(target),
+            "reservation": str(reservation), "python_relative": "bin/python",
+            "package": package, "cwd": str(root), "timeout": 10,
+            "callers": [api.process(os.getpid())],
+            "worker_sha256": hashlib.sha256(Path(worker.__file__).read_bytes()).hexdigest()})
+        return reservation
+
+    def lose_guardian(job, argv, cwd, log, timeout, tick):
+        def race(child):
+            tick(child)
+            if child is None and job.proc.poll() is None:
+                deadline = time.monotonic() + 3
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                assert_true(marker.exists(), "full update started its real package tree")
+                identities.extend(api.process(pid) for pid in json.loads(marker.read_text()))
+                job.proc.kill()
+        return original_run(job, argv, cwd, log, timeout, race)
+
+    reservation = request(first, root / "store-a", [sys.executable, "-c", stage.replace(
+        str(root / "guardian-ready.json"), str(marker))])
+    try:
+        with patch.object(worker, "platform_api", return_value=api), \
+             patch.object(api, "signaled", return_value=True), \
+             patch.dict(os.environ), \
+             patch.object(worker.PosixChildJob, "run", lose_guardian):
+            assert_true(worker.run_request(first) == 4, "guardian loss leaves full update unknown")
+        state = worker.read_json(first / "state.json")
+        assert_true(state["phase"] == "cleanup_pending" and not state["completed"]
+                    and claim_path.exists() and reservation.exists() and identities
+                    and any(not api.signaled(identity) for identity in identities),
+                    "uncertain full update keeps durable installation claim and local admission")
+        second = root / "other-store" / uuid_hex()
+        second.mkdir(parents=True)
+        mutation = root / "second-package-ran"
+        request(second, root / "store-b", [sys.executable, "-c",
+            "from pathlib import Path; Path(" + repr(str(mutation)) + ").touch()"])
+        with patch.object(worker, "platform_api", return_value=api):
+            assert_true(worker.run_request(second) == 1, "another store cannot bypass uncertain installation ownership")
+        assert_true(not mutation.exists() and not (second / "ready.json").exists()
+                    and not worker.read_json(second / "state.json")["stages"],
+                    "second updater is refused before READY and package mutation")
+        try:
+            with patch.object(worker.Posix, "signaled", return_value=True):
+                worker.recover_posix(first)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("recovery inferred cleanup from guardian loss")
+        assert_true(claim_path.exists(), "unproven explicit recovery preserves installation exclusion")
+    finally:
+        for identity in identities:
+            if api.open_identity(identity["pid"], identity):
+                os.kill(identity["pid"], signal.SIGKILL)
+        deadline = time.monotonic() + 5
+        while any(not api.signaled(identity) for identity in identities) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert_true(all(api.signaled(identity) for identity in identities), "fault fixture leaves no live owned processes")
+        # Simulate a changed boot only after the fixture's actual children stopped.
+        # Same-boot recovery above could not infer cleanup from dead leaders.
+        boot = worker.boot_identity()
+        with patch.object(worker, "boot_identity", return_value=boot + "-reboot-fixture"), redirect_stdout(io.StringIO()):
+            assert_true(worker.recover_posix(first) == 0, "explicit recovery accepts a proven changed boot generation")
+        assert_true(not claim_path.exists() and not reservation.exists()
+                    and worker.read_json(first / "state.json")["cleanup_confirmed"],
+                    "confirmed recovery releases only the bound installation and reservation")

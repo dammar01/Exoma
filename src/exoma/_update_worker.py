@@ -1,4 +1,4 @@
-"""Standalone Windows updater. Its snapshot runs without importing the target package.
+"""Standalone updater shared by Windows, Linux and macOS.
 
 Only stdlib imports belong here: the environment containing Exoma can disappear while
 this file is running. Native handles are deliberately local to this protocol; shared
@@ -17,6 +17,8 @@ import subprocess
 import sys
 import time
 import uuid
+import signal
+import selectors
 
 SCHEMA = 1
 HANDSHAKE_SECONDS = 15
@@ -133,6 +135,29 @@ class Win32:
         self.require(self.k.IsProcessInJob(self.k.GetCurrentProcess(), None, ctypes.byref(answer)))
         return bool(answer.value)
 
+    def job_snapshot(self):
+        result = {"in_job": self.in_job(), "ancestor_coverage": "unknown"}
+        if not result["in_job"]:
+            return result
+        class Basic(ctypes.Structure):
+            _fields_ = [("process_time", ctypes.c_int64), ("job_time", ctypes.c_int64),
+                        ("flags", w.DWORD), ("min_ws", ctypes.c_size_t), ("max_ws", ctypes.c_size_t),
+                        ("active", w.DWORD), ("affinity", ctypes.c_size_t),
+                        ("priority", w.DWORD), ("scheduling", w.DWORD)]
+        class IO(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint64) for name in ("ro", "wo", "oo", "rt", "wt", "ot")]
+        class Extended(ctypes.Structure):
+            _fields_ = [("basic", Basic), ("io", IO), ("pm", ctypes.c_size_t),
+                        ("jm", ctypes.c_size_t), ("peak_pm", ctypes.c_size_t), ("peak_jm", ctypes.c_size_t)]
+        info = Extended()
+        if self.k.QueryInformationJobObject(None, 9, ctypes.byref(info), ctypes.sizeof(info), None):
+            flags = info.basic.flags
+            result.update(immediate_flags=flags, breakaway=bool(flags & 0x800),
+                          silent_breakaway=bool(flags & 0x1000), kill_on_close=bool(flags & 0x2000))
+        else:
+            result["query_error"] = ctypes.get_last_error()
+        return result
+
     def identity(self, handle, pid):
         times = [w.FILETIME() for _ in range(4)]
         self.require(self.k.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)))
@@ -223,10 +248,431 @@ def installation_key(prefix, user):
     return hashlib.sha256((user + "\0" + canonical(prefix)).encode()).hexdigest()
 
 
+class Posix:
+    """Native lifecycle adapter; no imports from the installation being replaced."""
+    def user(self):
+        return str(os.getuid())
+
+    def in_job(self):
+        return False  # POSIX sessions do not imply escape from cgroups/containers.
+
+    def process(self, pid):
+        if sys.platform == "darwin":
+            # Apple's libproc ABI: proc_info.h / libproc.h. Use the native image,
+            # not ps argv[0], and a microsecond start identity for PID reuse checks.
+            class BSDInfo(ctypes.Structure):
+                _fields_ = [(name, ctypes.c_uint32) for name in (
+                    "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid", "rgid", "svuid", "svgid", "reserved")]
+                _fields_ += [("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)]
+                _fields_ += [(name, ctypes.c_uint32) for name in ("nfiles", "pgid", "jobc", "tdev", "tpgid")]
+                _fields_ += [("nice", ctypes.c_int32), ("seconds", ctypes.c_uint64), ("micros", ctypes.c_uint64)]
+            library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+            library.proc_pidinfo.restype = ctypes.c_int
+            library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+            library.proc_pidpath.restype = ctypes.c_int
+            info, image = BSDInfo(), ctypes.create_string_buffer(4096)
+            if library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
+                error = ctypes.get_errno()
+                if error in {2, 3}:
+                    raise ProcessLookupError(pid)
+                raise OSError(error, "cannot verify process generation")
+            if info.status == 5:
+                raise ProcessLookupError(pid)
+            if library.proc_pidpath(pid, image, len(image)) <= 0:
+                raise OSError(ctypes.get_errno(), "cannot verify process image")
+            return {"pid": pid, "created": info.seconds * 1000000 + info.micros,
+                    "image": canonical(os.fsdecode(image.value))}
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return {"pid": pid, "created": int(stat[19]),
+                    "image": canonical(os.readlink(f"/proc/{pid}/exe"))}
+        except FileNotFoundError:
+            if Path("/proc").is_dir():
+                raise ProcessLookupError(pid) from None
+        # macOS/BSD: fail closed if the start identity cannot be read.
+        result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart=", "-o", "comm="],
+                                capture_output=True, text=True, timeout=2, check=False)
+        text = result.stdout.strip()
+        if result.returncode or len(text) < 25:
+            raise ProcessLookupError(pid)
+        return {"pid": pid, "created": text[:24], "image": canonical(text[24:].strip())}
+
+    def parents(self):
+        return {os.getpid(): os.getppid()}
+
+    def open_identity(self, pid, expected=None):
+        try:
+            identity = self.process(pid)
+        except ProcessLookupError:
+            return None
+        if expected and identity != {key: expected[key] for key in ("pid", "created", "image")}:
+            return None
+        return identity
+
+    def signaled(self, handle):
+        return self.open_identity(handle["pid"], handle) is None
+
+    def close(self, handle):
+        pass
+
+
+def platform_api():
+    return Win32() if os.name == "nt" else Posix()
+
+
+class PosixLock:
+    def __init__(self, api, key, *, recovery=False):
+        import fcntl
+        import pwd
+        root = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".cache" / "exoma" / "update-locks"
+        root.mkdir(parents=True, exist_ok=True)
+        self.handle = (root / (key + ".lock")).open("a+b")
+        self.claim_path = root / (key + ".claim.json")
+        self.claim = None
+        try:
+            fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if self.claim_path.exists() and not recovery:
+                raise OSError(f"installation cleanup is unconfirmed; inspect {self.claim_path}")
+        except BaseException:
+            self.handle.close()
+            raise
+        self.abandoned = False
+
+    def reserve(self, operation, helper):
+        self.claim = {"schema_version": SCHEMA, "operation": str(operation), "helper": helper,
+                      "boot": boot_identity(), "stage": None}
+        atomic_json(self.claim_path, self.claim)
+
+    def stage(self, guardian, receipt):
+        self.claim.update(stage={"guardian": guardian, "receipt": str(receipt)})
+        atomic_json(self.claim_path, self.claim)
+
+    def confirm_cleanup(self):
+        if self.claim is not None:
+            if read_json(self.claim_path) != self.claim:
+                raise OSError("installation cleanup claim changed ownership")
+            self.claim_path.unlink()
+            self.claim = None
+
+    def close(self):
+        self.handle.close()
+
+
+def boot_identity():
+    if sys.platform.startswith("linux"):
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    if sys.platform == "darwin":
+        value = subprocess.check_output(["/usr/sbin/sysctl", "-n", "kern.boottime"], text=True)
+        fields = dict(re.findall(r"\b(sec|usec)\s*=\s*(\d+)", value))
+        if set(fields) != {"sec", "usec"}:
+            raise ValueError("unverifiable native boot generation")
+        # sysctl appends a date in the caller's timezone; that presentation must
+        # never be mistaken for a reboot and authorize uncertain cleanup recovery.
+        return "darwin:" + fields["sec"] + ":" + fields["usec"]
+    raise OSError("no native boot identity available for update ownership")
+
+
+class PosixChildJob:
+    """A guardian holds installation ownership and cleans the stage on pipe EOF."""
+    def __init__(self, api, key, lock):
+        self.api, self.lock, self.proc = api, lock, None
+        self.cleanup_unconfirmed, self.result, self.early_reply = False, None, None
+
+    def run(self, argv, cwd, log, timeout, tick):
+        if self.cleanup_unconfirmed:
+            raise OSError("previous guardian cleanup is unconfirmed")
+        self.result, self.early_reply = None, None
+        self.proc = subprocess.Popen([sys.executable, "-I", "-S", "-B", __file__, "--guardian"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            start_new_session=True, pass_fds=(self.lock.handle.fileno(),), text=True)
+        receipt = Path(log).with_name(Path(log).name + ".cleanup-" + uuid.uuid4().hex + ".json")
+        request = {"argv": argv, "cwd": str(cwd), "log": str(log), "timeout": timeout,
+                   "receipt": str(receipt)}
+        self.proc.stdin.write(json.dumps(request) + "\n")
+        self.proc.stdin.flush()
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(self.proc.stdout, selectors.EVENT_READ)
+                if not selector.select(HANDSHAKE_SECONDS):
+                    raise TimeoutError("guardian did not register a child")
+                identity = json.loads(self.proc.stdout.readline())
+            if not isinstance(identity, dict) or not all(key in identity for key in ("pid", "created", "image")):
+                self.early_reply = identity if isinstance(identity, dict) else None
+                raise OSError("guardian failed before child registration")
+            tick(identity)
+            if hasattr(self.lock, "stage"):
+                self.lock.stage(self.api.process(self.proc.pid), receipt)
+            self.proc.stdin.write("go\n")
+            self.proc.stdin.flush()
+            deadline, next_beat = time.monotonic() + timeout, 0
+            while self.proc.poll() is None:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"stage exceeded {timeout:g}s")
+                if time.monotonic() >= next_beat:
+                    tick(None)
+                    next_beat = time.monotonic() + 1
+                time.sleep(0.05)
+            self.cleanup()
+            return self.result["exit_code"]
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        if self.proc:
+            try:
+                if not self.proc.stdin.closed:
+                    try:
+                        self.proc.stdin.close()  # EOF is also sent on supervisor death.
+                    except BrokenPipeError:
+                        pass
+                self.proc.wait(timeout=15)
+                reply = self.early_reply or json.loads(self.proc.stdout.readline(8192))
+                if not isinstance(reply, dict) or reply.get("cleanup_confirmed") is not True or not isinstance(reply.get("exit_code"), int):
+                    raise OSError("guardian did not confirm stage cleanup")
+                self.result = reply
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                self.cleanup_unconfirmed = True
+            finally:
+                self.proc.stdout.close()
+                self.proc = None
+        if self.cleanup_unconfirmed:
+            raise OSError("guardian cleanup unconfirmed; inspect child group before retrying")
+
+    def close(self):
+        self.cleanup()
+
+
+class ChildExit:
+    """Observe exit without reaping: the stage PID/PGID cannot be reused before cleanup."""
+    def __init__(self, pid):
+        self.pid, self.seen, self.queue = pid, False, None
+        if not hasattr(os, "waitid"):
+            import select
+            self.queue = select.kqueue()
+            event = select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                                  flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+                                  fflags=select.KQ_NOTE_EXIT)
+            self.queue.control([event], 0, 0)
+
+    def exited(self):
+        if not self.seen:
+            self.seen = (bool(self.queue.control(None, 1, 0)) if self.queue else
+                         os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None)
+        return self.seen
+
+    def close(self):
+        if self.queue:
+            self.queue.close()
+
+
+class DescendantOwner:
+    """Linux adopts escaped descendants; other POSIX hosts fail closed on ambiguity."""
+    def __init__(self):
+        self.subreaper = sys.platform.startswith("linux")
+        if self.subreaper:
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+            libc.prctl.restype = ctypes.c_int
+            if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER, before stage fork
+                raise OSError(ctypes.get_errno(), "cannot adopt orphaned update descendants")
+            self.baseline = None
+        else:
+            self.baseline = self.inventory()
+
+    @staticmethod
+    def inventory():
+        # Inventory includes unrelated processes, deliberately. A new process whose
+        # ancestry was lost cannot safely be declared unrelated or killed. ps start
+        # times plus native generations prevent PID reuse from masking that gap.
+        proc = subprocess.Popen(["/bin/ps", "-axo", "pid=,ppid=,lstart="],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+        try:
+            stdout, _ = proc.communicate(timeout=5)
+            if proc.returncode:
+                raise OSError("cannot enumerate native process ancestry")
+            rows = stdout.splitlines()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        result, api = {}, Posix()
+        for row in rows:
+            pid_text, parent, stamp = row.strip().split(None, 2)
+            pid = int(pid_text)
+            if pid == proc.pid:
+                continue  # This waitable inventory child is already reaped.
+            try:
+                created = api.process(pid)["created"]
+            except ProcessLookupError:
+                # A disappearing new parent may already have orphaned a child
+                # after ps enumerated it. Keep that uncertainty instead of hiding
+                # the fork/exit race behind an empty final snapshot.
+                created = stamp
+            except OSError:
+                created = stamp
+            result[pid] = {"created": created, "parent": int(parent)}
+        return result
+
+    def cleanup(self):
+        if not self.subreaper:
+            current = self.inventory()
+            def unchanged(pid):
+                return pid in current and pid in self.baseline and (
+                    current[pid]["created"] == self.baseline[pid]["created"])
+            def foreign(pid):
+                seen = set()
+                while pid in current and pid not in seen:
+                    # A surviving parent that predated our stage and is outside
+                    # our guardian proves foreign ancestry. PID 1 is excluded:
+                    # escaped descendants may already have been reparented to it.
+                    if pid not in {0, 1, os.getpid()} and unchanged(pid):
+                        return True
+                    if pid == os.getpid():
+                        return False
+                    seen.add(pid)
+                    pid = current[pid]["parent"]
+                return False
+            remaining = [pid for pid in current if pid != os.getpid() and not unchanged(pid) and not foreign(pid)]
+            if remaining:
+                raise OSError("descendant ancestry cannot be confirmed: " + repr(sorted(remaining)))
+            return
+        # Every orphan, including setsid/double-fork children, is adopted by this
+        # guardian. Do not reap a live generation before signalling it: waitable
+        # direct children pin PIDs, unlike a process-tree snapshot followed by kill.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                while True:
+                    pid, _ = os.waitpid(-1, os.WNOHANG)
+                    if pid == 0:
+                        break
+            except ChildProcessError:
+                return  # Kernel confirms there are no remaining owned descendants.
+            children = Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()
+            for pid in children:
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if time.monotonic() >= deadline:
+                raise OSError("adopted update descendants did not terminate")
+            time.sleep(0.01)
+
+
+def guardian():
+    """No manager instruction runs until group registration and the owner GO message."""
+    request = json.loads(sys.stdin.readline())
+    child, monitor, owner, failure, cleanup_error, code = None, None, None, None, None, 1
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    try:
+        owner = DescendantOwner()
+        with Path(request["log"]).open("ab", buffering=0) as log:
+            child = subprocess.Popen([sys.executable, "-I", "-S", "-B", __file__, "--exec-stage",
+                                      json.dumps(request["argv"])], cwd=request["cwd"],
+                                     stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
+            monitor = ChildExit(child.pid)
+            print(json.dumps(Posix().process(child.pid)), flush=True)
+            with selectors.DefaultSelector() as selector:
+                selector.register(sys.stdin, selectors.EVENT_READ)
+                if not selector.select(HANDSHAKE_SECONDS) or sys.stdin.readline().strip() != "go":
+                    raise OSError("supervisor disappeared before stage registration")
+                child.stdin.write(b"1")
+                child.stdin.close()
+                deadline = time.monotonic() + request["timeout"]
+                while not monitor.exited():
+                    if selector.select(0.05):
+                        if not sys.stdin.readline():
+                            raise OSError("supervisor control pipe closed")
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("stage deadline")
+    except Exception as exc:
+        failure = str(exc)[:512]
+    finally:
+        if child:
+            try:
+                if not monitor or not monitor.exited():
+                    try:
+                        os.killpg(child.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    until = time.monotonic() + 2
+                    while monitor and not monitor.exited() and time.monotonic() < until:
+                        time.sleep(0.05)
+                # Reap ONLY after the last group signal. Holding a waitable child pins
+                # the group leader's PID even when it already exited successfully.
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                code = child.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                cleanup_error = str(exc)[:512]
+        if owner:
+            try:
+                owner.cleanup()
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                cleanup_error = str(exc)[:512]
+        if monitor:
+            monitor.close()
+    result = {"cleanup_confirmed": cleanup_error is None,
+              "exit_code": code if failure is None else 1, "error": cleanup_error or failure}
+    if request.get("receipt"):
+        atomic_json(request["receipt"], result)
+    try:
+        print(json.dumps(result), flush=True)
+    except BrokenPipeError:
+        pass  # Owner died; cleanup has still completed before the lease closes.
+    return result["exit_code"] if result["cleanup_confirmed"] else 4
+
+
+def outcome(operation, expected_key=None):
+    operation = Path(operation)
+    state = read_json(operation / "state.json")
+    phase = state.get("phase")
+    if state.get("schema_version") != SCHEMA or state.get("operation_id") != operation.name or (
+            expected_key is not None and state.get("installation_key") != expected_key):
+        raise ValueError("unsupported or mismatched update state")
+    if phase == "cleanup_pending" or state.get("cleanup_confirmed") is False:
+        code = 4
+    elif phase == "succeeded":
+        code = 0 if all(state.get("stages", {}).get(name, {}).get("exit_code") == 0
+                       for name in ("package", "probe", "install", "check")) else 4
+    elif phase in TERMINAL:
+        code = 130 if phase == "interrupted" and state.get("cancellation") else 1
+    elif phase in {"preparing", "accepted", "waiting_callers", "package", "probe", "install", "check"}:
+        api = platform_api()
+        handle = api.open_identity(state["helper"]["pid"], state["helper"])
+        try:
+            code = 3 if handle and not api.signaled(handle) and time.time() - float(state["heartbeat"]) < 30 else 4
+        finally:
+            api.close(handle)
+    else:
+        raise ValueError("unknown journal phase")
+    return {**state, "completed": code in {0, 1, 130}, "exit_code": code}, code
+
+
+def observe(operation, wait=False, cancel=False):
+    """Read a copied operation without importing/restarting the target installation."""
+    operation = Path(operation).resolve()
+    request = read_json(operation / "request.json")
+    if cancel:
+        atomic_json(operation / "cancel.json", {"token": request["token"], "source": "explicit_observer", "at": time.time()})
+    while True:
+        state, code = outcome(operation, request["installation_key"])
+        if not wait or code != 3:
+            print(json.dumps(state, indent=2))
+            return code
+        time.sleep(0.2)
+
+
 def callers(api, interpreter, entrypoints):
     """Only the current interpreter, its tool proxy, and its proven Exoma launcher."""
     rows = api.parents()
     current = api.process(os.getpid())
+    if os.name != "nt":
+        return [{**current, "parent": os.getppid()}]
     result = [current]
     for _ in range(8):
         parent = rows.get(current["pid"])
@@ -408,8 +854,9 @@ class ChildJob:
 def run_request(operation):
     operation = Path(operation).resolve()
     request = read_json(operation / "request.json")
-    api = Win32()
+    api = platform_api()
     lock, job, handles = None, None, []
+    final_phase, exit_code = "failed", 1
     state = {"schema_version": SCHEMA, "operation_id": operation.name,
              "installation_key": request["installation_key"], "phase": "preparing",
              "started_at": time.time(), "helper": api.process(os.getpid()), "stages": {},
@@ -425,6 +872,7 @@ def run_request(operation):
     try:
         if request.get("schema_version") != SCHEMA or request.get("operation_id") != operation.name:
             raise ValueError("unsupported update request")
+        state["host_job"] = api.job_snapshot() if os.name == "nt" else {"session": os.getsid(0), "cgroup_escape": False}
         if api.in_job():
             raise OSError("worker still belongs to a host job; run the manager directly from a terminal")
         target = request["prefix"]
@@ -438,18 +886,26 @@ def run_request(operation):
         snapshot = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         if snapshot != request["worker_sha256"]:
             raise ValueError("worker snapshot mismatch")
-        lock = InstallationLock(api, request["installation_key"])
-        job = ChildJob(api, request["installation_key"])
+        lock = InstallationLock(api, request["installation_key"]) if os.name == "nt" else PosixLock(api, request["installation_key"])
+        if os.name != "nt":
+            lock.reserve(operation, state["helper"])
+        job = ChildJob(api, request["installation_key"]) if os.name == "nt" else PosixChildJob(api, request["installation_key"], lock)
         rows = api.parents()
         for identity in request["callers"]:
             handle = api.open_identity(identity["pid"], identity)
             if handle:
                 handles.append(handle)
-                if not api.signaled(handle) and rows.get(identity["pid"]) != identity["parent"]:
+                if os.name == "nt" and not api.signaled(handle) and rows.get(identity["pid"]) != identity["parent"]:
                     raise ValueError("caller ancestry changed before acknowledgment")
         if not handles:
             raise ValueError("caller exited before handoff")
         save()
+        reservation = request.get("reservation")
+        if reservation:
+            claim = read_json(reservation)
+            if claim.get("token") != request["token"]:
+                raise ValueError("update reservation ownership changed")
+            atomic_json(reservation, {**claim, "helper": state["helper"]})
         atomic_json(operation.parent / "latest.json", {"operation_id": operation.name})
         atomic_json(operation / "ready.json", {"token": request["token"]})
         def check_caller():
@@ -474,6 +930,13 @@ def run_request(operation):
             state["stages"][name] = {"started_at": time.time(), "exit_code": None}
             save(name, child=None)
             def tick(child):
+                try:
+                    cancellation = read_json(operation / "cancel.json")
+                except FileNotFoundError:
+                    cancellation = None
+                if cancellation and cancellation.get("token") == request["token"]:
+                    state["cancellation"] = {key: cancellation.get(key) for key in ("source", "at")}
+                    raise KeyboardInterrupt("explicit update cancellation")
                 if child:
                     state["child"] = child
                 save()
@@ -486,6 +949,8 @@ def run_request(operation):
             if code:
                 raise RuntimeError(f"{name} failed (exit {code}); later stages skipped")
 
+        # Admission remains reserved while the manager changes the installed package.
+        os.environ["WORKFLOW_UPDATE_OWNER"] = request["token"]
         step("package", request["package"])
         interpreter = Path(target) / request["python_relative"]
         if not interpreter.is_file():
@@ -501,8 +966,7 @@ def run_request(operation):
         fresh = [str(interpreter), "-I", "-B", "-m", "exoma"]
         step("install", [*fresh, "install", "--no-input"])
         step("check", [*fresh, "install", "--check"])
-        save("succeeded", finished_at=time.time())
-        return 0
+        final_phase, exit_code = "succeeded", 0
     except (Exception, KeyboardInterrupt) as exc:
         # Package rollback is never inferred from a manager error or process crash.
         recovery = "Inspect package.log and installed version; after all update children exit, run the manager directly."
@@ -519,22 +983,113 @@ def run_request(operation):
             state["new_install_receipts"] = receipts
             if request.get("workspace"):
                 state["workspace_recovery_argv"] = ["exoma", "upgrade", "--work-dir", request["workspace"]]
-        save("interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
-             error=str(exc), recovery=recovery, finished_at=time.time())
-        return 1
+        final_phase = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+        state.update(error=str(exc), recovery=recovery)
+        exit_code = 130 if state.get("cancellation") else 1
     finally:
-        for handle in handles:
-            api.close(handle)
-        if job:
+        cleanup_error = None
+        try:
+            for handle in handles:
+                api.close(handle)
+            if job:
+                try:
+                    job.cleanup()
+                finally:
+                    job.close()
+            if request.get("reservation"):
+                reservation = Path(request["reservation"])
+                try:
+                    if read_json(reservation).get("token") != request["token"]:
+                        raise OSError("update reservation ownership changed during cleanup")
+                    reservation.unlink()
+                except FileNotFoundError:
+                    pass
+            if lock and os.name != "nt":
+                lock.confirm_cleanup()
+        except Exception as exc:
+            cleanup_error = str(exc)
+        finally:
+            if lock:
+                try:
+                    lock.close()
+                except Exception as exc:
+                    cleanup_error = str(exc)
+        if cleanup_error:
+            final_phase, exit_code = "cleanup_pending", 4
+            state.update(cleanup_error=cleanup_error, recovery="Confirm updater children and reservation ownership before repair; do not replay the package stage.")
+            if os.name != "nt":
+                state["recovery_argv"] = [sys.executable, "-I", "-S", "-B", __file__, "--recover", str(operation)]
+        # Terminal publication follows BOTH process cleanup and admission release.
+        save(final_phase, finished_at=time.time(), cleanup_confirmed=cleanup_error is None,
+             completed=cleanup_error is None)
+    return exit_code
+
+
+def recover_posix(operation):
+    """Explicit recovery; never infer descendant cleanup merely from dead leaders."""
+    if os.name == "nt":
+        raise OSError("POSIX ownership recovery is unavailable on Windows")
+    operation = Path(operation).resolve()
+    request = read_json(operation / "request.json")
+    api = Posix()
+    key = installation_key(request["prefix"], api.user())
+    if key != request["installation_key"]:
+        raise ValueError("installation identity mismatch")
+    lock = PosixLock(api, key, recovery=True)
+    try:
+        claim = read_json(lock.claim_path)
+        if claim.get("schema_version") != SCHEMA or not isinstance(claim.get("boot"), str) or not claim["boot"]:
+            raise ValueError("unverifiable installation cleanup claim")
+        if claim.get("operation") != str(operation):
+            raise OSError("another operation owns installation recovery")
+        if claim.get("boot") == boot_identity():
+            if not api.signaled(claim["helper"]):
+                raise OSError("update supervisor is still alive")
+            stage = claim.get("stage")
+            if stage:
+                if not api.signaled(stage["guardian"]):
+                    raise OSError("stage guardian is still alive")
+                if read_json(stage["receipt"]).get("cleanup_confirmed") is not True:
+                    raise OSError("descendant cleanup is unconfirmed; recovery requires a reboot")
+        # A changed native boot generation proves every old process exited. On the
+        # same boot, only a guardian's durable cleanup receipt provides that proof.
+        if request.get("reservation"):
+            reservation = Path(request["reservation"])
             try:
-                job.cleanup()
-            finally:
-                job.close()
-        if lock:
-            lock.close()
+                if read_json(reservation).get("token") != request["token"]:
+                    raise OSError("update reservation ownership changed")
+                reservation.unlink()
+            except FileNotFoundError:
+                pass
+        lock.claim = claim
+        lock.confirm_cleanup()
+        state = read_json(operation / "state.json")
+        state.update(phase="failed", completed=True, cleanup_confirmed=True,
+                     recovered_at=time.time(), recovery="Cleanup confirmed; inspect stage outcomes before repair.")
+        atomic_json(operation / "state.json", state)
+        print(json.dumps(state, indent=2))
+        return 0
+    finally:
+        lock.close()
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--recover"]:
+        raise SystemExit(recover_posix(sys.argv[2]))
+    if sys.argv[1:2] == ["--guardian"]:
+        raise SystemExit(guardian())
+    if sys.argv[1:2] == ["--exec-stage"]:
+        if sys.stdin.buffer.read(1) != b"1":
+            raise SystemExit("stage not admitted")
+        argv = json.loads(sys.argv[2])
+        os.execvpe(argv[0], argv, os.environ)
+    if sys.argv[1:2] == ["--observe"]:
+        try:
+            code = observe(sys.argv[2], wait="--wait" in sys.argv[3:], cancel="--cancel" in sys.argv[3:])
+        except KeyboardInterrupt:
+            state, code = outcome(sys.argv[2])
+            print(json.dumps({**state, "observer_detached": True}, indent=2))
+        raise SystemExit(code)
     if len(sys.argv) != 2:
         raise SystemExit("expected an operation directory")
     raise SystemExit(run_request(sys.argv[1]))

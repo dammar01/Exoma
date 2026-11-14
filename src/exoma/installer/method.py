@@ -114,31 +114,50 @@ def manual_command(method: str, packages: list[str]) -> str:
 
 
 def update_descriptor() -> dict:
-    """Describe the Windows target and prove a stdlib runtime outside that target.
+    """Describe the target and prove a stdlib runtime outside its mutation footprint.
 
     This is separate from detection: existing callers keep their current contracts.
     A copied python.exe alone is not a standalone runtime.
     """
     prefix = Path(sys.prefix).resolve()
-    relative = next((name for name in ("Scripts/python.exe", "python.exe") if (prefix / name).is_file()), None)
+    names = ("Scripts/python.exe", "python.exe") if os.name == "nt" else ("bin/python", "bin/python3")
+    relative = next((name for name in names if (prefix / name).is_file()), None)
     if relative is None:
-        raise ValueError("target Windows interpreter is unavailable")
+        raise ValueError("target interpreter is unavailable")
     interpreter = prefix / relative
-    probe = ("import sys,os,json; print(json.dumps(dict(executable=sys.executable,"
-             "prefix=sys.prefix,stdlib=os.__file__,paths=sys.path,version=list(sys.version_info[:2]))))")
-    candidates = [getattr(sys, "_base_executable", ""), str(Path(sys.base_prefix) / "python.exe"),
+    probe = ("import sys,os,json; image=sys.executable; "
+             "exec(\"if os.name == 'nt':\\n import ctypes\\n from ctypes import wintypes as w\\n "
+             "k=ctypes.WinDLL('kernel32',use_last_error=True)\\n k.GetCurrentProcess.restype=w.HANDLE\\n "
+             "k.QueryFullProcessImageNameW.argtypes=[w.HANDLE,w.DWORD,w.LPWSTR,ctypes.POINTER(w.DWORD)]\\n "
+             "n=w.DWORD(32768); b=ctypes.create_unicode_buffer(n.value)\\n "
+             "if not k.QueryFullProcessImageNameW(k.GetCurrentProcess(),0,b,ctypes.byref(n)): raise ctypes.WinError(ctypes.get_last_error())\\n "
+             "image=b.value\\n\"); "
+             "print(json.dumps(dict(executable=sys.executable,image=image,prefix=sys.prefix,"
+             "stdlib=os.__file__,paths=sys.path,version=list(sys.version_info[:2]))))")
+    candidates = [getattr(sys, "_base_executable", ""), str(Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")),
                   shutil.which("python3"), shutil.which("python")]
-    for candidate in dict.fromkeys(candidates):
+    seen = set()
+    for candidate in candidates:
         if not candidate or not Path(candidate).is_file():
             continue
         executable = Path(candidate).resolve()
-        if executable.is_relative_to(prefix) or executable.suffix.lower() != ".exe" or any(
+        if str(executable) in seen:
+            continue
+        seen.add(str(executable))
+        if executable.is_relative_to(prefix) or (os.name == "nt" and executable.suffix.lower() != ".exe") or any(
                 part.lower() == "windowsapps" for part in executable.parts):
             continue
         code, output, _ = run_bounded([str(executable), "-I", "-S", "-B", "-c", probe],
                                       DETECTION_TIMEOUT_SECONDS)
         try:
             info = json.loads(output)
+            physical = Path(info.get("image") or info["executable"]).resolve()
+            if physical != executable:
+                # uv/venv redirectors can put an otherwise independent helper in a job.
+                # Re-probe the native image directly; never assume a copied wrapper is independent.
+                if physical.is_file() and not physical.is_relative_to(prefix):
+                    candidates.append(str(physical))
+                continue
             paths = [info["executable"], info["prefix"], info["stdlib"], *info["paths"]]
             if code != 0 or info["version"] < [3, 11] or any(
                     Path(path).resolve().is_relative_to(prefix) for path in paths if path):
@@ -147,7 +166,7 @@ def update_descriptor() -> dict:
                 continue
         except (ValueError, KeyError, TypeError):
             continue
-        entrypoints = [interpreter.with_name("exoma.exe")]
+        entrypoints = [interpreter.with_name("exoma.exe" if os.name == "nt" else "exoma")]
         argument = Path(sys.argv[0]).resolve()
         if argument.name.lower() in ("exoma", "exoma.exe"):
             entrypoints.append(argument.with_suffix(".exe"))
