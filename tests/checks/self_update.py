@@ -32,6 +32,8 @@ def _test_self_update() -> None:
     _check_handoff_polling()
     _check_cleanup_publication()
     _check_guardian_diagnostics()
+    _check_guardian_cleanup_attempts()
+    _check_ready_failure_context()
     _check_worker_protocol()
     _check_synchronous_update()
     _check_update_deadlines_and_interruption()
@@ -1304,7 +1306,7 @@ def _check_guardian_diagnostics():
                         "receipt records existing observations/signals without adding lifecycle actions")
             assert_true(bool(diagnostic["stage_error"]) is fail_stage and
                         [error["site"] for error in diagnostic["cleanup_errors"]] ==
-                        (["child_cleanup"] if fail_wait else []) + (["owner_cleanup"] if fail_owner else []),
+                        (["child_reap"] if fail_wait else []) + (["owner_cleanup"] if fail_owner else []),
                         "stage and ordered multiple cleanup errors remain independently recoverable")
 
         # A child may never be started; its exit code must remain unobserved.
@@ -1374,6 +1376,107 @@ def _check_guardian_diagnostics():
                         "projection failure preserves original ancestry rejection")
         else:
             raise AssertionError("projection failure changed classifier acceptance")
+
+
+def _check_guardian_cleanup_attempts():
+    from exoma import _update_worker as worker
+    import signal
+
+    cases = (
+        {"denied": {"SIGKILL"}, "exit": 0},
+        {"denied": {"SIGKILL"}, "exit": 7},
+        {"denied": {"SIGKILL"}, "wait_error": "timeout"},
+        {"denied": {"SIGKILL"}, "wait_error": "oserror", "owner_error": True},
+        {"denied": {"SIGTERM"}, "term": True},
+        {"denied": {"SIGTERM", "SIGKILL"}, "term": True, "owner_error": True},
+        {"owner_error": True}, {"observation_error": True}, {"close_error": True}, {"gone": True},
+    )
+    with tempfile.TemporaryDirectory(prefix="guardian-reap-") as tmp:
+        root = Path(tmp)
+        for case in cases:
+            events, child, monitor, owner = [], MagicMock(), MagicMock(), MagicMock()
+            child.pid, child.stdin = 6044, io.BytesIO()
+            owner.diagnostics = {"rejected_pids": [6045]} if case.get("owner_error") else None
+            term = case.get("term") or case.get("observation_error")
+            monitor.exited.return_value = True
+            if case.get("observation_error"):
+                monitor.exited.side_effect = OSError(5, "fixture observation failure")
+            elif term:
+                monitor.exited.side_effect = [False, True]
+            def killpg(pid, sig):
+                name = "SIGTERM" if sig == signal.SIGTERM else "SIGKILL"
+                events.append(name)
+                if case.get("gone"):
+                    raise ProcessLookupError(3, "fixture group absent")
+                if name in case.get("denied", set()):
+                    raise PermissionError(1, "fixture signal denied")
+            def reap(timeout):
+                events.append("wait")
+                assert_true(timeout == 5, "reap retains its original bounded deadline")
+                if case.get("wait_error") == "timeout":
+                    raise subprocess.TimeoutExpired(["fixture-stage"], timeout)
+                if case.get("wait_error"):
+                    raise OSError(5, "fixture wait failed")
+                return case.get("exit", 0)
+            def clean_owner():
+                events.append("owner")
+                if case.get("owner_error"):
+                    raise OSError("fixture surviving descendant")
+            def close_monitor():
+                events.append("close")
+                if case.get("close_error"):
+                    raise OSError(5, "fixture monitor close failed")
+            child.wait.side_effect, owner.cleanup.side_effect = reap, clean_owner
+            monitor.close.side_effect = close_monitor
+            selector = MagicMock()
+            selector.__enter__.return_value = selector
+            selector.select.return_value = [] if term else [(1, 1)]
+            request = {"argv": ["fixture-stage"], "cwd": str(root), "timeout": 5, "log": str(root / "stage.log")}
+            output = io.StringIO()
+            with patch.object(worker, "DescendantOwner", return_value=owner), \
+                 patch.object(worker, "ChildExit", return_value=monitor), \
+                 patch.object(worker.subprocess, "Popen", return_value=child), \
+                 patch.object(worker.Posix, "process", return_value={"pid": 6044, "created": 123, "image": "fixture"}), \
+                 patch.object(worker.selectors, "DefaultSelector", return_value=selector), \
+                 patch.object(worker.signal, "signal"), patch.object(worker.signal, "SIGCHLD", 17, create=True), \
+                 patch.object(worker.signal, "SIGKILL", 9, create=True), \
+                 patch.object(worker.os, "killpg", side_effect=killpg, create=True), \
+                 patch.object(worker.sys, "stdin", io.StringIO(json.dumps(request) + "\ngo\n")), redirect_stdout(output):
+                code = worker.guardian()
+            receipt = json.loads(output.getvalue().splitlines()[-1])
+            expected_errors = []
+            if case.get("observation_error"):
+                expected_errors.append("exit_observation")
+            if "SIGTERM" in case.get("denied", set()):
+                expected_errors.append("signal_term")
+            if case.get("observation_error"):
+                expected_errors.append("exit_observation")
+            if "SIGKILL" in case.get("denied", set()):
+                expected_errors.append("signal_kill")
+            if case.get("wait_error"):
+                expected_errors.append("child_reap")
+            if case.get("owner_error"):
+                expected_errors.append("owner_cleanup")
+            if case.get("close_error"):
+                expected_errors.append("monitor_close")
+            diagnostic = receipt["diagnostics"]
+            lifecycle = diagnostic["child"]
+            signals = ["SIGTERM", "SIGKILL"] if term else ["SIGKILL"]
+            assert_true(events == signals + ["wait", "owner", "close"],
+                        f"signal/observation failures cannot skip the final signal, reap or owner cleanup: {events}")
+            assert_true([e["site"] for e in diagnostic["cleanup_errors"]] == expected_errors,
+                        "ordered errors retain each distinct failure boundary")
+            confirmed = not expected_errors
+            assert_true(receipt["cleanup_confirmed"] is confirmed and code == (case.get("exit", 0) if confirmed else 4),
+                        "reaped child exit zero cannot erase EPERM or surviving-descendant uncertainty")
+            assert_true(lifecycle["reap_outcome"] == ("failed" if case.get("wait_error") else "reaped") and
+                        lifecycle["child_returncode"] == (None if case.get("wait_error") else case.get("exit", 0)),
+                        "actual child exit remains observable even when cleanup is negative")
+            assert_true(bool(diagnostic["stage_error"]) is bool(term), "cleanup failures preserve the original stage error")
+            for error in diagnostic["cleanup_errors"]:
+                if error["site"] in {"signal_term", "signal_kill"}:
+                    assert_true(error["type"] == "PermissionError" and error["errno"] == 1,
+                                "EPERM remains an explicit failed signal, never missing-group evidence")
 
 
 def _check_restricted_worker_job():
@@ -1643,6 +1746,78 @@ def _preserved_handoff_temp(report):
                 report["operation_artifacts"] = str(destination)
 
 
+def _ready_failure_context(operation, process, *, commit, exit_caller):
+    """Bounded fixture evidence before its temporary operation is removed."""
+    detail = {"operation": str(operation)[:512], "commit": commit, "exit_caller": exit_caller}
+    try:
+        detail["worker_returncode"] = process.poll()
+    except (OSError, ValueError) as exc:
+        detail["worker_poll_error"] = type(exc).__name__
+    try:
+        with (operation / "state.json").open(encoding="utf-8") as stream:
+            raw = stream.read(16385)
+        if len(raw) > 16384:
+            raise ValueError("fixture state exceeds limit")
+        state = json.loads(raw)
+        if not isinstance(state, dict):
+            raise ValueError("fixture state is not an object")
+        def selected(value):
+            if isinstance(value, str):
+                return value[:256]
+            if value is None or type(value) in (int, float, bool):
+                return value
+            return "invalid_type"
+        detail["state"] = {key: selected(state[key]) for key in (
+            "phase", "error", "cleanup_error", "heartbeat", "completed", "cleanup_confirmed") if key in state}
+        if isinstance(state.get("stages"), dict):
+            detail["state"]["stages"] = {
+                name: {key: selected(state["stages"][name][key]) for key in ("started_at", "exit_code")
+                       if key in state["stages"][name]}
+                for name in ("package", "probe", "install", "check") if isinstance(state["stages"].get(name), dict)}
+    except (OSError, ValueError) as exc:
+        detail["state_unavailable"] = type(exc).__name__
+    try:
+        with (operation / "worker.log").open("rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 2048))
+            detail["worker_log_tail"] = stream.read(2048).decode("utf-8", errors="replace")
+    except OSError as exc:
+        detail["worker_log_unavailable"] = type(exc).__name__
+    text = json.dumps(detail, ensure_ascii=True)
+    if len(text) > 8000:
+        detail["truncated"] = True
+        detail["operation"] = detail["operation"][:256]
+        detail["state"] = {"unavailable": "context_budget"}
+        detail["worker_log_tail"] = detail.get("worker_log_tail", "")[-512:]
+        text = json.dumps(detail, ensure_ascii=True)
+    return "POSIX READY failure: " + text
+
+
+def _check_ready_failure_context():
+    with tempfile.TemporaryDirectory(prefix="ready-evidence-") as tmp:
+        operation = Path(tmp)
+        (operation / "state.json").write_text(json.dumps({
+            "phase": "failed", "error": "fixture caller identity changed", "completed": True,
+            "token": "secret-request-token", "request": {"argv": ["secret-request-argv"]},
+            "stages": {"package": {"exit_code": None, "token": "secret-stage-token"}},
+        }), encoding="utf-8")
+        (operation / "worker.log").write_text("fixture stderr", encoding="utf-8")
+        process = MagicMock()
+        process.poll.return_value = 1
+        text = _ready_failure_context(operation, process, commit=True, exit_caller=False)
+        detail = json.loads(text.split(": ", 1)[1])
+        assert_true(detail["commit"] and not detail["exit_caller"] and detail["worker_returncode"] == 1
+                    and detail["state"]["phase"] == "failed" and "caller identity" in detail["state"]["error"]
+                    and all(secret not in text for secret in ("secret-request-token", "secret-request-argv", "secret-stage-token")),
+                    "READY evidence keeps operation/iteration/state/exit context without copying requests or tokens")
+        (operation / "worker.log").write_bytes(b"\0" * 10000)
+        assert_true(len(_ready_failure_context(operation, process, commit=False, exit_caller=True)) < 8100,
+                    "READY failure evidence stays bounded even with escaped log bytes")
+        (operation / "state.json").unlink()
+        assert_true("state_unavailable" in _ready_failure_context(operation, process, commit=False, exit_caller=True),
+                    "missing state remains a named evidence gap instead of hiding READY failure")
+
+
 def _check_posix_worker_protocol():
     from exoma import _update_worker as worker
     api = worker.Posix()
@@ -1681,7 +1856,8 @@ def _check_posix_worker_protocol():
                 until = time.monotonic() + 5
                 while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < until:
                     time.sleep(0.01)
-                assert_true((operation / "ready.json").exists(), (operation / "worker.log").read_text())
+                if not (operation / "ready.json").exists():
+                    raise AssertionError(_ready_failure_context(operation, process, commit=commit, exit_caller=exit_caller))
                 if commit:
                     worker.atomic_json(operation / "commit.json", {"token": token})
                 if exit_caller:

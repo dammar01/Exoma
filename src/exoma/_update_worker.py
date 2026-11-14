@@ -34,7 +34,8 @@ DIAGNOSTIC_STRING_CHARS = 256
 def _diagnostic_error(site, exc):
     # Never persist str/repr(exc): subprocess exceptions can include argv/secrets.
     sites = {"owner_init", "spawn", "register", "release", "wait", "child_cleanup",
-             "owner_cleanup", "inventory"}
+             "owner_cleanup", "inventory", "exit_observation", "signal_term", "signal_kill",
+             "child_reap", "monitor_close"}
     kinds = {"OSError", "ProcessLookupError", "PermissionError", "TimeoutError",
              "ValueError", "SubprocessError", "TimeoutExpired", "BrokenPipeError"}
     number = getattr(exc, "errno", None)
@@ -692,6 +693,11 @@ def guardian():
         lifecycle["exit_observed"] |= exited
         return exited
 
+    def cleanup_failed(where, exc):
+        nonlocal cleanup_error
+        cleanup_error = str(exc)[:512]
+        cleanup_errors.append((where, exc))
+
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     try:
         owner = DescendantOwner()
@@ -728,38 +734,52 @@ def guardian():
     finally:
         if child:
             try:
-                if not monitor or not observed_exit():
-                    try:
-                        lifecycle["signals_attempted"].append("SIGTERM")
-                        os.killpg(child.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                running = not monitor or not observed_exit()
+            except (OSError, ValueError) as exc:
+                # Missing observation is not evidence of exit. Still attempt both
+                # group signals and a bounded reap while the child pins its PGID.
+                running = True
+                cleanup_failed("exit_observation", exc)
+            if running:
+                try:
+                    lifecycle["signals_attempted"].append("SIGTERM")
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except OSError as exc:
+                    cleanup_failed("signal_term", exc)
+                try:
                     until = time.monotonic() + 2
                     while monitor and not observed_exit() and time.monotonic() < until:
                         time.sleep(0.05)
-                # Reap ONLY after the last group signal. Holding a waitable child pins
-                # the group leader's PID even when it already exited successfully.
-                try:
-                    lifecycle["signals_attempted"].append("SIGKILL")
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                lifecycle["reap_outcome"] = "pending"
+                except (OSError, ValueError) as exc:
+                    cleanup_failed("exit_observation", exc)
+            # Reap ONLY after the last group signal. Holding a waitable child pins
+            # the group leader's PID even when it already exited successfully.
+            try:
+                lifecycle["signals_attempted"].append("SIGKILL")
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                cleanup_failed("signal_kill", exc)
+            lifecycle["reap_outcome"] = "pending"
+            try:
                 code = child.wait(timeout=5)
                 lifecycle.update(child_returncode=code, reap_outcome="reaped")
             except (OSError, subprocess.TimeoutExpired) as exc:
-                cleanup_error = str(exc)[:512]
-                cleanup_errors.append(("child_cleanup", exc))
-                if lifecycle["reap_outcome"] == "pending":
-                    lifecycle["reap_outcome"] = "failed"
+                cleanup_failed("child_reap", exc)
+                lifecycle["reap_outcome"] = "failed"
         if owner:
             try:
                 owner.cleanup()
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                cleanup_error = str(exc)[:512]
-                cleanup_errors.append(("owner_cleanup", exc))
+                cleanup_failed("owner_cleanup", exc)
         if monitor:
-            monitor.close()
+            try:
+                monitor.close()
+            except (OSError, ValueError) as exc:
+                cleanup_failed("monitor_close", exc)
     lifecycle["synthetic_exit"] = failure is not None or lifecycle["child_returncode"] is None
     result = _guardian_receipt({"cleanup_confirmed": cleanup_error is None,
                                "exit_code": code if failure is None else 1, "error": cleanup_error or failure},

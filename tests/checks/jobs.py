@@ -516,8 +516,12 @@ def _test_job_cancellation_and_diagnostics():
     from exoma.core.evidence.result_shaping import _verify_exit_code
     with tempfile.TemporaryDirectory(prefix="job-cancel-") as tmp:
         root = Path(tmp).resolve()
-        with patch("os.getcwd", return_value=str(root)):
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(root)
             relative_manager = JobManager(Path("relative-jobs"))
+        finally:
+            os.chdir(original_cwd)
         assert_true(relative_manager.job_dir == root / "relative-jobs",
                     "cross-process reservation paths are absolute even with relative storage")
         manager = JobManager(root / "jobs", idle_stall_seconds=10)

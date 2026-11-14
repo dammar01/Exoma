@@ -65,9 +65,15 @@ def local_checks(report: Report) -> None:
         )
 
         code, out = _run_cli(
-            "--command", "inspect", "--work-dir", str(project), "--pretty"
+            "--command", "inspect", "--session", "e2e-local", "--work-dir", str(project), "--pretty"
         )
-        report.check("inspect returns ok", (_json_from(out) or {}).get("ok") is True)
+        inspection = _json_from(out) or {}
+        report.check(
+            "inspect returns ok",
+            code == 0 and inspection.get("ok") is True
+            and inspection.get("meta", {}).get("read_only") is True,
+            f"rc={code}, read_only={inspection.get('meta', {}).get('read_only')}",
+        )
 
         code, out = _run_cli(
             "--command",

@@ -235,6 +235,14 @@ from the classifier's existing observations, with native-query/fallback status. 
 never authorize cleanup, recovery or a later stage, and their failure cannot replace the
 original error. Legacy receipts remain accepted under the same cleanup rules.
 
+Guardian cleanup attempts exit observation, group signalling, bounded child reaping and
+remaining-descendant verification independently. A SIGTERM/SIGKILL error cannot skip the
+last group-signal attempt or the subsequent five-second child wait. The child PID/PGID
+stays pinned until the final signal attempt. Signal, reap and ownership errors retain their
+order in diagnostics; failed observation/monitor cleanup is also recorded. Successful reap,
+including an observed child exit of zero, does not clear a signal error or authorize a
+positive cleanup receipt. Unconfirmed cleanup still retains admission and recovery limits.
+
 Diagnostic selection is limited to 8 rejected PIDs, 32 process records, 8 parent hops per
 snapshot and 256 characters per new string. The whole serialized receipt, including its
 newline, is limited to 7,168 encoded bytes, below the parent's 8,192-character read limit;

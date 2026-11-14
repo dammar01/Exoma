@@ -47,6 +47,12 @@ diagnostic failures are explicit. New error metadata is allowlisted and excludes
 payloads, argv, environment, tokens and image paths. Negative receipts remain rejected;
 diagnostics never substitute for cleanup proof, admission release or recovery authority.
 
+Guardian exit observation, each group signal, bounded child wait and remaining-descendant
+verification have independent error boundaries. A failed signal cannot suppress the final
+group-signal attempt or reap; the PID/PGID remains pinned until that last attempt. Ordered
+errors and observed return/reap evidence survive all steps. A successful reap never clears
+EPERM or makes an unconfirmed cleanup positive, even when the child return code is zero.
+
 The mandatory artifact matrix covers Windows/Linux/macOS, Python 3.11/3.13 and uv/pipx/pip
 venvs: real candidate A-to-B, fresh provenance, install/check, user data and separate no-op.
 Console and module entrypoints use the same state/order assertions. Contained fixtures
