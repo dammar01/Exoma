@@ -79,6 +79,9 @@ def _execution_needs_the_users_yes() -> None:
         _token(root, session, age_seconds=execution.TOKEN_TTL_SECONDS + 60)
         refused = execution.begin_execution(root, session)
         assert_true(refused["reason"] == "not_approved", f"a stale -y approves nothing: {refused}")
+        _token(root, session, age_seconds=-60)
+        assert_true(execution.begin_execution(root, session)["reason"] == "not_approved",
+                    "future-dated approval is not fresh approval")
 
         _token(root, session)
         begun = execution.begin_execution(root, session)
@@ -234,12 +237,120 @@ def _test_execution_chain() -> None:
     _plan_is_checked_mechanically()
     _execution_needs_the_users_yes()
     _approval_cannot_follow_a_replaced_plan()
+    _approval_runtime_identity()
     _cli_speaks_the_error_contract()
     _execution_tracks_its_own_edits()
     _concurrent_execution_publication()
     _stale_approval_preserves_new_token()
     _two_sessions_do_not_share_the_guard()
     _two_active_executions_keep_their_own_scope()
+
+
+def _approval_runtime_identity() -> None:
+    import threading
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory(prefix="execution-alias-") as tmp:
+        root, session = Path(tmp), "alias"
+        execution.record_plan(root, session, _plan())
+        runtime = workflow_paths(root, session)["runtime_dir"]
+        binding = execution.approval_binding(root, session)
+        # Keep '..' in the token's text: both names really stat to one directory,
+        # without needing symlink privileges or a case-insensitive test machine.
+        alias = str(runtime / ".." / runtime.name)
+        assert_true(alias != binding["runtime"] and Path(alias).samefile(runtime),
+                    "the regression fixture supplies different text for a real directory alias")
+        assert_true(execution._approval_matches({**binding, "runtime": alias}, binding),
+                    "physical directory identity accepts a real path alias")
+
+        for field, replacement in (
+                ("plan_id", "other"), ("recorded_at", "other"), ("revision", "other"),
+                ("task", "other"), ("files", ["other.py"]), ("extra", True)):
+            with patch.object(Path, "stat", side_effect=AssertionError("metadata mismatch must not query identity")):
+                assert_true(not execution._approval_matches({**binding, field: replacement}, binding),
+                            "non-path binding mismatch is rejected before filesystem queries: " + field)
+        for invalid in (None, [], {}, {key: value for key, value in binding.items() if key != "revision"}):
+            assert_true(not execution._approval_matches(invalid, binding), "malformed binding remains unapproved")
+
+        other, file = root / "Runtime", root / "not-directory"
+        other.mkdir()
+        file.write_text("fixture", encoding="utf-8")
+        token = runtime / execution.EXECUTE_TOKEN_FILE
+        for location in (str(other), str(root / "missing"), str(file), "runtime", "", None, 42, str(root) + "/\0"):
+            _token(root, session)
+            payload = json.loads(token.read_text())
+            payload["plan_binding"]["runtime"] = location
+            token.write_text(json.dumps(payload), encoding="utf-8")
+            before = token.read_bytes()
+            assert_true(execution.begin_execution(root, session).get("reason") == "not_approved"
+                        and token.read_bytes() == before,
+                        "unverifiable/different runtime rejects without consuming approval: " + repr(location))
+        for error in (PermissionError("fixture identity denied"), OSError("fixture identity unknown"),
+                      ValueError("fixture invalid path")):
+            _token(root, session)
+            before = token.read_bytes()
+            with patch.object(Path, "samefile", side_effect=error):
+                assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                            "a failed identity query cannot authorize execution")
+            assert_true(token.read_bytes() == before, "identity error leaves the initial approval untouched")
+
+        # Hermetic case-only alias simulation: acceptance still needs physical
+        # proof. It is not permission to lowercase two POSIX directory names.
+        folded = str(runtime.parent / "RUNTIME")
+        for matches in (True, False):
+            with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "samefile", return_value=matches) as probe:
+                assert_true(execution._approval_matches({**binding, "runtime": folded}, binding) is matches,
+                            "case-only alias follows actual identity proof, never text similarity")
+                probe.assert_called_once()
+
+        _token(root, session)
+        payload = json.loads(token.read_text())
+        payload["plan_binding"]["runtime"] = alias
+        token.write_text(json.dumps(payload), encoding="utf-8")
+        plan_bytes = (runtime / execution.PLAN_FILE).read_bytes()
+        begun = execution.begin_execution(root, session)
+        assert_true(begun["ok"] and not token.exists() and (runtime / execution.PLAN_FILE).read_bytes() == plan_bytes,
+                    "real alias consumes one approval without rewriting the recorded plan")
+        assert_true(execution.begin_execution(root, session).get("reason") == "not_approved",
+                    "accepted alias does not make approval replayable")
+
+        # Both callers target the same transaction file, including via an alias.
+        _token(root, session)
+        payload = json.loads(token.read_text())
+        payload["plan_binding"]["runtime"] = alias
+        token.write_text(json.dumps(payload), encoding="utf-8")
+        barrier, results, errors = threading.Barrier(2), [], []
+        def consume(project):
+            try:
+                barrier.wait(timeout=3)
+                results.append(execution.begin_execution(project, session))
+            except BaseException as exc:
+                errors.append(exc)
+        workers = [threading.Thread(target=consume, args=(project,))
+                   for project in (root, root / ".." / root.name)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(8)
+        assert_true(not errors and len(results) == 2 and sum(result["ok"] for result in results) == 1,
+                    "concurrent alias consumers can claim one approval only once")
+
+    # Supplemental native case-only proof on the checkout's filesystem (WSL's
+    # /mnt drive, Windows or a case-insensitive macOS volume). Core regressions
+    # above always run, including on case-sensitive Linux.
+    with tempfile.TemporaryDirectory(prefix=".execution-case-", dir=Path(__file__).resolve().parents[2]) as tmp:
+        root = Path(tmp) / "CaseProject"
+        root.mkdir()
+        alias_root = root.with_name("caseproject")
+        if alias_root.is_dir() and root.samefile(alias_root):
+            with patch.object(execution, "_tree", return_value=None):
+                execution.record_plan(root, "case", _plan())
+                _token(root, "case")
+                token = workflow_paths(root, "case")["runtime_dir"] / execution.EXECUTE_TOKEN_FILE
+                plan_bytes = (token.parent / execution.PLAN_FILE).read_bytes()
+                assert_true(execution.begin_execution(alias_root, "case")["ok"] and not token.exists()
+                            and (token.parent / execution.PLAN_FILE).read_bytes() == plan_bytes,
+                            "native filesystem case-only alias accepts the same revision exactly once")
 
 
 def _concurrent_execution_publication() -> None:

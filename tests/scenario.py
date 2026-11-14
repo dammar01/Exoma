@@ -17,7 +17,7 @@ import sys
 import tempfile
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 # Run from anywhere: `python tests/scenario.py` puts tests/ on sys.path, not the repo
 # root, so every `import main` below would miss without this.
@@ -1170,17 +1170,19 @@ confidence: high — all requested checks ran
             )
         repo_root = REPO_ROOT
         repo_leads = graph_index.leads(repo_root, "session manager")
-        # Guarded on the graph EXISTING, not on leads being truthy: keying the guard on
-        # the result itself would let a leads() that silently returns None skip its own
-        # assertions and still report success.
+        # An existing graph may have no usable source locations. Synthetic positive
+        # and empty graphs are covered unconditionally by graph-verification.
         assert_true(
-            (graph_index.graph_path(repo_root).exists()) == (repo_leads is not None),
-            "leads must be produced whenever graph.json exists, and only then",
+            repo_leads is None or graph_index.graph_path(repo_root).exists(),
+            "leads cannot be produced without graph.json",
         )
         if repo_leads:
             assert_true(
-                all("\\" not in row["file"] for row in repo_leads["files"]),
-                "lead paths must be repo-relative POSIX so they mean the same on any machine",
+                all("\\" not in row["file"] and not PureWindowsPath(row["file"]).drive
+                    and not Path(row["file"]).is_absolute() and ".." not in row["file"].split("/")
+                    and (repo_root / row["file"]).resolve().is_relative_to(repo_root.resolve())
+                    and (repo_root / row["file"]).is_file() for row in repo_leads["files"]),
+                "lead paths must name existing contained files using repo-relative POSIX spelling",
             )
             # Leads travel through a sidecar so the prompt only needs a bounded anchor.
             leads_prompt = build_prompt(

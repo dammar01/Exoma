@@ -31,6 +31,7 @@ def _test_self_update() -> None:
     _check_handoff_uncertainty()
     _check_handoff_polling()
     _check_cleanup_publication()
+    _check_guardian_diagnostics()
     _check_worker_protocol()
     _check_synchronous_update()
     _check_update_deadlines_and_interruption()
@@ -557,9 +558,34 @@ def _read_handoff_state(root):
     return worker.read_json(state_path), state_path
 
 
+def _handoff_diagnostics(value, state_path):
+    keys = ("phase", "heartbeat", "stages", "cleanup_error", "error", "helper",
+            "completed", "cleanup_confirmed")
+    summary = {key: value[key] for key in keys if key in value} if value is not None else None
+    parts = [f"state path: {state_path or 'unavailable'}",
+             "last state: " + json.dumps(summary, ensure_ascii=False, default=str)[:6000]]
+    budget = 12000
+    if state_path is not None:
+        for path in sorted(state_path.parent.glob("*.log")):
+            if budget <= 0:
+                break
+            try:
+                size = min(6000, budget)
+                with path.open("rb") as stream:
+                    stream.seek(0, os.SEEK_END)
+                    stream.seek(max(0, stream.tell() - size))
+                    tail = stream.read(size).decode("utf-8", errors="replace")
+            except OSError as exc:
+                tail = f"log unavailable: {exc}"
+            parts.append(path.name + ":\n" + tail)
+            budget -= len(tail)
+    return "\n".join(parts)
+
+
 def _poll_handoff(root, timeout):
     deadline = time.monotonic() + timeout
     last_error = None
+    last_value, last_path = None, None
     while time.monotonic() < deadline:
         try:
             value, state_path = _read_handoff_state(root)
@@ -568,20 +594,17 @@ def _poll_handoff(root, timeout):
         else:
             last_error = None
         if last_error is None and value is not None:
-            if value["phase"] in ("succeeded", "failed", "interrupted"):
+            last_value, last_path = value, state_path
+            if value["phase"] in ("succeeded", "failed", "interrupted", "cleanup_pending"):
                 if value["phase"] != "succeeded":
-                    try:
-                        logs = "\n".join(path.name + ":\n" + path.read_text(encoding="utf-8", errors="replace")[-6000:]
-                                         for path in state_path.parent.glob("*.log"))
-                    except OSError as exc:
-                        logs = f"logs unavailable: {exc}"
-                    raise AssertionError(f"handoff outcome: {value}\n{logs}")
+                    raise AssertionError("handoff outcome:\n" + _handoff_diagnostics(value, state_path))
                 return value, state_path
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(0.1, remaining))
     detail = f"; last read error: {last_error}" if last_error is not None else ""
-    raise AssertionError(f"handoff did not finish within {timeout}s: {root}{detail}") from last_error
+    raise AssertionError(f"handoff did not finish within {timeout}s: {root}{detail}\n"
+                         + _handoff_diagnostics(last_value, last_path)) from last_error
 
 
 class _PollingClock:
@@ -744,7 +767,50 @@ def _check_handoff_polling():
             else:
                 raise AssertionError("unreadable journal reported success")
         assert_true(clock.now < 0.2, "journal retries preserve the original deadline")
-        for value in (ValueError("corrupt journal"), ({"phase": "failed"}, state_path)):
+        (root / "worker.log").write_text("early-log-marker\n" + "x" * 7000 + "\nlatest-cleanup-diagnostic",
+                                        encoding="utf-8")
+        pending = {"phase": "cleanup_pending", "heartbeat": 12,
+                   "cleanup_error": "guardian receipt unavailable", "completed": False,
+                   "stages": {"package": {"exit_code": 0}}}
+        clock = _PollingClock()
+        with patch(__name__ + "._read_handoff_state", return_value=(pending, state_path)) as read, \
+             patch.object(time, "monotonic", side_effect=clock.monotonic), \
+             patch.object(time, "sleep", side_effect=clock.sleep):
+            try:
+                _poll_handoff(root, 480)
+            except AssertionError as exc:
+                detail = str(exc)
+                assert_true(all(text in detail for text in ("cleanup_pending", str(state_path),
+                            "guardian receipt unavailable", "latest-cleanup-diagnostic"))
+                            and "early-log-marker" not in detail and len(detail) < 14000,
+                            "cleanup-pending refusal retains state and bounded recent logs")
+            else:
+                raise AssertionError("cleanup-pending journal reported success")
+        assert_true(read.call_count == 1 and not clock.sleeps,
+                    "cleanup-pending fails acceptance immediately instead of waiting 480 seconds")
+        clock = _PollingClock()
+        running = {"phase": "package", "heartbeat": 21, "stages": {"package": {"exit_code": None}}}
+        observations = [(running, state_path)]
+        def denied_after_state(_root):
+            if observations:
+                return observations.pop()
+            raise PermissionError(13, "journal became unreadable")
+        with patch(__name__ + "._read_handoff_state", side_effect=denied_after_state), \
+             patch.object(time, "monotonic", side_effect=clock.monotonic), \
+             patch.object(time, "sleep", side_effect=clock.sleep):
+            try:
+                _poll_handoff(root, 0.25)
+            except AssertionError as exc:
+                detail = str(exc)
+                assert_true(all(text in detail for text in (str(state_path), '"phase": "package"',
+                            '"heartbeat": 21', '"exit_code": null', "journal became unreadable",
+                            "latest-cleanup-diagnostic")),
+                            "timeout retains the last observed state and logs after a later read denial")
+            else:
+                raise AssertionError("stalled journal reported success")
+        assert_true(clock.now < 0.35, "state observations and read errors never extend the deadline")
+        for value in (ValueError("corrupt journal"), ({"phase": "failed"}, state_path),
+                      ({"phase": "interrupted"}, state_path)):
             with patch(__name__ + "._read_handoff_state", side_effect=value if isinstance(value, Exception) else None,
                        return_value=value if not isinstance(value, Exception) else None):
                 try:
@@ -1150,6 +1216,9 @@ def _check_cleanup_publication():
         observed = owner.inventory()
     assert_true(123456 in observed and 999999 not in observed,
                 "a disappearing new parent retains ancestry uncertainty; only the reaped inventory child is excluded")
+    assert_true(observed.query_status[123456]["generation_source"] == "ps_fallback" and
+                observed.query_status[123456]["query_error"]["type"] == "ProcessLookupError",
+                "the same inventory observation retains why a native generation was unavailable")
     with patch.object(worker.sys, "platform", "darwin"), patch.object(worker.subprocess, "check_output",
             side_effect=["{ sec = 123, usec = 456 } date in timezone A", "{ sec = 123, usec = 456 } date in timezone B"]):
         assert_true(worker.boot_identity() == worker.boot_identity(),
@@ -1165,6 +1234,146 @@ def _check_cleanup_publication():
                 pass
             else:
                 raise AssertionError("orphan or reused-parent generation was declared safely unrelated")
+
+
+def _check_guardian_diagnostics():
+    from exoma import _update_worker as worker
+    from types import SimpleNamespace
+
+    # The same guardian path distinguishes observed child exits from synthetic
+    # failure, and retains both cleanup errors instead of just the last one.
+    with tempfile.TemporaryDirectory(prefix="guardian-diagnostics-") as tmp:
+        root = Path(tmp)
+        for observed, fail_stage, fail_wait, fail_owner, projection_failure in (
+                (0, False, False, False, False), (7, False, False, False, False),
+                (-9, False, False, False, False), (0, True, False, True, False),
+                (0, True, True, True, False), (0, False, True, False, False),
+                (0, True, False, True, True)):
+            child, monitor, owner = MagicMock(), MagicMock(), MagicMock()
+            child.pid, child.stdin = 6044, io.BytesIO()
+            child.wait.return_value = observed
+            if fail_wait:
+                child.wait.side_effect = subprocess.TimeoutExpired(["secret-argv"], 5)
+            monitor.exited.return_value = True
+            owner.diagnostics = None
+            if fail_owner:
+                owner.cleanup.side_effect = OSError(5, "secret-environment")
+            selector = MagicMock()
+            selector.__enter__.return_value = selector
+            selector.select.return_value = [] if fail_stage else [(1, 1)]
+            receipt = root / "receipt.json"
+            request = {"argv": ["secret-argv"], "cwd": str(root), "timeout": 5,
+                       "log": str(root / "stage.log"), "receipt": str(receipt)}
+            stdin = io.StringIO(json.dumps(request) + "\ngo\n")
+            output = io.StringIO()
+            builder = worker._guardian_diagnostics
+            with patch.object(worker, "DescendantOwner", return_value=owner), \
+                 patch.object(worker, "ChildExit", return_value=monitor), \
+                 patch.object(worker.subprocess, "Popen", return_value=child), \
+                 patch.object(worker.Posix, "process", return_value={"pid": 6044, "created": 123, "image": "secret-image"}), \
+                 patch.object(worker.selectors, "DefaultSelector", return_value=selector), \
+                 patch.object(worker.signal, "signal"), \
+                 patch.object(worker.signal, "SIGCHLD", 17, create=True), \
+                 patch.object(worker.signal, "SIGKILL", 9, create=True), \
+                 patch.object(worker.os, "killpg", create=True), \
+                 patch.object(worker.sys, "stdin", stdin), redirect_stdout(output), \
+                 patch.object(worker, "_guardian_diagnostics", side_effect=RuntimeError("secret-token")
+                              if projection_failure else builder):
+                result = worker.guardian()
+            saved = json.loads(receipt.read_text())
+            assert_true(saved == json.loads(output.getvalue().splitlines()[-1]), "durable and pipe receipts agree")
+            assert_true(saved["cleanup_confirmed"] is not (fail_wait or fail_owner) and
+                        saved["exit_code"] == (1 if fail_stage or fail_wait else observed) and
+                        result == (4 if fail_wait or fail_owner else observed), "legacy guardian outcomes retain their authority")
+            diagnostic = saved["diagnostics"]
+            encoded = json.dumps(diagnostic)
+            assert_true(all(secret not in encoded for secret in
+                            ("secret-argv", "secret-environment", "secret-image", "secret-token")),
+                        "new diagnostics never copy exception payloads, argv, images or tokens")
+            if projection_failure:
+                assert_true(diagnostic["unavailable"] and saved["error"] == "[Errno 5] secret-environment",
+                            "diagnostic failure cannot replace the original legacy error authority")
+                continue
+            lifecycle = diagnostic["child"]
+            assert_true(lifecycle["child_returncode"] == (None if fail_wait else observed) and
+                        lifecycle["reap_outcome"] == ("failed" if fail_wait else "reaped") and
+                        lifecycle["synthetic_exit"] is (fail_stage or fail_wait) and
+                        lifecycle["release_requested"] is not fail_stage,
+                        "observed return/reap and release are independent of a synthetic guardian exit")
+            assert_true(lifecycle["exit_observed"] and lifecycle["signals_attempted"] == ["SIGKILL"],
+                        "receipt records existing observations/signals without adding lifecycle actions")
+            assert_true(bool(diagnostic["stage_error"]) is fail_stage and
+                        [error["site"] for error in diagnostic["cleanup_errors"]] ==
+                        (["child_cleanup"] if fail_wait else []) + (["owner_cleanup"] if fail_owner else []),
+                        "stage and ordered multiple cleanup errors remain independently recoverable")
+
+        # A child may never be started; its exit code must remain unobserved.
+        output = io.StringIO()
+        with patch.object(worker, "DescendantOwner", side_effect=OSError("secret-owner-init")), \
+             patch.object(worker.signal, "signal"), patch.object(worker.signal, "SIGCHLD", 17, create=True), \
+             patch.object(worker.sys, "stdin", io.StringIO(json.dumps(request) + "\n")), redirect_stdout(output):
+            assert_true(worker.guardian() == 1, "guardian setup failure retains synthetic failure")
+        lifecycle = json.loads(output.getvalue())["diagnostics"]["child"]
+        assert_true(lifecycle["child_returncode"] is None and lifecycle["reap_outcome"] == "no_child"
+                    and lifecycle["synthetic_exit"], "absent child cannot acquire a fabricated exit code")
+
+    # Negative/enriched receipts do not become successful results; old receipts
+    # need no diagnostics to keep their original acceptance/rejection decisions.
+    for positive in (False, True):
+        legacy = {"cleanup_confirmed": positive, "exit_code": 0, "error": None}
+        for receipt in (legacy, {**legacy, "diagnostics": {"schema_version": 1}}, {}, None):
+            proc = MagicMock()
+            proc.stdin = io.StringIO()
+            proc.stdout = io.StringIO(json.dumps(receipt) + "\n")
+            job = worker.PosixChildJob(None, "fixture", None)
+            job.proc = proc
+            accepted = isinstance(receipt, dict) and receipt.get("cleanup_confirmed") is True
+            try:
+                job.cleanup()
+            except OSError:
+                assert_true(not accepted and job.cleanup_unconfirmed and job.result is None,
+                            "negative or malformed receipt cannot populate the successful result")
+            else:
+                assert_true(accepted and job.result == receipt, "legacy/enriched positive receipts remain compatible")
+
+    # Use the classifier's original observations, including changed generations,
+    # and bound both selection and its serialized envelope under hostile sizes.
+    baseline, current = worker._ProcessInventory(), worker._ProcessInventory()
+    for pid in range(100, 200):
+        baseline[pid] = {"created": pid, "parent": pid - 1}
+        current[pid] = {"created": "\U0001f600" * 1000, "parent": pid - 1}
+        current.query_status[pid] = {"generation_source": "ps_fallback",
+                                     "query_error": worker._diagnostic_error("inventory", PermissionError(13, "secret-token"))}
+    ancestry = worker._ancestry_diagnostics(baseline, current, list(range(110, 200)))
+    assert_true(len(ancestry["rejected_pids"]) == 8 and len(ancestry["records"]) <= 32 and
+                ancestry["omitted_pids"] > 0 and ancestry["depth_truncated"] and ancestry["strings_truncated"],
+                "ancestry selection bounds and omissions are explicit")
+    assert_true(ancestry["records"][0]["snapshot"] == "current" and
+                ancestry["records"][1]["snapshot"] == "baseline" and
+                ancestry["records"][0]["created"] != ancestry["records"][1]["created"] and
+                ancestry["records"][0]["query_error"]["errno"] == 13,
+                "current failures and different baseline generations survive record selection")
+    base = {"cleanup_confirmed": False, "exit_code": 1, "error": "\U0001f600" * 512}
+    owner = SimpleNamespace(diagnostics=ancestry)
+    receipt = worker._guardian_receipt(base, ("wait", OSError("secret-token")), [], {}, owner)
+    raw = json.dumps(receipt, ensure_ascii=True, indent=2, allow_nan=False) + "\n"
+    assert_true(len(raw.encode()) <= worker.GUARDIAN_RECEIPT_BYTES and len(raw) < 8192 and
+                all(receipt[k] == v for k, v in base.items()) and receipt["diagnostics"]["truncated"],
+                "full Unicode receipt stays readable without truncating legacy authority or JSON")
+
+    # Failing the diagnostic projection must not mask the classifier's original
+    # orphan rejection, or make an uncertain generation look unrelated.
+    owner = worker.DescendantOwner.__new__(worker.DescendantOwner)
+    owner.subreaper, owner.baseline = False, {}
+    with patch.object(owner, "inventory", return_value={6044: {"created": 123, "parent": 1}}), \
+         patch.object(worker, "_ancestry_diagnostics", side_effect=RuntimeError("secret-token")):
+        try:
+            owner.cleanup()
+        except OSError as exc:
+            assert_true("descendant ancestry cannot be confirmed" in str(exc) and owner.diagnostics["unavailable"],
+                        "projection failure preserves original ancestry rejection")
+        else:
+            raise AssertionError("projection failure changed classifier acceptance")
 
 
 def _check_restricted_worker_job():
@@ -1228,6 +1437,12 @@ def _artifact_evidence(report_path):
                 print(f"Artifact report unavailable: {exc}", file=sys.stderr)
 
 
+def _mark_handoff_passed(report, contained):
+    assert_true(contained or report.get("independent_worker_verified") is True,
+                "handoff acceptance requires verified worker independence")
+    report.update(passed=True, no_op_verified=True)
+
+
 def _check_artifact_reporting():
     proof = {"phase": "succeeded", "cleanup_confirmed": True, "callers_exited_at": 1,
              "stages": {"package": {"started_at": 2}}, "host_job": {"in_job": False}}
@@ -1250,6 +1465,19 @@ def _check_artifact_reporting():
                     and evidence["actual_version_transition"] and evidence["independent_worker_verified"]
                     and evidence["state"]["version_after"] == "fixture-B"
                     and evidence["error"] == "subsequent no-op failed", "later failure retains first-transition evidence")
+        for contained, independent in ((False, False), (False, True), (True, False)):
+            try:
+                with _artifact_evidence(report_path) as report:
+                    report.update(actual_version_transition=True, independent_worker_verified=independent)
+                    _mark_handoff_passed(report, contained)
+            except AssertionError:
+                assert_true(not contained and not independent,
+                            "only unverified handoff independence refuses a positive gate")
+            evidence = json.loads(report_path.read_text(encoding="utf-8"))
+            expected = contained or independent
+            assert_true(evidence["passed"] is expected and evidence["no_op_verified"] is expected
+                        and evidence["independent_worker_verified"] is independent,
+                        "artifact acceptance requires independence while contained results remain explicitly scoped")
 
 
 def _check_handoff_wheel_upgrade() -> None:
@@ -1381,7 +1609,7 @@ def _check_handoff_wheel_upgrade() -> None:
         run([interpreter, "-m", "exoma", "update", "--timeout", "120", "--manager", manager], accepted=True)
         second, _ = _poll_handoff(root / "state", 300)
         assert_true(second["version_before"] == second["version_after"] == versions[1], "explicit no-op case")
-        report.update(passed=True, no_op_verified=True)
+        _mark_handoff_passed(report, contained)
         label = "CONTAINED WHEEL (not independence acceptance)" if contained else (
             "SHARED HANDOFF WHEEL")
         print(f"{label}: {versions[0]} -> {versions[1]}; no manual recovery; then separate no-op")
@@ -1438,7 +1666,9 @@ def _check_posix_worker_protocol():
                     "CALLER_SECONDS = 60", "CALLER_SECONDS = 1"), encoding="utf-8")
                 token = uuid_hex()
                 marker = operation / "package-marker"
-                code = "from pathlib import Path; Path(" + repr(str(marker)) + ").write_text('started'); raise SystemExit(7)"
+                code = ("import runpy,os,json; from pathlib import Path; native=runpy.run_path(" + repr(str(script)) +
+                        "); Path(" + repr(str(marker)) +
+                        ").write_text(json.dumps(native['Posix']().process(os.getpid()))); raise SystemExit(7)")
                 request = {"schema_version": worker.SCHEMA, "operation_id": operation.name,
                            "installation_key": worker.installation_key(root / "target", api.user()),
                            "token": token, "prefix": str(root / "target"), "python_relative": "bin/python",
@@ -1465,6 +1695,16 @@ def _check_posix_worker_protocol():
                                 "install" not in state["stages"] and
                                 state["callers_exited_at"] <= state["stages"]["package"]["started_at"],
                                 "same package/order/failure boundary as Windows")
+                    receipts = list(operation.glob("package.log.cleanup-*.json"))
+                    assert_true(len(receipts) == 1, "real failed package stage retains one guardian receipt")
+                    receipt = worker.read_json(receipts[0])
+                    lifecycle = receipt["diagnostics"]["child"]
+                    assert_true(receipt["cleanup_confirmed"] and lifecycle["child_returncode"] == 7 and
+                                lifecycle["reap_outcome"] == "reaped" and lifecycle["release_requested"] and
+                                lifecycle["exit_observed"] and not lifecycle["synthetic_exit"] and
+                                lifecycle["registered_child"] ==
+                                {key: json.loads(marker.read_text())[key] for key in ("pid", "created")},
+                                "real exec/reap evidence preserves registered generation and observed manager exit")
                 else:
                     assert_true(not marker.exists() and not state["stages"], "no mutation before COMMIT and caller exit")
             finally:

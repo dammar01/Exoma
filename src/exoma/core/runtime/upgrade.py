@@ -288,10 +288,11 @@ def upgrade_workflow_workspace(
     }
 
 def active_jobs_for_workspace(project_root: Path) -> list[dict]:
-    """Pending/running jobs whose work_dir is this project. [] on any failure.
+    """Live jobs and retained cleanup claims that block workspace mutation.
 
-    Best-effort by design: this exists to stop an upgrade from landing under a live
-    call, and a job store it cannot read is not a reason to block one.
+    Cleanup admission is fail-closed: unreadable or non-object job/lock records
+    raise ValueError rather than authorizing an upgrade with an empty job list.
+    Readable objects with invalid live-job metadata are filtered below.
     """
     try:
         from exoma.core.jobs.job_manager import DEAD, JobManager

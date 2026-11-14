@@ -588,6 +588,46 @@ def _check_fork_execution_approval() -> None:
         ws.close()
 
 
+def _check_alias_execution_approval() -> None:
+    """Unchanged host-issued approval is consumed through a physical runtime alias."""
+    from unittest.mock import patch
+    from exoma.core.runtime import execution as execution_runtime
+
+    ws = _Workspace("alias-approval")
+    try:
+        execution_runtime.record_plan(ws.project, ws.main_id, {
+            "task": "alias approval", "decision": "proceed",
+            "confidence": {key: "high" for key in execution_runtime.CONFIDENCE_KEYS},
+            "open_questions": [], "files": ["core/a.py"],
+            "options": [{"name": "scoped", "minus": "requires identity proof", "recommended": True}],
+        })
+        gate_set = _flavours("intent-gate-set")[0][1]
+        code, _, _ = ws.run(gate_set, {"session_id": "c1", "cwd": str(ws.project),
+                                      "hook_event_name": "UserPromptSubmit", "prompt": "/.execute -y"})
+        token = ws.runtime / "execute.token"
+        assert_true(code == 0 and token.is_file(), "unchanged standalone launcher publishes fixture approval")
+        issued = json.loads(token.read_text())["plan_binding"]
+        plan = ws.runtime / execution_runtime.PLAN_FILE
+        before = plan.read_bytes()
+        alias = str(ws.runtime / ".." / ws.runtime.name)
+        assert_true(alias != issued["runtime"] and Path(alias).samefile(issued["runtime"]),
+                    "host integration uses genuinely equal directories with different text")
+        original = execution_runtime.approval_binding
+        def consumer_spelling(*args, **kwargs):
+            binding = original(*args, **kwargs)
+            return {**binding, "runtime": alias} if binding is not None else None
+        # Simulate the consumer's alternate path spelling without changing the
+        # host producer, plan or issued token. All identity checks remain real.
+        with patch.object(execution_runtime, "approval_binding", side_effect=consumer_spelling):
+            begun = execution_runtime.begin_execution(ws.project, ws.main_id)
+        assert_true(begun["ok"] and not token.exists() and plan.read_bytes() == before,
+                    "real host approval opens one execution across a proven alias without rewriting the plan")
+        assert_true(execution_runtime.begin_execution(ws.project, ws.main_id).get("reason") == "not_approved",
+                    "host approval remains single-use after alias admission")
+    finally:
+        ws.close()
+
+
 def _test_hooks_run_through_their_launchers() -> None:
     # Fails closed: the bash launchers are what every OS will run, so a machine that cannot
     # run them has not tested the contract, and a green result there would be false.
@@ -627,6 +667,7 @@ def _test_hooks_run_through_their_launchers() -> None:
     check_repro_matrix()
     _check_hashed_session_approval()
     _check_fork_execution_approval()
+    _check_alias_execution_approval()
 
 
 def _shim(directory: Path, name: str, body: str) -> None:

@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from exoma.core.workspace.workspace_paths import atomic_write_text, workflow_paths
 from exoma.utils.osutil import process_alive
@@ -271,17 +271,65 @@ def is_stale(project_root) -> bool | None:
     return verdict
 
 
-def _relative_source(source_file: str | None, project_root) -> str | None:
-    """graph.json stores absolute OS-native paths; emit repo-relative POSIX ones so the
-    shortlist means the same thing on another machine (and matches how file:line
-    citations are written everywhere else)."""
-    if not source_file:
+def _source_relative_parts(source_file, root, *, same_root=None) -> tuple[str, ...] | None:
+    """Map lexical locations; case aliases require explicit root identity proof.
+
+    The caller must still verify the concrete file and its containment.
+    """
+    if not isinstance(source_file, str) or not source_file or "\0" in source_file:
+        return None
+    spelling = source_file.replace("\\", "/")
+    windows, posix = PureWindowsPath(source_file), PurePosixPath(spelling)
+    if spelling.startswith(("//?/", "//./")) or ".." in posix.parts:
         return None
     try:
-        rel = Path(source_file).resolve().relative_to(Path(project_root).resolve())
-        return rel.as_posix()
+        if windows.drive:
+            if not windows.is_absolute():
+                return None  # C:foo depends on a drive's working directory.
+            if isinstance(root, PureWindowsPath):
+                relative = windows.relative_to(root)
+            elif (re.fullmatch(r"[A-Za-z]:", windows.drive)
+                  and len(root.parts) >= 3 and root.parts[1] == "mnt"
+                  and root.parts[2].lower() == windows.drive[0].lower()):
+                mounted_root = PureWindowsPath(windows.drive + "/").joinpath(*root.parts[3:])
+                relative = windows.relative_to(mounted_root)
+                if windows.parts[1:len(mounted_root.parts)] != mounted_root.parts[1:]:
+                    alias_root = PurePosixPath("/mnt", root.parts[2],
+                                               *windows.parts[1:len(mounted_root.parts)])
+                    if same_root is None or not same_root(alias_root):
+                        return None
+            else:
+                return None
+        elif source_file.startswith("\\") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", source_file):
+            return None  # Rooted-relative Windows and URI schemes have no mapping.
+        elif posix.is_absolute():
+            if not isinstance(root, PurePosixPath):
+                return None
+            relative = posix.relative_to(root)
+        else:
+            relative = posix
+        return relative.parts or None
     except (ValueError, OSError):
-        return Path(source_file).name or None
+        return None
+
+
+def _relative_source(source_file: str | None, project_root) -> str | None:
+    """Return an existing contained source as a repo-relative POSIX location.
+
+    A foreign or stale source is unmapped, never a basename guess. This boundary
+    also protects provenance from anchoring a foreign node to a same-named file.
+    """
+    try:
+        root = Path(project_root).resolve()
+        parts = _source_relative_parts(source_file, root, same_root=root.samefile)
+        if not parts:
+            return None
+        source = root.joinpath(*parts).resolve()
+        if not source.is_relative_to(root) or not source.is_file():
+            return None
+        return source.relative_to(root).as_posix()
+    except (ValueError, OSError, RuntimeError):
+        return None
 
 
 def _nodes(graph: dict) -> list[dict]:
@@ -335,6 +383,8 @@ def _keywords(text: str) -> set[str]:
 
 def entry_points(project_root, limit: int = MAX_LEADS) -> list[dict]:
     """Highest-connectivity nodes — the structural way into the codebase."""
+    if limit == 0:
+        return []
     graph = load_graph(project_root)
     if not graph:
         return []
@@ -344,7 +394,14 @@ def entry_points(project_root, limit: int = MAX_LEADS) -> list[dict]:
         key=lambda n: degrees.get(str(n.get("id")), 0.0),
         reverse=True,
     )
-    return [_as_lead(n, project_root, degrees) for n in ranked[:limit]]
+    rows = []
+    for node in ranked:
+        row = _as_lead(node, project_root, degrees)
+        if row["file"]:
+            rows.append(row)
+            if limit > 0 and len(rows) == limit:
+                break
+    return rows[:limit]
 
 
 def files_in_community(project_root, community, graph: dict | None = None) -> list[str]:

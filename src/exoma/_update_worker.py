@@ -24,6 +24,110 @@ SCHEMA = 1
 HANDSHAKE_SECONDS = 15
 CALLER_SECONDS = 60
 TERMINAL = {"succeeded", "failed", "interrupted"}
+GUARDIAN_RECEIPT_BYTES = 7168
+DIAGNOSTIC_PIDS = 8
+DIAGNOSTIC_RECORDS = 32
+DIAGNOSTIC_PARENT_HOPS = 8
+DIAGNOSTIC_STRING_CHARS = 256
+
+
+def _diagnostic_error(site, exc):
+    # Never persist str/repr(exc): subprocess exceptions can include argv/secrets.
+    sites = {"owner_init", "spawn", "register", "release", "wait", "child_cleanup",
+             "owner_cleanup", "inventory"}
+    kinds = {"OSError", "ProcessLookupError", "PermissionError", "TimeoutError",
+             "ValueError", "SubprocessError", "TimeoutExpired", "BrokenPipeError"}
+    number = getattr(exc, "errno", None)
+    return {"site": site if site in sites else "unknown",
+            "type": type(exc).__name__ if type(exc).__name__ in kinds else "Exception",
+            "errno": number if type(number) is int and abs(number) < 2 ** 31 else None}
+
+
+class _ProcessInventory(dict):
+    """Keep generation lookup provenance beside the unchanged classifier records."""
+    def __init__(self):
+        super().__init__()
+        self.query_status = {}
+        self.diagnostics_unavailable = False
+
+
+def _diagnostic_generation(value):
+    if type(value) is int and abs(value) < 2 ** 64:
+        return value
+    if isinstance(value, str):
+        return value[:DIAGNOSTIC_STRING_CHARS]
+    return None
+
+
+def _ancestry_diagnostics(baseline, current, remaining):
+    rejected = sorted(remaining)[:DIAGNOSTIC_PIDS]
+    selected, seen, strings_truncated, depth_truncated = [], set(), False, False
+    # Keep both snapshots of rejected generations before spending the budget on
+    # ancestors; a large baseline must not crowd out the current query failure.
+    walks = [[name, inventory, pid, set()] for pid in rejected
+             for name, inventory in (("current", current), ("baseline", baseline))]
+    for _ in range(DIAGNOSTIC_PARENT_HOPS):
+        for walk in walks:
+            name, inventory, pid, chain = walk
+            if pid not in inventory or pid in chain:
+                continue
+            chain.add(pid)
+            key = (name, pid)
+            if key not in seen:
+                seen.add(key)
+                row = inventory[pid]
+                generation = row.get("created")
+                strings_truncated |= isinstance(generation, str) and len(generation) > DIAGNOSTIC_STRING_CHARS
+                record = {"snapshot": name, "pid": pid, "parent": row["parent"],
+                          "created": _diagnostic_generation(generation)}
+                status = getattr(inventory, "query_status", {}).get(pid)
+                record.update(status or {"generation_source": "unknown"})
+                selected.append(record)
+            walk[2] = inventory[pid]["parent"]
+    depth_truncated = any(pid in inventory and pid not in chain for _, inventory, pid, chain in walks)
+    return {"rejected_count": len(remaining), "rejected_pids": rejected,
+            "omitted_pids": len(remaining) - len(rejected),
+            "records": selected[:DIAGNOSTIC_RECORDS],
+            "omitted_records": max(0, len(selected) - DIAGNOSTIC_RECORDS),
+            "strings_truncated": strings_truncated, "depth_truncated": depth_truncated,
+            "query_diagnostics_unavailable": any(getattr(s, "diagnostics_unavailable", False)
+                                                 for s in (baseline, current))}
+
+
+def _guardian_diagnostics(stage_error, cleanup_errors, lifecycle, owner):
+    return {"schema_version": 1,
+            "stage_error": _diagnostic_error(*stage_error) if stage_error else None,
+            "cleanup_errors": [_diagnostic_error(*error) for error in cleanup_errors],
+            "child": lifecycle,
+            "ancestry": getattr(owner, "diagnostics", None)}
+
+
+def _guardian_receipt(base, stage_error, cleanup_errors, lifecycle, owner):
+    """Project evidence best-effort; legacy authority survives diagnostic failures."""
+    try:
+        diagnostics = _guardian_diagnostics(stage_error, cleanup_errors, lifecycle, owner)
+        result = {**base, "diagnostics": diagnostics}
+        # atomic_json uses this pretty ASCII encoding; stdout is no larger.
+        def size():
+            return len((json.dumps(result, ensure_ascii=True, indent=2, allow_nan=False) + "\n").encode("ascii"))
+        ancestry = diagnostics.get("ancestry")
+        while size() > GUARDIAN_RECEIPT_BYTES and ancestry and ancestry.get("records"):
+            ancestry["records"].pop()
+            ancestry["omitted_records"] += 1
+            diagnostics["truncated"] = True
+        if size() > GUARDIAN_RECEIPT_BYTES:
+            # Retain causal and lifecycle evidence ahead of ancillary ancestry.
+            diagnostics["ancestry"] = {"unavailable": True, "reason": "receipt_budget"}
+            diagnostics["truncated"] = True
+        if size() > GUARDIAN_RECEIPT_BYTES:
+            result["diagnostics"] = {"schema_version": 1, "unavailable": True, "reason": "receipt_budget"}
+        if size() > GUARDIAN_RECEIPT_BYTES:
+            raise ValueError("legacy receipt exceeds diagnostic envelope")
+        return result
+    except Exception:
+        # The bounded legacy error is at most 512 characters (including Unicode).
+        return {**base, "diagnostics": {"schema_version": 1, "unavailable": True,
+                                        "reason": "projection_failed"}}
 
 
 def canonical(path):
@@ -497,22 +601,31 @@ class DescendantOwner:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
-        result, api = {}, Posix()
+        result, api = _ProcessInventory(), Posix()
         for row in rows:
             pid_text, parent, stamp = row.strip().split(None, 2)
             pid = int(pid_text)
             if pid == proc.pid:
                 continue  # This waitable inventory child is already reaped.
+            source, query_error = "native", None
             try:
                 created = api.process(pid)["created"]
-            except ProcessLookupError:
+            except ProcessLookupError as exc:
                 # A disappearing new parent may already have orphaned a child
                 # after ps enumerated it. Keep that uncertainty instead of hiding
                 # the fork/exit race behind an empty final snapshot.
                 created = stamp
-            except OSError:
+                source, query_error = "ps_fallback", exc
+            except OSError as exc:
                 created = stamp
+                source, query_error = "ps_fallback", exc
             result[pid] = {"created": created, "parent": int(parent)}
+            try:
+                result.query_status[pid] = {"generation_source": source,
+                                            "query_error": _diagnostic_error("inventory", query_error)
+                                            if query_error else None}
+            except Exception:
+                result.diagnostics_unavailable = True
         return result
 
     def cleanup(self):
@@ -536,6 +649,10 @@ class DescendantOwner:
                 return False
             remaining = [pid for pid in current if pid != os.getpid() and not unchanged(pid) and not foreign(pid)]
             if remaining:
+                try:
+                    self.diagnostics = _ancestry_diagnostics(self.baseline, current, remaining)
+                except Exception:
+                    self.diagnostics = {"unavailable": True, "reason": "projection_failed"}
                 raise OSError("descendant ancestry cannot be confirmed: " + repr(sorted(remaining)))
             return
         # Every orphan, including setsid/double-fork children, is adopted by this
@@ -565,23 +682,41 @@ def guardian():
     """No manager instruction runs until group registration and the owner GO message."""
     request = json.loads(sys.stdin.readline())
     child, monitor, owner, failure, cleanup_error, code = None, None, None, None, None, 1
+    stage_error, cleanup_errors, site = None, [], "owner_init"
+    lifecycle = {"registered_child": None, "release_requested": False,
+                 "exit_observed": False, "signals_attempted": [],
+                 "child_returncode": None, "reap_outcome": "no_child", "synthetic_exit": False}
+
+    def observed_exit():
+        exited = monitor.exited()
+        lifecycle["exit_observed"] |= exited
+        return exited
+
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     try:
         owner = DescendantOwner()
+        site = "spawn"
         with Path(request["log"]).open("ab", buffering=0) as log:
             child = subprocess.Popen([sys.executable, "-I", "-S", "-B", __file__, "--exec-stage",
                                       json.dumps(request["argv"])], cwd=request["cwd"],
                                      stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True)
+            lifecycle["reap_outcome"] = "not_attempted"
+            site = "register"
             monitor = ChildExit(child.pid)
-            print(json.dumps(Posix().process(child.pid)), flush=True)
+            identity = Posix().process(child.pid)
+            lifecycle["registered_child"] = {"pid": identity["pid"], "created": identity["created"]}
+            print(json.dumps(identity), flush=True)
             with selectors.DefaultSelector() as selector:
                 selector.register(sys.stdin, selectors.EVENT_READ)
                 if not selector.select(HANDSHAKE_SECONDS) or sys.stdin.readline().strip() != "go":
                     raise OSError("supervisor disappeared before stage registration")
+                site = "release"
                 child.stdin.write(b"1")
+                lifecycle["release_requested"] = True
                 child.stdin.close()
+                site = "wait"
                 deadline = time.monotonic() + request["timeout"]
-                while not monitor.exited():
+                while not observed_exit():
                     if selector.select(0.05):
                         if not sys.stdin.readline():
                             raise OSError("supervisor control pipe closed")
@@ -589,35 +724,46 @@ def guardian():
                         raise TimeoutError("stage deadline")
     except Exception as exc:
         failure = str(exc)[:512]
+        stage_error = (site, exc)
     finally:
         if child:
             try:
-                if not monitor or not monitor.exited():
+                if not monitor or not observed_exit():
                     try:
+                        lifecycle["signals_attempted"].append("SIGTERM")
                         os.killpg(child.pid, signal.SIGTERM)
                     except ProcessLookupError:
                         pass
                     until = time.monotonic() + 2
-                    while monitor and not monitor.exited() and time.monotonic() < until:
+                    while monitor and not observed_exit() and time.monotonic() < until:
                         time.sleep(0.05)
                 # Reap ONLY after the last group signal. Holding a waitable child pins
                 # the group leader's PID even when it already exited successfully.
                 try:
+                    lifecycle["signals_attempted"].append("SIGKILL")
                     os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                lifecycle["reap_outcome"] = "pending"
                 code = child.wait(timeout=5)
+                lifecycle.update(child_returncode=code, reap_outcome="reaped")
             except (OSError, subprocess.TimeoutExpired) as exc:
                 cleanup_error = str(exc)[:512]
+                cleanup_errors.append(("child_cleanup", exc))
+                if lifecycle["reap_outcome"] == "pending":
+                    lifecycle["reap_outcome"] = "failed"
         if owner:
             try:
                 owner.cleanup()
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 cleanup_error = str(exc)[:512]
+                cleanup_errors.append(("owner_cleanup", exc))
         if monitor:
             monitor.close()
-    result = {"cleanup_confirmed": cleanup_error is None,
-              "exit_code": code if failure is None else 1, "error": cleanup_error or failure}
+    lifecycle["synthetic_exit"] = failure is not None or lifecycle["child_returncode"] is None
+    result = _guardian_receipt({"cleanup_confirmed": cleanup_error is None,
+                               "exit_code": code if failure is None else 1, "error": cleanup_error or failure},
+                              stage_error, cleanup_errors, lifecycle, owner)
     if request.get("receipt"):
         atomic_json(request["receipt"], result)
     try:

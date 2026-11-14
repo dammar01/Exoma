@@ -35,12 +35,32 @@ Session detachment does not
 escape arbitrary cgroup/container termination. Neither platform changes host job limits.
 If no independent runtime can be proved, finish/exit Exoma and use its manager manually.
 
+Guardian receipts preserve legacy cleanup authority while adding optional versioned
+diagnostics: original guardian failure, ordered cleanup failures, nullable observed child
+return code, reap outcome, release request, observed exit and group signals attempted.
+Observed child exit after cleanup signalling is not proof of normal manager completion.
+Ancestry diagnostics project only the classifier's existing baseline/current observations;
+they retain generation-query failures without changing classification or adding queries.
+Selection is bounded to 8 rejected PIDs, 32 records, 8 parent hops and 256 characters per
+new string, with a 7,168-byte total receipt envelope including newline. Omitted details and
+diagnostic failures are explicit. New error metadata is allowlisted and excludes exception
+payloads, argv, environment, tokens and image paths. Negative receipts remain rejected;
+diagnostics never substitute for cleanup proof, admission release or recovery authority.
+
 The mandatory artifact matrix covers Windows/Linux/macOS, Python 3.11/3.13 and uv/pipx/pip
 venvs: real candidate A-to-B, fresh provenance, install/check, user data and separate no-op.
 Console and module entrypoints use the same state/order assertions. Contained fixtures
 exercise stages but cannot attest independence. Windows CI may select supported runner
 labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`; restrictive-host
 refusal remains mandatory and is never converted into a positive gate or a skip.
+
+The artifact poller treats `cleanup_pending` as a failed acceptance gate immediately,
+while production observation still reports that operation as unknown (exit 4). It must
+not wait for the polling deadline or report uncertain cleanup as a completed update.
+Failure diagnostics retain the operation's state path, last observed phase, heartbeat,
+stages and cleanup error, plus bounded log tails; a timeout also retains the last read
+error without resetting its deadline. A positive handoff report requires verified worker
+independence; a successful contained transition cannot satisfy that assertion.
 
 ## Live provider diagnostics and explicit cancellation
 
@@ -80,6 +100,20 @@ late output cannot erase intent, and an unmarked external taskkill remains unatt
 
 ## State and transport hardening
 
+Graph source normalization is shared by ranked leads, communities, entry points,
+subgraphs and provenance. It parses Windows and POSIX spelling explicitly, anchors
+relative locations at the project root, and validates resolved file existence and
+containment before returning a repo-relative POSIX location. Windows drive paths may
+map to WSL only through the matching `/mnt/<drive>` root and the same project path,
+including its case on POSIX, unless filesystem identity proves that the case-only root
+alias is the same directory. Identity lookup failure or a different directory leaves the
+source unmapped. Entry point limits apply after dropping unmapped locations;
+source resolution stops once the requested number of valid entry points is available.
+No basename/suffix search or arbitrary checkout relocation is allowed. Unsupported
+absolute roots, ambiguous Windows relative roots/drives, URI/device paths, traversal
+and resolved escapes remain unmapped. Rejected provenance stays unverifiable; a graph
+containing no usable source locations returns no leads rather than fabricated paths.
+
 Verification preparation is runtime-owned. `verify-prepare` reads effective policy and
 the named session's pending request before provider dispatch, without claiming/consuming
 the request, removing the delegated marker, running tests, or publishing a verdict.
@@ -100,6 +134,13 @@ seconds; it covers state transactions, never provider inference. A plan re-recor
 does not close an existing execution. Each new execution has an `execution_id` and
 `plan_revision`; end/verification publication checks the execution it targeted. A stale
 verification reports `meta.execution_state_error` and leaves the replacement untouched.
+
+Pre-claim approval comparison requires exact non-path binding fields before any identity
+query, then filesystem proof that both absolute runtime paths name the same directory.
+Aliases are accepted only through `samefile`; no POSIX case-folding is applied. Missing,
+non-directory, malformed or unverifiable identity refuses approval without consuming it.
+The token format and hook producer are unchanged. Atomic claiming, exact claimed-token
+reread, exact post-claim plan recheck, the TTL and single-use/session isolation still apply.
 
 Provider deadlines include stdin write/close through a feeder thread. Capture reads are
 bounded even for a single oversized line; `capture_truncated` identifies dropped earlier
@@ -1287,6 +1328,14 @@ events without a session are `unknown`. Older events carry no `derived`,
 so their tasks stay `open`.
 
 ## Workspace layout
+
+Workspace mutation admission is fail-closed. Before migration or script regeneration,
+upgrade checks update reservations, retained cleanup claims and live jobs. Invalid JSON,
+non-object job/lock records or unreadable records refuse admission rather than becoming
+an empty job list. Structurally readable objects with invalid status/scope fields are
+still filtered by live-job discovery; that filtering does not waive retained cleanup.
+Refusal leaves the workspace layout and user data in place. A retained cleanup lock
+continues to block mutation even if its job record disappears or becomes unreadable.
 
 `.workflow/` holds what a person edits: `config.json`, `second_agent.json`,
 `e2e/secrets.json`, the `run`/`check`/`inspect` scripts, and `current/`. Everything else —

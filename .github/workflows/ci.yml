@@ -72,7 +72,7 @@ jobs:
         # internally sequential, so it stops at its own first assertion either way.
         # --record writes the outcome to the workspace quality stream, so `--command
         # report` can show a test pass rate over time rather than only the latest run.
-        run: python tests/run.py --keep-going --record .
+        run: python tests/run.py --keep-going --traceback --record .
 
       - name: End-to-end (local + integrity + installer)
         # Without --full: no provider CLI is invoked and no quota is spent. The delegated

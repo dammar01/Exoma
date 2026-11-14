@@ -110,12 +110,12 @@ def _check_live_job_blocks_migration() -> None:
         live = manager.create_job("analyze", "live", "mixed", str(project), None)
         manager.set_worker_pid(live["job_id"], os.getpid())
         manager.mark_running(live["job_id"])
-        for index, record in enumerate(([], None, {"status": []}, {"status": "running", "work_dir": ["bad"]})):
+        for index, record in enumerate(({"status": []}, {"status": "running", "work_dir": ["bad"]})):
             (manager.job_dir / f"job_corrupt_{index}.json").write_text(json.dumps(record), encoding="utf-8")
         with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager):
             active = upgrade.active_jobs_for_workspace(project)
         assert_true([job["job_id"] for job in active] == [live["job_id"]],
-                    "corrupt records must not erase healthy live-job detection")
+                    "invalid live-job metadata must not erase healthy live-job detection")
         manager.fail_job(live["job_id"], "cleanup")
 
     root = _legacy_workspace()
@@ -132,6 +132,54 @@ def _check_live_job_blocks_migration() -> None:
     finally:
         upgrade.active_jobs_for_workspace = saved
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_cleanup_admission_blocks_migration() -> None:
+    import exoma.core.runtime.upgrade as upgrade
+    from unittest.mock import patch
+    from exoma.core.jobs.job_manager import JobManager
+
+    original_read = Path.read_text
+    for case, raw in (("array", "[]"), ("null", "null"),
+                      ("invalid-json", "{broken"), ("unreadable", "{}")):
+        root = _legacy_workspace()
+        wf = root / ".workflow"
+        try:
+            before = {p.relative_to(wf): p.read_bytes() for p in wf.rglob("*") if p.is_file()}
+            with tempfile.TemporaryDirectory(prefix="upgrade-admission-jobs-") as tmp:
+                manager = JobManager(Path(tmp))
+                record = manager.job_dir / "job_corrupt.json"
+                record.write_text(raw, encoding="utf-8")
+
+                def read(path, *args, **kwargs):
+                    if case == "unreadable" and path == record:
+                        raise PermissionError("fixture cleanup record unreadable")
+                    return original_read(path, *args, **kwargs)
+
+                with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
+                     patch("exoma.core.runtime.migrations.run") as migrate, \
+                     patch.object(Path, "read_text", read):
+                    try:
+                        upgrade.active_jobs_for_workspace(root)
+                    except ValueError as exc:
+                        assert_true("cannot establish workspace cleanup admission" in str(exc)
+                                    and exc.__cause__ is not None,
+                                    f"{case}: admission refusal retains the underlying cause")
+                    else:
+                        raise AssertionError(f"{case}: unreadable cleanup proof became an empty job list")
+                    try:
+                        upgrade.upgrade_workflow_workspace(root)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError(f"{case}: cleanup uncertainty authorized migration")
+                    assert_true(not migrate.called, f"{case}: refusal precedes every migration step")
+            after = {p.relative_to(wf): p.read_bytes() for p in wf.rglob("*") if p.is_file()}
+            assert_true(before == after and is_legacy_layout(root)
+                        and not (wf / "data").exists() and not (wf / "data.migrating").exists(),
+                        f"{case}: admission refusal preserves the layout and every user file")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 def _check_failed_migration_is_rolled_back() -> None:
@@ -554,6 +602,7 @@ def _check_current_mirrors_the_latest_dispatch() -> None:
 def _test_workspace_migration() -> None:
     _check_migration_moves_everything_once()
     _check_live_job_blocks_migration()
+    _check_cleanup_admission_blocks_migration()
     _check_failed_migration_is_rolled_back()
     _check_post_rename_failure_resumes()
     _check_failed_backup_leaves_no_staging()

@@ -313,6 +313,27 @@ def approval_binding(project_root: Path, session_id: str, plan: dict | None = No
     }
 
 
+def _approval_matches(approved: object, current: object) -> bool:
+    """Only physical aliases of one runtime may differ in an approval snapshot."""
+    if not isinstance(approved, dict) or not isinstance(current, dict):
+        return False
+    required = {"plan_id", "recorded_at", "revision", "task", "files", "runtime"}
+    if not required.issubset(approved) or not required.issubset(current):
+        return False
+    if ({key: value for key, value in approved.items() if key != "runtime"} !=
+            {key: value for key, value in current.items() if key != "runtime"}):
+        return False
+    locations = (approved["runtime"], current["runtime"])
+    if not all(isinstance(path, str) and path for path in locations):
+        return False
+    try:
+        left, right = (Path(path) for path in locations)
+        return (left.is_absolute() and right.is_absolute() and left.is_dir() and right.is_dir()
+                and left.samefile(right))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def _token_age(token: dict) -> float | None:
     try:
         set_at = datetime.datetime.fromisoformat(str(token.get("set_at")))
@@ -344,7 +365,7 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
     age = _token_age(token) if token else None
     binding = approval_binding(project_root, session_id, plan)
     if (token is None or age is None or age < 0 or age > TOKEN_TTL_SECONDS
-            or binding is None or token.get("plan_binding") != binding):
+            or binding is None or not _approval_matches(token.get("plan_binding"), binding)):
         return {
             "ok": False,
             "reason": "not_approved",

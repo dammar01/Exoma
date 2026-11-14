@@ -225,6 +225,24 @@ Session detachment does not
 escape arbitrary cgroup/container termination. Neither platform changes host job limits.
 If no independent runtime can be proved, finish/exit Exoma and use its manager manually.
 
+POSIX guardian cleanup receipts retain the authoritative `cleanup_confirmed`, `exit_code`
+and `error` fields. Optional `diagnostics` (schema version 1) distinguish the original
+guardian failure, ordered cleanup failures, observed child return code and reap outcome,
+execution-release request, observed exit and group signals attempted. A synthetic guardian
+exit or an exit after cleanup signals does not attest a normal package-manager exit.
+An ancestry rejection includes selected baseline/current PID, generation and parent records
+from the classifier's existing observations, with native-query/fallback status. Diagnostics
+never authorize cleanup, recovery or a later stage, and their failure cannot replace the
+original error. Legacy receipts remain accepted under the same cleanup rules.
+
+Diagnostic selection is limited to 8 rejected PIDs, 32 process records, 8 parent hops per
+snapshot and 256 characters per new string. The whole serialized receipt, including its
+newline, is limited to 7,168 encoded bytes, below the parent's 8,192-character read limit;
+detail is removed deterministically with explicit omission/truncation markers. Only
+allowlisted reason/type/errno metadata is added for errors: no arbitrary exception payload,
+argv, environment, tokens, image paths or full process inventory. These limits apply to
+the new diagnostics; the existing bounded legacy `error` field retains its meaning.
+
 `--check` queries public metadata with a timeout/size bound, independently of workspace
 preflight. It reports installed distribution provenance, checkout shadowing and numeric
 stable-release comparison. Other version formats are unknown. Non-yanked unsupported
@@ -1201,6 +1219,7 @@ exoma upgrade --work-dir /path/to/target-app --pretty
 `upgrade`:
 
 - refuses to run while a delegated job is active;
+- refuses before migration when cleanup is unconfirmed or the job/lock store cannot establish admission; invalid JSON, non-object records and unreadable records are not an empty job list;
 - regenerates the runner scripts and repoints `runtime.python`/`runtime.package_root` at the running build;
 - takes over a workspace agent-workflow wrote: `runtime.agent_workflow_path`, `main_py_path`, `check_py_path` and `tool_dir` are removed, and the scripts call `-m exoma` instead of a checkout's `main.py`;
 - migrates the v3.4.2 keys (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) once, moving their values;
@@ -1656,6 +1675,19 @@ the bundles as `<id>.review.md`: the first export writes it from a template and 
 
 With `policies.graph_leads_enabled: true`, the runtime reads `graphify-out/graph.json` **directly** without calling the Graphify CLI or MCP. It ranks at most 12 candidate files by keyword and weighted dependency degree, carries at most four communities, then injects them as **starting points, not evidence**.
 
+Graph source locations are parsed as Windows or POSIX paths independently of the host.
+Relative paths use the project root, not cwd. Absolute paths must belong to that root;
+a Windows drive path can also map to its matching WSL `/mnt/<drive>/...` project root,
+with the project path's case preserved on POSIX. A case-only alias is accepted only
+when the filesystem confirms that both project roots are the same directory; a missing,
+unreadable or different root cannot authorize that mapping.
+Every emitted location is an existing file inside the resolved project root, expressed
+as a relative POSIX path. Foreign roots, unsupported UNC/device/URI mappings, traversal,
+missing files and symlink escapes are omitted rather than guessed from a basename or
+matching suffix. A graph without usable locations legitimately produces no leads.
+The same mapping governs graph provenance, so a rejected location cannot acquire a
+local file's anchor merely because the filenames match.
+
 - `explore`/`plan`/`analyze` receive the full leads and communities for fan-out;
 - `verify` receives a compact shortlist of at most six files without communities;
 - a graph older than the sources (`.py`, `.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`, `.php`, `.go`, `.rs`, `.java`, `.rb`) is still used, but the prompt carries a stale warning;
@@ -1999,12 +2031,19 @@ reuse, a snapshot sees content as Git stores it, so an edit Git's conversions un
 a normalized file) is not a change.
 
 **Approval binding.** An `execute.token` carries a `plan_binding`: the recorded plan's revision,
-its `files` scope and the runtime session. `execute-begin` opens an execution only when that
-binding equals the current plan's, so a token from before a `plan-record` (an identical document
-included), from another session, or without a binding cannot open it. The token is claimed by an
+its `files` scope and the runtime session. Before claiming the token, `execute-begin` requires
+every non-path binding field to equal the current plan's exactly. Both absolute runtime paths
+must name directories that the filesystem proves are the same (`samefile`), including when
+their text is identical. This accepts filesystem aliases such as `work`/`Work` on a Windows
+mount in WSL, without case-folding distinct POSIX directories. Missing, malformed, unreadable,
+non-directory or unverifiable locations are refused without consuming the token. A token from
+before a `plan-record` (an identical document included), from another runtime session, or
+without a binding cannot open it. The token is claimed by an
 atomic rename, so one `-y` opens one execution even when two `execute-begin` calls race. Plan and
 execution writes share one per-session transaction lock with the hooks; contention past its bound
 returns `runtime_lock` instead of a partial write.
+The claimed token is reread exactly and the current plan binding is checked exactly again;
+alias admission does not relax either transaction race check or the approval's 15-minute TTL.
 
 `execute.token` and `commit.marker` are written by the `intent-gate-set` hook only for a prompt
 the user wrote: `/.execute -y` (typed or as the expanded slash command) and a prompt asking to
@@ -2312,13 +2351,15 @@ Gates run by the free path, in order:
 python tools/maintain/stamp_version.py --check
 python tools/maintain/gen_manifest.py --check
 python tests/run.py --only deps
-python tests/run.py --keep-going --record .
+python tests/run.py --keep-going --traceback --record .
 python tools/e2e/e2e.py
 ```
 
 `--only deps` stands as its own step, not only inside the suite: it is the gate that
 decides whether the absence of a lockfile is still correct, and a reader scanning the step list must
-be able to see it applied. `--keep-going` so that one failure does not hide the rest;
+be able to see it applied. `--keep-going` continues between selected suites; the default
+selects one sequential `scenario`, so its first assertion still stops later checks.
+`--traceback` preserves the original exception chain behind an admission error;
 `--record .` writes the results to the workspace quality stream, so `--command report` can
 show the pass rate over time instead of only the last run. `e2e.py` without `--full`:
 zero provider CLIs called, zero quota burned — which is why it may run on every push.
@@ -2348,6 +2389,15 @@ and the generated `inspect.sh`. A second clean venv installs the sdist and check
 bundle presence and version. Only Ubuntu with Python `3.13` uploads `dist/` as the publish artifact.
 These smoke checks do not run the full source suite against installed artifacts or invoke
 real provider CLIs. `ci.yml` also accepts `workflow_call`.
+
+The native self-update handoff gate rejects `cleanup_pending` immediately with diagnostic
+state and bounded operation-log tails; it does not treat uncertain cleanup as completion.
+A polling timeout includes the last observed phase, heartbeat, stages and cleanup error,
+the state path, and the latest read error. A positive handoff result requires verified
+worker independence as well as the A-to-B transition and separate no-op. Contained
+fixtures remain a different gate and cannot attest independence. Native operation artifacts
+are needed to diagnose Windows membership refusals and macOS stalls; source checks or WSL
+results do not replace those platform results.
 
 `.github/workflows/publish.yml` runs on a pushed `v*` tag: it calls `ci.yml`, refuses a tag
 whose name does not match the built wheel's version, and uploads that same artifact to PyPI
