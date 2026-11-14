@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import time
 import urllib.request
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,9 +23,17 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _test_self_update() -> None:
-    if os.environ.get("EXOMA_UPDATE_HANDOFF_SMOKE") == "1":
+    handoff = os.environ.get("EXOMA_UPDATE_HANDOFF_SMOKE") == "1"
+    historical = os.environ.get("EXOMA_UPDATE_UPGRADE_SMOKE") == "1"
+    if handoff and historical:
+        raise ValueError("historical upgrade smoke and strict handoff are separate modes")
+    if handoff:
         _check_handoff_wheel_upgrade()
         return
+    if historical:
+        _check_installed_upgrade()
+        return
+    _check_update_dispatch()
     _check_release_queries()
     _check_artifact_reporting()
     _check_handshake_reads()
@@ -35,11 +44,46 @@ def _test_self_update() -> None:
     _check_guardian_cleanup_attempts()
     _check_ready_failure_context()
     _check_worker_protocol()
-    _check_synchronous_update()
+    _check_update_admission()
     _check_update_deadlines_and_interruption()
+    _check_workflow_refresh()
 
 
-def _check_synchronous_update() -> None:
+def _check_update_dispatch() -> None:
+    """Source checks never start either opt-in wheel/network gate."""
+    module = sys.modules[__name__]
+    helpers = [name for name in vars(module) if name.startswith("_check_")]
+    for handoff, historical in ((False, False), (True, False), (False, True), (True, True)):
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, {
+                "EXOMA_UPDATE_HANDOFF_SMOKE": "1" if handoff else "0",
+                "EXOMA_UPDATE_UPGRADE_SMOKE": "1" if historical else "0",
+            }))
+            checks = {name: stack.enter_context(patch.object(module, name)) for name in helpers}
+            network = stack.enter_context(patch.object(urllib.request, "urlopen"))
+            if handoff and historical:
+                try:
+                    _test_self_update()
+                except ValueError as exc:
+                    assert_true("separate modes" in str(exc), "ambiguous modes explain the refusal")
+                else:
+                    raise AssertionError("ambiguous artifact modes were accepted")
+                assert_true(not any(check.called for check in checks.values()),
+                            "ambiguous modes refuse before any check or installation")
+            else:
+                _test_self_update()
+                assert_true(checks["_check_handoff_wheel_upgrade"].call_count == int(handoff)
+                            and checks["_check_installed_upgrade"].call_count == int(historical),
+                            "each opt-in mode invokes exactly its selected gate")
+                if handoff or historical:
+                    assert_true(sum(check.call_count for check in checks.values()) == 1,
+                                "an artifact mode does not also execute source checks")
+                else:
+                    checks["_check_workflow_refresh"].assert_called_once_with()
+            network.assert_not_called()
+
+
+def _check_update_admission() -> None:
     """Frontend admission/manager tests; stages are tested through the shared worker."""
     with tempfile.TemporaryDirectory(prefix="exoma-update-") as tmp:
         root = Path(tmp).resolve()
@@ -270,8 +314,8 @@ def _assert_migrated_user_data(run, home: Path, project: Path) -> None:
                 "the migrated runner enters the new preparation flow with preserved policy and marker")
 
 
-def _check_update_migrates_workflow() -> None:
-    """Simulate only package installation; run the actual fresh installer/check in a sandbox."""
+def _check_workflow_refresh() -> None:
+    """Refresh real installed artifacts at the same version, preserving user data."""
     with tempfile.TemporaryDirectory(prefix="exoma-update-migration-") as tmp:
         root = Path(tmp).resolve()
         home, project = root / "home", root / "project"
@@ -290,14 +334,6 @@ def _check_update_migrates_workflow() -> None:
             assert_true(code == 0, f"migration command exited zero: {argv}\n{out}\n{err}")
             return out
 
-        calls = []
-
-        def package_only_mock(argv, timeout, **kwargs):
-            calls.append(argv)
-            if argv[1:4] == ["-m", "pip", "install"]:
-                return 0, "package installation simulated", ""
-            return real_run(argv, timeout, **kwargs)
-
         with patch.dict(os.environ, env, clear=True):
             run([sys.executable, "-m", "exoma", "install", "claude", "--provider", "opencode", "--no-input"])
             run([sys.executable, "-m", "exoma", "init", "--work-dir", project, "--host", "claude"])
@@ -311,23 +347,18 @@ def _check_update_migrates_workflow() -> None:
                                     encoding="utf-8")
             for path in artifacts[1:]:
                 path.write_text("stale artifact\n", encoding="utf-8")
-            with patch.object(self_update.Path, "cwd", return_value=project), \
-                    patch.object(self_update, "run_bounded", side_effect=package_only_mock):
-                assert_true(self_update.main(["--manager", "pip"]) == 0,
-                            "update refreshes real installed artifacts after the simulated package stage")
-            assert_true(len(calls) == 3 and "--no-input" in calls[1] and "--check" in calls[2],
-                        "migration uses package, real install, and real check in order")
+            run([sys.executable, "-m", "exoma", "install", "--no-input"])
+            run([sys.executable, "-m", "exoma", "install", "--check"])
             # Marker splicing may normalize whitespace outside the block; check owned
             # instruction content through install --check and user prose separately.
             assert_true("stale owned instructions" not in instructions.read_text(encoding="utf-8")
                         and all(path.read_bytes() == expected[path] for path in artifacts[1:]),
-                        "update replaces stale instructions, skills, hooks and runner even at the same version")
+                        "refresh replaces stale instructions, skills, hooks and runner even at the same version")
             _assert_migrated_user_data(run, home, project)
             snapshot = {path: path.read_bytes() for path in [*artifacts, home / ".claude/settings.json",
                                                             project / ".workflow/config.json"]}
-            with patch.object(self_update.Path, "cwd", return_value=project), \
-                    patch.object(self_update, "run_bounded", side_effect=package_only_mock):
-                assert_true(self_update.main(["--manager", "pip"]) == 0, "repeat update completes refresh/check")
+            run([sys.executable, "-m", "exoma", "install", "--no-input"])
+            run([sys.executable, "-m", "exoma", "install", "--check"])
             assert_true(all(path.read_bytes() == content for path, content in snapshot.items()),
                         "repeated migration leaves current artifacts and user settings unchanged")
             _assert_migrated_user_data(run, home, project)
@@ -413,21 +444,23 @@ def _check_installed_upgrade() -> None:
             _assert_migrated_user_data(run, home, project)
             second_result = subprocess.run([str(exe), "update", "--timeout", "60"], cwd=project,
                                            capture_output=True, text=True, timeout=90, **no_console())
-            assert_true(second_result.returncode == 0, second_result.stdout + second_result.stderr)
-            if os.name == "nt":
-                _poll_handoff(root / "exoma-state", 180)
-            else:
-                assert_true("[UPDATE] complete" in second_result.stdout, "synchronous candidate completed")
+            assert_true(second_result.returncode == 3 and "accepted; not complete" in second_result.stdout,
+                        second_result.stdout + second_result.stderr)
+            second_state, _ = _poll_handoff(root / "exoma-state", 180)
+            assert_true(second_state["version_before"] == second_state["version_after"] == TOOL_VERSION,
+                        "candidate no-op reaches succeeded after asynchronous acceptance")
             run([exe, "install", "--check"])
             _assert_migrated_user_data(run, home, project)
             installed_python = root / "tools/exoma" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             smoke = run([installed_python, "-c", "import exoma, sys; print(exoma.__file__); print(sys.executable)"])
             assert_true(str(root / "tools/exoma") in smoke, "imports and interpreter come from the isolated tool")
         report = {
+            "kind": "exoma-update-historical", "schema_version": 1,
             "baseline": "1.0.1", "candidate": TOOL_VERSION, "uv": uv_version,
             "python": sys.version.split()[0], "platform": sys.platform,
             "old_updater_exit": old_code, "manual_recovery_checked": bool(old_code),
-            "new_updater_exit": 0, "install_check_exit": 0,
+            "new_updater_exit": second_result.returncode, "new_updater_phase": second_state["phase"],
+            "install_check_exit": 0,
             "user_data_preserved": True, "post_upgrade_prepare_checked": True,
             "baseline_sha256": baseline_hash,
             "candidate_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
@@ -437,7 +470,7 @@ def _check_installed_upgrade() -> None:
             Path(report_path).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(f"UPGRADE SMOKE: 1.0.1 -> {TOOL_VERSION}; old updater exit={old_code}; "
               f"manual recovery={'required and checked' if old_code else 'not needed'}; "
-              f"new updater/check=exit 0; {uv_version}; "
+              f"new updater=accepted exit 3 then succeeded; check=exit 0; {uv_version}; "
               f"baseline SHA256={baseline_hash}; candidate SHA256={hashlib.sha256(candidate.read_bytes()).hexdigest()}")
 
 
@@ -1540,10 +1573,25 @@ def _check_restricted_worker_job():
 
 
 def _handoff_independence_verified(platform, contained, state):
-    return (platform in {"win32", "linux", "darwin"} and not contained and isinstance(state, dict)
-            and state.get("phase") == "succeeded" and state.get("cleanup_confirmed") is True
-            and state.get("callers_exited_at", float("inf")) <= state.get("stages", {}).get("package", {}).get("started_at", -1)
-            and (platform != "win32" or state.get("host_job", {}).get("in_job") is False))
+    if platform not in {"win32", "linux", "darwin"} or contained or not isinstance(state, dict):
+        return False
+    stages = state.get("stages")
+    package = stages.get("package") if isinstance(stages, dict) else None
+    if not isinstance(package, dict):
+        return False
+    exited, started = state.get("callers_exited_at"), package.get("started_at")
+    for timestamp in (exited, started):
+        if not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool):
+            return False
+        try:
+            if not math.isfinite(timestamp):
+                return False
+        except OverflowError:
+            return False
+    host_job = state.get("host_job")
+    return (state.get("phase") == "succeeded" and state.get("cleanup_confirmed") is True
+            and exited <= started and (platform != "win32" or
+                                      isinstance(host_job, dict) and host_job.get("in_job") is False))
 
 
 @contextmanager
@@ -1765,6 +1813,8 @@ def _check_handoff_wheel_upgrade() -> None:
         run([interpreter, "-m", "exoma", "update", "--timeout", "120", "--manager", manager], accepted=True)
         second, _ = _poll_handoff(root / "state", 300)
         assert_true(second["version_before"] == second["version_after"] == versions[1], "explicit no-op case")
+        _assert_migrated_user_data(run, home, project)
+        run([exe, "install", "--check"])
         _mark_handoff_passed(report, contained)
         label = "CONTAINED WHEEL (not independence acceptance)" if contained else (
             "SHARED HANDOFF WHEEL")

@@ -151,15 +151,58 @@ def _test_native_update_gate():
         assert_true(Path(resolved).is_absolute() and resolved.startswith(str(Path(other).resolve())),
                     "a relative interpreter path is resolved against the caller's cwd before probing and launching")
 
-    # The validator's acceptance rule must stay identical to the one the producing test applies.
+    # Assert independent outcomes, not only parity: two predicates can agree and both be wrong.
     proof = {"phase": "succeeded", "cleanup_confirmed": True, "callers_exited_at": 1,
              "stages": {"package": {"started_at": 2}}, "host_job": {"in_job": False}}
-    variants = (proof, {**proof, "phase": "failed"}, {**proof, "cleanup_confirmed": False},
-                {**proof, "callers_exited_at": 3}, {**proof, "host_job": {"in_job": True}}, {"phase": "succeeded"})
+    # Each row names the expected POSIX and Windows result explicitly.
+    variants = [
+        ("finite integer timestamps", proof, True, True),
+        ("finite float timestamps", {**proof, "callers_exited_at": 1.5,
+                                     "stages": {"package": {"started_at": 2.5}}}, True, True),
+        ("equal timestamps", {**proof, "callers_exited_at": 2}, True, True),
+        ("failed phase", {**proof, "phase": "failed"}, False, False),
+        ("pending cleanup", {**proof, "phase": "cleanup_pending"}, False, False),
+        ("unconfirmed cleanup", {**proof, "cleanup_confirmed": False}, False, False),
+        ("numeric cleanup flag", {**proof, "cleanup_confirmed": 1}, False, False),
+        ("package before caller exit", {**proof, "callers_exited_at": 3}, False, False),
+        ("inherited Windows job", {**proof, "host_job": {"in_job": True}}, True, False),
+        ("numeric job flag", {**proof, "host_job": {"in_job": 0}}, True, False),
+        ("null state", None, False, False),
+        ("list state", [], False, False),
+        ("missing evidence", {"phase": "succeeded"}, False, False),
+        ("missing caller exit", {key: value for key, value in proof.items()
+                                 if key != "callers_exited_at"}, False, False),
+        ("missing package start", {**proof, "stages": {"package": {}}}, False, False),
+    ]
+    for label, value in (("null", None), ("string", "1"), ("true", True), ("false", False),
+                         ("NaN", float("nan")), ("infinity", float("inf")),
+                         ("negative infinity", float("-inf")), ("oversized integer", 10 ** 400)):
+        variants.extend((
+            (label + " caller exit", {**proof, "callers_exited_at": value}, False, False),
+            (label + " package start", {**proof, "stages": {"package": {"started_at": value}}}, False, False),
+        ))
+    variants.append(("both timestamps infinite", {**proof, "callers_exited_at": float("inf"),
+                                                  "stages": {"package": {"started_at": float("inf")}}}, False, False))
+    for label, value in (("null", None), ("boolean", True), ("string", "bad"), ("list", [])):
+        variants.extend((
+            (label + " stages", {**proof, "stages": value}, False, False),
+            (label + " package", {**proof, "stages": {"package": value}}, False, False),
+            (label + " host job", {**proof, "host_job": value}, True, False),
+        ))
     for platform in gate.PLATFORMS:
-        for state in variants:
-            assert_true(gate._independent(platform, state) == _handoff_independence_verified(platform, False, state),
-                        f"validator and producer agree on {platform} {state}")
+        for label, state, posix, windows in variants:
+            expected = windows if platform == "win32" else posix
+            assert_true(_handoff_independence_verified(platform, False, state) is expected,
+                        f"producer: {platform} {label} must yield {expected}")
+            assert_true(gate._independent(platform, state) is expected,
+                        f"collector: {platform} {label} must yield {expected}")
+            report = _report(gate, platform, "3.11", "uv", state=state)
+            assert_true((not gate.check_report(report, SHA, platform)) is expected,
+                        f"receipt: {platform} {label} must qualify only with valid evidence")
+            assert_true(_handoff_independence_verified(platform, True, state) is False,
+                        f"contained execution never proves independence: {platform} {label}")
+    assert_true(_handoff_independence_verified("unknown", False, proof) is False,
+                "an unsupported platform never attests native independence")
 
     # Interpreter and checkout preconditions, and one full matrix with the cell command replaced.
     wrong = gate.probe_interpreter(sys.executable, "2.7")

@@ -12,6 +12,7 @@ two files that nothing forces to agree. This check is that force.
 """
 
 import ast
+import textwrap
 from pathlib import Path
 
 from tests.checks.support import assert_true
@@ -63,11 +64,101 @@ def _calls_inside(path: Path, function: str) -> set[str]:
         f"{path.name} defines no top-level `{function}()` — the entry point this check "
         "reads was renamed or moved, so it can no longer prove anything",
     )
-    return {
-        node.func.id
-        for node in ast.walk(body)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
+    return _function_calls(body)
+
+
+def _function_calls(function) -> set[str]:
+    """Follow direct calls, including invoked local functions, without counting dead bodies."""
+    class Calls(ast.NodeVisitor):
+        def __init__(self):
+            self.names, self.local = set(), {}
+
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name):
+                self.names.add(node.func.id)
+            self.generic_visit(node)
+
+        def visit_FunctionDef(self, node):
+            self.local[node.name] = node
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, node):
+            pass
+
+        def visit_Lambda(self, node):
+            pass
+
+    calls = Calls()
+    for statement in function.body:
+        calls.visit(statement)
+    visited = set()
+    while pending := (calls.names & calls.local.keys()) - visited:
+        for name in pending:
+            visited.add(name)
+            calls.names.update(_function_calls(calls.local[name]))
+    return calls.names - calls.local.keys()
+
+
+def _unreachable_check_helpers(tree, entrypoint) -> set[str]:
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert_true(entrypoint in functions, f"helper guard entrypoint {entrypoint} exists")
+    reached, pending = set(), {entrypoint}
+    while pending:
+        name = pending.pop()
+        if name in reached or name not in functions:
+            continue
+        reached.add(name)
+        pending.update(_function_calls(functions[name]) - reached)
+    return {name for name in functions if name.startswith("_check_")} - reached
+
+
+def _check_self_update_helpers() -> None:
+    # A definition, or a call inside another orphan, is not an execution path.
+    fixtures = (
+        ("direct", """
+            def _test_self_update(): _check_leaf()
+            def _check_leaf(): pass
+        """, set()),
+        ("transitive", """
+            def _test_self_update(): setup()
+            def setup(): _check_leaf()
+            def _check_leaf(): pass
+        """, set()),
+        ("orphan caller", """
+            def _test_self_update(): pass
+            def unused(): _check_leaf()
+            def _check_leaf(): pass
+        """, {"_check_leaf"}),
+        ("uncalled nested body", """
+            def _test_self_update():
+                def unused(): _check_leaf()
+            def _check_leaf(): pass
+        """, {"_check_leaf"}),
+        ("called nested body", """
+            def _test_self_update():
+                def run(): _check_leaf()
+                run()
+            def _check_leaf(): pass
+        """, set()),
+        ("uncalled lambda", """
+            def _test_self_update():
+                unused = lambda: _check_leaf()
+            def _check_leaf(): pass
+        """, {"_check_leaf"}),
+        ("unreachable cycle", """
+            def _test_self_update(): pass
+            def _check_first(): _check_second()
+            def _check_second(): _check_first()
+        """, {"_check_first", "_check_second"}),
+    )
+    for label, source, expected in fixtures:
+        actual = _unreachable_check_helpers(ast.parse(textwrap.dedent(source)), "_test_self_update")
+        assert_true(actual == expected, f"{label}: orphan helpers {actual}, expected {expected}")
+    source = CHECKS_DIR / "self_update.py"
+    orphaned = _unreachable_check_helpers(ast.parse(source.read_text(encoding="utf-8")), "_test_self_update")
+    assert_true(not orphaned, "self-update helpers unreachable from their entrypoint: " + ", ".join(sorted(orphaned)))
 
 
 def _registered_in_suites() -> set[str]:
@@ -93,6 +184,7 @@ def _registered_in_suites() -> set[str]:
 
 
 def _test_every_check_is_registered() -> None:
+    _check_self_update_helpers()
     defined = _defined_checks()
     assert_true(
         defined,
