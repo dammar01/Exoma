@@ -90,7 +90,18 @@ accident.
    do not replace the artifact gate. The gate builds disposable A/B wheels containing the
    candidate updater, polls journal files after A exits, and requires B plus refresh/check
    and preserved user data. Manual recovery or a package no-op cannot satisfy it. CI runs
-   this gate on Linux/macOS for both CI Python versions and uv/pipx/pip venvs; operation logs are preserved with the result artifact. On GitHub-hosted Windows CI skips only this handoff step (the runner keeps the helper inside an outer job); setting the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER` to supported Windows runner labels re-enables it there.
+   this strict gate on Linux/macOS for both CI Python versions and uv/pipx/pip venvs.
+   Every hosted Windows cell instead runs `--update-artifacts contained`: a real A-to-B
+   transition with fixture-only launcher/worker changes, explicitly without independence
+   acceptance. No dist cell skips its transition. CI validates the report's SHA, clean
+   checkout, mode, Python/manager and completed transition/no-op; a missing report fails.
+   Report and bounded logs are preserved in mode-labelled `update-handoff-*` or
+   `update-contained-*` artifacts. Source refusal/cleanup tests still run separately.
+   Setting the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER` to compatible
+   Windows runner labels selects strict handoff there instead, for example
+   `["self-hosted","Windows","X64","exoma-independent"]`. Matching labels alone do not
+   establish independence: the runner must actually pass production admission and the
+   report must prove that the worker is outside inherited jobs.
    **The handoff on a native Windows host (all three managers, both Python versions) is a
    mandatory release-staging gate**: run the command above there before tagging and record
    the result. `publish.yml` cannot enforce it, so it depends on this step being followed.
@@ -105,9 +116,16 @@ accident.
    exits nonzero if any cell is missing or does not qualify. Keep that directory with the
    release record; `native_update_gate.py validate <dir> --commit <sha>` rechecks it later.
    `--update-artifacts contained` exercises the real package/refresh/check transition in
-   disposable fixtures under a restrictive test supervisor. It relaxes only that fixture's
-   inherited-job assertion; it does not verify independent-worker survival and cannot
-   replace the `handoff` release gate.
+   disposable fixtures under a restrictive test supervisor. It relaxes only the copied
+   fixture's worker admission and launcher's breakaway request. Production guards are
+   unchanged. Its report has `mode=contained`, `independent_worker_verified=false` and
+   `release_acceptance=false`; it cannot replace the `handoff` release gate. A strict CI
+   cell is eligible evidence for that cell, not proof that every required native cell ran.
+   `native_update_gate.py check-cell <report> --commit <sha> --mode <strict|contained>
+   --python <3.11|3.13> --manager <uv|pipx|pip>` validates one CI cell, while `validate`
+   continues to require a complete strict native matrix. A hosted CI pass never fills
+   the missing Windows strict receipts. Retest the exact final commit after any edits;
+   reports from the earlier green SHA are not evidence for the new candidate.
 
    Then **real use**: the maintainer runs the changed commands on an actual project and
    finds no safety problem — no write the guard should have refused, no credential in an

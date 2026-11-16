@@ -22,7 +22,9 @@ def _load():
 
 def _report(gate, platform, python, manager, **override):
     state = {"phase": "succeeded", "cleanup_confirmed": True, "callers_exited_at": 1,
-             "stages": {"package": {"started_at": 2}}}
+             "version_before": "1.1.1.post1", "version_after": "1.1.1.post2",
+             "stages": {name: {"started_at": index + 2, "exit_code": 0}
+                        for index, name in enumerate(("package", "probe", "install", "check"))}}
     if platform == "win32":
         state["host_job"] = {"in_job": False}
     report = {"kind": gate.KIND, "schema_version": gate.SCHEMA_VERSION, "mode": "strict", "commit": SHA,
@@ -40,8 +42,52 @@ def _write_all(gate, directory, platform, **override):
                 json.dumps(_report(gate, platform, python, manager, **override)), encoding="utf-8")
 
 
+def _check_transition_cells(gate):
+    strict = _report(gate, sys.platform, "3.11", "uv", transition="real_a_to_b", release_acceptance=True)
+    contained = {**strict, "mode": "contained", "independent_worker_verified": False, "release_acceptance": False}
+    for mode, report in (("strict", strict), ("contained", contained)):
+        assert_true(gate.check_transition_report(report, SHA, sys.platform, mode, "3.11", "uv") == [],
+                    mode + " cell qualifies within its explicit scope")
+        for name in ("package", "probe", "install", "check"):
+            for replacement in (None, {}, {"exit_code": 1}, {"exit_code": False}, {"exit_code": 0.0}):
+                stages = dict(report["state"]["stages"])
+                if replacement is None:
+                    stages.pop(name)
+                else:
+                    stages[name] = replacement
+                inconsistent = {**report, "state": {**report["state"], "stages": stages}}
+                assert_true(gate.check_transition_report(inconsistent, SHA, sys.platform, mode, "3.11", "uv"),
+                            f"{mode} refuses missing/failed/invalid {name} despite positive producer flags")
+                if mode == "strict":
+                    assert_true(gate.check_report(inconsistent, SHA, sys.platform),
+                                "strict native matrix also checks stage results")
+    for changes in ({"commit": "b" * 40}, {"commit_dirty": True}, {"mode": "strict"},
+                    {"independent_worker_verified": True}, {"release_acceptance": True},
+                    {"no_op_verified": False}, {"actual_version_transition": False}, {"passed": False},
+                    {"manual_recovery": True}, {"transition": None}, {"manager": "pip"},
+                    {"python_version": "3.13.1"}, {"state": {"phase": "cleanup_pending"}}):
+        assert_true(gate.check_transition_report({**contained, **changes}, SHA, sys.platform,
+                                                "contained", "3.11", "uv"),
+                    "contained evidence refuses wrong/missing proof: " + str(changes))
+    assert_true(gate.check_report(contained, SHA, sys.platform), "contained CI success is never strict acceptance")
+    assert_true(gate.check_transition_report(contained, SHA, sys.platform, "strict", "3.11", "uv"),
+                "strict CI cannot be satisfied by contained evidence")
+    assert_true(gate.check_transition_report({**contained, "state": {**contained["state"],
+                    "version_after": contained["state"]["version_before"]}}, SHA, sys.platform,
+                    "contained", "3.11", "uv"), "a no-op cannot be labelled as a real transition")
+    with tempfile.TemporaryDirectory(prefix="transition-cell-") as tmp:
+        path = Path(tmp) / "report.json"
+        args = ["check-cell", str(path), "--commit", SHA, "--mode", "contained", "--python", "3.11", "--manager", "uv"]
+        assert_true(gate.main(args) == 1, "missing report fails the CI cell")
+        path.write_text("{broken", encoding="utf-8")
+        assert_true(gate.main(args) == 1, "unreadable report fails the CI cell")
+        path.write_text(json.dumps(contained), encoding="utf-8")
+        assert_true(gate.main(args) == 0, "CLI accepts correctly scoped contained coverage")
+
+
 def _test_native_update_gate():
     gate = _load()
+    _check_transition_cells(gate)
     from tests.checks.self_update import _handoff_independence_verified
 
     with tempfile.TemporaryDirectory(prefix="native-gate-") as tmp:
@@ -153,12 +199,14 @@ def _test_native_update_gate():
 
     # Assert independent outcomes, not only parity: two predicates can agree and both be wrong.
     proof = {"phase": "succeeded", "cleanup_confirmed": True, "callers_exited_at": 1,
-             "stages": {"package": {"started_at": 2}}, "host_job": {"in_job": False}}
+             "stages": {name: {"started_at": index + 2, "exit_code": 0}
+                        for index, name in enumerate(("package", "probe", "install", "check"))},
+             "host_job": {"in_job": False}}
     # Each row names the expected POSIX and Windows result explicitly.
     variants = [
         ("finite integer timestamps", proof, True, True),
         ("finite float timestamps", {**proof, "callers_exited_at": 1.5,
-                                     "stages": {"package": {"started_at": 2.5}}}, True, True),
+                                     "stages": {**proof["stages"], "package": {"started_at": 2.5, "exit_code": 0}}}, True, True),
         ("equal timestamps", {**proof, "callers_exited_at": 2}, True, True),
         ("failed phase", {**proof, "phase": "failed"}, False, False),
         ("pending cleanup", {**proof, "phase": "cleanup_pending"}, False, False),

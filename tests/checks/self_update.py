@@ -36,6 +36,7 @@ def _test_self_update() -> None:
     _check_update_dispatch()
     _check_release_queries()
     _check_artifact_reporting()
+    _check_contained_fixture_isolation()
     _check_handshake_reads()
     _check_handoff_uncertainty()
     _check_handoff_polling()
@@ -48,8 +49,72 @@ def _test_self_update() -> None:
     _check_ready_failure_context()
     _check_worker_protocol()
     _check_update_admission()
+    _check_workspace_admission_errors()
     _check_update_deadlines_and_interruption()
     _check_workflow_refresh()
+
+
+def _check_workspace_admission_errors() -> None:
+    from exoma import cli
+    from exoma.core.jobs.job_manager import JobManager
+    from exoma.utils import osutil
+
+    with tempfile.TemporaryDirectory(prefix="update-admission-errors-") as tmp:
+        root = Path(tmp)
+        project = root / "workspace"
+        (project / ".workflow").mkdir(parents=True)
+        (project / ".workflow/config.json").write_text("{}", encoding="utf-8")
+        manager = JobManager(root / "jobs")
+        record = manager.job_dir / "job_corrupt.json"
+        snapshot = osutil.open_snapshot
+        for label, raw in (("array", "[]"), ("null", "null"), ("invalid-json", "{broken"),
+                           ("unreadable", "{}")):
+            record.write_text(raw, encoding="utf-8")
+
+            def read(path, *args, **kwargs):
+                if label == "unreadable" and Path(path) == record:
+                    raise PermissionError("fixture record unreadable")
+                return snapshot(path, *args, **kwargs)
+
+            for argv in ([], ["--manager", "pip"]):
+                output = io.StringIO()
+                with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
+                     patch.object(self_update.Path, "cwd", return_value=project), \
+                     patch.object(self_update, "_package_command") as package, \
+                     patch.object(self_update, "_handoff") as handoff, \
+                     patch.object(osutil, "open_snapshot", side_effect=read), \
+                     redirect_stdout(output), redirect_stderr(output):
+                    code = self_update.main(argv)
+                    if not argv:
+                        for spelling in (["update"], ["--command", "update"]):
+                            try:
+                                cli.main(spelling)
+                            except SystemExit as exc:
+                                assert_true(exc.code == 1, "both public update spellings refuse cleanly")
+                            else:
+                                raise AssertionError("public updater must return a refusal exit status")
+                assert_true(code == 1 and "workspace admission refused" in output.getvalue()
+                            and "package unchanged" in output.getvalue(), label + " gives a controlled refusal")
+                package.assert_not_called()
+                handoff.assert_not_called()
+        record.unlink()
+        with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
+             patch.object(self_update.Path, "cwd", return_value=project), \
+             patch.object(self_update, "_package_command", return_value=("pip", ["python", "-m", "pip"])), \
+             patch.object(self_update, "_handoff", return_value=3):
+            assert_true(self_update.main([]) == 3, "valid workspace still reaches handoff")
+        job = manager.create_job("analyze", "orphan", "frontend-orphan", str(project), None)
+        job.update(created_at="2020-01-01T00:00:00+00:00", reservation_owner_pid=42424242)
+        manager._save(job)
+        with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
+             patch.object(osutil, "process_state", return_value="dead"), \
+             patch.object(self_update.install_method, "update_descriptor", side_effect=ValueError("fixture stops after preflight")) as descriptor, \
+             patch.object(self_update.subprocess, "Popen") as spawn:
+            assert_true(self_update._handoff("pip", [sys.executable, "-m", "pip"], project, 1) == 1,
+                        "orphan advisory preflight reaches descriptor selection")
+        descriptor.assert_called_once_with()
+        spawn.assert_not_called()
+        assert_true(manager.get_job(job["job_id"])["status"] == "pending", "advisory preflight leaves retirement to reservation")
 
 
 def _check_update_dispatch() -> None:
@@ -1842,7 +1907,8 @@ def _artifact_evidence(report_path):
                 "mode": "contained" if os.environ.get("EXOMA_UPDATE_CONTAINED_SMOKE") == "1" else "strict",
                 "passed": False, "platform": sys.platform, "machine": host.machine(),
                 "python_version": host.python_version(),
-                "actual_version_transition": False, "independent_worker_verified": False, "no_op_verified": False}
+                "actual_version_transition": False, "independent_worker_verified": False, "no_op_verified": False,
+                "transition": None, "release_acceptance": False}
     failed = False
     try:
         yield evidence
@@ -1873,7 +1939,40 @@ def _checkout_identity():
 def _mark_handoff_passed(report, contained):
     assert_true(contained or report.get("independent_worker_verified") is True,
                 "handoff acceptance requires verified worker independence")
-    report.update(passed=True, no_op_verified=True)
+    assert_true(not contained or report.get("independent_worker_verified") is False,
+                "contained coverage never attests independence")
+    report.update(passed=True, no_op_verified=True, release_acceptance=not contained)
+
+
+def _prepare_contained_fixture(source):
+    """Relax only disposable A/B sources, including the launcher's breakaway request."""
+    for relative in ("src/exoma/_update_worker.py", "src/exoma/self_update.py"):
+        path = source / relative
+        raw = path.read_text(encoding="utf-8")
+        needle = "if api.in_job():"
+        assert_true(raw.count(needle) == 1, f"{relative}: exactly one contained admission seam")
+        path.write_text(raw.replace(needle, "if False:  # contained fixture; not release acceptance", 1), encoding="utf-8")
+
+
+def _check_contained_fixture_isolation():
+    originals = {name: (REPO / "src/exoma" / name).read_bytes() for name in ("_update_worker.py", "self_update.py")}
+    with tempfile.TemporaryDirectory(prefix="contained-source-") as tmp:
+        source = Path(tmp)
+        (source / "src/exoma").mkdir(parents=True)
+        for name, raw in originals.items():
+            (source / "src/exoma" / name).write_bytes(raw)
+        _prepare_contained_fixture(source)
+        for name, raw in originals.items():
+            assert_true((REPO / "src/exoma" / name).read_bytes() == raw, "production source is unchanged")
+            compiled = (source / "src/exoma" / name).read_text(encoding="utf-8")
+            compile(compiled, name, "exec")
+            assert_true("if api.in_job():" not in compiled, "contained launcher and worker both avoid inherited-job refusal")
+        try:
+            _prepare_contained_fixture(source)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("fixture seam drift/repeated transformation must not silently pass")
 
 
 def _check_artifact_reporting():
@@ -1951,9 +2050,7 @@ def _check_handoff_wheel_upgrade() -> None:
                 # Only a disposable fixture relaxes this assertion. The helper stays
                 # inside the test supervisor, which can still kill its entire tree.
                 # This exercises real package/refresh stages, NOT host independence.
-                worker_path = source / "src/exoma/_update_worker.py"
-                worker_path.write_text(worker_path.read_text(encoding="utf-8").replace(
-                    "if api.in_job():", "if False:  # contained artifact fixture; not release acceptance"), encoding="utf-8")
+                _prepare_contained_fixture(source)
             config = source / "src/exoma/config/settings.py"
             config.write_text(config.read_text(encoding="utf-8").replace(
                 f'TOOL_VERSION = "{TOOL_VERSION}"', f'TOOL_VERSION = "{version}"'), encoding="utf-8")
@@ -2042,7 +2139,7 @@ def _check_handoff_wheel_upgrade() -> None:
         assert_true(versions[1] in run([exe, "--version"]), "console entrypoint starts B")
         _assert_migrated_user_data(run, home, project)
         run([exe, "install", "--check"])
-        report.update(actual_version_transition=True,
+        report.update(actual_version_transition=True, transition="real_a_to_b",
                       independent_worker_verified=_handoff_independence_verified(sys.platform, contained, state),
                       state=state)
         print(f"TRANSITION EVIDENCE: {versions[0]} -> {versions[1]}; refresh/check and user data checked; "

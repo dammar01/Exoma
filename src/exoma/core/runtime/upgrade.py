@@ -142,7 +142,7 @@ def upgrade_workflow_workspace(
         admission = JobManager()
         with admission.capacity_guard():
             admission.assert_update_admission()
-            admission.assert_cleanup_admission(project_root)
+            admission.retire_startup_reservations(project_root)
             return upgrade_workflow_workspace(
                 project_root, agent_workflow_path, _capacity_guarded=True
             )
@@ -296,7 +296,7 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
     Readable objects with invalid live-job metadata are filtered below.
     """
     try:
-        from exoma.core.jobs.job_manager import DEAD, JobManager
+        from exoma.core.jobs.job_manager import JobManager
 
         manager = JobManager()
         target = str(Path(project_root).resolve())
@@ -327,11 +327,8 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
                     continue
             # A job whose worker is gone is not "active", it is unreaped. Blocking the
             # upgrade on one would make a crashed worker permanently jam the command.
-            try:
-                liveness = manager.liveness(job)
-            except (OSError, ValueError, TypeError):
-                continue
-            if liveness == DEAD:
+            decision = manager.mutation_admission(job)
+            if decision != "block":
                 continue
             out.append(job)
         return out

@@ -8,10 +8,13 @@ command, writes uniquely named reports bound to the tested commit, and checks th
 
     python tools/maintain/native_update_gate.py matrix --python-311 <exe> --python-313 <exe>
     python tools/maintain/native_update_gate.py validate <dir> --commit <sha>
+    python tools/maintain/native_update_gate.py check-cell <report> --commit <sha> --mode contained --python 3.11 --manager uv
 
 It does not authenticate the host: a receipt shows what the tested checkout reported about
 itself, not who ran it. It also cannot enforce anything at tagging or publication; the
 maintainer runs it before tagging (RELEASE.md). Stdlib only.
+The check-cell command validates a single scoped CI result; contained success never
+qualifies for the strict matrix or attests to independent-worker survival.
 """
 
 import argparse
@@ -62,17 +65,30 @@ def _number(value):
         return False
 
 
-def _independent(platform, state):
-    """The same acceptance rule as tests/checks/self_update.py `_handoff_independence_verified`."""
+def _completed_transition(state):
     if not isinstance(state, dict):
         return False
     stages = state.get("stages") if isinstance(state.get("stages"), dict) else {}
     package = stages.get("package") if isinstance(stages.get("package"), dict) else {}
-    host_job = state.get("host_job") if isinstance(state.get("host_job"), dict) else {}
     exited, started = state.get("callers_exited_at"), package.get("started_at")
     return (state.get("phase") == "succeeded" and state.get("cleanup_confirmed") is True
-            and _number(exited) and _number(started) and exited <= started
-            and (platform != "win32" or host_job.get("in_job") is False))
+            and _number(exited) and _number(started) and exited <= started)
+
+
+def _independent(platform, state):
+    """The same acceptance rule as tests/checks/self_update.py `_handoff_independence_verified`."""
+    host_job = state.get("host_job") if isinstance(state, dict) else None
+    return (_completed_transition(state) and (platform != "win32" or
+            isinstance(host_job, dict) and host_job.get("in_job") is False))
+
+
+def _stages_succeeded(state):
+    stages = state.get("stages") if isinstance(state, dict) else None
+    if not isinstance(stages, dict):
+        return False
+    return all(isinstance(stages.get(name), dict) and
+               type(stages[name].get("exit_code")) is int and stages[name]["exit_code"] == 0
+               for name in ("package", "probe", "install", "check"))
 
 
 def _cell(report):
@@ -112,6 +128,8 @@ def check_report(report, commit, platform):
         problems.append("report carries an error")
     if not _independent(platform, report.get("state")):
         problems.append("state does not prove an independent, cleanly completed handoff")
+    if not _stages_succeeded(report.get("state")):
+        problems.append("package/probe/install/check stage is missing or did not succeed")
     return problems
 
 
@@ -139,6 +157,50 @@ def validate(directory, commit, platform=None):
         problems.append(f"missing cell: {cell_name(platform, python, manager)}")
     for python, manager in sorted(set(seen) - required):
         problems.append(f"unexpected cell: python {python}, manager {manager} ({seen[(python, manager)]})")
+    return problems
+
+
+def check_transition_report(report, commit, platform, mode, python, manager):
+    """Validate one CI cell, with contained coverage explicitly below release acceptance.
+
+    Unlike validate(), this does not certify a complete native matrix. Strict
+    release validation never accepts contained reports, regardless of this result.
+    """
+    if not isinstance(report, dict):
+        return ["not a JSON object"]
+    if mode not in {"strict", "contained"}:
+        return ["invalid expected mode"]
+    problems = check_report(report, commit, platform) if mode == "strict" else []
+    if mode == "contained":
+        if report.get("kind") != KIND or type(report.get("schema_version")) is not int or report["schema_version"] != SCHEMA_VERSION:
+            problems.append("not a current update-handoff report (kind/schema_version)")
+        if report.get("commit") != commit:
+            problems.append("commit does not match the candidate")
+        if report.get("commit_dirty") is not False:
+            problems.append("tested checkout was not clean")
+        if report.get("platform") != platform:
+            problems.append("platform does not match the cell")
+        for key in ("passed", "actual_version_transition", "no_op_verified"):
+            if report.get(key) is not True:
+                problems.append(f"{key} is not true")
+        if report.get("manual_recovery") is not False or report.get("error"):
+            problems.append("manual recovery/error invalidates the transition")
+        if not _completed_transition(report.get("state")) or not _stages_succeeded(report.get("state")):
+            problems.append("state does not prove a completed, cleaned-up transition")
+        if report.get("independent_worker_verified") is not False:
+            problems.append("contained evidence must not attest worker independence")
+    if report.get("mode") != mode:
+        problems.append("mode does not match the requested cell")
+    if _cell(report) != (python, manager):
+        problems.append("Python/manager does not match the requested cell")
+    if report.get("transition") != "real_a_to_b":
+        problems.append("real A-to-B transition label is missing")
+    state = report.get("state") if isinstance(report.get("state"), dict) else {}
+    before, after = state.get("version_before"), state.get("version_after")
+    if not isinstance(before, str) or not before or not isinstance(after, str) or not after or before == after:
+        problems.append("state must show different installed versions for A-to-B")
+    if report.get("release_acceptance") is not (mode == "strict"):
+        problems.append("release acceptance does not match the evidence mode")
     return problems
 
 
@@ -224,9 +286,26 @@ def main(argv=None):
     check.add_argument("directory")
     check.add_argument("--commit", required=True, help="full SHA the receipts must name")
     check.add_argument("--platform", choices=PLATFORMS, help="platform the receipts must report (default: this host)")
+    cell = commands.add_parser("check-cell", help="validate a strict or contained CI cell; not a native matrix gate")
+    cell.add_argument("report")
+    cell.add_argument("--commit", required=True)
+    cell.add_argument("--mode", choices=("strict", "contained"), required=True)
+    cell.add_argument("--python", choices=PYTHONS, required=True)
+    cell.add_argument("--manager", choices=MANAGERS, required=True)
     args = parser.parse_args(argv)
     if args.command == "matrix":
         return matrix({"3.11": args.python_311, "3.13": args.python_313}, args.output)
+    if args.command == "check-cell":
+        try:
+            report = json.loads(Path(args.report).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"PROBLEM missing/unreadable report: {exc}", file=sys.stderr)
+            return 1
+        problems = check_transition_report(report, args.commit, sys.platform, args.mode, args.python, args.manager)
+        for problem in problems:
+            print(f"PROBLEM {problem}", file=sys.stderr)
+        print(f"{args.mode} transition cell: " + ("qualifies" if not problems else "does not qualify"))
+        return 0 if not problems else 1
     problems = validate(args.directory, args.commit, args.platform)
     for problem in problems:
         print(f"PROBLEM {problem}", file=sys.stderr)

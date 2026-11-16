@@ -100,6 +100,8 @@ jobs:
     name: dist (${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.manager }})
     runs-on: ${{ matrix.os == 'windows-latest' && fromJSON(vars.EXOMA_WINDOWS_UPDATE_RUNNER || '"windows-latest"') || matrix.os }}
     timeout-minutes: 15
+    env:
+      EXOMA_UPDATE_TEST_MODE: ${{ matrix.os == 'windows-latest' && vars.EXOMA_WINDOWS_UPDATE_RUNNER == '' && 'contained' || 'handoff' }}
     strategy:
       fail-fast: false
       matrix:
@@ -127,27 +129,34 @@ jobs:
         if: matrix.manager == 'pipx'
         run: uv tool install pipx
 
-      - name: Shared self-update replaces A with B without recovery
-        # GitHub-hosted Windows keeps the helper inside an outer job, so real breakaway
-        # cannot be proven there. Only that handoff step is skipped; the native Windows
-        # run is a mandatory RELEASE.md staging gate. A runner override (variable
-        # EXOMA_WINDOWS_UPDATE_RUNNER) re-enables it automatically.
-        if: matrix.os != 'windows-latest' || vars.EXOMA_WINDOWS_UPDATE_RUNNER != ''
-        env:
-          EXOMA_UPDATE_HANDOFF_SMOKE: '1'
-          EXOMA_UPDATE_SMOKE_MANAGER: ${{ matrix.manager }}
-          EXOMA_UPDATE_SMOKE_REPORT: ${{ runner.temp }}/exoma-handoff-report.json
-        run: python tests/run.py --only self-update --traceback --update-artifacts handoff
+      - name: Update A to B (${{ env.EXOMA_UPDATE_TEST_MODE }})
+        # Hosted Windows proves a real transition in a disposable contained fixture.
+        # Independence remains a separate strict gate; a compatible override runner
+        # uses the unchanged production handoff instead. No matrix cell skips A-to-B.
+        run: >-
+          python tests/run.py --only self-update --traceback
+          --update-artifacts ${{ env.EXOMA_UPDATE_TEST_MODE }}
+          --update-manager ${{ matrix.manager }}
+          --update-report "${{ runner.temp }}/exoma-update-report.json"
 
-      - name: Preserve native handoff evidence
+      - name: Validate update transition evidence
+        if: always()
+        run: >-
+          python tools/maintain/native_update_gate.py check-cell
+          "${{ runner.temp }}/exoma-update-report.json"
+          --commit ${{ github.sha }}
+          --mode ${{ env.EXOMA_UPDATE_TEST_MODE == 'handoff' && 'strict' || 'contained' }}
+          --python ${{ matrix.python }} --manager ${{ matrix.manager }}
+
+      - name: Preserve update evidence (${{ env.EXOMA_UPDATE_TEST_MODE }})
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: handoff-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.manager }}
+          name: update-${{ env.EXOMA_UPDATE_TEST_MODE }}-${{ matrix.os }}-${{ matrix.python }}-${{ matrix.manager }}
           path: |
-            ${{ runner.temp }}/exoma-handoff-report.json
-            ${{ runner.temp }}/exoma-handoff-report.logs
-          if-no-files-found: warn
+            ${{ runner.temp }}/exoma-update-report.json
+            ${{ runner.temp }}/exoma-update-report.logs
+          if-no-files-found: error
 
       - name: Wheel in a clean environment
         # RELEASE.md step 6 "the wheel in a clean environment", run instead of remembered.

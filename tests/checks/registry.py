@@ -103,8 +103,9 @@ def _function_calls(function) -> set[str]:
 def _unreachable_check_helpers(tree, entrypoint) -> set[str]:
     functions = {node.name: node for node in tree.body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    assert_true(entrypoint in functions, f"helper guard entrypoint {entrypoint} exists")
-    reached, pending = set(), {entrypoint}
+    entrypoints = (entrypoint,) if isinstance(entrypoint, str) else entrypoint
+    assert_true(all(name in functions for name in entrypoints), f"helper guard entrypoints {entrypoints} exist")
+    reached, pending = set(), set(entrypoints)
     while pending:
         name = pending.pop()
         if name in reached or name not in functions:
@@ -159,6 +160,11 @@ def _check_self_update_helpers() -> None:
     source = CHECKS_DIR / "self_update.py"
     orphaned = _unreachable_check_helpers(ast.parse(source.read_text(encoding="utf-8")), "_test_self_update")
     assert_true(not orphaned, "self-update helpers unreachable from their entrypoint: " + ", ".join(sorted(orphaned)))
+    for filename in ("jobs.py", "workspace_migration.py", "native_update_gate.py"):
+        tree = ast.parse((CHECKS_DIR / filename).read_text(encoding="utf-8"))
+        roots = [node.name for node in tree.body if isinstance(node, ast.FunctionDef) and node.name.startswith("_test_")]
+        orphaned = _unreachable_check_helpers(tree, roots)
+        assert_true(not orphaned, filename + " has unreachable check helpers: " + ", ".join(sorted(orphaned)))
 
 
 def _registered_in_suites() -> set[str]:

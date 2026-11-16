@@ -190,7 +190,14 @@ def _update(args: argparse.Namespace) -> int:
             return 1
         from exoma.core.runtime.upgrade import active_jobs_for_workspace
 
-        active = active_jobs_for_workspace(workspace)
+        try:
+            active = active_jobs_for_workspace(workspace)
+        except (ValueError, OSError) as exc:
+            cause = exc.__cause__ or exc
+            print(f"[UPDATE] workspace admission refused: {exc}; "
+                  f"{type(cause).__name__}: {cause}; package unchanged. "
+                  "Inspect job/cleanup records and confirm cleanup before retrying.", file=sys.stderr)
+            return 1
         if active:
             print(f"[UPDATE] {len(active)} active job(s) in {workspace}; finish them before updating",
                   file=sys.stderr)
@@ -266,7 +273,7 @@ def _handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int
     reservation = None
     cwd = cwd.resolve()
     try:
-        from exoma.core.jobs.job_manager import DEAD, JobManager
+        from exoma.core.jobs.job_manager import JobManager
 
         jobs = JobManager()
         for path in jobs.job_dir.glob("job_*.json"):
@@ -274,7 +281,7 @@ def _handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int
                 job = json.load(stream)
             if not isinstance(job, dict):
                 raise ValueError("expected a JSON object")
-            if job.get("status") in ("pending", "running", "recovering") and jobs.liveness(job) != DEAD:
+            if jobs.mutation_admission(job) == "block":
                 raise ValueError("active Exoma jobs exist in this user store; finish them before updating")
         descriptor = install_method.update_descriptor()
         api = worker.platform_api()

@@ -27,6 +27,7 @@ from tests.checks.support import (
 
 def _test_submit_admission() -> None:
     """Initial dispatch and global capacity must admit exactly one worker."""
+    _check_mutation_admission()
     import shutil as _shutil
 
     root = Path(tempfile.mkdtemp(prefix="submit-admission-"))
@@ -309,6 +310,146 @@ def _test_submit_admission() -> None:
         main.JOB_MANAGER = original_manager
         check.JOB_MANAGER = original_check_manager
         _shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_mutation_admission() -> None:
+    """Mutation needs proof of death and a durable fence against late startup."""
+    from contextlib import contextmanager
+    from unittest.mock import patch
+    from exoma.utils import osutil
+
+    base = {"status": "pending", "worker_pid": None, "created_at": "2020-01-01T00:00:00+00:00",
+            "reservation_owner_pid": 42424242, "reservation_owner_identity": "owner"}
+    with tempfile.TemporaryDirectory(prefix="mutation-admission-") as tmp:
+        root = Path(tmp)
+        manager = JobManager(root / "classify")
+        cases = (
+            ("dead owner", {}, "dead", None, "retire_startup"),
+            ("reused owner", {}, "alive", "replacement", "retire_startup"),
+            ("live owner", {}, "alive", "owner", "block"),
+            ("unknown owner", {}, "unknown", "replacement", "block"),
+            ("inaccessible identity", {}, "alive", None, "block"),
+            ("legacy without owner", {"reservation_owner_pid": None}, "dead", None, "block"),
+            ("legacy dead PID", {"reservation_owner_identity": None}, "dead", None, "retire_startup"),
+            ("legacy live PID", {"reservation_owner_identity": None}, "alive", None, "block"),
+            ("bad timestamp", {"created_at": "invalid"}, "dead", None, "block"),
+            ("future timestamp", {"created_at": "2999-01-01T00:00:00+00:00"}, "dead", None, "block"),
+            ("registered without PID", {"worker_registered": True}, "dead", None, "block"),
+            ("pending cancellation", {"cancellation": {"cleanup_confirmed": False}}, "dead", None, "block"),
+            ("pending cleanup", {"ownership": {"cleanup_confirmed": False}}, "dead", None, "block"),
+            ("terminal cleanup", {"status": "failed", "ownership": {"cleanup_confirmed": False}}, "dead", None, "block"),
+            ("terminal", {"status": "failed"}, "unknown", None, "ignore"),
+            ("dead worker", {"worker_pid": 777}, "dead", None, "ignore"),
+            ("unknown worker", {"worker_pid": 777}, "unknown", None, "block"),
+            ("live launcher", {"launcher_pid": 777, "launcher_identity": "owner"}, "alive", "owner", "block"),
+        )
+        for label, changes, state, identity, expected in cases:
+            with patch.object(osutil, "process_state", return_value=state), \
+                 patch.object(osutil, "process_identity", return_value=identity):
+                assert_true(manager.mutation_admission({**base, **changes}) == expected, label)
+        with patch.object(osutil, "process_state", return_value="dead"):
+            for age, expected in ((29.999, "block"), (30.0, "retire_startup")):
+                with patch.object(manager, "_age_seconds", return_value=age):
+                    assert_true(manager.mutation_admission(base) == expected, "startup grace boundary")
+        for current, expected in ((42, "block"), (43, "retire_startup"), (None, "block")):
+            with patch.object(osutil, "process_state", return_value="alive"), \
+                 patch.object(osutil, "pid_create_time", return_value=current):
+                assert_true(manager.mutation_admission({**base, "reservation_owner_identity": None,
+                            "reservation_owner_create_time": 42}) == expected, "create-time proof fallback")
+
+        def fixture(name):
+            store = JobManager(root / name)
+            job = store.create_job("analyze", name, name, str(root), None)
+            job.update(base)
+            store._save(job)
+            return store, job
+
+        with patch.object(osutil, "process_state", return_value="dead"):
+            store, job = fixture("retired")
+            reservation = store.reserve_update(root / "operation", "token")
+            current = store.get_job(job["job_id"])
+            assert_true(reservation.is_file() and current["status"] == "failed" and current["reaped"]
+                        and not store._lock_path(job["session_id"]).exists(), "orphan retires before update admission")
+            reservation.unlink()
+            store.set_launcher_pid(job["job_id"], os.getpid())
+            store.set_worker_pid(job["job_id"], os.getpid())
+            assert_true(store.mark_running(job["job_id"])["status"] == "failed"
+                        and store.get_job(job["job_id"])["worker_pid"] is None,
+                        "late startup cannot revive the terminal job even after the update ends")
+
+            # Deterministically let registration/recovery/cancellation win the job lock.
+            for winner in ("registration", "recovery", "cancellation"):
+                store, job = fixture(winner)
+                original = store._job_mutation
+                changed = False
+
+                @contextmanager
+                def interleave(job_id):
+                    nonlocal changed
+                    if not changed:
+                        changed = True
+                        record = store.get_job(job_id)
+                        if winner == "registration":
+                            record.update(worker_pid=os.getpid(), worker_identity="live")
+                        elif winner == "recovery":
+                            record.update(reservation_owner_pid=os.getpid(), reservation_owner_identity="live")
+                        else:
+                            record["cancellation"] = {"cleanup_confirmed": False}
+                        store._save(record)
+                    with original(job_id):
+                        yield
+
+                def state(pid):
+                    return "alive" if pid == os.getpid() else "dead"
+
+                with patch.object(store, "_job_mutation", interleave), \
+                     patch.object(osutil, "process_state", side_effect=state), \
+                     patch.object(osutil, "process_identity", return_value="live"):
+                    try:
+                        store.reserve_update(root / "operation", "token")
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError(winner + " must prevent retirement/admission")
+                assert_true(store.get_job(job["job_id"])["status"] == "pending"
+                            and not (store.job_dir / ".update-reservation.json").exists(), winner + " wins safely")
+
+            store, job = fixture("save-failure")
+            with patch.object(store, "_save", side_effect=OSError("retirement persistence failed")):
+                try:
+                    store.reserve_update(root / "operation", "token")
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("failed persistence must refuse admission")
+            assert_true(store.get_job(job["job_id"])["status"] == "pending"
+                        and store._lock_path(job["session_id"]).exists()
+                        and not (store.job_dir / ".update-reservation.json").exists(),
+                        "save failure preserves ownership and prevents update reservation")
+
+            store, job = fixture("release-failure")
+            with patch.object(store, "_release_session_lock", return_value=None):
+                for attempt in range(2):
+                    try:
+                        store.reserve_update(root / "operation", "token")
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError("unreleased ownership must refuse admission, including retry")
+            assert_true(not (store.job_dir / ".update-reservation.json").exists(), "lock release is confirmed")
+            store, job = fixture("retained-lock")
+            path = store._lock_path(job["session_id"])
+            claim = json.loads(path.read_text(encoding="utf-8"))
+            claim["cleanup_required"] = True
+            path.write_text(json.dumps(claim), encoding="utf-8")
+            try:
+                store.reserve_update(root / "operation", "token")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("retained cleanup lock must override dead-owner proof")
+            assert_true(store.get_job(job["job_id"])["status"] == "pending" and path.exists(),
+                        "retained cleanup cannot be converted into startup retirement")
 
 
 def _test_worker_log_preservation() -> None:

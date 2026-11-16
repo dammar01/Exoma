@@ -190,6 +190,34 @@ def _check_cleanup_admission_blocks_migration() -> None:
             shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_orphan_admission_upgrade() -> None:
+    from unittest.mock import patch
+    from exoma.core.jobs.job_manager import JobManager
+    from exoma.core.runtime import upgrade
+    from exoma.utils import osutil
+
+    root = _legacy_workspace()
+    try:
+        with tempfile.TemporaryDirectory(prefix="orphan-upgrade-jobs-") as tmp:
+            manager = JobManager(Path(tmp))
+            job = manager.create_job("analyze", "orphan", "orphan-upgrade", str(root), None)
+            job.update(created_at="2020-01-01T00:00:00+00:00", reservation_owner_pid=42424242)
+            manager._save(job)
+            before = manager._path(job["job_id"]).read_bytes()
+            with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
+                 patch.object(osutil, "process_state", return_value="dead"):
+                assert_true(upgrade.active_jobs_for_workspace(root) == [], "orphan is advisory-eligible")
+                assert_true(manager._path(job["job_id"]).read_bytes() == before
+                            and manager._lock_path(job["session_id"]).exists(), "advisory query never retires or unlocks")
+                upgrade.upgrade_workflow_workspace(root, None)
+            assert_true(manager.get_job(job["job_id"])["status"] == "failed"
+                        and not manager._lock_path(job["session_id"]).exists(), "authoritative upgrade retires orphan")
+            assert_true((root / ".workflow/notes.txt").read_text(encoding="utf-8") == "the user's"
+                        and (root / ".workflow/data/usage.jsonl").is_file(), "upgrade preserves user files and history")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _check_failed_migration_is_rolled_back() -> None:
     import exoma.core.runtime.migrations as migrations
 
@@ -611,6 +639,7 @@ def _test_workspace_migration() -> None:
     _check_migration_moves_everything_once()
     _check_live_job_blocks_migration()
     _check_cleanup_admission_blocks_migration()
+    _check_orphan_admission_upgrade()
     _check_failed_migration_is_rolled_back()
     _check_post_rename_failure_resumes()
     _check_failed_backup_leaves_no_staging()

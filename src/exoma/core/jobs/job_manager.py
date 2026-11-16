@@ -1354,17 +1354,121 @@ class JobManager:
             raise ValueError("unconfirmed Exoma cleanup owns admission: " +
                              ", ".join(str(row["job_id"]) for row in retained[:3]))
 
+    @staticmethod
+    def _admission_process_gone(job, prefix):
+        """Prove exit/reuse without interpreting an inaccessible process as dead."""
+        pid = job.get(prefix + "_pid")
+        if type(pid) is not int or pid <= 0:
+            return False
+        state = osutil.process_state(pid)
+        if state == "dead":
+            return True
+        if state != "alive":
+            return False
+        identity = job.get(prefix + "_identity")
+        if identity is not None:
+            if not isinstance(identity, str) or not identity:
+                return False
+            current = osutil.process_identity(pid)
+        else:
+            identity = job.get(prefix + "_create_time")
+            if type(identity) is not int or identity <= 0:
+                return False
+            current = osutil.pid_create_time(pid)
+        return current is not None and current != identity
+
+    def mutation_admission(self, job):
+        """Read-only classification; an orphan is eligible, never permission by itself.
+
+        Package/workspace mutation must retire eligible startup records under the
+        capacity and job guards before relying on this advisory decision.
+        """
+        if not isinstance(job, dict):
+            raise ValueError("unreadable job admission record")
+        for field in ("cancellation", "ownership"):
+            if job.get(field) is not None and not isinstance(job[field], dict):
+                raise ValueError("unreadable cleanup admission metadata")
+        if _cleanup_unconfirmed(job):
+            return "block"
+        status = job.get("status")
+        if not isinstance(status, str):
+            raise ValueError("unreadable job admission status")
+        if status in {"completed", "failed"}:
+            return "ignore"
+        if status not in {"pending", "running", "recovering"} or job.get("cancellation"):
+            return "block"
+        processes = [prefix for prefix in ("worker", "launcher") if job.get(prefix + "_pid") is not None]
+        if processes:
+            return "ignore" if all(self._admission_process_gone(job, prefix) for prefix in processes) else "block"
+        if status != "pending" or job.get("worker_registered"):
+            return "block"
+        age = self._age_seconds(job.get("recovery_started_at") if job.get("recovery_in_progress")
+                                else job.get("created_at"))
+        if age is None or age < _CLAIM_STALE_SECONDS:
+            return "block"
+        return "retire_startup" if self._admission_process_gone(job, "reservation_owner") else "block"
+
+    def retire_startup_reservations(self, workspace=None):
+        """Caller holds capacity_guard until its mutation/reservation is complete.
+
+        A terminal record fences a child spawned just before its parent died:
+        set_worker_pid/set_launcher_pid/mark_running cannot revive that child.
+        Re-read under the same job guard used by registration and recovery.
+        """
+        self.assert_cleanup_admission(workspace)
+        target = Path(workspace).resolve() if workspace is not None else None
+        for path in self.job_dir.glob("job_*.json"):
+            with osutil.open_snapshot(path) as file:
+                job = json.load(file)
+            retired = (isinstance(job, dict) and job.get("status") == "failed" and
+                       job.get("error") == "startup_reservation_retired_for_update")
+            if self.mutation_admission(job) != "retire_startup" and not retired:
+                continue
+            if target is not None:
+                work_dir = job.get("work_dir")
+                if not isinstance(work_dir, str) or not Path(work_dir).is_absolute():
+                    raise ValueError("cannot establish orphan workspace admission")
+                root = Path(work_dir).resolve()
+                if root != target and not root.is_relative_to(target) and not target.is_relative_to(root):
+                    continue
+            if retired:
+                self._release_retired_startup_lock(job)
+                continue
+            job_id = job.get("job_id")
+            if job_id != path.stem or not isinstance(job.get("session_id"), str) or not job.get("lock_token"):
+                raise ValueError("cannot establish orphan reservation ownership")
+            with self._job_mutation(job_id):
+                job = self._load(job_id)
+                self.assert_cleanup_admission(workspace)
+                if self.mutation_admission(job) != "retire_startup":
+                    continue
+                job.update(status="failed", reaped=True, completed_at=self._now(),
+                           error="startup_reservation_retired_for_update")
+                job.pop("recovery_in_progress", None)
+                self._save(job)  # Persistence must succeed BEFORE releasing ownership.
+            self._release_retired_startup_lock(job)
+        self.assert_cleanup_admission(workspace)
+
+    def _release_retired_startup_lock(self, job):
+        self._release_session_lock(job)
+        try:
+            with osutil.open_snapshot(self._lock_path(job["session_id"])) as file:
+                claim = json.load(file)
+        except FileNotFoundError:
+            return
+        if not isinstance(claim, dict) or claim.get("job_id") == job["job_id"]:
+            raise ValueError("cannot release retired startup ownership; inspect its session lock")
+
     def reserve_update(self, operation, token):
         with self.capacity_guard():
             self.assert_update_admission()
-            self.assert_cleanup_admission()
+            self.retire_startup_reservations()
             for path in self.job_dir.glob("job_*.json"):
                 with osutil.open_snapshot(path) as file:
                     job = json.load(file)
                 if not isinstance(job, dict):
                     raise ValueError("unreadable job admission record")
-                if _cleanup_unconfirmed(job) or job.get("status") in {"pending", "running", "recovering"} and (
-                        job.get("cancellation") or self.liveness(job) != DEAD):
+                if self.mutation_admission(job) != "ignore":
                     raise ValueError("active Exoma jobs exist; finish or confirm cleanup before updating")
             path = self.job_dir / ".update-reservation.json"
             atomic_write_json(path, {"token": token, "operation": str(operation), "owner_pid": os.getpid()})
