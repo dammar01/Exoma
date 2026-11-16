@@ -138,8 +138,9 @@ def _check_cleanup_admission_blocks_migration() -> None:
     import exoma.core.runtime.upgrade as upgrade
     from unittest.mock import patch
     from exoma.core.jobs.job_manager import JobManager
+    from exoma.utils import osutil
 
-    original_read = Path.read_text
+    original_open = osutil.open_snapshot
     for case, raw in (("array", "[]"), ("null", "null"),
                       ("invalid-json", "{broken"), ("unreadable", "{}")):
         root = _legacy_workspace()
@@ -150,15 +151,17 @@ def _check_cleanup_admission_blocks_migration() -> None:
                 manager = JobManager(Path(tmp))
                 record = manager.job_dir / "job_corrupt.json"
                 record.write_text(raw, encoding="utf-8")
+                denials = []
 
-                def read(path, *args, **kwargs):
-                    if case == "unreadable" and path == record:
+                def open_record(path, *args, **kwargs):
+                    if case == "unreadable" and Path(path) == record:
+                        denials.append(path)
                         raise PermissionError("fixture cleanup record unreadable")
-                    return original_read(path, *args, **kwargs)
+                    return original_open(path, *args, **kwargs)
 
                 with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
                      patch("exoma.core.runtime.migrations.run") as migrate, \
-                     patch.object(Path, "read_text", read):
+                     patch.object(osutil, "open_snapshot", open_record):
                     try:
                         upgrade.active_jobs_for_workspace(root)
                     except ValueError as exc:
@@ -167,12 +170,17 @@ def _check_cleanup_admission_blocks_migration() -> None:
                                     f"{case}: admission refusal retains the underlying cause")
                     else:
                         raise AssertionError(f"{case}: unreadable cleanup proof became an empty job list")
+                    if case == "unreadable":
+                        assert_true(denials, "workspace admission reaches the injected snapshot read denial")
+                        denials.clear()
                     try:
                         upgrade.upgrade_workflow_workspace(root)
                     except ValueError:
                         pass
                     else:
                         raise AssertionError(f"{case}: cleanup uncertainty authorized migration")
+                    if case == "unreadable":
+                        assert_true(denials, "workspace upgrade reaches the injected snapshot read denial")
                     assert_true(not migrate.called, f"{case}: refusal precedes every migration step")
             after = {p.relative_to(wf): p.read_bytes() for p in wf.rglob("*") if p.is_file()}
             assert_true(before == after and is_legacy_layout(root)

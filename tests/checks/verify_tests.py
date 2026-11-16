@@ -479,6 +479,7 @@ def _check_inherited_output_deadlines() -> None:
         for mode in ("success", "noisy", "silent", "cancel", "fallback", "exited-fallback", "captured-fallback", "timed-fallback"):
             ready, release = root / (mode + ".json"), root / (mode + ".release")
             worker_ready = root / (mode + ".worker")
+            identities_captured = root / (mode + ".captured")
             stdout, stderr = root / (mode + ".out"), root / (mode + ".err")
             worker = (
                 "import os,pathlib,time; "
@@ -518,7 +519,8 @@ def _check_inherited_output_deadlines() -> None:
                    if mode in ("fallback", "exited-fallback", "captured-fallback", "timed-fallback") else "")
                 + "def beat(elapsed):\n"
                 "    print('heartbeat', file=sys.stderr, flush=True)\n"
-                f"    if {mode in ('cancel', 'fallback')!r} and pathlib.Path({str(ready)!r}).exists():\n"
+                f"    if {mode in ('cancel', 'fallback')!r} and pathlib.Path({str(ready)!r}).exists()"
+                f" and pathlib.Path({str(identities_captured)!r}).exists():\n"
                 "        raise KeyboardInterrupt\n"
                 "try:\n"
                 f"    result = osutil.run_bounded([sys.executable, '-c', {child!r}], "
@@ -552,6 +554,9 @@ def _check_inherited_output_deadlines() -> None:
                     if osutil.IS_WINDOWS:
                         assert_true(all(created is not None for _pid, created, _identity in identities),
                                     f"{mode}: capture native generation identities before releasing any process")
+                    if mode in ("cancel", "fallback"):
+                        # Cleanup may start only after the observer has its native proof.
+                        identities_captured.touch()
                     if mode == "success":
                         while (b"live-out" not in stdout.read_bytes() or b"live-err" not in stderr.read_bytes()) \
                                 and time.monotonic() < deadline:

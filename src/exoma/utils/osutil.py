@@ -370,6 +370,11 @@ def _windows_kernel32():
         kernel32.TerminateProcess.restype = wintypes.BOOL
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CreateFileW.argtypes = (
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        )
+        kernel32.CreateFileW.restype = wintypes.HANDLE
         kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
         _WIN_KERNEL32 = kernel32
@@ -1053,6 +1058,44 @@ def process_generation(
     if current is None:
         return PROCESS_UNVERIFIABLE
     return PROCESS_MATCHED if current == expected_identity else PROCESS_REUSED
+
+
+def open_snapshot(path: Path, *, binary: bool = False):
+    """Open a read-only snapshot compatible with publisher DELETE access on Windows.
+
+    Plain Python opens omit FILE_SHARE_DELETE. They can both block a publisher's
+    rename and fail while a publisher already has DELETE access. Sharing deletion
+    fixes that reader conflict; a publisher may still need to wait for readers to
+    close before replacing an existing destination with MoveFileEx.
+    Real access failures propagate; this does not retry or change file permissions.
+    """
+    path = Path(path)
+    if not IS_WINDOWS:
+        return path.open("rb") if binary else path.open("r", encoding="utf-8")
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = _windows_kernel32()
+    handle = kernel32.CreateFileW(
+        str(path), 0x80000000, 0x1 | 0x2 | 0x4, None, 3, 0x80, None,
+    )  # GENERIC_READ; SHARE_READ | WRITE | DELETE; OPEN_EXISTING.
+    if handle == wintypes.HANDLE(-1).value:
+        error = ctypes.WinError(ctypes.get_last_error())
+        error.filename = str(path)
+        raise error
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+    # open_osfhandle transfers ownership: only the descriptor/stream closes it now.
+    try:
+        return os.fdopen(fd, "rb") if binary else os.fdopen(fd, "r", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def open_lock_file(path: Path):

@@ -13,6 +13,7 @@ from exoma.core.workspace.workspace_paths import workflow_paths
 from pathlib import Path
 import json
 import os
+from exoma.utils.osutil import open_snapshot
 from exoma.core.runtime.config_defaults import default_config, diverged_defaults, merge_config_defaults
 from exoma.core.runtime.scripts import _generate_run_scripts
 
@@ -303,7 +304,8 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
         retained_ids = {job.get("job_id") for job in out}
         for path in manager.job_dir.glob("job_*.json"):
             try:
-                job = json.loads(path.read_text(encoding="utf-8"))
+                with open_snapshot(path) as stream:
+                    job = json.load(stream)
             except (OSError, ValueError):
                 continue
             if not isinstance(job, dict):

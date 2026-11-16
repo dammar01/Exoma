@@ -42,6 +42,9 @@ def _test_self_update() -> None:
     _check_cleanup_publication()
     _check_guardian_diagnostics()
     _check_guardian_cleanup_attempts()
+    _check_birth_lineage()
+    _check_cleanup_receipt_context()
+    _check_caller_acknowledgement()
     _check_ready_failure_context()
     _check_worker_protocol()
     _check_update_admission()
@@ -601,6 +604,9 @@ def _handoff_diagnostics(value, state_path):
              "last state: " + json.dumps(summary, ensure_ascii=False, default=str)[:6000]]
     budget = 12000
     if state_path is not None:
+        context = _cleanup_receipt_context(value, state_path)
+        parts.append("guardian receipt: " + context)
+        budget -= len(context)
         for path in sorted(state_path.parent.glob("*.log")):
             if budget <= 0:
                 break
@@ -615,6 +621,190 @@ def _handoff_diagnostics(value, state_path):
             parts.append(path.name + ":\n" + tail)
             budget -= len(tail)
     return "\n".join(parts)
+
+
+def _cleanup_receipt_context(value, state_path):
+    from exoma import _update_worker as worker
+
+    root = state_path.parent.resolve()
+    guardian = value.get("cleanup_diagnostics") if isinstance(value, dict) else None
+    pointer = guardian.get("receipt") if isinstance(guardian, dict) else None
+    paths, detail = [], {}
+    if isinstance(guardian, dict):
+        detail["failure"] = worker.cleanup_diagnostic_projection({"diagnostics": {
+            "stage_error": guardian.get("failure")}}).get("stage_error")
+        returned = guardian.get("guardian_exit_code")
+        detail["guardian_exit_code"] = returned if type(returned) is int else None
+    if isinstance(pointer, str) and re.fullmatch(r"(?:package|probe|install|check)\.log\.cleanup-[0-9a-f]{32}\.json", pointer):
+        paths = [root / pointer]
+    else:
+        stages = value.get("stages") if isinstance(value, dict) else None
+        if isinstance(stages, dict):
+            for stage in ("package", "probe", "install", "check"):
+                if isinstance(stages.get(stage), dict) and stages[stage].get("exit_code") is None:
+                    for path in root.glob(stage + ".log.cleanup-*.json"):
+                        if re.fullmatch(stage + r"\.log\.cleanup-[0-9a-f]{32}\.json", path.name):
+                            paths.append(path)
+                            if len(paths) == 4:
+                                break
+                    break
+    detail.update(status="selected" if paths else "absent", ambiguous=len(paths) > 1, receipts=[])
+    for path in sorted(paths)[:3]:
+        entry = {"file": path.name}
+        try:
+            if path.resolve().parent != root:
+                raise ValueError("receipt outside operation")
+            with path.open("rb") as stream:
+                raw = stream.read(8193)
+            if len(raw) > 8192:
+                entry["status"] = "oversized"
+            else:
+                receipt = json.loads(raw)
+                entry.update(status="parsed", evidence=worker.cleanup_diagnostic_projection(receipt))
+        except FileNotFoundError:
+            entry["status"] = "missing"
+        except (OSError, ValueError) as exc:
+            entry.update(status="unavailable", error_type=type(exc).__name__)
+        detail["receipts"].append(entry)
+    text = json.dumps(detail, ensure_ascii=True)
+    return text if len(text) <= 6000 else text[:5950] + " [truncated]"
+
+
+def _check_cleanup_receipt_context():
+    from exoma import _update_worker as worker
+
+    with tempfile.TemporaryDirectory(prefix="receipt-context-") as tmp:
+        root = Path(tmp)
+        path = root / ("package.log.cleanup-" + "a" * 32 + ".json")
+        state = {"stages": {"package": {"exit_code": None}}}
+        receipt = {"cleanup_confirmed": False, "exit_code": 0, "error": "sentinel-secret",
+                   "token": "sentinel-secret", "diagnostics": {
+                       "stage_error": None, "cleanup_errors": [{"site": "owner_cleanup", "type": "OSError", "errno": None}],
+                       "child": {"exit_observed": True, "child_returncode": 0, "reap_outcome": "reaped"}}}
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+        text = _cleanup_receipt_context(state, root / "state.json")
+        assert_true("owner_cleanup" in text and "reaped" in text and "sentinel-secret" not in text,
+                    "receipt explains cleanup failure without copying legacy errors or arbitrary fields")
+        assert_true("owner_cleanup" in _handoff_diagnostics(state, root / "state.json"),
+                    "handoff assertion includes the actual guardian receipt")
+        second = root / ("package.log.cleanup-" + "b" * 32 + ".json")
+        second.write_text("{", encoding="utf-8")
+        context = json.loads(_cleanup_receipt_context(state, root / "state.json"))
+        assert_true(context["ambiguous"] and len(context["receipts"]) == 2,
+                    "several matching receipts are reported as ambiguous, not silently selected")
+        state["cleanup_diagnostics"] = {"receipt": path.name, "guardian_exit_code": 4}
+        assert_true(len(json.loads(_cleanup_receipt_context(state, root / "state.json"))["receipts"]) == 1,
+                    "the runtime receipt pointer selects the exact stage invocation")
+        path.write_bytes(b"x" * 9000)
+        assert_true("oversized" in _cleanup_receipt_context(state, root / "state.json"), "oversized receipt is not dumped")
+        path.unlink()
+        assert_true("missing" in _cleanup_receipt_context(state, root / "state.json"), "missing receipt is explicit")
+        hostile = {**receipt, "diagnostics": {"stage_error": {"site": ["sentinel-secret"], "type": {}},
+                                             "cleanup_errors": [None, {"site": "secret", "type": "secret"}],
+                                             "child": {"reap_outcome": "sentinel-secret"}}}
+        assert_true("sentinel-secret" not in json.dumps(worker.cleanup_diagnostic_projection(hostile)),
+                    "malformed nested diagnostic fields cannot inject text")
+
+
+def _check_birth_lineage():
+    from exoma import _update_worker as worker
+    from types import SimpleNamespace
+
+    guardian, foreign, candidate = os.getpid(), os.getpid() + 1000000, os.getpid() + 1000001
+    baseline = {1: {"created": "launchd", "parent": 0, "uniqueid": 11, "parent_uniqueid": 0,
+                    "version": 101, "parent_version": 0},
+                guardian: {"created": 2, "parent": foreign, "uniqueid": 22, "parent_uniqueid": 33,
+                           "version": 202, "parent_version": 303},
+                foreign: {"created": 3, "parent": 1, "uniqueid": 33, "parent_uniqueid": 11,
+                          "version": 303, "parent_version": 101}}
+    born = {"created": 4, "parent": 1, "uniqueid": 44, "parent_uniqueid": 11,
+            "version": 404, "parent_version": 101}
+    cases = [
+        ("launchd birth", {**baseline, candidate: born}, True),
+        ("foreign parent gone", {1: baseline[1], guardian: baseline[guardian],
+                                  candidate: {**born, "parent_uniqueid": 33, "parent_version": 303}}, True),
+        ("foreign multi-generation chain", {**baseline, candidate: born, candidate + 1: {
+            **born, "uniqueid": 55, "parent_uniqueid": 44, "version": 505, "parent_version": 404}}, True),
+        ("foreign parent exec version advances", {**baseline, foreign: {**baseline[foreign], "version": 304},
+            candidate: {**born, "parent_uniqueid": 33, "parent_version": 304}}, True),
+        ("owned reparented child", {**baseline, candidate: {**born, "parent_uniqueid": 22, "parent_version": 202}}, False),
+        ("owned adopted by foreign process", {**baseline, candidate: {
+            **born, "parent": foreign, "parent_uniqueid": 22, "parent_version": 202}}, False),
+        ("owned adopted child without parent version", {**baseline, candidate: {
+            **born, "parent": foreign, "parent_uniqueid": 22, "parent_version": 0}}, False),
+        ("owned adopted grandchild without versions", {**baseline,
+            candidate: {**born, "parent": foreign, "parent_uniqueid": 22, "parent_version": None},
+            candidate + 1: {**born, "parent": foreign, "uniqueid": 55,
+                            "parent_uniqueid": 44, "parent_version": 0}}, False),
+        ("unknown birth contradicts adoptive PPID without version", {**baseline, candidate: {
+            **born, "parent": foreign, "parent_uniqueid": 99, "parent_version": 0}}, False),
+        ("ancestor contradiction vetoes PPID fallback", {**baseline,
+            candidate: {**born, "parent": foreign, "parent_uniqueid": 99, "parent_version": 0},
+            candidate + 1: {**born, "parent": candidate, "uniqueid": 55,
+                            "parent_uniqueid": 44, "parent_version": 0}}, False),
+        ("orphan exec after launchd adoption", {**baseline, candidate: {**born, "parent_version": 202}}, False),
+        ("orphan exec after foreign adoption", {**baseline, candidate: {
+            **born, "parent": foreign, "parent_uniqueid": 33, "parent_version": 202}}, False),
+        ("baseline parent version survives later query failure", {**baseline, 1: {**baseline[1], "version": 0}, candidate: born}, True),
+        ("old kernel without original-parent version", {**baseline, candidate: {**born, "parent_version": 0}}, False),
+        ("lost intermediate", {**baseline, candidate: {**born, "parent_uniqueid": 99}}, False),
+        ("missing lineage", {**baseline, candidate: {"created": 4, "parent": 1}}, False),
+        ("boolean lineage", {**baseline, candidate: {**born, "uniqueid": True}}, False),
+        ("partial lineage", {**baseline, candidate: {**born, "parent_uniqueid": None}}, False),
+        ("PID reused with same timestamp", {**baseline, foreign: {
+            "created": 3, "parent": 1, "uniqueid": 66, "parent_uniqueid": 22,
+            "version": 606, "parent_version": 202}}, False),
+        ("same lifetime despite query fallback", {**baseline, foreign: {
+            **baseline[foreign], "created": "ps timestamp"}}, True),
+        ("unknown cyclic lineage", {**baseline, candidate: {**born, "parent_uniqueid": 55, "parent_version": 505},
+                                    candidate + 1: {**born, "uniqueid": 55, "version": 505,
+                                                    "parent_uniqueid": 44, "parent_version": 404}}, False),
+        ("conflicting unique ID", {**baseline, candidate: {**born, "uniqueid": 33}}, False),
+    ]
+    owner = worker.DescendantOwner.__new__(worker.DescendantOwner)
+    owner.subreaper, owner.baseline = False, baseline
+    for label, current, accepted in cases:
+        with patch.object(owner, "inventory", return_value=current):
+            try:
+                owner.cleanup()
+            except OSError:
+                assert_true(not accepted, f"{label} should prove foreign ancestry")
+            else:
+                assert_true(accepted, f"{label} cannot prove cleanup")
+    # A missing root or parent version in BOTH observations cannot create proof.
+    for incomplete in ({**baseline, guardian: {"created": 2, "parent": foreign}},
+                       {**baseline, 1: {**baseline[1], "version": 0}}):
+        owner.baseline = incomplete
+        with patch.object(owner, "inventory", return_value={**incomplete, candidate: born}):
+            try:
+                owner.cleanup()
+            except OSError:
+                pass
+            else:
+                raise AssertionError("missing guardian lineage or unsampled parent version acquired foreign proof")
+
+    # Test the real ctypes decoder and short/error records, without a Darwin host.
+    def query(pid, flavor, arg, buffer, size):
+        assert_true((pid, flavor, arg, size) == (123, 17, 0, 56), "libproc ABI is bounded and explicit")
+        worker.ctypes.c_uint64.from_buffer(buffer, 16).value = 44
+        worker.ctypes.c_uint64.from_buffer(buffer, 24).value = 11
+        worker.ctypes.c_uint32.from_buffer(buffer, 32).value = 404
+        worker.ctypes.c_uint32.from_buffer(buffer, 36).value = 101
+        return 56
+    library = SimpleNamespace(proc_pidinfo=MagicMock(side_effect=query))
+    with patch.object(worker.sys, "platform", "darwin"), patch.object(worker.ctypes, "CDLL", return_value=library):
+        assert_true(worker.Posix().lineage(123) == {"uniqueid": 44, "parent_uniqueid": 11,
+                                                 "version": 404, "parent_version": 101},
+                    "native lifetime and immutable birth-parent IDs are decoded independently of image access")
+        for returned in (0, 55):
+            library.proc_pidinfo.side_effect = None
+            library.proc_pidinfo.return_value = returned
+            try:
+                worker.Posix().lineage(123)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("a failed or short native record was accepted")
 
 
 def _poll_handoff(root, timeout):
@@ -1370,6 +1560,47 @@ def _check_guardian_diagnostics():
                             "negative or malformed receipt cannot populate the successful result")
             else:
                 assert_true(accepted and job.result == receipt, "legacy/enriched positive receipts remain compatible")
+            if not accepted:
+                assert_true(job.diagnostics["failure"]["site"] == "receipt_validate",
+                            "negative receipt keeps the exact validation failure boundary")
+    for site, error in (("receipt_wait", subprocess.TimeoutExpired(["secret-argv"], 15)),
+                        ("receipt_read", OSError(5, "secret-read-error")),
+                        ("receipt_parse", None)):
+        proc = MagicMock()
+        proc.stdin, proc.stdout = io.StringIO(), MagicMock()
+        proc.stdout.readline.return_value = "{"
+        if site == "receipt_wait":
+            proc.wait.side_effect = error
+        elif site == "receipt_read":
+            proc.stdout.readline.side_effect = error
+        job = worker.PosixChildJob(None, "fixture", None)
+        job.proc = proc
+        try:
+            job.cleanup()
+        except OSError:
+            assert_true(job.result is None and job.cleanup_unconfirmed and job.diagnostics["failure"]["site"] == site
+                        and "secret" not in json.dumps(job.diagnostics),
+                        "wait/read/parse failures remain distinct and sanitized without changing rejection")
+        else:
+            raise AssertionError("invalid guardian transport became successful cleanup")
+
+    # A second stage that cannot spawn has no receipt, rather than the first
+    # stage's successful receipt. Only the current typed failure is published.
+    lock = SimpleNamespace(handle=SimpleNamespace(fileno=lambda: 3))
+    job = worker.PosixChildJob(None, "fixture", lock)
+    job.result = {"cleanup_confirmed": True, "exit_code": 0}
+    job.diagnostics = {"receipt": "package.log.cleanup-" + "a" * 32 + ".json", "status": "received"}
+    with patch.object(worker.subprocess, "Popen", side_effect=OSError(5, "secret-spawn-argv")):
+        try:
+            job.run(["secret-spawn-argv"], Path("."), Path("install.log"), 5, lambda _: None)
+        except OSError:
+            assert_true(job.result is None and job.proc is None and job.diagnostics["status"] == "spawn_failed"
+                        and job.diagnostics["receipt"].startswith("install.log.cleanup-")
+                        and job.diagnostics["failure"]["site"] == "spawn"
+                        and "secret" not in json.dumps(job.diagnostics),
+                        "spawn failure keeps the current stage pointer and typed cause without stale receipt or secrets")
+        else:
+            raise AssertionError("guardian spawn failure was hidden")
 
     # Use the classifier's original observations, including changed generations,
     # and bound both selection and its serialized envelope under hostile sizes.
@@ -1524,6 +1755,13 @@ def _check_guardian_cleanup_attempts():
             diagnostic = receipt["diagnostics"]
             lifecycle = diagnostic["child"]
             signals = ["SIGTERM", "SIGKILL"] if term else ["SIGKILL"]
+            expected_probe = ({"absent": "absent", "denied": "error", "error": "error"}.get(
+                case.get("probe"), "present") if probe_expected else "not_attempted")
+            assert_true(lifecycle["group_probe"]["status"] == expected_probe,
+                        "existing probe outcomes are retained without adding probes")
+            if probe_expected and expected_probe == "error":
+                assert_true(lifecycle["group_probe"]["error"]["errno"] == (1 if case["probe"] == "denied" else 5),
+                            "probe errno is diagnostic evidence, not cleanup permission")
             assert_true(events == signals + ["wait"] + (["PROBE"] if probe_expected else []) + ["owner", "close"],
                         f"signal/observation failures cannot skip the final signal, reap or owner cleanup: {events}")
             assert_true([e["site"] for e in diagnostic["cleanup_errors"]] == expected_errors,
@@ -1849,9 +2087,75 @@ def _preserved_handoff_temp(report):
                 report["operation_artifacts"] = str(destination)
 
 
-def _ready_failure_context(operation, process, *, commit, exit_caller):
+def _acknowledged_caller_identity(api, caller, ack, timeout=5):
+    deadline = time.monotonic() + timeout
+    while True:
+        returned = caller.poll()
+        if returned is not None:
+            raise AssertionError(f"fixture caller exited before acknowledgement: {returned}")
+        try:
+            ready = ack.read_text(encoding="utf-8") == "ready"
+        except FileNotFoundError:
+            ready = False
+        if ready:
+            identity = api.process(caller.pid)
+            assert_true(caller.poll() is None, "fixture caller exited during identity capture")
+            return identity
+        remaining = deadline - time.monotonic()
+        assert_true(remaining > 0, "fixture caller acknowledgement timed out before identity capture")
+        time.sleep(min(0.01, remaining))
+
+
+def _check_caller_acknowledgement():
+    from types import SimpleNamespace
+
+    with tempfile.TemporaryDirectory(prefix="caller-ack-") as tmp:
+        ack = Path(tmp) / "ack"
+        clock, events = _PollingClock(), []
+        caller = SimpleNamespace(pid=123, poll=lambda: None)
+        api = MagicMock()
+        api.process.side_effect = lambda pid: events.append("identity") or {"pid": pid}
+        def sleep(seconds):
+            events.append("ack")
+            ack.write_text("ready", encoding="utf-8")
+            clock.sleep(seconds)
+        with patch.object(time, "monotonic", clock.monotonic), patch.object(time, "sleep", sleep):
+            assert_true(_acknowledged_caller_identity(api, caller, ack)["pid"] == 123
+                        and events == ["ack", "identity"], "identity capture follows caller acknowledgement")
+        ack.unlink()
+        for early_exit in (True, False):
+            clock = _PollingClock()
+            api.reset_mock()
+            caller.poll = lambda: 7 if early_exit else None
+            with patch.object(time, "monotonic", clock.monotonic), patch.object(time, "sleep", clock.sleep):
+                try:
+                    _acknowledged_caller_identity(api, caller, ack, 0.1)
+                except AssertionError as exc:
+                    assert_true(("exited" if early_exit else "timed out") in str(exc), "ack failure has a specific cause")
+                else:
+                    raise AssertionError("dead or unacknowledged caller acquired an identity")
+            api.process.assert_not_called()
+
+
+def _ready_failure_context(operation, process, *, commit, exit_caller,
+                           caller=None, api=None, expected=None, ack=None, started_at=None):
     """Bounded fixture evidence before its temporary operation is removed."""
     detail = {"operation": str(operation)[:512], "commit": commit, "exit_caller": exit_caller}
+    if caller is not None:
+        detail["caller_returncode"] = caller.poll()
+        detail["acknowledged"] = ack is not None and ack.is_file()
+        detail["identity_sample"] = "fixture observation at diagnostic time"
+        def identity(value):
+            return {key: value[key][:(512 if key == "image" else 64)] if isinstance(value[key], str) else value[key]
+                    for key in ("pid", "created", "image") if key in value and
+                    (type(value[key]) is int or isinstance(value[key], str))} if isinstance(value, dict) else None
+        detail["expected_identity"] = identity(expected)
+        try:
+            detail["observed_identity"] = identity(api.process(caller.pid)) if api else None
+        except (OSError, ValueError) as exc:
+            detail["observed_identity_error"] = type(exc).__name__
+        if started_at is not None:
+            detail["elapsed_seconds"] = round(time.monotonic() - started_at, 3)
     try:
         detail["worker_returncode"] = process.poll()
     except (OSError, ValueError) as exc:
@@ -1892,6 +2196,9 @@ def _ready_failure_context(operation, process, *, commit, exit_caller):
         detail["operation"] = detail["operation"][:256]
         detail["state"] = {"unavailable": "context_budget"}
         detail["worker_log_tail"] = detail.get("worker_log_tail", "")[-512:]
+        for key in ("expected_identity", "observed_identity"):
+            if isinstance(detail.get(key), dict):
+                detail[key].pop("image", None)
         text = json.dumps(detail, ensure_ascii=True)
     return "POSIX READY failure: " + text
 
@@ -1919,6 +2226,24 @@ def _check_ready_failure_context():
         (operation / "state.json").unlink()
         assert_true("state_unavailable" in _ready_failure_context(operation, process, commit=False, exit_caller=True),
                     "missing state remains a named evidence gap instead of hiding READY failure")
+        caller, api = MagicMock(), MagicMock()
+        caller.pid, caller.poll.return_value = 123, None
+        api.process.return_value = {"pid": 123, "created": 2, "image": "interpreter"}
+        ack = operation / "caller-ack"
+        ack.write_text("ready", encoding="utf-8")
+        text = _ready_failure_context(operation, process, commit=False, exit_caller=False,
+            caller=caller, api=api, expected={"pid": 123, "created": 1, "image": "launcher", "token": "secret-token"},
+            ack=ack, started_at=time.monotonic())
+        detail = json.loads(text.split(": ", 1)[1])
+        assert_true(detail["caller_returncode"] is None and detail["acknowledged"]
+                    and detail["expected_identity"]["created"] == 1 and detail["observed_identity"]["created"] == 2
+                    and "diagnostic time" in detail["identity_sample"] and "secret-token" not in text,
+                    "READY failure distinguishes a living caller's identity mismatch from an exit")
+        api.process.return_value["image"] = "\U0001f600" * 1000
+        (operation / "worker.log").write_bytes(b"\0" * 10000)
+        text = _ready_failure_context(operation, process, commit=False, exit_caller=False,
+            caller=caller, api=api, expected={"pid": 123, "created": 1, "image": "\U0001f600" * 1000}, ack=ack)
+        assert_true(len(text.encode("utf-8")) < 8100, "Unicode identity and escaped logs share the READY diagnostic budget")
 
 
 def _check_posix_worker_protocol():
@@ -1931,10 +2256,14 @@ def _check_posix_worker_protocol():
     with tempfile.TemporaryDirectory(prefix="posix-update-") as tmp:
         root = Path(tmp).resolve()
         for commit, exit_caller in ((False, False), (True, False), (True, True)):
-            caller = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console())
+            ack = root / ("caller-" + uuid_hex())
+            started_at = time.monotonic()
+            caller_code = ("import time; from pathlib import Path; Path(" + repr(str(ack)) +
+                           ").write_text('ready', encoding='utf-8'); time.sleep(60)")
+            caller = subprocess.Popen([sys.executable, "-c", caller_code], **no_console())
             process = None
             try:
-                identity = api.process(caller.pid)
+                identity = _acknowledged_caller_identity(api, caller, ack)
                 identity["parent"] = os.getpid()
                 operation = root / "updates" / uuid_hex()
                 operation.mkdir(parents=True)
@@ -1958,9 +2287,12 @@ def _check_posix_worker_protocol():
                                                stdout=log, stderr=log, start_new_session=True, **no_console())
                 until = time.monotonic() + 5
                 while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < until:
+                    if caller.poll() is not None:
+                        break
                     time.sleep(0.01)
-                if not (operation / "ready.json").exists():
-                    raise AssertionError(_ready_failure_context(operation, process, commit=commit, exit_caller=exit_caller))
+                if not (operation / "ready.json").exists() or caller.poll() is not None:
+                    raise AssertionError(_ready_failure_context(operation, process, commit=commit, exit_caller=exit_caller,
+                        caller=caller, api=api, expected=identity, ack=ack, started_at=started_at))
                 if commit:
                     worker.atomic_json(operation / "commit.json", {"token": token})
                 if exit_caller:

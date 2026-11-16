@@ -6,12 +6,13 @@ import re
 
 from exoma.config.settings import JOB_DIR
 from exoma.core.workspace.workspace_paths import workflow_paths
+from exoma.utils.osutil import open_snapshot
 from exoma.utils.redact import redact_value
 
 
 def _read(path, limit=262144):
     try:
-        with Path(path).open("rb") as stream:
+        with open_snapshot(Path(path), binary=True) as stream:
             raw = stream.read(limit + 1)
         if len(raw) > limit:
             return {"unavailable": "size_limit"}

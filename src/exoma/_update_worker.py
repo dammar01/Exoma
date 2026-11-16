@@ -30,19 +30,75 @@ DIAGNOSTIC_PIDS = 8
 DIAGNOSTIC_RECORDS = 32
 DIAGNOSTIC_PARENT_HOPS = 8
 DIAGNOSTIC_STRING_CHARS = 256
+DIAGNOSTIC_SITES = {"owner_init", "spawn", "register", "release", "wait", "child_cleanup",
+                    "owner_cleanup", "inventory", "exit_observation", "signal_term", "signal_kill",
+                    "child_reap", "monitor_close", "signal_probe", "receipt_wait", "receipt_read",
+                    "receipt_parse", "receipt_validate"}
+DIAGNOSTIC_TYPES = {"OSError", "ProcessLookupError", "PermissionError", "TimeoutError", "ValueError",
+                    "SubprocessError", "TimeoutExpired", "BrokenPipeError", "JSONDecodeError"}
 
 
 def _diagnostic_error(site, exc):
     # Never persist str/repr(exc): subprocess exceptions can include argv/secrets.
-    sites = {"owner_init", "spawn", "register", "release", "wait", "child_cleanup",
-             "owner_cleanup", "inventory", "exit_observation", "signal_term", "signal_kill",
-             "child_reap", "monitor_close"}
-    kinds = {"OSError", "ProcessLookupError", "PermissionError", "TimeoutError",
-             "ValueError", "SubprocessError", "TimeoutExpired", "BrokenPipeError"}
     number = getattr(exc, "errno", None)
-    return {"site": site if site in sites else "unknown",
-            "type": type(exc).__name__ if type(exc).__name__ in kinds else "Exception",
+    return {"site": site if site in DIAGNOSTIC_SITES else "unknown",
+            "type": type(exc).__name__ if type(exc).__name__ in DIAGNOSTIC_TYPES else "Exception",
             "errno": number if type(number) is int and abs(number) < 2 ** 31 else None}
+
+
+def cleanup_diagnostic_projection(receipt):
+    """Allowlisted evidence only; never copy legacy error strings, requests or argv."""
+    def number(value):
+        return value if type(value) is int and abs(value) < 2 ** 64 else None
+    def error(value):
+        if not isinstance(value, dict):
+            return None
+        return {"site": value.get("site") if isinstance(value.get("site"), str) and value["site"] in DIAGNOSTIC_SITES else "unknown",
+                "type": value.get("type") if isinstance(value.get("type"), str) and value["type"] in DIAGNOSTIC_TYPES else "Exception",
+                "errno": number(value.get("errno"))}
+    if not isinstance(receipt, dict):
+        return {"malformed": True}
+    result = {"cleanup_confirmed": receipt.get("cleanup_confirmed") is True,
+              "exit_code": number(receipt.get("exit_code"))}
+    diagnostic = receipt.get("diagnostics")
+    if not isinstance(diagnostic, dict):
+        return result
+    result["stage_error"] = error(diagnostic.get("stage_error"))
+    errors = diagnostic.get("cleanup_errors")
+    result["cleanup_errors"] = [error(value) for value in errors[:8]] if isinstance(errors, list) else []
+    child = diagnostic.get("child")
+    if isinstance(child, dict):
+        lifecycle = {key: child.get(key) is True for key in ("exit_observed", "synthetic_exit", "release_requested")}
+        lifecycle["child_returncode"] = number(child.get("child_returncode"))
+        lifecycle["reap_outcome"] = child.get("reap_outcome") if child.get("reap_outcome") in (
+            "no_child", "not_attempted", "pending", "reaped", "failed") else "unknown"
+        signals = child.get("signals_attempted")
+        lifecycle["signals_attempted"] = [s for s in signals[:4] if s in ("SIGTERM", "SIGKILL")] if isinstance(signals, list) else []
+        probe = child.get("group_probe")
+        if isinstance(probe, dict):
+            lifecycle["group_probe"] = {
+                "status": probe.get("status") if probe.get("status") in ("not_attempted", "present", "absent", "error") else "unknown",
+                "error": error(probe.get("error"))}
+        result["child"] = lifecycle
+    ancestry = diagnostic.get("ancestry")
+    if isinstance(ancestry, dict):
+        projected = {key: number(ancestry.get(key)) for key in ("rejected_count", "omitted_pids", "omitted_records")}
+        records = ancestry.get("records")
+        projected["records"] = []
+        for row in records[:8] if isinstance(records, list) else []:
+            if not isinstance(row, dict):
+                continue
+            projected["records"].append({
+                "snapshot": row.get("snapshot") if row.get("snapshot") in ("baseline", "current") else "unknown",
+                **{key: number(row.get(key)) for key in ("pid", "parent", "created", "uniqueid", "parent_uniqueid", "version", "parent_version")},
+                "generation_source": row.get("generation_source") if row.get("generation_source") in ("native", "ps_fallback") else "unknown",
+                "query_error": error(row.get("query_error")),
+                "lineage_error": error(row.get("lineage_error"))})
+        result["ancestry"] = projected
+    if len(json.dumps(result, ensure_ascii=True)) > 4096:
+        result.pop("ancestry", None)
+        result["truncated"] = True
+    return result
 
 
 class _ProcessInventory(dict):
@@ -82,6 +138,9 @@ def _ancestry_diagnostics(baseline, current, remaining):
                 strings_truncated |= isinstance(generation, str) and len(generation) > DIAGNOSTIC_STRING_CHARS
                 record = {"snapshot": name, "pid": pid, "parent": row["parent"],
                           "created": _diagnostic_generation(generation)}
+                for field in ("uniqueid", "parent_uniqueid", "version", "parent_version"):
+                    if type(row.get(field)) is int and 0 <= row[field] < 2 ** 64:
+                        record[field] = row[field]
                 status = getattr(inventory, "query_status", {}).get(pid)
                 record.update(status or {"generation_source": "unknown"})
                 selected.append(record)
@@ -407,6 +466,34 @@ class Posix:
     def parents(self):
         return {os.getpid(): os.getppid()}
 
+    def lineage(self, pid):
+        """Darwin libproc lifetime IDs and original-parent exec version.
+
+        proc_info.h: PROC_PIDUNIQIDENTIFIERINFO (17), 56-byte ABI. This private
+        flavor is optional: an unavailable/short record cannot prove ancestry.
+        """
+        if sys.platform != "darwin":
+            return None
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+        library.proc_pidinfo.restype = ctypes.c_int
+        info = ctypes.create_string_buffer(56)
+        ctypes.set_errno(0)
+        size = library.proc_pidinfo(pid, 17, 0, info, len(info))
+        if size != len(info):
+            raise OSError(ctypes.get_errno() or errno.EIO, "cannot verify process birth lineage")
+        uniqueid = ctypes.c_uint64.from_buffer(info, 16).value
+        parent_uniqueid = ctypes.c_uint64.from_buffer(info, 24).value
+        if not uniqueid or uniqueid == parent_uniqueid:
+            raise ValueError("invalid native process lineage")
+        # p_puniqueid survives reparenting, but exec's replacement proc may
+        # acquire its adoptive parent's ID. p_orig_ppidversion is copied across
+        # exec and must match a sampled version of that parent before we trust
+        # the edge. Older kernels reserve this field as zero: no new proof.
+        return {"uniqueid": uniqueid, "parent_uniqueid": parent_uniqueid,
+                "version": ctypes.c_uint32.from_buffer(info, 32).value,
+                "parent_version": ctypes.c_uint32.from_buffer(info, 36).value}
+
     def open_identity(self, pid, expected=None):
         try:
             identity = self.process(pid)
@@ -484,15 +571,22 @@ class PosixChildJob:
     def __init__(self, api, key, lock):
         self.api, self.lock, self.proc = api, lock, None
         self.cleanup_unconfirmed, self.result, self.early_reply = False, None, None
+        self.diagnostics = {}
 
     def run(self, argv, cwd, log, timeout, tick):
         if self.cleanup_unconfirmed:
             raise OSError("previous guardian cleanup is unconfirmed")
         self.result, self.early_reply = None, None
-        self.proc = subprocess.Popen([sys.executable, "-I", "-S", "-B", __file__, "--guardian"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            start_new_session=True, pass_fds=(self.lock.handle.fileno(),), text=True)
         receipt = Path(log).with_name(Path(log).name + ".cleanup-" + uuid.uuid4().hex + ".json")
+        self.diagnostics = {"receipt": receipt.name, "status": "spawning"}
+        try:
+            self.proc = subprocess.Popen([sys.executable, "-I", "-S", "-B", __file__, "--guardian"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                start_new_session=True, pass_fds=(self.lock.handle.fileno(),), text=True)
+        except Exception as exc:
+            self.diagnostics.update(status="spawn_failed", failure=_diagnostic_error("spawn", exc))
+            raise
+        self.diagnostics["status"] = "pending"
         request = {"argv": argv, "cwd": str(cwd), "log": str(log), "timeout": timeout,
                    "receipt": str(receipt)}
         self.proc.stdin.write(json.dumps(request) + "\n")
@@ -526,19 +620,31 @@ class PosixChildJob:
 
     def cleanup(self):
         if self.proc:
+            site = "receipt_wait"
             try:
                 if not self.proc.stdin.closed:
                     try:
                         self.proc.stdin.close()  # EOF is also sent on supervisor death.
                     except BrokenPipeError:
                         pass
-                self.proc.wait(timeout=15)
-                reply = self.early_reply or json.loads(self.proc.stdout.readline(8192))
+                returned = self.proc.wait(timeout=15)
+                if type(returned) is int:
+                    self.diagnostics["guardian_exit_code"] = returned
+                site = "receipt_read"
+                raw = self.proc.stdout.readline(8192) if self.early_reply is None else None
+                site = "receipt_parse"
+                reply = self.early_reply if self.early_reply is not None else json.loads(raw)
+                try:
+                    self.diagnostics.update(status="received", reply=cleanup_diagnostic_projection(reply))
+                except Exception:
+                    self.diagnostics.update(status="received", projection_unavailable=True)
+                site = "receipt_validate"
                 if not isinstance(reply, dict) or reply.get("cleanup_confirmed") is not True or not isinstance(reply.get("exit_code"), int):
                     raise OSError("guardian did not confirm stage cleanup")
                 self.result = reply
-            except (OSError, ValueError, subprocess.TimeoutExpired):
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
                 self.cleanup_unconfirmed = True
+                self.diagnostics.update(status="unconfirmed", failure=_diagnostic_error(site, exc))
             finally:
                 self.proc.stdout.close()
                 self.proc = None
@@ -622,10 +728,19 @@ class DescendantOwner:
                 created = stamp
                 source, query_error = "ps_fallback", exc
             result[pid] = {"created": created, "parent": int(parent)}
+            lineage_error = None
+            try:
+                lineage = api.lineage(pid)
+                if lineage is not None:
+                    result[pid].update(lineage)
+            except (OSError, ValueError) as exc:
+                lineage_error = exc
             try:
                 result.query_status[pid] = {"generation_source": source,
                                             "query_error": _diagnostic_error("inventory", query_error)
-                                            if query_error else None}
+                                             if query_error else None,
+                                             "lineage_error": _diagnostic_error("inventory", lineage_error)
+                                             if lineage_error else None}
             except Exception:
                 result.diagnostics_unavailable = True
         return result
@@ -633,19 +748,106 @@ class DescendantOwner:
     def cleanup(self):
         if not self.subreaper:
             current = self.inventory()
+            def lineage(row):
+                return (isinstance(row, dict) and type(row.get("uniqueid")) is int
+                        and 0 < row["uniqueid"] < 2 ** 64 and type(row.get("parent_uniqueid")) is int
+                        and 0 <= row["parent_uniqueid"] < 2 ** 64 and row["uniqueid"] != row["parent_uniqueid"])
             def unchanged(pid):
+                if lineage(current.get(pid)) and lineage(self.baseline.get(pid)):
+                    return current[pid]["uniqueid"] == self.baseline[pid]["uniqueid"]
                 return pid in current and pid in self.baseline and (
                     current[pid]["created"] == self.baseline[pid]["created"])
+            def outside_baseline(pid):
+                seen = set()
+                while pid in self.baseline and pid not in seen:
+                    if pid == os.getpid():
+                        return False
+                    if pid == 1:
+                        return True
+                    seen.add(pid)
+                    pid = self.baseline[pid]["parent"]
+                return False
+            # A birth edge to launchd is proof; an adoptive PPID of 1 is not.
+            root = self.baseline.get(os.getpid())
+            foreign_ids = {row["uniqueid"] for pid, row in self.baseline.items()
+                           if lineage(row) and outside_baseline(pid)} if lineage(root) else set()
+            edges, versions, conflicts, possible_owned = {}, {}, set(), set()
+            root_sample = root if lineage(root) else current.get(os.getpid())
+            if lineage(root_sample):
+                possible_owned.add(root_sample["uniqueid"])
+            raw_edges = []
+            for snapshot in (self.baseline, current):
+                for pid, row in snapshot.items():
+                    if lineage(row):
+                        raw_edges.append((row["uniqueid"], row["parent_uniqueid"]))
+                        version, parent_version = row.get("version"), row.get("parent_version")
+                        if type(version) is int and 0 < version < 2 ** 32:
+                            versions.setdefault(row["uniqueid"], set()).add(version)
+                        if type(parent_version) is not int or not 0 < parent_version < 2 ** 32:
+                            continue
+                        edge = (pid, row["parent_uniqueid"], parent_version)
+                        previous = edges.get(row["uniqueid"])
+                        if previous and (previous[0] != pid or previous[2] != parent_version):
+                            conflicts.add(row["uniqueid"])
+                        edges[row["uniqueid"]] = edge
+            # Native evidence of possible ownership vetoes the PPID fallback
+            # even when an old kernel/query cannot provide a parent version.
+            while True:
+                children = {child for child, parent in raw_edges if parent in possible_owned}
+                if children <= possible_owned:
+                    break
+                possible_owned.update(children)
+            for uniqueid in conflicts:
+                edges.pop(uniqueid, None)
+                foreign_ids.discard(uniqueid)
+            def birth_foreign(pid):
+                row = current.get(pid)
+                if not lineage(row):
+                    return None
+                if row["uniqueid"] in possible_owned:
+                    return False
+                parent = current.get(row.get("parent")) if type(row.get("parent")) is int else None
+                contradiction = lineage(parent) and row["parent_uniqueid"] != parent["uniqueid"]
+                if not foreign_ids:
+                    return False if contradiction else None
+                uniqueid, seen = row["uniqueid"], set()
+                if uniqueid in conflicts:
+                    return False
+                if uniqueid in foreign_ids:
+                    return True  # This lifetime already existed outside the guardian.
+                if uniqueid not in edges:
+                    return False if contradiction else None
+                while uniqueid not in seen:
+                    if uniqueid == root["uniqueid"]:
+                        return False
+                    if uniqueid in foreign_ids:
+                        return True
+                    if uniqueid not in edges:
+                        return False
+                    seen.add(uniqueid)
+                    _, parent, parent_version = edges[uniqueid]
+                    if parent == root["uniqueid"]:
+                        return False
+                    if parent_version not in versions.get(parent, set()):
+                        return False  # An adoptive parent after exec is not birth proof.
+                    uniqueid = parent
+                return False
             def foreign(pid):
+                proof = birth_foreign(pid)
+                if proof is not None:
+                    return proof
                 seen = set()
                 while pid in current and pid not in seen:
+                    if pid in {0, 1, os.getpid()}:
+                        return False  # An adoptive root is never fallback foreign proof.
+                    proof = birth_foreign(pid)
+                    if proof is not None:
+                        return proof
                     # A surviving parent that predated our stage and is outside
                     # our guardian proves foreign ancestry. PID 1 is excluded:
                     # escaped descendants may already have been reparented to it.
-                    if pid not in {0, 1, os.getpid()} and unchanged(pid):
+                    if unchanged(pid):
                         return True
-                    if pid == os.getpid():
-                        return False
                     seen.add(pid)
                     pid = current[pid]["parent"]
                 return False
@@ -687,7 +889,8 @@ def guardian():
     stage_error, cleanup_errors, site = None, [], "owner_init"
     lifecycle = {"registered_child": None, "release_requested": False,
                  "exit_observed": False, "signals_attempted": [],
-                 "child_returncode": None, "reap_outcome": "no_child", "synthetic_exit": False}
+                 "child_returncode": None, "reap_outcome": "no_child", "synthetic_exit": False,
+                 "group_probe": {"status": "not_attempted"}}
 
     def observed_exit():
         exited = monitor.exited()
@@ -787,10 +990,12 @@ def guardian():
                 if reap_error is None and exit_before_kill:
                     try:
                         os.killpg(child.pid, 0)  # signal 0: never destructive
+                        lifecycle["group_probe"] = {"status": "present"}
                     except ProcessLookupError:
                         group_absent = True
-                    except OSError:
-                        pass
+                        lifecycle["group_probe"] = {"status": "absent"}
+                    except OSError as exc:
+                        lifecycle["group_probe"] = {"status": "error", "error": _diagnostic_error("signal_probe", exc)}
                 if not group_absent:
                     cleanup_failed("signal_kill", kill_denied)
             if reap_error is not None:
@@ -1210,6 +1415,12 @@ def run_request(operation):
             state.update(cleanup_error=cleanup_error, recovery="Confirm updater children and reservation ownership before repair; do not replay the package stage.")
             if os.name != "nt":
                 state["recovery_argv"] = [sys.executable, "-I", "-S", "-B", __file__, "--recover", str(operation)]
+        try:
+            diagnostic = getattr(job, "diagnostics", None)
+            if isinstance(diagnostic, dict) and diagnostic:
+                state["cleanup_diagnostics"] = diagnostic
+        except Exception:
+            state["cleanup_diagnostics"] = {"unavailable": True}
         # Terminal publication follows BOTH process cleanup and admission release.
         save(final_phase, finished_at=time.time(), cleanup_confirmed=cleanup_error is None,
              completed=cleanup_error is None)

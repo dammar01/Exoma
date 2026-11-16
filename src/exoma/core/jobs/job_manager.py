@@ -901,7 +901,8 @@ class JobManager:
             if index < keep_last:
                 continue
             try:
-                job = json.loads(path.read_text(encoding="utf-8"))
+                with osutil.open_snapshot(path) as file:
+                    job = json.load(file)
             except (OSError, json.JSONDecodeError):
                 continue
             if job.get("status") not in {"completed", "failed"}:
@@ -1199,7 +1200,8 @@ class JobManager:
         n = 0
         for path in self.job_dir.glob("*.json"):
             try:
-                rec = json.loads(path.read_text(encoding="utf-8"))
+                with osutil.open_snapshot(path) as file:
+                    rec = json.load(file)
             except (OSError, ValueError):
                 continue
             if not isinstance(rec, dict) or rec.get("reaped"):
@@ -1305,7 +1307,8 @@ class JobManager:
     def assert_update_admission(self):
         path = self.job_dir / ".update-reservation.json"
         if path.exists():
-            claim = json.loads(path.read_text(encoding="utf-8"))
+            with osutil.open_snapshot(path) as file:
+                claim = json.load(file)
             if not isinstance(claim, dict) or not claim.get("token") or os.environ.get("WORKFLOW_UPDATE_OWNER") != claim["token"]:
                 raise ValueError("package update owns admission; inspect its operation before submitting jobs")
 
@@ -1324,7 +1327,8 @@ class JobManager:
                 return True
         def read(path):
             try:
-                value = json.loads(path.read_text(encoding="utf-8"))
+                with osutil.open_snapshot(path) as file:
+                    value = json.load(file)
             except FileNotFoundError:
                 return None  # A concurrent confirmed completion can remove its record.
             except (OSError, ValueError) as exc:
@@ -1355,7 +1359,8 @@ class JobManager:
             self.assert_update_admission()
             self.assert_cleanup_admission()
             for path in self.job_dir.glob("job_*.json"):
-                job = json.loads(path.read_text(encoding="utf-8"))
+                with osutil.open_snapshot(path) as file:
+                    job = json.load(file)
                 if not isinstance(job, dict):
                     raise ValueError("unreadable job admission record")
                 if _cleanup_unconfirmed(job) or job.get("status") in {"pending", "running", "recovering"} and (
@@ -1453,7 +1458,7 @@ class JobManager:
     @staticmethod
     def _read_side(path: Path) -> dict | None:
         try:
-            with path.open("r", encoding="utf-8") as file:
+            with osutil.open_snapshot(path) as file:
                 data = json.load(file)
         except (OSError, json.JSONDecodeError):
             return None
@@ -1463,7 +1468,7 @@ class JobManager:
         return self.lock_dir / f"{self._safe(session_id)}.lock"
 
     def _load(self, job_id: str) -> dict:
-        with self._path(job_id).open("r", encoding="utf-8") as file:
+        with osutil.open_snapshot(self._path(job_id)) as file:
             return json.load(file)
 
     def _save(self, job: dict) -> None:
@@ -1581,7 +1586,7 @@ class JobManager:
     @staticmethod
     def _read_lock(path: Path) -> dict | None:
         try:
-            with path.open("r", encoding="utf-8") as file:
+            with osutil.open_snapshot(path) as file:
                 data = json.load(file)
             return data if isinstance(data, dict) else None
         except (OSError, json.JSONDecodeError):

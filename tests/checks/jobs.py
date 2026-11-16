@@ -516,6 +516,7 @@ def _test_job_cancellation_and_diagnostics():
     from exoma.core.evidence.result_shaping import _verify_exit_code
     with tempfile.TemporaryDirectory(prefix="job-cancel-") as tmp:
         root = Path(tmp).resolve()
+        _check_job_snapshot_sharing(root)
         original_cwd = Path.cwd()
         try:
             os.chdir(root)
@@ -651,6 +652,152 @@ def _test_job_cancellation_and_diagnostics():
                 osutil.terminate_tree(process)
             waiter.join(timeout=5)
         _check_worker_provider_cancellation(root)
+
+
+def _check_job_snapshot_sharing(root):
+    """Readers share publisher access and release complete snapshots promptly."""
+    from unittest.mock import patch
+    from concurrent.futures import ThreadPoolExecutor
+    from exoma.core.jobs.diagnostics import _read
+    from exoma.utils import osutil
+
+    manager = JobManager(root / "snapshot-jobs")
+    job = manager.create_job("analyze", "old ü", "snapshot-session", str(root), None)
+    path = manager._path(job["job_id"])
+    blocked, release = threading.Event(), threading.Event()
+    real_replace = os.replace
+
+    def replace(source, target):
+        try:
+            return real_replace(source, target)
+        except PermissionError:
+            blocked.set()
+            assert_true(release.wait(5), "reader releases its snapshot before the writer retries")
+            raise
+
+    with ThreadPoolExecutor(max_workers=1) as pool, \
+            patch("exoma.core.workspace.workspace_paths.os.replace", side_effect=replace):
+        old = osutil.open_snapshot(path)
+        try:
+            assert_true(not os.get_inheritable(old.fileno()), "snapshot descriptors are not inherited by workers")
+            pending = pool.submit(manager._save, {**job, "task": "new ü"})
+            if os.name == "nt":
+                # MoveFileEx can still require the destination reader to close.
+                assert_true(blocked.wait(5) or pending.done(), "publisher reaches replacement")
+            else:
+                pending.result(timeout=5)
+            assert_true(json.load(old)["task"] == "old ü", "a reader sees one complete old snapshot")
+        finally:
+            old.close()
+            release.set()
+        pending.result(timeout=10)
+    assert_true(manager.get_job(job["job_id"])["task"] == "new ü",
+                "publisher replaces the record after reader release within its existing retry policy")
+    with osutil.open_snapshot(path, binary=True) as stream:
+        assert_true(isinstance(stream.read(1), bytes), "bounded diagnostics can read binary snapshots")
+    try:
+        with osutil.open_snapshot(path.with_name("missing.json")):
+            raise AssertionError("opening a snapshot must not create a missing file")
+    except FileNotFoundError:
+        pass
+
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel32 = osutil._windows_kernel32()
+        info = kernel32.GetHandleInformation
+        info.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        info.restype = wintypes.BOOL
+
+        def assert_closed(handle):
+            flags = wintypes.DWORD()
+            assert_true(not info(handle, ctypes.byref(flags)) and ctypes.get_last_error() == 6,
+                        "snapshot ownership closes the native handle exactly once")
+
+        # Deterministic sharing conflict: no sleeps, thread scheduling or retry needed.
+        delete_handle = kernel32.CreateFileW(str(path), 0x10000, 7, None, 3, 0x80, None)
+        assert_true(delete_handle != wintypes.HANDLE(-1).value, "fixture holds DELETE access for a publisher")
+        try:
+            try:
+                with path.open("r", encoding="utf-8"):
+                    raise AssertionError("plain open unexpectedly shared the publisher's DELETE access")
+            except PermissionError:
+                pass
+            assert_true(manager.get_job(job["job_id"])["task"] == "new ü" and _read(path)["task"] == "new ü",
+                        "production job and diagnostic readers coexist with publisher DELETE access")
+        finally:
+            kernel32.CloseHandle(delete_handle)
+
+        exclusive = kernel32.CreateFileW(str(path), 0x80000000, 0, None, 3, 0x80, None)
+        assert_true(exclusive != wintypes.HANDLE(-1).value, "fixture holds an incompatible exclusive reader")
+        try:
+            try:
+                manager.get_job(job["job_id"])
+            except PermissionError as error:
+                assert_true(error.winerror == 32 and error.filename == str(path),
+                            "real sharing denial retains native error and filename")
+            else:
+                raise AssertionError("a denied read must not become a missing or successful job")
+            try:
+                manager.retained_cleanup_claims(root)
+            except ValueError as error:
+                assert_true(isinstance(error.__cause__, PermissionError), "admission retains the read failure cause")
+            else:
+                raise AssertionError("unreadable jobs must not authorize cleanup admission")
+            assert_true(manager._read_side(path) is None and manager._read_lock(path) is None
+                        and _read(path).get("unavailable"), "best-effort readers retain their unavailable policy")
+        finally:
+            kernel32.CloseHandle(exclusive)
+
+        with osutil.open_snapshot(path) as stream:
+            native = msvcrt.get_osfhandle(stream.fileno())
+        assert_closed(native)
+
+        real_create, real_transfer = kernel32.CreateFileW, msvcrt.open_osfhandle
+        for fail_transfer in (True, False):
+            handles, descriptors = [], []
+            failure = OSError("fixture stream ownership failure")
+
+            def create(*args):
+                handle = real_create(*args)
+                handles.append(handle)
+                return handle
+
+            def transfer(*args):
+                if fail_transfer:
+                    raise failure
+                fd = real_transfer(*args)
+                descriptors.append(fd)
+                return fd
+
+            with patch.object(kernel32, "CreateFileW", side_effect=create), \
+                    patch("msvcrt.open_osfhandle", side_effect=transfer), \
+                    patch("os.fdopen", side_effect=failure):
+                try:
+                    osutil.open_snapshot(path)
+                except OSError as error:
+                    assert_true(error is failure, "snapshot setup propagates its original failure")
+                else:
+                    raise AssertionError("snapshot setup failure was suppressed")
+            assert_true(len(handles) == 1, "failed setup opens only one native handle")
+            assert_closed(handles[0])
+            for fd in descriptors:
+                try:
+                    os.fstat(fd)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("failed stream construction leaked a descriptor")
+
+    path.write_text("{", encoding="utf-8")
+    try:
+        manager.get_job(job["job_id"])
+    except json.JSONDecodeError:
+        pass
+    else:
+        raise AssertionError("snapshot opening must not hide malformed job JSON")
 
 
 def _check_worker_provider_cancellation(root):

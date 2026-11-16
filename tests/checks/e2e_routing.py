@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -26,6 +27,7 @@ from urllib.parse import quote
 from exoma.core.evidence.contract import validate_verification_contract
 from exoma.core.evidence.e2e import preflight as e2e_preflight
 from exoma.core.evidence.e2e import runner as e2e_runner
+from exoma.core.evidence.e2e import redact as e2e_redact
 from exoma.core.evidence.e2e.request import CONFIG_ONLY_SETTINGS, config_settings, draft_path, load_request, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
 from exoma.core.evidence.e2e.runner import FAKE_ENV
 from exoma.core.evidence.e2e.spec import parse_spec
@@ -33,6 +35,7 @@ from exoma.core.evidence.result_shaping import _finalize_verify_result, _verify_
 from exoma.core.provider.executor import Executor
 from exoma.core.runtime.state import ensure_workflow_workspace
 from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
+from exoma.utils.redact import redact_value
 from tests.checks.support import assert_true
 from tests.checks.support import no_console
 
@@ -315,6 +318,110 @@ def _flow(root: Path, adapter, fake: str | None, env: dict | None = None, *, set
     return draft, result
 
 
+def _failure_context(root: Path, result: dict, env: dict | None = None) -> str:
+    """Bounded, scrubbed diagnostic before the fixture deletes its artifacts."""
+    allowed = {"ok", "phase", "verdict", "error_type", "reason", "status", "errors", "not_verified",
+               "preflight", "attempts", "stages", "stage", "draft", "reviewer_error", "detail",
+               "returncode", "timed_out", "stalled", "events", "attempt", "duration_seconds",
+               "browser_verdict", "stderr_tail", "malformed", "diagnosis", "bucket",
+               "blocking_findings", "warnings", "kind", "cleanup", "groups", "cleans"}
+    nodes = 256
+    def selected(value, depth=0):
+        nonlocal nodes
+        nodes -= 1
+        if nodes < 0 or depth > 6:
+            return "[context budget]"
+        if isinstance(value, str):
+            clean = e2e_redact.scrub_resolved(value, env or {})
+            return redact_value(clean)[0][:4000]
+        if value is None or type(value) in (bool, int):
+            return value
+        if type(value) is float:
+            return value if math.isfinite(value) else "[nonfinite number]"
+        if isinstance(value, dict):
+            return {key: selected(child, depth + 1) for key, child in value.items() if key in allowed}
+        if isinstance(value, list):
+            return [selected(child, depth + 1) for child in value[:12]]
+        return "[unsupported type]"
+    meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    e2e = meta.get("e2e") if isinstance(meta.get("e2e"), dict) else {}
+    context = {"result": selected({"ok": result.get("ok"), **meta}), "e2e": selected(e2e)}
+    # Canonical gaps are text, not necessarily fields in meta. Keep only the
+    # failure sections, never the complete provider response or checks/prompts.
+    sections, active = {}, None
+    content = result.get("content")
+    if isinstance(content, str):
+        content = redact_value(e2e_redact.scrub_resolved(content, env or {}))[0]
+        for line in content[:32768].splitlines()[:256]:
+            stripped = line.strip()
+            if stripped.endswith(":") and not stripped.startswith("-"):
+                active = stripped[:-1] if stripped[:-1] in ("not_verified", "blocking_findings") else None
+            elif active and stripped.startswith("-"):
+                sections.setdefault(active, []).append(stripped)
+    context["verification"] = selected(sections)
+    artifact = e2e.get("artifacts")
+    context["report_status"] = "missing"
+    if isinstance(artifact, str):
+        try:
+            directory = Path(artifact)
+            report = (directory if directory.is_absolute() else root / directory) / "report.json"
+            if not report.resolve().is_relative_to(root.resolve()):
+                context["report_status"] = "outside_root"
+            else:
+                with report.open("rb") as stream:
+                    raw = stream.read(32769)
+                if len(raw) > 32768:
+                    context["report_status"] = "oversized"
+                else:
+                    value = json.loads(raw)
+                    context["report_status"] = "parsed" if isinstance(value, dict) else "malformed"
+                    if isinstance(value, dict):
+                        context["report"] = selected(value)
+        except FileNotFoundError:
+            context["report_status"] = "missing"
+        except (OSError, ValueError):
+            context["report_status"] = "unreadable_or_malformed"
+    text = json.dumps(context, ensure_ascii=True)
+    return text if len(text) <= 12000 else text[:11950] + " [truncated]"
+
+
+def _check_failure_context():
+    with tempfile.TemporaryDirectory(prefix="e2e-diagnostic-") as tmp, tempfile.TemporaryDirectory(prefix="e2e-foreign-") as other:
+        root, foreign = Path(tmp), Path(other)
+        sentinel = "fixture-credential-sentinel"
+        result = {"ok": False, "content": "[VERIFICATION]\nnot_verified:\n- hybrid review unavailable\nchecks_run:\n- withheld prompt",
+                  "meta": {"phase": "run", "verdict": "incomplete",
+                  "not_verified": ["review unavailable"], "stages": [{"stage": 2, "returncode": 1, "stalled": True}],
+                  "e2e": {"artifacts": str(root), "reviewer_error": "provider_failure",
+                          "draft": {"status": "ready", "scenario": {"password": sentinel}}}}}
+        report = root / "report.json"
+        report.write_text(json.dumps({"browser_verdict": "incomplete", "stderr_tail": "child error " + sentinel,
+                                     "malformed": ["protocol error"], "env": {"secret": sentinel}}), encoding="utf-8")
+        text = _failure_context(root, result, {"E2E_PASSWORD": sentinel})
+        assert_true(all(word in text for word in ("stalled", "provider_failure", "protocol error", "parsed", "hybrid review unavailable"))
+                    and sentinel not in text and '"scenario"' not in text and '"env"' not in text and "withheld prompt" not in text,
+                    "failure context names player/review failures while withholding inputs and resolved secrets")
+        report.write_text("{", encoding="utf-8")
+        assert_true("unreadable_or_malformed" in _failure_context(root, result), "malformed report cannot mask the assertion")
+        report.write_bytes(b"x" * 32769)
+        assert_true("oversized" in _failure_context(root, result), "oversized report is not dumped")
+        report.unlink()
+        assert_true("missing" in _failure_context(root, result), "missing report is a named gap")
+        (foreign / "report.json").write_text(json.dumps({"stderr_tail": sentinel}), encoding="utf-8")
+        result["meta"]["e2e"]["artifacts"] = str(foreign)
+        text = _failure_context(root, result)
+        assert_true("outside_root" in text and sentinel not in text, "diagnostics cannot read an arbitrary external path")
+        result["meta"]["not_verified"] = ["\U0001f600" * 10000] * 20
+        assert_true(len(_failure_context(root, result).encode("utf-8")) <= 12000, "Unicode failure context has a final byte budget")
+        draft = {"ok": False, "meta": {"phase": "draft", "e2e": {"draft": {"status": "invalid", "errors": ["spec_invalid"]}}}}
+        assert_true("spec_invalid" in _failure_context(root, draft), "an unrecovered draft is distinguishable from a run failure")
+        header = "\nnot_verified:\n- "
+        prefix = "#" * (32768 - len(header) - len(sentinel) // 2)
+        cut = {"content": prefix + header + sentinel, "meta": {}}
+        assert_true(sentinel[:len(sentinel) // 2] not in _failure_context(root, cut, {"E2E_PASSWORD": sentinel}),
+                    "resolved secrets are scrubbed before the canonical section read budget can split them")
+
+
 def _scenario(reply: str = _SPEC_REPLY) -> dict:
     return parse_spec(reply)["scenario"]
 
@@ -559,6 +666,7 @@ def _test_e2e_routing() -> None:
     real_display = e2e_runner.display_available
     e2e_runner.display_available = lambda: True
     try:
+        _check_failure_context()
         _check_auto_browser_flow(workspace)
         # --- pass: draft (stage 1) → confirmed run → fake player → stage 3 clean → pass ---
         root = workspace("e2e-pass-")
@@ -1024,7 +1132,9 @@ def _test_e2e_routing() -> None:
         # --- continuation that supplies the section recovers the draft ------------------------
         root = workspace("e2e-recover-")
         _, result = _flow(root, _adapter(spec=[_EVIDENCE_ONLY, _SPEC_ONLY]), "pass", {"E2E_USER": "u"})
-        assert_true(result["meta"].get("verdict") == "pass", f"a recovered spec runs to a verdict: {result['meta'].get('verdict')}")
+        if result["meta"].get("verdict") != "pass":
+            raise AssertionError("a recovered spec runs to a verdict:\n" +
+                                 _failure_context(root, result, {"E2E_USER": "u"}))
 
         # --- section present but unparsed (no fence) → one repair quoting the parser ---------
         unfenced = _SPEC_REPLY.replace("```json\n", "").replace("\n```", "")
