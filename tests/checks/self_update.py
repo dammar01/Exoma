@@ -2432,25 +2432,35 @@ def _check_posix_observer(root, api):
         "        time.sleep(0.2)\n\n\ndef callers"))
     assert_true("observer-ready.json" in source, "observer readiness fixture is installed")
     script.write_text(source, encoding="utf-8")
-    caller = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console())
+    ack = operation / "caller-ready"
+    started_at = time.monotonic()
+    caller_code = ("import time; from pathlib import Path; Path(" + repr(str(ack)) +
+                   ").write_text('ready', encoding='utf-8'); time.sleep(60)")
+    caller = subprocess.Popen([sys.executable, "-c", caller_code], **no_console())
     process = observer = None
     marker = operation / "package-ready"
     try:
+        identity = _acknowledged_caller_identity(api, caller, ack)
         token = uuid_hex()
         worker.atomic_json(operation / "request.json", {
             "schema_version": worker.SCHEMA, "operation_id": operation.name,
             "installation_key": worker.installation_key(root / "observer-target", api.user()),
             "token": token, "prefix": str(root / "observer-target"), "python_relative": "bin/python",
             "package": [sys.executable, "-c", "import pathlib,time; pathlib.Path(" + repr(str(marker)) + ").touch(); time.sleep(60)"],
-            "cwd": str(root), "timeout": 20, "callers": [api.process(caller.pid)],
+            "cwd": str(root), "timeout": 20, "callers": [identity],
             "worker_sha256": hashlib.sha256(script.read_bytes()).hexdigest()})
         with (operation / "worker.log").open("wb") as log:
             process = subprocess.Popen([sys.executable, "-I", "-S", "-B", str(script), str(operation)],
                                        stdout=log, stderr=log, start_new_session=True, **no_console())
         deadline = time.monotonic() + 5
         while not (operation / "ready.json").exists() and process.poll() is None and time.monotonic() < deadline:
+            if caller.poll() is not None:
+                break
             time.sleep(0.01)
-        assert_true((operation / "ready.json").exists(), "production observer fixture reaches READY")
+        if not (operation / "ready.json").exists() or caller.poll() is not None or process.poll() is not None:
+            raise AssertionError("production observer fixture reaches READY: " + _ready_failure_context(
+                operation, process, commit=False, exit_caller=False, caller=caller, api=api,
+                expected=identity, ack=ack, started_at=started_at))
         worker.atomic_json(operation / "commit.json", {"token": token})
         caller.terminate()
         caller.wait(timeout=5)
