@@ -289,6 +289,7 @@ def _check_darwin_inventory_probe(gate):
     from contextlib import redirect_stdout
     import io
     import subprocess
+    from unittest.mock import MagicMock
 
     spec = importlib.util.spec_from_file_location(
         "darwin_inventory_probe", REPO / "tools/maintain/darwin_inventory_probe.py")
@@ -320,7 +321,7 @@ def _check_darwin_inventory_probe(gate):
                "lineage": {"ok": False, "error": {"type": "ProcessLookupError", "errno": errno.ESRCH}}}
     survivor = native(44, 33)
     survivor["record"]["parent"] = 1
-    report = {"kind": probe.KIND, "schema_version": 1, "commit": SHA, "commit_dirty": False,
+    report = {"kind": probe.KIND, "schema_version": probe.SCHEMA, "commit": SHA, "commit_dirty": False,
               "capability_verified": True, "release_acceptance": False, "global_atomic": False,
               "cleanup_confirmed": True, "errors": [], "layout": copy.deepcopy(layout),
               "source_sha256": {name: "b" * 64 for name in probe.SOURCES},
@@ -337,6 +338,23 @@ def _check_darwin_inventory_probe(gate):
                                     "parent_baseline": native(33, 11), "child_baseline": native(44, 33),
                                     "parent_reaped": True, "parent_after": copy.deepcopy(missing),
                                     "child_after": survivor, "child_session": 44}}}
+    def production_snapshot(value):
+        return {**copy.deepcopy(value), "kind": probe.PRODUCTION_KIND,
+                "lineage_binding": {"queried": 0, "attached": 0, "unbound": 0, "followup": None},
+                "queries": {str(item["pid"]): {"generation_source": "native", "query_error": None,
+                                              "lineage_error": None} for item in value["records"]}}
+    for case in report["cases"].values():
+        case["production"] = production_snapshot(case["snapshot"])
+    bound = production_snapshot(snapshot(row(22, 11)))
+    bound["lineage_binding"] = {"queried": 1, "attached": 1, "unbound": 0,
+                                "followup": {key: copy.deepcopy(bound[key])
+                                             for key in ("total_records", "attempts", "limits")}}
+    bound["queries"]["22"]["query_error"] = {"site": "inventory", "type": "PermissionError", "errno": errno.EPERM}
+    for key in ("query_error", "lineage_error"):
+        report["cases"]["retained_after_exit"]["production"]["queries"]["22"][key] = {
+            "site": "inventory", "type": "ProcessLookupError", "errno": errno.ESRCH}
+    report["production"] = {"abi_verified": True, "layout": copy.deepcopy(layout), "lineage_probe": {
+        "forced_combined_denial": 22, "snapshot": bound, "record": native(22, 11)["record"]}}
     assert_true(probe.validate_report(report, SHA) == [], "complete synthetic capability contract qualifies")
     assert_true(gate.check_report(report, SHA, "darwin"),
                 "a capability report can never stand in for an update-handoff receipt")
@@ -361,6 +379,23 @@ def _check_darwin_inventory_probe(gate):
         ("release acceptance", put(("release_acceptance",), True)),
         ("atomic overclaim", put(("global_atomic",), True)),
         ("boolean schema", put(("schema_version",), True)),
+        ("old capability lacks production proof", put(("schema_version",), 1)),
+        ("missing production ABI", lambda r: r.pop("production")),
+        ("unsupported production ABI", put(("production", "abi_verified"), False)),
+        ("production layout mismatch", put(("production", "layout", "record_size"), 64)),
+        ("missing production observation", lambda r: r["cases"]["live_identity"].pop("production")),
+        ("production generation mismatch", put(("cases", "live_identity", "production", "records", 0, "start_micros"), 12)),
+        ("production partial fill", put(("cases", "live_identity", "production", "attempts", 0, "returned_bytes"), 319)),
+        ("production binding missing", put(("cases", "live_identity", "production", "lineage_binding"), None)),
+        ("production lookup provenance missing", lambda r: r["cases"]["live_identity"]["production"].pop("queries")),
+        ("no real disappearance during production enrichment", put(("cases", "retained_after_exit", "production", "queries", "22", "query_error"), None)),
+        ("production permission denial is not disappearance", put(("cases", "retained_after_exit", "production", "queries", "22", "lineage_error", "errno"), errno.EPERM)),
+        ("lineage-only query not actually forced", put(("production", "lineage_probe", "snapshot", "queries", "22", "query_error"), None)),
+        ("production binding inconsistent", put(("production", "lineage_probe", "snapshot", "lineage_binding", "attached"), 0)),
+        ("production binding missing followup", put(("production", "lineage_probe", "snapshot", "lineage_binding", "followup"), None)),
+        ("production binding partial followup", put(("production", "lineage_probe", "snapshot", "lineage_binding", "followup", "attempts", 0, "returned_bytes"), 319)),
+        ("lineage proof from wrong fixture", put(("production", "lineage_probe", "forced_combined_denial"), 33)),
+        ("unbound lineage generation", put(("production", "lineage_probe", "record", "created"), 100000023)),
         ("unsupported architecture", put(("environment", "architecture"), "unknown")),
         ("helper/Python architecture mismatch", put(("layout", "architecture"), "x86_64")),
         ("overlapping layout", put(("layout", "fields", "parent", "offset"), 0)),
@@ -440,8 +475,11 @@ def _check_darwin_inventory_probe(gate):
                 return ""
             raise AssertionError("unexpected native command in portable test")
         def collected(candidate, helper, api):
-            for name in ("cases", "fixture_pids", "cleanup_confirmed"):
+            for name in ("cases", "fixture_pids", "cleanup_confirmed", "production"):
                 candidate[name] = copy.deepcopy(report[name])
+        from types import SimpleNamespace
+        fake_native = SimpleNamespace(DARWIN_KINFO_LAYOUT=layout, Posix=MagicMock())
+        fake_native.Posix._darwin_kinfo_supported.return_value = True
         # Exercise reporting/control flow with fake boundaries, not a fake
         # claim that this Windows/Linux test has validated Apple's ABI.
         with patch.object(probe.sys, "platform", "darwin"), \
@@ -450,6 +488,7 @@ def _check_darwin_inventory_probe(gate):
              patch.object(probe, "_checkout", return_value=(SHA, False)), \
              patch.object(probe, "_source_hashes", return_value=report["source_sha256"]), \
              patch.object(probe, "_command", side_effect=command), \
+             patch.object(probe, "_load_native", return_value=fake_native), \
              redirect_stdout(io.StringIO()):
             with patch.object(probe, "_collect", side_effect=collected):
                 assert_true(probe.run(path) == 0, "coordinator validates all synthetic observations before success")

@@ -83,16 +83,39 @@ independence; a successful contained transition cannot satisfy that assertion.
 
 ## Darwin inventory capability investigation
 
+The standalone production worker has a compiler-free `ctypes` process-table reader
+for the measured ARM64/little-endian/64-bit ABI on kernel `25.6.0`, OS build `25G332`.
+Native run [44284715093](https://github.com/dammar01/Exoma/actions/runs/44284715093)
+measured the 648-byte record and field layout with the runner SDK. Unknown architecture,
+kernel or unreadable/unrecognized build retains the existing conservative `ps` collector.
+On the recognized ABI, native enumeration or decoding errors fail cleanup rather than
+downgrade to coarse successful evidence. PID zero is the explicit kernel-record exclusion;
+positive PIDs with invalid generations/statuses, duplicate PIDs and partial records fail.
+
+The reader captures precise generation, parent and status before optional libproc
+enrichment. Combined-query enrichment must match that generation. Lineage-only queries
+are bound by a matching generation in one follow-up native table for the batch; a changed
+generation is a conflict, and an absent follow-up record never attaches unbound lineage.
+The original precise record remains available after ESRCH. These observations do not
+authorize ignoring missing identity or inventing ownership: the classifier, parent-version
+checks and escaped-descendant uncertainty remain unchanged.
+
 The manual `darwin-inventory-probe.yml` workflow investigates native enumeration;
-it does not change production inventory, run a package update or authorize cleanup.
+it runs no package update and cannot authorize cleanup.
 Its SDK-compiled helper obtains `kinfo_proc` field layout from the runner's headers
 and retains precise start time as part of enumeration. The coordinator compares
-selected, probe-owned lifetimes with existing libproc observations, captures a child
+selected, probe-owned lifetimes with libproc and the production reader, captures a child
 before reaping it and querying its now-missing PID, and demonstrates a parent exiting
 while a child in a separate session remains alive. Fixture control pipes and alarms
 bound those lifetimes; only direct children are killed/reaped by the coordinator.
+For the disappearance case, the coordinator reaps its held child between production
+table capture and enrichment, then requires both actual enrichment calls to report
+ESRCH while retaining the captured precise generation. Production decoding validates
+the full returned table before only selected rows are projected into the report.
+A separate controlled case forces a combined-query denial
+for one owned fixture to exercise real lineage-only lookup and generation binding.
 
-Capability reports use the separate kind `exoma-darwin-inventory-capability`, name
+Capability reports use schema 2 of the separate kind `exoma-darwin-inventory-capability`, name
 the clean source commit and source hashes, record OS/kernel/SDK/compiler and measured
 layout, and include selected fixture observations and aggregate counts. They exclude
 raw table buffers, pointers, process command lines, environments and executable paths.
@@ -105,7 +128,8 @@ contract passed on that runner. Reports always state `release_acceptance=false` 
 `global_atomic=false`. A complete returned buffer is not complete fork/exit history;
 neither repeated snapshots nor repeated ESRCH can erase unresolved ancestry. These
 artifacts never substitute for strict transition/no-op or other release evidence.
-Production integration requires a separate review of the native artifacts and ABI.
+Earlier schema-1 SDK-only artifacts cannot establish the new production-reader comparison.
+Production acceptance still requires review and new-commit native/strict update evidence.
 
 On a clean native checkout, the equivalent commands are:
 
@@ -115,7 +139,9 @@ python tools/maintain/darwin_inventory_probe.py validate /tmp/exoma-darwin-capab
 ```
 
 The initial engineering bounds are four allocation attempts and a 16 MiB native
-buffer. A five-second deadline is checked between native calls; the coordinator's
+buffer, applied separately to each production table observation (including a lineage
+binding follow-up). A five-second deadline is checked between native calls and after
+decoding; it cannot interrupt an in-progress system call. The coordinator's
 ten-second subprocess timeout also bounds a blocking helper. Compilation has a
 45-second timeout. Controlled Python fixtures self-terminate after 20 seconds if
 their coordinator stops making progress. These limits are recorded/configured bounds,

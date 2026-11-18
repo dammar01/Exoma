@@ -44,6 +44,7 @@ def _test_self_update() -> None:
     _check_guardian_diagnostics()
     _check_guardian_cleanup_attempts()
     _check_darwin_inventory_snapshot()
+    _check_darwin_kinfo_enumeration()
     _check_birth_lineage()
     _check_cleanup_receipt_context()
     _check_caller_acknowledgement()
@@ -770,6 +771,163 @@ def _check_cleanup_receipt_context():
                                              "child": {"reap_outcome": "sentinel-secret"}}}
         assert_true("sentinel-secret" not in json.dumps(worker.cleanup_diagnostic_projection(hostile)),
                     "malformed nested diagnostic fields cannot inject text")
+
+
+def _check_darwin_kinfo_enumeration():
+    from exoma import _update_worker as worker
+    from types import SimpleNamespace
+    import errno
+    import struct
+
+    api, ct = worker.Posix(), worker.ctypes
+    guardian, foreign = os.getpid(), 123456
+    def raw(pid=foreign, parent=1, seconds=123, micros=456, status=2):
+        # Golden offsets from SDK run 44284715093, not the decoder constants.
+        data = bytearray(648)
+        struct.pack_into("<qi", data, 0, seconds, micros)
+        struct.pack_into("<b", data, 36, status)
+        struct.pack_into("<i", data, 40, pid)
+        struct.pack_into("<i", data, 560, parent)
+        return bytes(data)
+    expected = {"created": 123000456, "parent": 1, "status": 2}
+    assert_true(api._darwin_kinfo_decode(raw())[foreign] == expected,
+                "measured SDK stride/fields decode a precise process lifetime")
+    assert_true(api._darwin_kinfo_decode(raw(0, 0, 0, 0, 0) + raw()) == {foreign: expected},
+                "only the kernel PID zero is excluded")
+    def refused(call, label):
+        try:
+            call()
+        except (OSError, ValueError):
+            return
+        raise AssertionError("native enumeration accepted " + label)
+    for label, data in (("empty", b""), ("partial", raw()[:-1]), ("duplicate", raw() * 2),
+                        ("negative PID", raw(pid=-1)), ("self parent", raw(parent=foreign)),
+                        ("negative parent", raw(parent=-1)), ("missing birth", raw(seconds=0)),
+                        ("invalid micros", raw(micros=1000000)), ("negative micros", raw(micros=-1)),
+                        ("overflow birth", raw(seconds=2 ** 63 - 1)), ("invalid status", raw(status=0))):
+        refused(lambda data=data: api._darwin_kinfo_decode(data), label)
+
+    mode, fills, capacities = {"value": "ok"}, [], []
+    def sysctl(mib, count, buffer, length, new, new_size):
+        assert_true(list(mib) == [1, 14, 0, 0] and count == 4 and new is None and new_size == 0,
+                    "production requests the same read-only KERN_PROC_ALL MIB as the SDK oracle")
+        size = ct.cast(length, ct.POINTER(ct.c_size_t)).contents
+        if buffer is None:
+            if mode["value"] == "size_denied":
+                ct.set_errno(errno.EPERM)
+                return -1
+            size.value = worker.DARWIN_INVENTORY_BYTES + 1 if mode["value"] == "size_overflow" else 648
+            return 0
+        capacities.append(size.value)
+        fills.append(1)
+        if mode["value"] in ("growth", "exhaust") and (len(fills) == 1 or mode["value"] == "exhaust"):
+            # Malformed partial bytes must never be decoded on failure.
+            ct.memset(buffer, 255, min(size.value, 648))
+            ct.set_errno(errno.ENOMEM)
+            return -1
+        if mode["value"] in ("denied", "errno_missing"):
+            ct.set_errno(errno.EPERM if mode["value"] == "denied" else 0)
+            return -1
+        data = raw()
+        ct.memmove(buffer, data, len(data))
+        size.value = {"partial": 647, "returned_overflow": size.value + 1,
+                      "empty": 0}.get(mode["value"], len(data))
+        return 0
+    def byname(name, buffer, length, new, new_size):
+        ct.memmove(buffer, b"25G332\0", 7)
+        ct.cast(length, ct.POINTER(ct.c_size_t)).contents.value = 7
+        return 0
+    library = SimpleNamespace(sysctl=MagicMock(side_effect=sysctl), sysctlbyname=MagicMock(side_effect=byname))
+    with patch.object(worker.ctypes, "CDLL", return_value=library):
+        result = api._darwin_kinfo_snapshot()
+        assert_true(result[foreign] == expected and result.enumeration["total_records"] == 1,
+                    "complete native transport retains precise fields and bounded provenance")
+        mode["value"], fills[:], capacities[:] = "growth", [], []
+        result = api._darwin_kinfo_snapshot()
+        assert_true(len(fills) == 2 and capacities[1] >= 2 * capacities[0]
+                    and result.enumeration["attempts"][0]["errno"] == errno.ENOMEM,
+                    "ENOMEM grows bounded storage before decoding a complete successful fill")
+        for fault in ("size_denied", "size_overflow", "denied", "errno_missing", "partial",
+                      "returned_overflow", "empty", "exhaust"):
+            mode["value"], fills[:] = fault, []
+            refused(api._darwin_kinfo_snapshot, fault)
+            assert_true(len(fills) <= 4, "native retries are bounded")
+        mode["value"] = "ok"
+        with patch.object(worker.time, "monotonic", side_effect=[0, 0, 0, 6]):
+            refused(api._darwin_kinfo_snapshot, "elapsed deadline")
+        measured = SimpleNamespace(machine="arm64", release="25.6.0")
+        with patch.object(worker.sys, "platform", "darwin"), patch.object(worker.sys, "byteorder", "little"), \
+             patch.object(worker.os, "uname", return_value=measured, create=True):
+            assert_true(api._darwin_kinfo_supported(), "only the measured kernel/build/process ABI is enabled")
+            measured.release = "25.7.0"
+            assert_true(not api._darwin_kinfo_supported(), "unknown kernel keeps legacy collection")
+            measured.release, measured.machine = "25.6.0", "x86_64"
+            assert_true(not api._darwin_kinfo_supported(), "unmeasured architecture keeps legacy collection")
+            measured.machine = "arm64"
+            library.sysctlbyname.return_value, library.sysctlbyname.side_effect = -1, None
+            assert_true(not api._darwin_kinfo_supported(), "unreadable build cannot activate an ABI")
+
+    base = api._darwin_kinfo_decode(raw(1, 0, 1, 0) + raw(guardian, foreign, 2, 0) + raw())
+    native = {**expected, "uniqueid": 44, "parent_uniqueid": 11, "version": 404, "parent_version": 101}
+    def combined(pid):
+        row = base[pid]
+        return {**row, "uniqueid": {1: 11, guardian: 22, foreign: 44}[pid],
+                "parent_uniqueid": {1: 0, guardian: 44, foreign: 11}[pid],
+                "version": {1: 101, guardian: 202, foreign: 404}[pid],
+                "parent_version": {1: 0, guardian: 404, foreign: 101}[pid]}
+    baseline = {pid: combined(pid) for pid in base}
+    def inventory(current, lineage=None, followup=None):
+        initial = api._darwin_kinfo_decode(raw(1, 0, 1, 0) + raw(guardian, foreign, 2, 0) + raw())
+        with patch.object(api, "_darwin_kinfo_snapshot", side_effect=[initial, followup]), \
+             patch.object(api, "_darwin_inventory_record", side_effect=current), \
+             patch.object(api, "_darwin_lineage_record", side_effect=lineage or ProcessLookupError(errno.ESRCH, "fixture")):
+            return api._darwin_enriched_inventory()
+    missing = ProcessLookupError(errno.ESRCH, "fixture missing lifetime")
+    def vanished(pid):
+        if pid == foreign:
+            raise missing
+        return combined(pid)
+    current = inventory(vanished)
+    assert_true(current[foreign] == expected and current.query_status[foreign]["query_error"]["errno"] == errno.ESRCH,
+                "historical double-ESRCH retains enumerated precise generation instead of ps text")
+    owner = worker.DescendantOwner.__new__(worker.DescendantOwner)
+    owner.subreaper, owner.baseline = False, baseline
+    with patch.object(worker.sys, "platform", "darwin"), patch.object(owner, "inventory", return_value=current), \
+         patch.object(worker.os, "kill") as kill:
+        owner.cleanup()
+    assert_true(not kill.called, "matching baseline-foreign generation needs no signal or ESRCH exemption")
+    def reused(pid):
+        row = combined(pid)
+        return {**row, "created": row["created"] + 1} if pid == foreign else row
+    refused(lambda: inventory(reused), "combined lookup of a reused PID")
+    def restricted(pid):
+        if pid == foreign:
+            raise PermissionError(errno.EPERM, "fixture")
+        return combined(pid)
+    lineage = {k: native[k] for k in ("uniqueid", "parent_uniqueid", "version", "parent_version")}
+    bound = inventory(restricted, lambda *a, **kw: lineage, base)
+    assert_true(bound[foreign]["uniqueid"] == 44 and bound.lineage_binding["attached"] == 1,
+                "permission-restricted lineage is bound by a matching follow-up generation")
+    absent = worker._ProcessInventory()
+    gone = inventory(restricted, lambda *a, **kw: lineage, absent)
+    assert_true("uniqueid" not in gone[foreign] and gone[foreign] == expected
+                and gone.lineage_binding["unbound"] == 1,
+                "absence after a lineage query never attaches an unbound lifetime ID or discards the original")
+    changed = worker._ProcessInventory()
+    changed.update({**base, foreign: {**base[foreign], "created": 999}})
+    refused(lambda: inventory(restricted, lambda *a, **kw: lineage, changed), "lineage query across PID reuse")
+    with patch.object(worker.Posix, "_darwin_kinfo_supported", return_value=True), \
+         patch.object(worker.Posix, "_darwin_enriched_inventory", side_effect=OSError("native failure")), \
+         patch.object(worker.subprocess, "Popen", side_effect=AssertionError("must not downgrade native failures")):
+        refused(worker.DescendantOwner.inventory, "failed recognized ABI")
+    # The copied worker must import without an installed exoma or tools package.
+    with tempfile.TemporaryDirectory(prefix="darwin-standalone-") as tmp:
+        script = Path(tmp) / "worker.py"
+        script.write_bytes(Path(worker.__file__).read_bytes())
+        result = subprocess.run([sys.executable, "-I", "-c",
+                                 "import runpy; runpy.run_path('worker.py', run_name='isolated_worker')"], cwd=tmp,
+                                capture_output=True, text=True, timeout=10)
+        assert_true(result.returncode == 0, "standalone worker imports independently of installation/compiler")
 
 
 def _check_darwin_inventory_snapshot():
@@ -1641,6 +1799,7 @@ def _check_cleanup_publication():
     inventory.communicate.return_value = ("123456 1 Fri Nov 13 00:00:00 2026\n999999 99 Fri Nov 13 00:00:01 2026\n", "")
     inventory.poll.return_value = 0
     with patch.object(worker.subprocess, "Popen", return_value=inventory), \
+         patch.object(worker.Posix, "_darwin_kinfo_supported", return_value=False), \
          patch.object(worker.Posix, "process", side_effect=ProcessLookupError):
         observed = owner.inventory()
     assert_true(123456 in observed and 999999 not in observed,

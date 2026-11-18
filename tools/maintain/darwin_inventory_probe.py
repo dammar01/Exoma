@@ -3,8 +3,8 @@
     python tools/maintain/darwin_inventory_probe.py run --report <path>
     python tools/maintain/darwin_inventory_probe.py validate <path> --commit <sha>
 
-The C helper is compiled only for this investigation. No runtime decoder, compiler
-dependency, process-table dump or package update is installed by this tool.
+The C helper is an independent SDK oracle for the standalone production reader.
+No compiler dependency, process-table dump or package update is installed by this tool.
 """
 
 import argparse
@@ -25,7 +25,8 @@ import time
 REPO = Path(__file__).resolve().parents[2]
 KIND = "exoma-darwin-inventory-capability"
 NATIVE_KIND = "exoma-darwin-inventory-native"
-SCHEMA = 1
+PRODUCTION_KIND = "exoma-darwin-inventory-production"
+SCHEMA = 2
 MAX_BYTES = 16 * 1024 * 1024
 MAX_ATTEMPTS = 4
 DEADLINE_NS = 5_000_000_000
@@ -100,7 +101,7 @@ def validate_snapshot(value, selected, layout):
     if not isinstance(value, dict) or not _layout_valid(layout):
         return ["invalid native snapshot/layout"]
     if (value.get("kind") != NATIVE_KIND or type(value.get("schema_version")) is not int
-            or value["schema_version"] != SCHEMA or value.get("ok") is not True
+            or value["schema_version"] != 1 or value.get("ok") is not True
             or value.get("transport_complete") is not True or "error" not in value or value["error"] is not None
             or value.get("layout") != layout):
         return ["native snapshot did not qualify"]
@@ -164,6 +165,35 @@ def _missing(value):
             and type(value["error"].get("errno")) is int and value["error"]["errno"] == errno.ESRCH)
 
 
+def _validate_production(value, selected, layout):
+    if not isinstance(value, dict) or value.get("kind") != PRODUCTION_KIND:
+        return ["production enumeration missing"]
+    problems = validate_snapshot({**value, "kind": NATIVE_KIND}, selected, layout)
+    if problems:
+        return problems
+    queries = value.get("queries")
+    if (not isinstance(queries, dict) or set(queries) != {str(pid) for pid in selected}
+            or any(not isinstance(query, dict) or query.get("generation_source") != "native"
+                   or not {"query_error", "lineage_error"} <= set(query) for query in queries.values())):
+        return ["production lookup provenance missing"]
+    binding = value.get("lineage_binding")
+    if (not isinstance(binding, dict) or set(binding) != {"queried", "attached", "unbound", "followup"}
+            or any(not _int(binding.get(key), 0, value["total_records"])
+                   for key in ("queried", "attached", "unbound"))
+            or binding["attached"] + binding["unbound"] != binding["queried"]):
+        return ["production lineage binding evidence invalid"]
+    if binding["queried"]:
+        followup = binding["followup"]
+        if not isinstance(followup, dict):
+            return ["production binding follow-up missing"]
+        problems.extend(validate_snapshot({**followup, "kind": NATIVE_KIND, "schema_version": 1,
+                                           "ok": True, "transport_complete": True,
+                                           "layout": layout, "error": None, "records": []}, [], layout))
+    elif binding["followup"] is not None:
+        problems.append("unexpected production binding follow-up")
+    return problems
+
+
 def validate_report(report, commit=None):
     if not isinstance(report, dict):
         return ["report is not an object"]
@@ -197,6 +227,10 @@ def validate_report(report, commit=None):
         problems.append("unvalidated SDK layout")
     elif isinstance(environment, dict) and layout["architecture"] != environment.get("architecture"):
         problems.append("helper/Python architectures differ")
+    production = report.get("production")
+    if (not isinstance(production, dict) or production.get("abi_verified") is not True
+            or production.get("layout") != layout):
+        problems.append("production/SDK ABI agreement missing")
     if (not isinstance(pids, dict) or set(pids) != {"self", "foreign", "parent", "escaped"}
             or any(not _int(pid, 1, 2 ** 31 - 1) for pid in pids.values())
             or len(set(pids.values())) != 4):
@@ -214,8 +248,14 @@ def validate_report(report, commit=None):
         if not isinstance(case, dict):
             return ["malformed capability case"]
         problems.extend(name + ": " + error for error in validate_snapshot(case.get("snapshot"), selected, layout))
+        problems.extend(name + ": " + error for error in _validate_production(case.get("production"), selected, layout))
     if problems:
         return problems
+    for name, selected in selections.items():
+        oracle = {row["pid"]: row for row in cases[name]["snapshot"]["records"]}
+        for row in cases[name]["production"]["records"]:
+            if any(row[key] != oracle[row["pid"]][key] for key in ("parent", "start_seconds", "start_micros")):
+                problems.append("production/SDK lifetime mismatch")
     live, retained, escaped = (cases[name] for name in selections)
     identities = live.get("native", {})
     for pid in selections["live_identity"]:
@@ -226,8 +266,28 @@ def validate_report(report, commit=None):
     after = retained.get("after", {})
     if (baseline is None or not _matches(retained["snapshot"], pids["foreign"], baseline)
             or retained.get("reaped") is not True or not isinstance(after, dict)
-            or not all(_missing(after.get(key)) for key in ("inventory", "lineage"))):
+            or not all(_missing(after.get(key)) for key in ("inventory", "lineage"))
+            or not all(_missing({"ok": False, "error": retained["production"]["queries"][str(pids["foreign"])][key]})
+                       for key in ("query_error", "lineage_error"))):
         problems.append("retained generation after reap/ESRCH not established")
+    lineage_probe = production.get("lineage_probe", {})
+    if (not isinstance(lineage_probe, dict)
+            or type(lineage_probe.get("forced_combined_denial")) is not int
+            or lineage_probe["forced_combined_denial"] != pids["foreign"]):
+        problems.append("forced lineage-only case missing")
+    else:
+        binding_snapshot = lineage_probe.get("snapshot")
+        binding_errors = _validate_production(binding_snapshot, [pids["foreign"]], layout)
+        problems.extend(binding_errors)
+        bound = _native_record({"ok": True, "record": lineage_probe.get("record")}, pids["foreign"])
+        if (bound is None or baseline is None or binding_errors
+                or any(bound[key] != baseline[key] for key in NATIVE_FIELDS if key != "status")
+                or bound["status"] == 5 or not _matches(binding_snapshot, pids["foreign"], bound)
+                or not _int(binding_snapshot["lineage_binding"]["attached"], 1)
+                or binding_snapshot["queries"][str(pids["foreign"])]["query_error"] != {
+                    "site": "inventory", "type": "PermissionError", "errno": errno.EPERM}
+                or binding_snapshot["queries"][str(pids["foreign"])]["lineage_error"] is not None):
+            problems.append("lineage-only enrichment not bound to native lifetime")
     parent = _native_record(escaped.get("parent_baseline"), pids["parent"])
     child = _native_record(escaped.get("child_baseline"), pids["escaped"])
     survivor = _native_record(escaped.get("child_after"), pids["escaped"])
@@ -297,6 +357,21 @@ def _escaped_stopped(api, pid, identity):
     return False
 
 
+def _production_snapshot(report, api, pids):
+    observed = api._darwin_enriched_inventory()  # Decodes/validates the full returned table.
+    rows = []
+    for pid in pids:
+        if pid not in observed:
+            raise ProbeError("production_fixture_missing")
+        row = observed[pid]
+        rows.append({"pid": pid, "parent": row["parent"], "status": row["status"],
+                     "start_seconds": row["created"] // 1000000, "start_micros": row["created"] % 1000000})
+    return {**observed.enumeration, "kind": PRODUCTION_KIND, "schema_version": 1, "ok": True,
+            "transport_complete": True, "layout": report["production"]["layout"], "error": None,
+            "records": rows, "lineage_binding": observed.lineage_binding,
+            "queries": {str(pid): observed.query_status[pid] for pid in pids}}, observed
+
+
 def _collect(report, helper, api):
     direct, pipe_fds = [], []
     escaped_pid, escaped_identity = None, None
@@ -318,14 +393,32 @@ def _collect(report, helper, api):
         report["fixture_pids"] = {"self": os.getpid(), "foreign": foreign.pid}
         # Both processes are held alive while their two native observations are compared.
         live = snapshot([os.getpid(), foreign.pid])
+        production_live, _ = _production_snapshot(report, api, [os.getpid(), foreign.pid])
         report["cases"]["live_identity"] = {"snapshot": live, "native": {
-            str(pid): _read(api, pid) for pid in (os.getpid(), foreign.pid)}}
+            str(pid): _read(api, pid) for pid in (os.getpid(), foreign.pid)}, "production": production_live}
+        # Force only the owned fixture's combined query to fail. The actual
+        # native lineage call and bracketing table reads still execute unchanged.
+        class Restricted(type(api)):
+            def _darwin_inventory_record(self, pid):
+                if pid == foreign.pid:
+                    raise PermissionError(errno.EPERM, "forced probe fixture denial")
+                return super()._darwin_inventory_record(pid)
+        binding_snapshot, binding_rows = _production_snapshot(report, Restricted(), [foreign.pid])
+        report["production"]["lineage_probe"] = {
+            "forced_combined_denial": foreign.pid, "snapshot": binding_snapshot,
+            "record": {key: value for key, value in binding_rows[foreign.pid].items() if key in NATIVE_FIELDS}}
         baseline = _read(api, foreign.pid)
         retained = snapshot([foreign.pid])
+        class Exiting(type(api)):
+            def _darwin_inventory_record(self, pid):
+                if pid == foreign.pid:
+                    _stop_direct(foreign)  # After production capture, before either native enrichment call.
+                return super()._darwin_inventory_record(pid)
+        production_retained, _ = _production_snapshot(report, Exiting(), [foreign.pid])
         _stop_direct(foreign)
         report["cases"]["retained_after_exit"] = {
             "snapshot": retained, "baseline": baseline, "reaped": foreign.returncode == 0,
-            "after": _after(api, foreign.pid)}
+            "after": _after(api, foreign.pid), "production": production_retained}
 
         read_fd, write_fd = os.pipe()
         pipe_fds.extend((read_fd, write_fd))
@@ -346,6 +439,7 @@ def _collect(report, helper, api):
             raise ProbeError("fixture_identity")
         report["fixture_pids"].update(parent=parent.pid, escaped=escaped_pid)
         observations = snapshot([parent.pid, escaped_pid])
+        production_escaped, _ = _production_snapshot(report, api, [parent.pid, escaped_pid])
         parent_native, child_native = _read(api, parent.pid), _read(api, escaped_pid)
         escaped_identity = _native_record(child_native, escaped_pid)
         child_session = os.getsid(escaped_pid)
@@ -353,7 +447,8 @@ def _collect(report, helper, api):
         report["cases"]["escaped_child"] = {
             "snapshot": observations, "parent_baseline": parent_native, "child_baseline": child_native,
             "child_session": child_session, "parent_reaped": parent.returncode == 0,
-            "parent_after": _after(api, parent.pid), "child_after": _read(api, escaped_pid)}
+            "parent_after": _after(api, parent.pid), "child_after": _read(api, escaped_pid),
+            "production": production_escaped}
     finally:
         # Only the coordinator owns the escaped child's write end. Closing it
         # releases that child even if its parent has exited; alarms bound a hang.
@@ -389,6 +484,13 @@ def _write(path, report):
     os.replace(temporary, path)
 
 
+def _load_native():
+    spec = importlib.util.spec_from_file_location("darwin_probe_identity", REPO / SOURCES[2])
+    native = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(native)
+    return native
+
+
 def run(report_path):
     report = {"kind": KIND, "schema_version": SCHEMA, "capability_verified": False,
               "release_acceptance": False, "global_atomic": False, "cleanup_confirmed": False,
@@ -414,9 +516,11 @@ def run(report_path):
             report["layout"] = json.loads(_command([helper, "layout"], "layout")).get("layout")
             if not _layout_valid(report["layout"]):
                 raise ProbeError("layout_contract")
-            spec = importlib.util.spec_from_file_location("darwin_probe_identity", REPO / SOURCES[2])
-            native = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(native)
+            native = _load_native()
+            report["production"] = {"layout": native.DARWIN_KINFO_LAYOUT,
+                                    "abi_verified": native.Posix._darwin_kinfo_supported()}
+            if not report["production"]["abi_verified"] or native.DARWIN_KINFO_LAYOUT != report["layout"]:
+                raise ProbeError("production_abi_contract")
             _collect(report, helper, native.Posix())
         if (_checkout() != (report["commit"], False)
                 or _source_hashes() != report["source_sha256"]):

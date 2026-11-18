@@ -30,6 +30,19 @@ DIAGNOSTIC_PIDS = 8
 DIAGNOSTIC_RECORDS = 32
 DIAGNOSTIC_PARENT_HOPS = 8
 DIAGNOSTIC_STRING_CHARS = 256
+# Measured by the SDK oracle in native run 44284715093 (clean 9902ec3).
+# Enable only for that kernel/build and process ABI; never guess an ABI upgrade.
+DARWIN_KINFO_LAYOUT = {
+    "architecture": "arm64", "record_size": 648, "alignment": 8,
+    "pointer_width": 8, "endianness": "little",
+    "fields": {"pid": {"offset": 40, "width": 4, "signed": True},
+               "parent": {"offset": 560, "width": 4, "signed": True},
+               "status": {"offset": 36, "width": 1, "signed": True},
+               "start_seconds": {"offset": 0, "width": 8, "signed": True},
+               "start_micros": {"offset": 8, "width": 4, "signed": True}}}
+DARWIN_INVENTORY_BYTES = 16 * 1024 * 1024
+DARWIN_INVENTORY_ATTEMPTS = 4
+DARWIN_INVENTORY_SECONDS = 5
 DIAGNOSTIC_SITES = {"owner_init", "spawn", "register", "release", "wait", "child_cleanup",
                     "owner_cleanup", "inventory", "exit_observation", "signal_term", "signal_kill",
                     "child_reap", "monitor_close", "signal_probe", "receipt_wait", "receipt_read",
@@ -107,6 +120,8 @@ class _ProcessInventory(dict):
         super().__init__()
         self.query_status = {}
         self.diagnostics_unavailable = False
+        self.enumeration = None
+        self.lineage_binding = None
 
 
 def _diagnostic_generation(value):
@@ -517,6 +532,134 @@ class Posix:
                 "version": ctypes.c_uint32.from_buffer(info, 32).value,
                 "parent_version": ctypes.c_uint32.from_buffer(info, 36).value}
 
+    @staticmethod
+    def _darwin_kinfo_supported():
+        if sys.platform != "darwin" or sys.byteorder != "little" or ctypes.sizeof(ctypes.c_void_p) != 8:
+            return False
+        try:
+            identity = os.uname()
+            if identity.machine != "arm64" or identity.release != "25.6.0":
+                return False
+            library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+            library.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                                            ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+            library.sysctlbyname.restype = ctypes.c_int
+            data, size = ctypes.create_string_buffer(128), ctypes.c_size_t(128)
+            if library.sysctlbyname(b"kern.osversion", data, ctypes.byref(size), None, 0) != 0:
+                return False
+            return size.value == 7 and data.raw[:size.value] == b"25G332\0"
+        except (AttributeError, OSError, ValueError):
+            return False  # Unknown ABI keeps the existing conservative collector.
+
+    @staticmethod
+    def _darwin_kinfo_decode(data):
+        size = DARWIN_KINFO_LAYOUT["record_size"]
+        if not data or len(data) > DARWIN_INVENTORY_BYTES or len(data) % size:
+            raise ValueError("invalid native process table length")
+        result, seen = _ProcessInventory(), set()
+        view = memoryview(data)
+        for start in range(0, len(data), size):
+            row = {name: int.from_bytes(view[start + field["offset"]:start + field["offset"] + field["width"]],
+                                        "little", signed=field["signed"])
+                   for name, field in DARWIN_KINFO_LAYOUT["fields"].items()}
+            pid, parent = row["pid"], row["parent"]
+            if pid < 0 or pid in seen:
+                raise ValueError("duplicate or invalid native process PID")
+            seen.add(pid)
+            if pid == 0:
+                continue  # Apple ps excludes the kernel record; positive PIDs never get this exemption.
+            created = row["start_seconds"] * 1000000 + row["start_micros"]
+            if (parent < 0 or parent == pid or row["status"] not in (1, 2, 3, 4, 5, 6)
+                    or row["start_seconds"] <= 0 or not 0 <= row["start_micros"] < 1000000
+                    or not 0 < created < 2 ** 64):
+                raise ValueError("invalid native process record")
+            result[pid] = {"created": created, "parent": parent, "status": row["status"]}
+        return result
+
+    def _darwin_kinfo_snapshot(self):
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        library.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                  ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        library.sysctl.restype = ctypes.c_int
+        mib = (ctypes.c_int * 4)(1, 14, 0, 0)  # CTL_KERN, KERN_PROC, KERN_PROC_ALL.
+        started, next_capacity, attempts = time.monotonic(), 0, []
+        def deadline():
+            if time.monotonic() - started >= DARWIN_INVENTORY_SECONDS:
+                raise TimeoutError("native process enumeration deadline")
+        for _ in range(DARWIN_INVENTORY_ATTEMPTS):
+            deadline()
+            before, needed = time.monotonic(), ctypes.c_size_t()
+            ctypes.set_errno(0)
+            if library.sysctl(mib, 4, None, ctypes.byref(needed), None, 0) != 0:
+                raise OSError(ctypes.get_errno() or errno.EIO, "cannot size native process table")
+            deadline()
+            if not DARWIN_KINFO_LAYOUT["record_size"] <= needed.value <= DARWIN_INVENTORY_BYTES:
+                raise ValueError("native process table exceeds bounds")
+            capacity = max(next_capacity, min(DARWIN_INVENTORY_BYTES,
+                           needed.value + max(needed.value // 4, DARWIN_KINFO_LAYOUT["record_size"] * 16)))
+            data, returned = ctypes.create_string_buffer(capacity), ctypes.c_size_t(capacity)
+            ctypes.set_errno(0)
+            failed = library.sysctl(mib, 4, data, ctypes.byref(returned), None, 0) != 0
+            error = (ctypes.get_errno() or errno.EIO) if failed else 0
+            attempts.append({"capacity": capacity, "returned_bytes": returned.value, "errno": error,
+                             "elapsed_ns": max(0, int((time.monotonic() - before) * 1000000000))})
+            deadline()
+            if failed:
+                if error == errno.ENOMEM and capacity < DARWIN_INVENTORY_BYTES:
+                    next_capacity = min(DARWIN_INVENTORY_BYTES, capacity * 2)
+                    continue  # Never decode failed/partial fills.
+                raise OSError(error, "cannot fill native process table")
+            if returned.value > capacity:
+                raise ValueError("native process table overran capacity")
+            result = self._darwin_kinfo_decode(data.raw[:returned.value])
+            deadline()
+            result.enumeration = {"total_records": returned.value // DARWIN_KINFO_LAYOUT["record_size"],
+                                  "attempts": attempts,
+                                  "limits": {"max_bytes": DARWIN_INVENTORY_BYTES,
+                                             "max_attempts": DARWIN_INVENTORY_ATTEMPTS,
+                                             "deadline_ns": DARWIN_INVENTORY_SECONDS * 1000000000}}
+            return result
+        raise OSError(errno.ENOMEM, "native process enumeration exhausted")
+
+    def _darwin_enriched_inventory(self):
+        result, pending = self._darwin_kinfo_snapshot(), {}
+        fields = ("uniqueid", "parent_uniqueid", "version", "parent_version")
+        for pid, row in result.items():
+            query_error, lineage_error = None, None
+            try:
+                native = self._darwin_inventory_record(pid)
+            except (OSError, ValueError) as exc:
+                query_error = exc
+                try:
+                    pending[pid] = self._darwin_lineage_record(pid, include_terminal=True)
+                except (OSError, ValueError) as exc:
+                    lineage_error = exc
+            else:
+                if native["created"] != row["created"]:
+                    raise OSError("native inventory generation conflict")
+                row.update({key: native[key] for key in fields})
+            result.query_status[pid] = {"generation_source": "native",
+                                       "query_error": _diagnostic_error("inventory", query_error) if query_error else None,
+                                       "lineage_error": _diagnostic_error("inventory", lineage_error) if lineage_error else None}
+        # A lineage-only result has no generation. Bracket all such queries with
+        # native generation observations, using one follow-up table for the batch.
+        binding = {"queried": len(pending), "attached": 0, "unbound": 0, "followup": None}
+        if pending:
+            followup = self._darwin_kinfo_snapshot()
+            binding["followup"] = followup.enumeration
+            for pid, lineage in pending.items():
+                if pid in followup and followup[pid]["created"] != result[pid]["created"]:
+                    raise OSError("native lineage generation conflict")
+                if pid in followup:
+                    result[pid].update(lineage)
+                    binding["attached"] += 1
+                else:
+                    binding["unbound"] += 1
+                    result.query_status[pid]["lineage_error"] = _diagnostic_error(
+                        "inventory", ProcessLookupError(errno.ESRCH, "unbound native lineage"))
+        result.lineage_binding = binding
+        return result
+
     def _darwin_inventory_record(self, pid):
         """One native lifetime/status/parent snapshot, including terminal processes.
 
@@ -746,6 +889,10 @@ class DescendantOwner:
         # Inventory includes unrelated processes, deliberately. A new process whose
         # ancestry was lost cannot safely be declared unrelated or killed. ps start
         # times plus native generations prevent PID reuse from masking that gap.
+        api = Posix()
+        if api._darwin_kinfo_supported():
+            # A recognized ABI must fail closed on enumeration/decoding errors.
+            return api._darwin_enriched_inventory()
         proc = subprocess.Popen(["/bin/ps", "-axo", "pid=,ppid=,lstart="],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 start_new_session=True)
@@ -758,7 +905,7 @@ class DescendantOwner:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
-        result, api = _ProcessInventory(), Posix()
+        result = _ProcessInventory()
         for row in rows:
             pid_text, parent, stamp = row.strip().split(None, 2)
             pid = int(pid_text)

@@ -1078,7 +1078,15 @@ def _check_worker_terminal_inventory(root):
                           "parent_uniqueid": 11, "version": 303, "parent_version": 101}}
     cases = (
         ("foreign-terminal", {**baseline, foreign: {**baseline[foreign], "status": 5}}, True),
+        ("foreign-enumerated-then-esrch", {**baseline, foreign: {
+            "created": 3, "parent": 1, "status": 2}}, True),
         ("unknown-terminal", {**baseline, foreign: {"created": "ps timestamp", "parent": 1}}, False),
+        ("reused-enumeration", {**baseline, foreign: {"created": 4, "parent": 1, "status": 2}}, False),
+        ("escaped-after-parent-exit", {**baseline,
+            foreign + 1: {"created": 4, "parent": guardian, "status": 5, "uniqueid": 55,
+                          "parent_uniqueid": 22, "version": 505, "parent_version": 202},
+            foreign + 2: {"created": 5, "parent": 1, "status": 2, "uniqueid": 66,
+                          "parent_uniqueid": 55, "version": 606, "parent_version": 505}}, False),
         ("reused-owned", {**baseline, foreign: {**baseline[foreign], "uniqueid": 44,
                                                "parent_uniqueid": 22, "parent_version": 202}}, False),
     )
