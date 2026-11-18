@@ -809,14 +809,17 @@ def _check_darwin_kinfo_enumeration():
 
     mode, fills, capacities = {"value": "ok"}, [], []
     def sysctl(mib, count, buffer, length, new, new_size):
-        assert_true(list(mib) == [1, 14, 0, 0] and count == 4 and new is None and new_size == 0,
-                    "production requests the same read-only KERN_PROC_ALL MIB as the SDK oracle")
+        assert_true(list(mib)[:2] == [1, 14] and mib[2] in (0, 1)
+                    and (mib[3] == 0 if mib[2] == 0 else mib[3] == guardian)
+                    and count == 4 and new is None and new_size == 0,
+                    "production uses read-only ALL or selected-self native enumeration")
         size = ct.cast(length, ct.POINTER(ct.c_size_t)).contents
         if buffer is None:
             if mode["value"] == "size_denied":
                 ct.set_errno(errno.EPERM)
                 return -1
-            size.value = worker.DARWIN_INVENTORY_BYTES + 1 if mode["value"] == "size_overflow" else 648
+            size.value = {"size_overflow": worker.DARWIN_INVENTORY_BYTES + 1,
+                          "padded": 648 * 6}.get(mode["value"], 648)
             return 0
         capacities.append(size.value)
         fills.append(1)
@@ -828,16 +831,15 @@ def _check_darwin_kinfo_enumeration():
         if mode["value"] in ("denied", "errno_missing"):
             ct.set_errno(errno.EPERM if mode["value"] == "denied" else 0)
             return -1
-        data = raw()
+        selected = mib[3] if mib[2] == 1 else foreign
+        data = raw(pid=selected + 1 if mode["value"] == "wrong_pid" else selected)
+        if mode["value"] == "extra_kernel_record":
+            data += raw(0, 0, 0, 0, 0)
         ct.memmove(buffer, data, len(data))
         size.value = {"partial": 647, "returned_overflow": size.value + 1,
-                      "empty": 0}.get(mode["value"], len(data))
+                      "wrong_stride": 649, "empty": 0}.get(mode["value"], len(data))
         return 0
-    def byname(name, buffer, length, new, new_size):
-        ct.memmove(buffer, b"25G332\0", 7)
-        ct.cast(length, ct.POINTER(ct.c_size_t)).contents.value = 7
-        return 0
-    library = SimpleNamespace(sysctl=MagicMock(side_effect=sysctl), sysctlbyname=MagicMock(side_effect=byname))
+    library = SimpleNamespace(sysctl=MagicMock(side_effect=sysctl))
     with patch.object(worker.ctypes, "CDLL", return_value=library):
         result = api._darwin_kinfo_snapshot()
         assert_true(result[foreign] == expected and result.enumeration["total_records"] == 1,
@@ -855,17 +857,48 @@ def _check_darwin_kinfo_enumeration():
         mode["value"] = "ok"
         with patch.object(worker.time, "monotonic", side_effect=[0, 0, 0, 6]):
             refused(api._darwin_kinfo_snapshot, "elapsed deadline")
-        measured = SimpleNamespace(machine="arm64", release="25.6.0")
+        measured = SimpleNamespace(machine="arm64", release="unknown-future-kernel")
+        native = {**expected, "uniqueid": 44, "parent_uniqueid": 11, "version": 404, "parent_version": 101}
         with patch.object(worker.sys, "platform", "darwin"), patch.object(worker.sys, "byteorder", "little"), \
-             patch.object(worker.os, "uname", return_value=measured, create=True):
-            assert_true(api._darwin_kinfo_supported(), "only the measured kernel/build/process ABI is enabled")
-            measured.release = "25.7.0"
-            assert_true(not api._darwin_kinfo_supported(), "unknown kernel keeps legacy collection")
-            measured.release, measured.machine = "25.6.0", "x86_64"
+             patch.object(worker.os, "uname", return_value=measured, create=True), \
+             patch.object(worker.Posix, "_darwin_inventory_record", return_value=native) as identity:
+            mode["value"] = "padded"
+            assert_true(api._darwin_kinfo_supported() and identity.call_count == 2
+                        and all(call.args == (guardian,) for call in identity.call_args_list),
+                        "successful fill and bracketing native self identity enable the measured ABI without a build list")
+            mode["value"], fills[:] = "growth", []
+            assert_true(api._darwin_kinfo_supported() and len(fills) == 2,
+                        "selected-self capability reuses bounded ENOMEM transport")
+            for fault in ("size_denied", "size_overflow", "denied", "errno_missing", "partial",
+                          "returned_overflow", "empty", "exhaust", "wrong_stride", "wrong_pid", "extra_kernel_record"):
+                mode["value"], fills[:] = fault, []
+                refused(api._darwin_kinfo_supported, "capability " + fault)
+            mode["value"] = "ok"
+            with patch.object(worker.time, "monotonic", side_effect=[0, 0, 0, 6]):
+                refused(api._darwin_kinfo_supported, "capability deadline")
+            for field in native:
+                changed = {**native, field: native[field] + 1}
+                identity.side_effect = [native, changed]
+                refused(api._darwin_kinfo_supported, "changing native self " + field)
+            for field in ("created", "parent", "status"):
+                changed = {**native, field: native[field] + 1}
+                identity.side_effect = [changed, changed]
+                refused(api._darwin_kinfo_supported, "decoded/native self disagreement " + field)
+            for failure in (PermissionError(errno.EPERM, "fixture"), ValueError("invalid native self identity")):
+                identity.side_effect = failure
+                refused(api._darwin_kinfo_supported, "invalid independent self evidence")
+            identity.side_effect = AssertionError("unsupported ABI must not query native records")
+            measured.machine = "x86_64"
             assert_true(not api._darwin_kinfo_supported(), "unmeasured architecture keeps legacy collection")
             measured.machine = "arm64"
-            library.sysctlbyname.return_value, library.sysctlbyname.side_effect = -1, None
-            assert_true(not api._darwin_kinfo_supported(), "unreadable build cannot activate an ABI")
+            with patch.object(worker.sys, "byteorder", "big"):
+                assert_true(not api._darwin_kinfo_supported(), "unmeasured byte order keeps legacy collection")
+            with patch.object(worker.ctypes, "sizeof", return_value=4):
+                assert_true(not api._darwin_kinfo_supported(), "unmeasured pointer width keeps legacy collection")
+            with patch.object(worker.sys, "platform", "linux"):
+                assert_true(not api._darwin_kinfo_supported(), "non-Darwin cannot activate this capability")
+        for invalid in (0, -1, True, 2 ** 31, "1"):
+            refused(lambda invalid=invalid: api._darwin_kinfo_snapshot(pid=invalid), "invalid PID selection")
 
     base = api._darwin_kinfo_decode(raw(1, 0, 1, 0) + raw(guardian, foreign, 2, 0) + raw())
     native = {**expected, "uniqueid": 44, "parent_uniqueid": 11, "version": 404, "parent_version": 101}
@@ -972,6 +1005,7 @@ def _check_darwin_inventory_snapshot():
     inventory.communicate.return_value = (f"{foreign} 987654 Fri Nov 13 00:00:00 2026\n", "")
     inventory.poll.return_value = 0
     with patch.object(worker.sys, "platform", "darwin"), \
+         patch.object(worker.Posix, "_darwin_kinfo_supported", return_value=False), \
          patch.object(worker.ctypes, "CDLL", return_value=library):
         assert_true(worker.ctypes.sizeof(worker._DarwinBSDInfo) == 136 and
                     worker.ctypes.sizeof(worker._DarwinUniqueInfo) == 56,

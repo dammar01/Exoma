@@ -84,13 +84,26 @@ independence; a successful contained transition cannot satisfy that assertion.
 ## Darwin inventory capability investigation
 
 The standalone production worker has a compiler-free `ctypes` process-table reader
-for the measured ARM64/little-endian/64-bit ABI on kernel `25.6.0`, OS build `25G332`.
+for one measured ARM64/little-endian/64-bit ABI.
 Native run [44284715093](https://github.com/dammar01/Exoma/actions/runs/44284715093)
-measured the 648-byte record and field layout with the runner SDK. Unknown architecture,
-kernel or unreadable/unrecognized build retains the existing conservative `ps` collector.
-On the recognized ABI, native enumeration or decoding errors fail cleanup rather than
-downgrade to coarse successful evidence. PID zero is the explicit kernel-record exclusion;
+measured the 648-byte record and field layout with the runner SDK. Selection uses a
+bounded capability check, not a list of kernel versions or OS builds. The existing
+transport queries `KERN_PROC_PID` for the current process and requires a successful
+fill of exactly one 648-byte record naming that PID. Size-only estimates include spare
+capacity and never establish record size. Precise generation, parent and status must
+agree with independent combined libproc observations before and after capture; native
+lifetime/lineage fields must remain consistent across those observations.
+
+Unsupported process architecture, byte order or pointer width retains the existing
+conservative `ps` collector. Once the ARM64 capability check is attempted, native
+errors, malformed records or disagreement stop the operation. They do not silently
+downgrade to legacy evidence. A parent/status transition during validation also refuses
+the check. The same failure behavior applies to later native enumeration/decoding.
+PID zero is the explicit kernel-record exclusion;
 positive PIDs with invalid generations/statuses, duplicate PIDs and partial records fail.
+This validates observed fields of the one measured layout, not every future SPI semantic
+or architecture. A real ABI change can still require maintenance; an OS build-string
+change alone requires no new whitelist entry. No offsets are discovered heuristically.
 
 The reader captures precise generation, parent and status before optional libproc
 enrichment. Combined-query enrichment must match that generation. Lineage-only queries
@@ -131,6 +144,12 @@ artifacts never substitute for strict transition/no-op or other release evidence
 Earlier schema-1 SDK-only artifacts cannot establish the new production-reader comparison.
 Production acceptance still requires review and new-commit native/strict update evidence.
 
+Focused local validation includes the existing global subprocess scanner:
+
+```sh
+python tests/run.py --only hidden-spawn --only self-update --only jobs --only job-cancellation --only native-update-gate --only registry --only deps --only manifest --traceback
+```
+
 On a clean native checkout, the equivalent commands are:
 
 ```sh
@@ -140,7 +159,7 @@ python tools/maintain/darwin_inventory_probe.py validate /tmp/exoma-darwin-capab
 
 The initial engineering bounds are four allocation attempts and a 16 MiB native
 buffer, applied separately to each production table observation (including a lineage
-binding follow-up). A five-second deadline is checked between native calls and after
+binding follow-up and the selected-self capability query). A five-second deadline is checked between native calls and after
 decoding; it cannot interrupt an in-progress system call. The coordinator's
 ten-second subprocess timeout also bounds a blocking helper. Compilation has a
 45-second timeout. Controlled Python fixtures self-terminate after 20 seconds if

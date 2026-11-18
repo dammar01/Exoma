@@ -31,7 +31,7 @@ DIAGNOSTIC_RECORDS = 32
 DIAGNOSTIC_PARENT_HOPS = 8
 DIAGNOSTIC_STRING_CHARS = 256
 # Measured by the SDK oracle in native run 44284715093 (clean 9902ec3).
-# Enable only for that kernel/build and process ABI; never guess an ABI upgrade.
+# Keep one measured layout; verify its observed fields before enabling this process ABI.
 DARWIN_KINFO_LAYOUT = {
     "architecture": "arm64", "record_size": 648, "alignment": 8,
     "pointer_width": 8, "endianness": "little",
@@ -536,20 +536,20 @@ class Posix:
     def _darwin_kinfo_supported():
         if sys.platform != "darwin" or sys.byteorder != "little" or ctypes.sizeof(ctypes.c_void_p) != 8:
             return False
-        try:
-            identity = os.uname()
-            if identity.machine != "arm64" or identity.release != "25.6.0":
-                return False
-            library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-            library.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
-                                            ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
-            library.sysctlbyname.restype = ctypes.c_int
-            data, size = ctypes.create_string_buffer(128), ctypes.c_size_t(128)
-            if library.sysctlbyname(b"kern.osversion", data, ctypes.byref(size), None, 0) != 0:
-                return False
-            return size.value == 7 and data.raw[:size.value] == b"25G332\0"
-        except (AttributeError, OSError, ValueError):
-            return False  # Unknown ABI keeps the existing conservative collector.
+        if os.uname().machine != "arm64":
+            return False
+        api, pid = Posix(), os.getpid()
+        before = api._darwin_inventory_record(pid)
+        observed = api._darwin_kinfo_snapshot(pid=pid)[pid]
+        after = api._darwin_inventory_record(pid)
+        if (any(before[key] != observed[key] or after[key] != observed[key]
+                for key in ("created", "parent", "status"))
+                or any(before[key] != after[key]
+                       for key in ("uniqueid", "parent_uniqueid", "version", "parent_version"))):
+            raise OSError("native process ABI cannot be verified")
+        # This validates the observed fixed layout, not future kernel semantics
+        # or complete fork/exit history. Attempted validation failures propagate.
+        return True
 
     @staticmethod
     def _darwin_kinfo_decode(data):
@@ -576,12 +576,15 @@ class Posix:
             result[pid] = {"created": created, "parent": parent, "status": row["status"]}
         return result
 
-    def _darwin_kinfo_snapshot(self):
+    def _darwin_kinfo_snapshot(self, *, pid=None):
+        if pid is not None and (type(pid) is not int or not 0 < pid < 2 ** 31):
+            raise ValueError("invalid native process selection")
         library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
         library.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
                                   ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
         library.sysctl.restype = ctypes.c_int
-        mib = (ctypes.c_int * 4)(1, 14, 0, 0)  # CTL_KERN, KERN_PROC, KERN_PROC_ALL.
+        # CTL_KERN, KERN_PROC: the same caller-ABI record writer serves ALL/PID.
+        mib = (ctypes.c_int * 4)(1, 14, 0 if pid is None else 1, 0 if pid is None else pid)
         started, next_capacity, attempts = time.monotonic(), 0, []
         def deadline():
             if time.monotonic() - started >= DARWIN_INVENTORY_SECONDS:
@@ -611,7 +614,13 @@ class Posix:
                 raise OSError(error, "cannot fill native process table")
             if returned.value > capacity:
                 raise ValueError("native process table overran capacity")
+            # A size-only query includes spare capacity. Only copied fill bytes
+            # can establish the stride of a selected process record.
+            if pid is not None and returned.value != DARWIN_KINFO_LAYOUT["record_size"]:
+                raise ValueError("native selected record size does not match")
             result = self._darwin_kinfo_decode(data.raw[:returned.value])
+            if pid is not None and set(result) != {pid}:
+                raise ValueError("native selected record PID does not match")
             deadline()
             result.enumeration = {"total_records": returned.value // DARWIN_KINFO_LAYOUT["record_size"],
                                   "attempts": attempts,
