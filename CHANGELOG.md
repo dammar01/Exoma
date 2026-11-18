@@ -11,6 +11,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 1.1.2 (candidate) | [docs/releases/v1.1.2.md](docs/releases/v1.1.2.md) | Darwin cleanup inventory retains terminal process identity and birth lineage without executable lookup; conservative ownership checks and native release gates retained |
 | 1.1.1 (candidate) | [docs/releases/v1.1.1.md](docs/releases/v1.1.1.md) | Updater guardian tolerates the macOS post-exit EPERM only with proof the group is gone; native Windows handoff is a mandatory release-staging gate and CI skips only the GitHub-hosted Windows handoff step; release gates pending |
 | 1.1.0 | [docs/releases/v1.1.0.md](docs/releases/v1.1.0.md) | Native Codex host workflows, centralized verification preparation, automatic browser verification, and tested Codex CLI 0.168.0; final release gates pending |
 | 1.0.2 (candidate) | [docs/releases/v1.0.2.md](docs/releases/v1.0.2.md) | Bounded updater waits, live manager output, elapsed heartbeat, cancellation recovery and Windows cleanup fallback; release gates pending |

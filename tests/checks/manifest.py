@@ -139,7 +139,8 @@ def _check_package_artifacts() -> None:
             run([str(python), "-I", "-m", "exoma", "--version"], root)
             project = root / f"project-{index}"
             run([str(python), "-I", "-m", "exoma", "init", "--work-dir", str(project)], root)
-            run([str(python), "-I", "-m", "exoma", "--command", "inspect", "--work-dir", str(project)], root)
+            run([str(python), "-I", "-m", "exoma", "--command", "inspect", "--work-dir", str(project),
+                 "--session", "package-artifacts"], root)
 
 
 def _test_malformed_manifest_entry_fails_closed() -> None:

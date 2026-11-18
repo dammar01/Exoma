@@ -90,7 +90,7 @@ def cleanup_diagnostic_projection(receipt):
                 continue
             projected["records"].append({
                 "snapshot": row.get("snapshot") if row.get("snapshot") in ("baseline", "current") else "unknown",
-                **{key: number(row.get(key)) for key in ("pid", "parent", "created", "uniqueid", "parent_uniqueid", "version", "parent_version")},
+                **{key: number(row.get(key)) for key in ("pid", "parent", "created", "uniqueid", "parent_uniqueid", "version", "parent_version", "native_status")},
                 "generation_source": row.get("generation_source") if row.get("generation_source") in ("native", "ps_fallback") else "unknown",
                 "query_error": error(row.get("query_error")),
                 "lineage_error": error(row.get("lineage_error"))})
@@ -141,6 +141,8 @@ def _ancestry_diagnostics(baseline, current, remaining):
                 for field in ("uniqueid", "parent_uniqueid", "version", "parent_version"):
                     if type(row.get(field)) is int and 0 <= row[field] < 2 ** 64:
                         record[field] = row[field]
+                if type(row.get("status")) is int and 1 <= row["status"] <= 6:
+                    record["native_status"] = row["status"]
                 status = getattr(inventory, "query_status", {}).get(pid)
                 record.update(status or {"generation_source": "unknown"})
                 selected.append(record)
@@ -413,6 +415,27 @@ def installation_key(prefix, user):
     return hashlib.sha256((user + "\0" + canonical(prefix)).encode()).hexdigest()
 
 
+class _DarwinBSDInfo(ctypes.Structure):
+    # Apple proc_info.h: struct proc_bsdinfo (136 bytes on supported Darwin ABIs).
+    _fields_ = [(name, ctypes.c_uint32) for name in (
+        "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid", "rgid", "svuid", "svgid", "reserved")]
+    _fields_ += [("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)]
+    _fields_ += [(name, ctypes.c_uint32) for name in ("nfiles", "pgid", "jobc", "tdev", "tpgid")]
+    _fields_ += [("nice", ctypes.c_int32), ("seconds", ctypes.c_uint64), ("micros", ctypes.c_uint64)]
+
+
+class _DarwinUniqueInfo(ctypes.Structure):
+    # proc_info_private.h: the 56-byte proc_uniqidentifierinfo layout.
+    _fields_ = [("uuid", ctypes.c_ubyte * 16), ("uniqueid", ctypes.c_uint64),
+                ("parent_uniqueid", ctypes.c_uint64), ("version", ctypes.c_uint32),
+                ("parent_version", ctypes.c_uint32), ("reserved2", ctypes.c_uint64),
+                ("reserved3", ctypes.c_uint64)]
+
+
+class _DarwinInventoryInfo(ctypes.Structure):
+    _fields_ = [("bsd", _DarwinBSDInfo), ("lineage", _DarwinUniqueInfo)]
+
+
 class Posix:
     """Native lifecycle adapter; no imports from the installation being replaced."""
     def user(self):
@@ -425,18 +448,12 @@ class Posix:
         if sys.platform == "darwin":
             # Apple's libproc ABI: proc_info.h / libproc.h. Use the native image,
             # not ps argv[0], and a microsecond start identity for PID reuse checks.
-            class BSDInfo(ctypes.Structure):
-                _fields_ = [(name, ctypes.c_uint32) for name in (
-                    "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid", "rgid", "svuid", "svgid", "reserved")]
-                _fields_ += [("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)]
-                _fields_ += [(name, ctypes.c_uint32) for name in ("nfiles", "pgid", "jobc", "tdev", "tpgid")]
-                _fields_ += [("nice", ctypes.c_int32), ("seconds", ctypes.c_uint64), ("micros", ctypes.c_uint64)]
             library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
             library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
             library.proc_pidinfo.restype = ctypes.c_int
             library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
             library.proc_pidpath.restype = ctypes.c_int
-            info, image = BSDInfo(), ctypes.create_string_buffer(4096)
+            info, image = _DarwinBSDInfo(), ctypes.create_string_buffer(4096)
             if library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
                 error = ctypes.get_errno()
                 if error in {2, 3}:
@@ -474,12 +491,18 @@ class Posix:
         """
         if sys.platform != "darwin":
             return None
+        return self._darwin_lineage_record(pid)
+
+    def _darwin_lineage_record(self, pid, *, include_terminal=False):
+        # Flavor 17 is available without the same-user permission required by
+        # flavor 18. Keep this independent evidence when the combined query is
+        # unavailable. A nonzero argument also permits querying zombie records.
         library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
         library.proc_pidinfo.restype = ctypes.c_int
         info = ctypes.create_string_buffer(56)
         ctypes.set_errno(0)
-        size = library.proc_pidinfo(pid, 17, 0, info, len(info))
+        size = library.proc_pidinfo(pid, 17, int(include_terminal), info, len(info))
         if size != len(info):
             raise OSError(ctypes.get_errno() or errno.EIO, "cannot verify process birth lineage")
         uniqueid = ctypes.c_uint64.from_buffer(info, 16).value
@@ -493,6 +516,32 @@ class Posix:
         return {"uniqueid": uniqueid, "parent_uniqueid": parent_uniqueid,
                 "version": ctypes.c_uint32.from_buffer(info, 32).value,
                 "parent_version": ctypes.c_uint32.from_buffer(info, 36).value}
+
+    def _darwin_inventory_record(self, pid):
+        """One native lifetime/status/parent snapshot, including terminal processes.
+
+        Apple proc_info_private.h and kern/proc_info.c: flavor 18 combines BSD
+        and unique-ID records from the same referenced process; arg=1 includes
+        zombies. Inventory needs no executable path and must retain terminal
+        ancestry: an exited parent may have surviving escaped descendants.
+        """
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+        library.proc_pidinfo.restype = ctypes.c_int
+        info = _DarwinInventoryInfo()
+        ctypes.set_errno(0)
+        size = library.proc_pidinfo(pid, 18, 1, ctypes.byref(info), ctypes.sizeof(info))
+        if size != ctypes.sizeof(info):
+            raise OSError(ctypes.get_errno() or errno.EIO, "cannot read native process inventory")
+        bsd, lineage = info.bsd, info.lineage
+        if (bsd.pid != pid or bsd.ppid == pid or bsd.status not in (1, 2, 3, 4, 5, 6)
+                or not bsd.seconds or bsd.micros >= 1000000 or bsd.seconds * 1000000 + bsd.micros >= 2 ** 64
+                or not lineage.uniqueid or lineage.uniqueid == lineage.parent_uniqueid):
+            raise ValueError("invalid native process inventory")
+        return {"created": bsd.seconds * 1000000 + bsd.micros, "parent": bsd.ppid,
+                "status": bsd.status, "uniqueid": lineage.uniqueid,
+                "parent_uniqueid": lineage.parent_uniqueid, "version": lineage.version,
+                "parent_version": lineage.parent_version}
 
     def open_identity(self, pid, expected=None):
         try:
@@ -716,25 +765,26 @@ class DescendantOwner:
             if pid == proc.pid:
                 continue  # This waitable inventory child is already reaped.
             source, query_error = "native", None
+            lineage_error = None
             try:
-                created = api.process(pid)["created"]
-            except ProcessLookupError as exc:
+                if sys.platform == "darwin":
+                    result[pid] = api._darwin_inventory_record(pid)
+                else:
+                    result[pid] = {"created": api.process(pid)["created"], "parent": int(parent)}
+            except (OSError, ValueError) as exc:
                 # A disappearing new parent may already have orphaned a child
                 # after ps enumerated it. Keep that uncertainty instead of hiding
                 # the fork/exit race behind an empty final snapshot.
-                created = stamp
+                result[pid] = {"created": stamp, "parent": int(parent)}
                 source, query_error = "ps_fallback", exc
-            except OSError as exc:
-                created = stamp
-                source, query_error = "ps_fallback", exc
-            result[pid] = {"created": created, "parent": int(parent)}
-            lineage_error = None
-            try:
-                lineage = api.lineage(pid)
-                if lineage is not None:
-                    result[pid].update(lineage)
-            except (OSError, ValueError) as exc:
-                lineage_error = exc
+            if sys.platform != "darwin" or query_error is not None:
+                try:
+                    lineage = (api._darwin_lineage_record(pid, include_terminal=True) if sys.platform == "darwin"
+                               else api.lineage(pid))
+                    if lineage is not None:
+                        result[pid].update(lineage)
+                except (OSError, ValueError) as exc:
+                    lineage_error = exc
             try:
                 result.query_status[pid] = {"generation_source": source,
                                             "query_error": _diagnostic_error("inventory", query_error)
@@ -755,6 +805,10 @@ class DescendantOwner:
             def unchanged(pid):
                 if lineage(current.get(pid)) and lineage(self.baseline.get(pid)):
                     return current[pid]["uniqueid"] == self.baseline[pid]["uniqueid"]
+                if sys.platform == "darwin" and not all(
+                        type(snapshot.get(pid, {}).get("created")) is int and 0 < snapshot[pid]["created"] < 2 ** 64
+                        for snapshot in (current, self.baseline)):
+                    return False  # Coarse ps timestamps cannot prove a Darwin lifetime.
                 return pid in current and pid in self.baseline and (
                     current[pid]["created"] == self.baseline[pid]["created"])
             def outside_baseline(pid):

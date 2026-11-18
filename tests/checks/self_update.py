@@ -43,6 +43,7 @@ def _test_self_update() -> None:
     _check_cleanup_publication()
     _check_guardian_diagnostics()
     _check_guardian_cleanup_attempts()
+    _check_darwin_inventory_snapshot()
     _check_birth_lineage()
     _check_cleanup_receipt_context()
     _check_caller_acknowledgement()
@@ -771,6 +772,139 @@ def _check_cleanup_receipt_context():
                     "malformed nested diagnostic fields cannot inject text")
 
 
+def _check_darwin_inventory_snapshot():
+    from exoma import _update_worker as worker
+    from types import SimpleNamespace
+    import errno
+
+    foreign, guardian = 123456, os.getpid()
+    native = {"created": 123000456, "parent": 1, "status": 5,
+              "uniqueid": 44, "parent_uniqueid": 11, "version": 404, "parent_version": 101}
+    mode = {"value": "valid"}
+    def query(pid, flavor, arg, buffer, size):
+        assert_true((pid, flavor, arg, size) == (foreign, 18, 1, 192),
+                    "inventory requests the combined, zombie-inclusive Apple ABI")
+        if mode["value"] in ("denied", "missing", "unsupported", "short"):
+            worker.ctypes.set_errno({"denied": errno.EPERM, "missing": errno.ESRCH,
+                                     "unsupported": errno.EINVAL, "short": 0}[mode["value"]])
+            return size - 1 if mode["value"] == "short" else 0
+        info = worker.ctypes.cast(buffer, worker.ctypes.POINTER(worker._DarwinInventoryInfo)).contents
+        info.bsd.pid, info.bsd.ppid, info.bsd.status = pid, 1, 5
+        info.bsd.seconds, info.bsd.micros = 123, 456
+        info.lineage.uniqueid, info.lineage.parent_uniqueid = 44, 11
+        info.lineage.version, info.lineage.parent_version = 404, 101
+        if mode["value"] == "wrong_pid":
+            info.bsd.pid += 1
+        elif mode["value"] == "invalid_lineage":
+            info.lineage.uniqueid = 0
+        elif mode["value"] == "same_parent_identity":
+            info.lineage.parent_uniqueid = info.lineage.uniqueid
+        elif mode["value"] == "self_parent":
+            info.bsd.ppid = pid
+        elif mode["value"] == "invalid_time":
+            info.bsd.micros = 1000000
+        elif mode["value"] == "overflow_time":
+            info.bsd.seconds = 2 ** 64 - 1
+        elif mode["value"] == "invalid_status":
+            info.bsd.status = 0
+        return size
+    library = SimpleNamespace(proc_pidinfo=MagicMock(side_effect=query), proc_pidpath=MagicMock())
+    inventory = MagicMock()
+    inventory.pid, inventory.returncode = 999999, 0
+    inventory.communicate.return_value = (f"{foreign} 987654 Fri Nov 13 00:00:00 2026\n", "")
+    inventory.poll.return_value = 0
+    with patch.object(worker.sys, "platform", "darwin"), \
+         patch.object(worker.ctypes, "CDLL", return_value=library):
+        assert_true(worker.ctypes.sizeof(worker._DarwinBSDInfo) == 136 and
+                    worker.ctypes.sizeof(worker._DarwinUniqueInfo) == 56,
+                    "combined inventory uses Apple's BSD and unique-ID structure sizes")
+        assert_true(worker.Posix()._darwin_inventory_record(foreign) == native,
+                    "a terminal process retains native generation, status and original-parent evidence")
+        for fault in ("denied", "missing", "unsupported", "short", "wrong_pid", "invalid_lineage",
+                      "same_parent_identity", "self_parent", "invalid_time", "overflow_time", "invalid_status"):
+            mode["value"] = fault
+            try:
+                worker.Posix()._darwin_inventory_record(foreign)
+            except (OSError, ValueError):
+                pass
+            else:
+                raise AssertionError("invalid native inventory was accepted: " + fault)
+        mode["value"] = "valid"
+        with patch.object(worker.subprocess, "Popen", return_value=inventory), \
+             patch.object(worker.Posix, "process", side_effect=AssertionError("live identity is not inventory")), \
+             patch.object(worker.Posix, "lineage", side_effect=AssertionError("combined snapshot already has lineage")):
+            observed = worker.DescendantOwner.inventory()
+        assert_true(observed[foreign] == native and not library.proc_pidpath.called,
+                    "inventory uses one coherent native parent/lifetime snapshot without executable access")
+        def live_query(pid, flavor, arg, buffer, size):
+            assert_true((flavor, arg, size) == (3, 0, 136), "live identity keeps its existing ABI")
+            worker.ctypes.cast(buffer, worker.ctypes.POINTER(worker._DarwinBSDInfo)).contents.status = 5
+            return size
+        library.proc_pidinfo.side_effect = live_query
+        try:
+            worker.Posix().process(foreign)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("terminal inventory support relaxed live/executable identity verification")
+        assert_true(not library.proc_pidpath.called, "a terminal lifetime never passes the live identity check")
+        baseline = {1: {"created": 1, "parent": 0, "uniqueid": 11, "parent_uniqueid": 0,
+                        "version": 101, "parent_version": 0},
+                    guardian: {"created": 2, "parent": foreign, "uniqueid": 22, "parent_uniqueid": 44,
+                               "version": 202, "parent_version": 404},
+                    foreign: {**native, "status": 2}}
+        owner = worker.DescendantOwner.__new__(worker.DescendantOwner)
+        owner.subreaper, owner.baseline = False, baseline
+        current = {**baseline, foreign: observed[foreign]}
+        with patch.object(owner, "inventory", return_value=current), patch.object(worker.os, "kill") as kill:
+            owner.cleanup()
+        assert_true(not kill.called, "a baseline-foreign lifetime becoming terminal requires no signal")
+        diagnostics = worker._ancestry_diagnostics(baseline, current, [foreign])
+        projection = worker.cleanup_diagnostic_projection({"diagnostics": {"ancestry": diagnostics}})
+        assert_true(projection["ancestry"]["records"][0]["native_status"] == 5,
+                    "bounded cleanup evidence retains numeric terminal status")
+
+        # Flavor 17 has a different permission boundary. Losing the combined
+        # snapshot must not erase independently verifiable native lifetime IDs.
+        def restricted(pid, flavor, arg, buffer, size):
+            assert_true(arg == 1, "inventory fallback also includes terminal processes")
+            if flavor == 18:
+                worker.ctypes.set_errno(errno.EPERM)
+                return 0
+            assert_true((flavor, size) == (17, 56), "fallback uses the bounded native lineage ABI")
+            worker.ctypes.c_uint64.from_buffer(buffer, 16).value = 44
+            worker.ctypes.c_uint64.from_buffer(buffer, 24).value = 11
+            worker.ctypes.c_uint32.from_buffer(buffer, 32).value = 404
+            worker.ctypes.c_uint32.from_buffer(buffer, 36).value = 101
+            return 56
+        library.proc_pidinfo.side_effect = restricted
+        with patch.object(worker.subprocess, "Popen", return_value=inventory):
+            fallback = worker.DescendantOwner.inventory()
+        assert_true(fallback[foreign]["uniqueid"] == 44 and fallback[foreign]["created"] != native["created"]
+                    and fallback.query_status[foreign]["query_error"]["errno"] == errno.EPERM,
+                    "restricted combined queries preserve independent lineage and failure provenance")
+        with patch.object(owner, "inventory", return_value={**baseline, foreign: fallback[foreign]}):
+            owner.cleanup()
+
+        library.proc_pidinfo.side_effect = None
+        library.proc_pidinfo.return_value = 0
+        with patch.object(worker.subprocess, "Popen", return_value=inventory):
+            unknown = worker.DescendantOwner.inventory()
+        assert_true(foreign in unknown and "uniqueid" not in unknown[foreign]
+                    and unknown.query_status[foreign]["lineage_error"] is not None,
+                    "failed native queries retain the uncertain process rather than an empty successful inventory")
+        # Identical coarse timestamps, including two failed observations, cannot
+        # prove that the PID still names the same process lifetime.
+        owner.baseline = unknown
+        with patch.object(owner, "inventory", return_value=unknown):
+            try:
+                owner.cleanup()
+            except OSError:
+                pass
+            else:
+                raise AssertionError("identical fallback timestamps concealed unknown/PID-reused ownership")
+
+
 def _check_birth_lineage():
     from exoma import _update_worker as worker
     from types import SimpleNamespace
@@ -821,6 +955,11 @@ def _check_birth_lineage():
             "version": 606, "parent_version": 202}}, False),
         ("same lifetime despite query fallback", {**baseline, foreign: {
             **baseline[foreign], "created": "ps timestamp"}}, True),
+        ("terminal foreign birth", {**baseline, candidate: {**born, "status": 5}}, True),
+        ("terminal owned parent with escaped child", {**baseline,
+            candidate: {**born, "status": 5, "parent_uniqueid": 22, "parent_version": 202},
+            candidate + 1: {**born, "uniqueid": 55, "parent_uniqueid": 44,
+                            "version": 505, "parent_version": 404}}, False),
         ("unknown cyclic lineage", {**baseline, candidate: {**born, "parent_uniqueid": 55, "parent_version": 505},
                                     candidate + 1: {**born, "uniqueid": 55, "version": 505,
                                                     "parent_uniqueid": 44, "parent_version": 404}}, False),

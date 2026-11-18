@@ -1063,7 +1063,61 @@ def _check_worker_provider_cancellation(root):
     _check_worker_cleanup_uncertainty(root)
 
 
+def _check_worker_terminal_inventory(root):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from exoma import _update_worker as native
+    from exoma.core.jobs import job_lifecycle, job_manager
+
+    guardian, foreign = os.getpid(), os.getpid() + 1000000
+    baseline = {1: {"created": 1, "parent": 0, "uniqueid": 11, "parent_uniqueid": 0,
+                    "version": 101, "parent_version": 0},
+                guardian: {"created": 2, "parent": foreign, "uniqueid": 22, "parent_uniqueid": 33,
+                           "version": 202, "parent_version": 303},
+                foreign: {"created": 3, "parent": 1, "status": 2, "uniqueid": 33,
+                          "parent_uniqueid": 11, "version": 303, "parent_version": 101}}
+    cases = (
+        ("foreign-terminal", {**baseline, foreign: {**baseline[foreign], "status": 5}}, True),
+        ("unknown-terminal", {**baseline, foreign: {"created": "ps timestamp", "parent": 1}}, False),
+        ("reused-owned", {**baseline, foreign: {**baseline[foreign], "uniqueid": 44,
+                                               "parent_uniqueid": 22, "parent_version": 202}}, False),
+    )
+    for label, current, accepted in cases:
+        manager = JobManager(root / ("native-cleanup-" + label))
+        job = manager.create_job("analyze", "task", "native-" + label, str(root), None)
+        observations = iter([baseline])
+        def inventory():
+            return next(observations, current)
+        # Exercise the real POSIX ownership wrapper/classifier on every CI OS.
+        # Replace the module's os reference, never the host-wide os.name/Path ABI.
+        posix_os = SimpleNamespace(**{**vars(os), "name": "posix"})
+        with patch.object(main, "JOB_MANAGER", manager), \
+             patch.object(main, "run", return_value={"ok": True, "content": "ordinary completion"}), \
+             patch.object(job_manager, "os", posix_os), \
+             patch.object(native.sys, "platform", "darwin"), \
+             patch.object(native.DescendantOwner, "inventory", side_effect=inventory), \
+             patch.dict(os.environ, {"WORKFLOW_JOB_WORKER": job["job_id"]}):
+            result = job_lifecycle.run_worker(job["job_id"])
+        stored = manager.get_job(job["job_id"])
+        if accepted:
+            assert_true(result["ok"] and stored["status"] == "completed"
+                        and stored["ownership"]["cleanup_confirmed"]
+                        and manager.active_job_for_session(job["session_id"]) is None,
+                        "a terminal foreign native lifetime permits real worker completion and lock release")
+        else:
+            assert_true(not result["ok"] and result["meta"]["error_type"] == "cleanup_pending"
+                        and stored["status"] == "running" and not stored["ownership"]["cleanup_confirmed"],
+                        "unknown or reused-owned inventory retains cleanup ownership")
+            try:
+                manager.reserve_update(root / ("update-" + label), "fixture")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("uncertain native inventory allowed package mutation")
+
+
 def _check_worker_cleanup_uncertainty(root):
+    _check_worker_terminal_inventory(root)
     from exoma.core.jobs import job_lifecycle
     from exoma.core.evidence.contract import make_error
     from unittest.mock import MagicMock, patch

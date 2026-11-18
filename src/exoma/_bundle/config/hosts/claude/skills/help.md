@@ -1,11 +1,11 @@
 # Skill: help
-description: Command reference v1.1.1
+description: Command reference v1.1.2
 
 ## Trigger
 {{CMD:help}}
 
 ## Output
-[COMMAND GUIDE — v1.1.1]
+[COMMAND GUIDE — v1.1.2]
 
 LOCAL (main_agent directly):
   {{CMD:execute}} -y      implement code (-y required)
