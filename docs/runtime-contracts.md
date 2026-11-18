@@ -59,19 +59,23 @@ group raises ESRCH. A present group, a denied or failed probe, a failed reap, a 
 exit observation or any non-EPERM signal error keeps the negative receipt. Signal 0 is the
 only signal sent after the reap.
 
-The mandatory artifact matrix covers Windows/Linux/macOS, Python 3.11/3.13 and uv/pipx/pip
+The CI artifact matrix covers Windows/Linux/macOS, Python 3.11/3.13 and uv/pipx/pip
 venvs: real candidate A-to-B, fresh provenance, install/check, user data and separate no-op.
 Console and module entrypoints use the same state/order assertions. Contained fixtures
 exercise stages but cannot attest independence. Windows CI may select supported runner
-labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`. On GitHub-hosted
-Windows, whose runners keep the helper inside an outer job, CI skips only the real
-handoff step. The handoff on a native Windows host is a mandatory release-staging gate
-(`RELEASE.md`); `publish.yml` cannot enforce it. `tools/maintain/native_update_gate.py`
-makes that run reproducible: one command executes all six manager/Python cells with
-commit-bound reports, and its validator accepts only complete, clean, strict receipts
-(see `docs/reference.md`). Receipts are not host-authenticated and stay out of Git, so
-the gate remains a maintainer-run check before tagging. Restrictive-host refusal is never
-converted into a positive gate, and production admission is unchanged.
+labels through the JSON repository variable `EXOMA_WINDOWS_UPDATE_RUNNER`. GitHub-hosted
+Windows runs contained transitions; Linux/macOS run strict handoff. Native Windows strict
+handoff remains a maintainer-run release gate under the coverage policy in `RELEASE.md`:
+Windows launch/ownership/runtime/entrypoint/integration/support changes require all six
+strict cells. A platform-specific change with reviewed unchanged Windows behavior may use
+one current strict uv/Python 3.13 cell alongside the earlier full Windows matrix and current
+CI coverage. Earlier reports retain their original SHA; they never become new-commit
+receipts. `tools/maintain/native_update_gate.py check-cell` validates a named cell, while
+`matrix` collects all six and `validate` still requires the complete strict native matrix
+(see `docs/reference.md`). Run native qualification outside the bounded test wrapper's
+Windows Job Object. Receipts are not host-authenticated and stay out of Git; `publish.yml`
+cannot enforce this staging gate. Restrictive-host refusal is never converted into a
+positive gate, and production admission is unchanged.
 
 The artifact poller treats `cleanup_pending` as a failed acceptance gate immediately,
 while production observation still reports that operation as unknown (exit 4). It must

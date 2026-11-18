@@ -2,9 +2,10 @@
 """Collect and validate native update-handoff receipts for a release candidate.
 
 The strict artifact gate (`tests/run.py --update-artifacts handoff`) proves a real A-to-B
-update on one host, one Python and one package manager. A release needs all three managers
-under both supported Pythons on each native platform. This tool runs that matrix in one
-command, writes uniquely named reports bound to the tested commit, and checks the result.
+update on one host, one Python and one package manager. RELEASE.md defines when Windows
+staging needs a representative cell or the complete strict matrix. This tool validates one
+named cell, or collects and validates all three managers under both supported Pythons with
+uniquely named reports bound to the tested commit. Full-matrix validation is unchanged.
 
     python tools/maintain/native_update_gate.py matrix --python-311 <exe> --python-313 <exe>
     python tools/maintain/native_update_gate.py validate <dir> --commit <sha>

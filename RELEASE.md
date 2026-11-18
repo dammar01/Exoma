@@ -102,10 +102,31 @@ accident.
    `["self-hosted","Windows","X64","exoma-independent"]`. Matching labels alone do not
    establish independence: the runner must actually pass production admission and the
    report must prove that the worker is outside inherited jobs.
-   **The handoff on a native Windows host (all three managers, both Python versions) is a
-   mandatory release-staging gate**: run the command above there before tagging and record
-   the result. `publish.yml` cannot enforce it, so it depends on this step being followed.
-   Run the whole matrix on each native host from a clean checkout of the exact commit to tag:
+   **Native Windows strict handoff remains a release-staging gate.** Choose its coverage
+   from the reviewed changes since the last complete strict Windows matrix:
+
+   - Run all six native Windows cells when launch/job admission, ownership, runtime or
+     interpreter selection, entrypoints, package-manager integration or supported versions
+     change, or when the applicability of the earlier matrix is uncertain.
+   - For a change confined to another platform, one current strict Windows cell may qualify
+     that unchanged Windows behavior: use uv/Python 3.13, retain the earlier six-cell strict
+     receipts and review the intervening Windows paths, and require the current six hosted
+     Windows contained cells plus the Linux/macOS strict matrices. Record both commits, the
+     applicability review and the named current cell in the release notes. This is an
+     incremental qualification; it does not establish a new complete strict Windows matrix.
+
+   Run strict qualification directly from a terminal that permits an independent worker.
+   The bounded `run.sh test` wrapper puts tests in a Windows Job Object and can correctly
+   cause admission refusal; use the native staging command or matrix collector outside
+   that wrapper. Do not relax production admission or count that refusal as a pass.
+   For the representative cell, from a clean checkout of the exact commit to tag:
+
+   ```powershell
+   python tests/run.py --only self-update --traceback --update-artifacts handoff --update-manager uv --update-report <report.json>
+   python tools/maintain/native_update_gate.py check-cell <report.json> --commit <sha> --mode strict --python 3.13 --manager uv
+   ```
+
+   When the complete matrix is required, run it from the same clean candidate checkout:
 
    ```powershell
    python tools/maintain/native_update_gate.py matrix --python-311 <python3.11> --python-313 <python3.13>
@@ -122,10 +143,11 @@ accident.
    `release_acceptance=false`; it cannot replace the `handoff` release gate. A strict CI
    cell is eligible evidence for that cell, not proof that every required native cell ran.
    `native_update_gate.py check-cell <report> --commit <sha> --mode <strict|contained>
-   --python <3.11|3.13> --manager <uv|pipx|pip>` validates one CI cell, while `validate`
-   continues to require a complete strict native matrix. A hosted CI pass never fills
-   the missing Windows strict receipts. Retest the exact final commit after any edits;
-   reports from the earlier green SHA are not evidence for the new candidate.
+   --python <3.11|3.13> --manager <uv|pipx|pip>` validates one named cell, while `validate`
+   continues to require a complete strict native matrix. `publish.yml` cannot enforce the
+   maintainer-run native gate. A hosted CI pass cannot replace the required current strict
+   evidence. Retest the exact final commit after any edits, including documentation edits;
+   historical receipts establish the reviewed baseline, not a receipt for the new SHA.
 
    Then **real use**: the maintainer runs the changed commands on an actual project and
    finds no safety problem — no write the guard should have refused, no credential in an
