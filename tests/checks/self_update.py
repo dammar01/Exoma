@@ -926,7 +926,7 @@ def _check_darwin_kinfo_enumeration():
         script.write_bytes(Path(worker.__file__).read_bytes())
         result = subprocess.run([sys.executable, "-I", "-c",
                                  "import runpy; runpy.run_path('worker.py', run_name='isolated_worker')"], cwd=tmp,
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, timeout=10, **no_console())
         assert_true(result.returncode == 0, "standalone worker imports independently of installation/compiler")
 
 
