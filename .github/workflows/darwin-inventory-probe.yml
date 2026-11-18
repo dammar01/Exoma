@@ -1,0 +1,37 @@
+name: Darwin inventory capability
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capability:
+    name: Native enumeration capability (not release acceptance)
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile SDK helper and observe controlled lifetimes
+        run: >-
+          python tools/maintain/darwin_inventory_probe.py run
+          --report "${{ runner.temp }}/darwin-inventory-capability.json"
+      - name: Validate commit-bound capability evidence
+        if: always()
+        run: >-
+          python tools/maintain/darwin_inventory_probe.py validate
+          "${{ runner.temp }}/darwin-inventory-capability.json"
+          --commit "${{ github.sha }}"
+      - name: Preserve capability evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-inventory-capability-${{ github.sha }}
+          path: ${{ runner.temp }}/darwin-inventory-capability.json
+          if-no-files-found: error

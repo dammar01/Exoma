@@ -81,6 +81,46 @@ stages and cleanup error, plus bounded log tails; a timeout also retains the las
 error without resetting its deadline. A positive handoff report requires verified worker
 independence; a successful contained transition cannot satisfy that assertion.
 
+## Darwin inventory capability investigation
+
+The manual `darwin-inventory-probe.yml` workflow investigates native enumeration;
+it does not change production inventory, run a package update or authorize cleanup.
+Its SDK-compiled helper obtains `kinfo_proc` field layout from the runner's headers
+and retains precise start time as part of enumeration. The coordinator compares
+selected, probe-owned lifetimes with existing libproc observations, captures a child
+before reaping it and querying its now-missing PID, and demonstrates a parent exiting
+while a child in a separate session remains alive. Fixture control pipes and alarms
+bound those lifetimes; only direct children are killed/reaped by the coordinator.
+
+Capability reports use the separate kind `exoma-darwin-inventory-capability`, name
+the clean source commit and source hashes, record OS/kernel/SDK/compiler and measured
+layout, and include selected fixture observations and aggregate counts. They exclude
+raw table buffers, pointers, process command lines, environments and executable paths.
+Memory, allocation attempts and subprocess waits are bounded. Failed/partial native
+fills, unsupported platforms, permission failures and compilation errors produce
+non-success results and a report instead of a successful skip.
+
+`capability_verified=true` means only that the recorded cases and buffer/layout
+contract passed on that runner. Reports always state `release_acceptance=false` and
+`global_atomic=false`. A complete returned buffer is not complete fork/exit history;
+neither repeated snapshots nor repeated ESRCH can erase unresolved ancestry. These
+artifacts never substitute for strict transition/no-op or other release evidence.
+Production integration requires a separate review of the native artifacts and ABI.
+
+On a clean native checkout, the equivalent commands are:
+
+```sh
+python tools/maintain/darwin_inventory_probe.py run --report /tmp/exoma-darwin-capability.json
+python tools/maintain/darwin_inventory_probe.py validate /tmp/exoma-darwin-capability.json --commit "$(git rev-parse HEAD)"
+```
+
+The initial engineering bounds are four allocation attempts and a 16 MiB native
+buffer. A five-second deadline is checked between native calls; the coordinator's
+ten-second subprocess timeout also bounds a blocking helper. Compilation has a
+45-second timeout. Controlled Python fixtures self-terminate after 20 seconds if
+their coordinator stops making progress. These limits are recorded/configured bounds,
+not performance measurements or additional cleanup authority.
+
 ## Live provider diagnostics and explicit cancellation
 
 Provider heartbeat, stream activity and recognized work activity are separate observations.

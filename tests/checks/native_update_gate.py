@@ -88,6 +88,7 @@ def _check_transition_cells(gate):
 def _test_native_update_gate():
     gate = _load()
     _check_transition_cells(gate)
+    _check_darwin_inventory_probe(gate)
     from tests.checks.self_update import _handoff_independence_verified
 
     with tempfile.TemporaryDirectory(prefix="native-gate-") as tmp:
@@ -279,3 +280,209 @@ def _test_native_update_gate():
                  patch.object(gate, "run_cell", return_value=1):
                 assert_true(gate.matrix({"3.11": "py311", "3.13": "py313"}, out) == 1,
                             "a failing cell fails the matrix and every cell is still attempted")
+
+
+def _check_darwin_inventory_probe(gate):
+    """Portable contract tests; these do not simulate a passing native SDK run."""
+    import copy
+    import errno
+    from contextlib import redirect_stdout
+    import io
+    import subprocess
+
+    spec = importlib.util.spec_from_file_location(
+        "darwin_inventory_probe", REPO / "tools/maintain/darwin_inventory_probe.py")
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    # Deliberately synthetic layout, never a proposed Darwin ABI.
+    layout = {"architecture": "arm64", "record_size": 32, "alignment": 8, "pointer_width": 8, "endianness": "little",
+              "fields": {name: {"offset": offset, "width": width, "signed": True}
+                         for name, offset, width in (("pid", 0, 4), ("parent", 4, 4), ("status", 8, 1),
+                                                    ("start_seconds", 16, 8), ("start_micros", 24, 4))}}
+
+    def row(pid, parent):
+        return {"pid": pid, "parent": parent, "status": 3, "start_seconds": 100, "start_micros": pid}
+
+    def native(pid, parent):
+        return {"ok": True, "record": {"created": 100000000 + pid, "parent": parent, "status": 3,
+                                      "uniqueid": pid + 100, "parent_uniqueid": parent + 100,
+                                      "version": pid + 200, "parent_version": parent + 200}}
+
+    def snapshot(*rows):
+        return {"kind": probe.NATIVE_KIND, "schema_version": 1, "ok": True, "transport_complete": True,
+                "total_records": 10, "layout": copy.deepcopy(layout), "error": None,
+                "limits": {"max_bytes": probe.MAX_BYTES, "max_attempts": probe.MAX_ATTEMPTS,
+                           "deadline_ns": probe.DEADLINE_NS},
+                "attempts": [{"capacity": 512, "returned_bytes": 320, "errno": 0, "elapsed_ns": 100}],
+                "records": list(rows)}
+
+    missing = {"inventory": {"ok": False, "error": {"type": "ProcessLookupError", "errno": errno.ESRCH}},
+               "lineage": {"ok": False, "error": {"type": "ProcessLookupError", "errno": errno.ESRCH}}}
+    survivor = native(44, 33)
+    survivor["record"]["parent"] = 1
+    report = {"kind": probe.KIND, "schema_version": 1, "commit": SHA, "commit_dirty": False,
+              "capability_verified": True, "release_acceptance": False, "global_atomic": False,
+              "cleanup_confirmed": True, "errors": [], "layout": copy.deepcopy(layout),
+              "source_sha256": {name: "b" * 64 for name in probe.SOURCES},
+              "environment": {"platform": "darwin", "architecture": "arm64", "os_version": "fixture",
+                              "os_build": "fixture", "kernel": "fixture", "python": "3.13.1"},
+              "sdk": {"version": "fixture", "compiler": "fixture clang"},
+              "fixture_pids": {"self": 11, "foreign": 22, "parent": 33, "escaped": 44},
+              "cases": {
+                  "live_identity": {"snapshot": snapshot(row(11, 1), row(22, 11)),
+                                    "native": {"11": native(11, 1), "22": native(22, 11)}},
+                  "retained_after_exit": {"snapshot": snapshot(row(22, 11)), "baseline": native(22, 11),
+                                          "reaped": True, "after": copy.deepcopy(missing)},
+                  "escaped_child": {"snapshot": snapshot(row(33, 11), row(44, 33)),
+                                    "parent_baseline": native(33, 11), "child_baseline": native(44, 33),
+                                    "parent_reaped": True, "parent_after": copy.deepcopy(missing),
+                                    "child_after": survivor, "child_session": 44}}}
+    assert_true(probe.validate_report(report, SHA) == [], "complete synthetic capability contract qualifies")
+    assert_true(gate.check_report(report, SHA, "darwin"),
+                "a capability report can never stand in for an update-handoff receipt")
+    forged_update = {**_report(gate, "darwin", "3.13", "pipx"), "kind": probe.KIND,
+                     "capability_verified": True, "release_acceptance": False}
+    assert_true(gate.check_report(forged_update, SHA, "darwin"),
+                "capability kind stays distinct even when update proof fields are supplied")
+
+    def put(path, value):
+        def mutate(candidate):
+            target = candidate
+            for part in path[:-1]:
+                target = target[part]
+            target[path[-1]] = value
+        return mutate
+
+    corruptions = [
+        ("wrong commit", put(("commit",), "c" * 40)),
+        ("dirty checkout", put(("commit_dirty",), True)),
+        ("missing source hash", lambda r: r["source_sha256"].pop(probe.SOURCES[0])),
+        ("unconfirmed fixture cleanup", put(("cleanup_confirmed",), False)),
+        ("release acceptance", put(("release_acceptance",), True)),
+        ("atomic overclaim", put(("global_atomic",), True)),
+        ("boolean schema", put(("schema_version",), True)),
+        ("unsupported architecture", put(("environment", "architecture"), "unknown")),
+        ("helper/Python architecture mismatch", put(("layout", "architecture"), "x86_64")),
+        ("overlapping layout", put(("layout", "fields", "parent", "offset"), 0)),
+        ("invalid field signedness", put(("layout", "fields", "pid", "signed"), 1)),
+        ("partial fill", put(("cases", "live_identity", "snapshot", "attempts", 0, "returned_bytes"), 319)),
+        ("over-cap allocation", put(("cases", "live_identity", "snapshot", "attempts", 0, "capacity"), probe.MAX_BYTES + 1)),
+        ("unbounded deadline", put(("cases", "live_identity", "snapshot", "attempts", 0, "elapsed_ns"), probe.DEADLINE_NS + 1)),
+        ("missing native error evidence", lambda r: r["cases"]["live_identity"]["snapshot"].pop("error")),
+        ("duplicate PID", lambda r: r["cases"]["live_identity"]["snapshot"]["records"].__setitem__(1, row(11, 1))),
+        ("missing selected PID", lambda r: r["cases"]["live_identity"]["snapshot"]["records"].pop()),
+        ("coarse/missing generation", put(("cases", "retained_after_exit", "snapshot", "records", 0, "start_micros"), None)),
+        ("reused generation", put(("cases", "retained_after_exit", "baseline", "record", "created"), 100000023)),
+        ("permission denial is not absence", put(("cases", "retained_after_exit", "after", "inventory", "error", "errno"), errno.EPERM)),
+        ("native lookup recovered a different lifetime", put(("cases", "retained_after_exit", "after", "inventory"), native(22, 11))),
+        ("parent not reaped", put(("cases", "escaped_child", "parent_reaped"), False)),
+        ("child no longer alive", put(("cases", "escaped_child", "child_after", "record", "status"), 5)),
+        ("child lifetime changed", put(("cases", "escaped_child", "child_after", "record", "uniqueid"), 999)),
+        ("child self-parent", put(("cases", "escaped_child", "child_after", "record", "parent"), 44)),
+        ("not a separate session", put(("cases", "escaped_child", "child_session"), 33)),
+        ("native error/unsupported", put(("errors",), [{"site": "compile", "type": "ProbeError"}])),
+    ]
+    for label, mutate in corruptions:
+        candidate = copy.deepcopy(report)
+        mutate(candidate)
+        assert_true(probe.validate_report(candidate, SHA), "capability refuses " + label)
+
+    growing = snapshot(row(11, 1), row(22, 11))
+    growing["attempts"].insert(0, {"capacity": 256, "returned_bytes": 300, "errno": errno.ENOMEM, "elapsed_ns": 100})
+    assert_true(probe.validate_snapshot(growing, [11, 22], layout) == [],
+                "bounded ENOMEM resize qualifies only after a complete successful fill")
+    growing["attempts"][-1]["capacity"] = 400
+    assert_true(probe.validate_snapshot(growing, [11, 22], layout), "ENOMEM without bounded growth is refused")
+    growing["attempts"][-1]["capacity"] = 512
+    for item in growing["attempts"]:
+        item["elapsed_ns"] = probe.DEADLINE_NS
+    assert_true(probe.validate_snapshot(growing, [11, 22], layout), "cumulative native time exceeds the deadline")
+    exhausted = copy.deepcopy(growing)
+    exhausted["attempts"] = exhausted["attempts"] * 3
+    assert_true(probe.validate_snapshot(exhausted, [11, 22], layout), "attempt exhaustion is not success")
+    native_failure = snapshot(row(11, 1))
+    native_failure.update(ok=False, transport_complete=False, error={"site": "fill", "errno": errno.EPERM})
+    assert_true(probe.validate_snapshot(native_failure, [11], layout), "native failures cannot skip green")
+
+    # Metadata allowlisting must not expose a future identity API's image/argv.
+    identity_api = type("Identity", (), {"_darwin_inventory_record": lambda self, pid: {
+        **native(pid, 1)["record"], "image": "secret-image", "argv": "secret-argv"}})()
+    assert_true("secret-" not in json.dumps(probe._read(identity_api, 11)), "identity projection excludes image/argv")
+    with tempfile.TemporaryDirectory(prefix="darwin-capability-contract-") as tmp:
+        path = Path(tmp) / "report.json"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            assert_true(probe.main(["validate", str(path), "--commit", SHA]) == 0,
+                        "capability CLI validates complete evidence")
+            path.write_text("{", encoding="utf-8")
+            assert_true(probe.main(["validate", str(path), "--commit", SHA]) == 1,
+                        "malformed report is rejected without a traceback")
+            path.write_bytes(b"x" * (probe.MAX_REPORT_BYTES + 1))
+            assert_true(probe.main(["validate", str(path), "--commit", SHA]) == 1, "oversized report is refused")
+            with patch.object(probe.sys, "platform", "win32"), \
+                 patch.object(probe, "_checkout", return_value=(SHA, False)), \
+                 patch.object(probe, "_command", side_effect=AssertionError("native tools must not run")):
+                assert_true(probe.run(path) == 1, "unsupported platform is a failure, never a successful skip")
+        unsupported = json.loads(path.read_text(encoding="utf-8"))
+        assert_true(not unsupported["capability_verified"] and not unsupported["release_acceptance"]
+                    and unsupported["errors"][0]["site"] == "unsupported_platform",
+                    "unsupported execution still writes a bounded negative artifact")
+        def command(argv, site, timeout=10):
+            if site == "environment":
+                return "fixture-build"
+            if site == "sdk":
+                return "fixture-sdk"
+            if site == "compiler":
+                return "fixture clang"
+            if site == "layout":
+                return json.dumps({"layout": layout})
+            if site == "compile":
+                return ""
+            raise AssertionError("unexpected native command in portable test")
+        def collected(candidate, helper, api):
+            for name in ("cases", "fixture_pids", "cleanup_confirmed"):
+                candidate[name] = copy.deepcopy(report[name])
+        # Exercise reporting/control flow with fake boundaries, not a fake
+        # claim that this Windows/Linux test has validated Apple's ABI.
+        with patch.object(probe.sys, "platform", "darwin"), \
+             patch.object(probe.platform, "machine", return_value="arm64"), \
+             patch.object(probe.platform, "mac_ver", return_value=("fixture", (), "")), \
+             patch.object(probe, "_checkout", return_value=(SHA, False)), \
+             patch.object(probe, "_source_hashes", return_value=report["source_sha256"]), \
+             patch.object(probe, "_command", side_effect=command), \
+             redirect_stdout(io.StringIO()):
+            with patch.object(probe, "_collect", side_effect=collected):
+                assert_true(probe.run(path) == 0, "coordinator validates all synthetic observations before success")
+            assert_true(json.loads(path.read_text())["release_acceptance"] is False,
+                        "even successful capability control flow never attests release acceptance")
+            def changed(candidate, helper, api):
+                collected(candidate, helper, api)
+                probe._checkout.return_value = (SHA, True)
+            with patch.object(probe, "_collect", side_effect=changed):
+                assert_true(probe.run(path) == 1, "a checkout changed during observation cannot qualify")
+            probe._checkout.return_value = (SHA, False)
+            assert_true(json.loads(path.read_text())["errors"][0]["site"] == "checkout_changed",
+                        "native evidence remains tied to the source that was actually tested")
+            def compile_failure(argv, site, timeout=10):
+                if site == "compile":
+                    raise probe.ProbeError("compile", 1)
+                return command(argv, site, timeout)
+            with patch.object(probe, "_command", side_effect=compile_failure):
+                assert_true(probe.run(path) == 1, "compilation failure produces a negative capability artifact")
+            assert_true(json.loads(path.read_text())["errors"][0]["site"] == "compile",
+                        "the compilation failure site survives in the artifact")
+            with patch.object(probe, "_collect",
+                              side_effect=subprocess.TimeoutExpired(["private-token-argv"], 1)):
+                assert_true(probe.run(path) == 1, "native timeout cannot become a successful skip")
+            failure_text = path.read_text(encoding="utf-8")
+            assert_true("private-token" not in failure_text and
+                        json.loads(failure_text)["errors"][0]["type"] == "TimeoutExpired",
+                        "timeout artifacts retain typed provenance without argv")
+    # A timed-out native command remains an error, without copying argv into reports.
+    with patch.object(probe.subprocess, "run", side_effect=subprocess.TimeoutExpired(["secret-argv"], 1)):
+        try:
+            probe._command(["fixture"], "enumeration")
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            raise AssertionError("native subprocess timeout was hidden")
