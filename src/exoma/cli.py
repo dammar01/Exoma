@@ -301,6 +301,9 @@ def _test_command(project_root: Path, session_id: str, task: str | None, main_ho
         lines.append(f"- `{outcome['command']}` {outcome['status']} ({detail}, {outcome.get('seconds', 0)} s)")
         if outcome["status"] in ("failed", "timeout", "error") and outcome.get("tail"):
             lines.append("  tail: " + " ".join(outcome["tail"].split())[-600:])
+        diagnostic = verify_tests.diagnostic_note(outcome)
+        if diagnostic:
+            lines.append("  " + diagnostic)
     passed = all(o["status"] == "passed" for o in outcomes)
     # From `reusable` alone, never the batch fingerprint: a batch can keep its identity while
     # a command's latest outcome failed or another run's marker withholds it. Per command,

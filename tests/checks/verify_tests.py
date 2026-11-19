@@ -57,6 +57,9 @@ def _verify(root: Path) -> tuple[dict, dict]:
 
 def _test_verify_runtime_tests() -> None:
     _check_verify_preparation()
+    _check_first_run_diagnostics()
+    _check_diagnostic_limits_and_errors()
+    _check_diagnostic_session_isolation()
     python = f'"{sys.executable}"'
     root = _workspace([f"{python} -c"])
     try:
@@ -148,6 +151,189 @@ def _test_verify_runtime_tests() -> None:
     _check_exited_runner_is_not_held_by_its_orphan()
     _check_inherited_output_deadlines()
     _check_attached_windows_console()
+
+
+def _check_first_run_diagnostics() -> None:
+    """Both public paths expose first-run errors without rerunning a failing test."""
+    from exoma import cli
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} diagnostic.py"])
+    try:
+        # Fake credential-shaped data only; never read credentials to test redaction.
+        fake_key = "sk-" + "A" * 24
+        (root / "diagnostic.py").write_text(
+            "import pathlib, sys\n"
+            "counter = pathlib.Path('count-' + sys.argv[1])\n"
+            "count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
+            "counter.write_text(str(count))\n"
+            "assert count == 1, 'unexpected rerun'\n"
+            f"sys.stdout.buffer.write(('EARLY_ERROR\\n{fake_key}\\n' + 'x' * 20000 + "
+            "'\\nLATE_ERROR\\n').encode('utf-8'))\n"
+            "sys.stderr.buffer.write('STDERR_ERROR café\\n'.encode('utf-8'))\n"
+            "sys.exit(3)\n", encoding="utf-8",
+        )
+        command = f"{python} diagnostic.py cli"
+        cli_result = cli._test_command(root, "s1", command)
+        _request(root, {"commands": [f"{python} diagnostic.py verify"], "reason": "diagnostics"})
+        result, verdict = _verify(root)
+        assert_true(not cli_result["ok"] and verdict["verdict"] == "fail",
+                    "retaining diagnostics must not turn a failing test into pass")
+        outcomes = [cli_result["meta"]["outcomes"][0], result["meta"]["runtime_tests"]["outcomes"][0]]
+        rows = [json.loads(line) for line in verify_tests.runs_path(root, "s1").read_text().splitlines()]
+        for response, outcome, row in zip((cli_result, result), outcomes, rows):
+            artifact = Path(outcome["log_ref"])
+            saved = json.loads(artifact.read_text(encoding="utf-8"))
+            assert_true("EARLY_ERROR" in saved["stdout"] and "LATE_ERROR" in saved["stdout"]
+                        and saved["stderr"] == "STDERR_ERROR café\n",
+                        "the artifact preserves early/late diagnostics and separate stderr")
+            assert_true(fake_key not in artifact.read_text(encoding="utf-8")
+                        and "[REDACTED:" in saved["stdout"], "redaction precedes persistence")
+            assert_true(str(artifact) in response["content"] and "tail" not in outcome
+                        and row["log_ref"] == str(artifact) and row["exit_code"] == 3
+                        and row["log_output"] == outcome["log_output"],
+                        "both result/ledger paths retain the same retrievable reference and status")
+            # Reading the artifact repeatedly does not invoke a test or provider.
+            artifact.read_text(encoding="utf-8")
+        assert_true(all((root / f"count-{kind}").read_text() == "1" for kind in ("cli", "verify")),
+                    "diagnostics are recovered from the single original execution")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_diagnostic_limits_and_errors() -> None:
+    from unittest.mock import patch
+
+    root = _workspace(["python diagnostic.py"])
+    request = {"commands": ["python diagnostic.py"]}
+    fake_key = "sk-" + "B" * 24
+    try:
+        # Large multibyte output exercises the retention cap, separately from tail slicing.
+        output = "EARLY\n" + "é" * verify_tests.OUTPUT_LOG_BYTES + fake_key + "TAIL"
+        with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, output, "stderr")):
+            out = verify_tests.run_tests(root, request, session_id="s1")[0]
+        artifact = Path(out["log_ref"])
+        saved = json.loads(artifact.read_text(encoding="utf-8"))
+        size = len(saved["stdout"].encode("utf-8"))
+        info = out["log_output"]["stdout"]
+        assert_true(size <= verify_tests.OUTPUT_LOG_BYTES and info["truncated"]
+                    and info["stored_bytes"] == size
+                    and info["omitted_bytes"] == info["redacted_bytes"] - size
+                    and saved["stdout"].startswith("EARLY\n") and fake_key not in out["tail"]
+                    and info["redactions"] and "truncated" in verify_tests.diagnostic_note(out),
+                    "UTF-8 byte caps, redaction, and omission are explicit")
+        # Place only the credential suffix inside the old pre-redaction tail. An
+        # implementation that slices first cannot recognize or remove that suffix.
+        suffix = "C" * 24
+        trailer = "\n" + "z" * (verify_tests.OUTPUT_TAIL_CHARS - len(suffix) - 2)
+        straddling = "prefix\nsk-" + suffix + trailer
+        raw_tail = straddling[-verify_tests.OUTPUT_TAIL_CHARS:]
+        assert_true(suffix in raw_tail and "sk-" not in raw_tail,
+                    "fixture must cut off the recognizable credential prefix")
+        with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, straddling, "")):
+            out = verify_tests.run_tests(root, request, session_id="s1")[0]
+        assert_true(suffix not in out["tail"] and out["tail"].endswith(trailer),
+                    "redaction must see the whole credential before display-tail slicing")
+        # The byte cap ends after the first byte of a two-byte codepoint. Retain only
+        # complete codepoints and account for the discarded byte in omitted_bytes.
+        split_utf8 = "x" * (verify_tests.OUTPUT_LOG_BYTES - 1) + "éEND"
+        with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, split_utf8, "")):
+            out = verify_tests.run_tests(root, request, session_id="s1")[0]
+        saved = json.loads(Path(out["log_ref"]).read_text(encoding="utf-8"))
+        info = out["log_output"]["stdout"]
+        assert_true(saved["stdout"] == "x" * (verify_tests.OUTPUT_LOG_BYTES - 1)
+                    and info["stored_bytes"] == verify_tests.OUTPUT_LOG_BYTES - 1
+                    and info["omitted_bytes"] == len("éEND".encode("utf-8")),
+                    "a cut UTF-8 codepoint is omitted and measured without replacement text")
+        with patch.object(verify_tests.osutil, "run_bounded", return_value=(None, b"partial-out", b"partial-err")):
+            timeout = verify_tests.run_tests(root, request, session_id="s1")[0]
+        saved = json.loads(Path(timeout["log_ref"]).read_text(encoding="utf-8"))
+        assert_true(timeout["status"] == "timeout" and saved["stdout"] == "partial-out"
+                    and saved["stderr"] == "partial-err" and "partial-err" in timeout["tail"],
+                    "timeout preserves partial bytes/text diagnostics without claiming pass")
+        for target in ("NamedTemporaryFile", "dump"):
+            owner = verify_tests.tempfile if target == "NamedTemporaryFile" else verify_tests.json
+            before = set(artifact.parent.glob("*.json"))
+            _request(root, {**request, "reason": "write failure"})
+            with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, "error", "")), \
+                    patch.object(owner, target, side_effect=PermissionError("injected write failure")):
+                result, verdict = _verify(root)
+            failed = result["meta"]["runtime_tests"]["outcomes"][0]
+            row = json.loads(verify_tests.runs_path(root, "s1").read_text().splitlines()[-1])
+            assert_true(verdict["verdict"] == "fail" and "log_ref" not in failed
+                        and failed["log_error"] == row["log_error"]
+                        and failed["log_error"] in result["content"]
+                        and failed["log_output"]["stdout"]["stored_bytes"] == 0
+                        and set(artifact.parent.glob("*.json")) == before,
+                        "creation/write failure is visible; a partial log is not advertised")
+
+        # Write real partial content, then deny deletion as a separate filesystem fault.
+        real_unlink = Path.unlink
+
+        def partial_write(data, handle, **kwargs):
+            handle.write('{"stdout": "partial redacted data')
+            raise OSError("injected after partial write")
+
+        def deny_log_cleanup(path, *args, **kwargs):
+            if path.parent == artifact.parent:
+                raise PermissionError("injected cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+
+        _request(root, {**request, "reason": "combined storage and cleanup failure"})
+        with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, "error", "")), \
+                patch.object(verify_tests.json, "dump", side_effect=partial_write), \
+                patch.object(Path, "unlink", deny_log_cleanup):
+            result, verdict = _verify(root)
+        failed = result["meta"]["runtime_tests"]["outcomes"][0]
+        cleanup = failed["log_cleanup"]
+        row = json.loads(verify_tests.runs_path(root, "s1").read_text().splitlines()[-1])
+        assert_true(verdict["verdict"] == "fail" and "log_ref" not in failed
+                    and cleanup["status"] == "uncertain" and cleanup["error"] == "PermissionError"
+                    and Path(cleanup["path"]).read_text().startswith('{"stdout":')
+                    and row["log_cleanup"] == cleanup and "partial artifact may remain" in result["content"]
+                    and cleanup["path"] in result["content"],
+                    "a remaining partial file is reported separately from unavailable diagnostics")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_diagnostic_session_isolation() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+
+    root = _workspace(["python diagnostic.py"])
+    try:
+        def run(index):
+            return verify_tests.run_tests(root, {"commands": ["python diagnostic.py"]},
+                                          session_id="s1" if index < 2 else "s2")[0]
+
+        with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, "diagnostic", "")):
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                outcomes = list(pool.map(run, range(3)))
+        refs = [Path(out["log_ref"]) for out in outcomes]
+        assert_true(len(set(refs)) == 3 and all(p.is_file() for p in refs)
+                    and refs[0].parent == refs[1].parent != refs[2].parent,
+                    "concurrent runs never overwrite another artifact or session")
+        if os.name != "nt":
+            assert_true(all(p.stat().st_mode & 0o777 == 0o600 for p in refs),
+                        "new diagnostic files are owner-readable/writable on POSIX")
+        # No retrieval API follows caller-supplied references. Also refuse redirected
+        # output directories before creating any file in another session's directory.
+        redirected = workflow_paths(root, "s3")["session_dir"] / "verify"
+        redirected.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            redirected.symlink_to(refs[0].parent, target_is_directory=True)
+        except OSError:  # Windows hosts may not grant symlink creation.
+            pass
+        else:
+            before = set(refs[0].parent.iterdir())
+            with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, "error", "")):
+                out = verify_tests.run_tests(root, {"commands": ["python diagnostic.py"]}, session_id="s3")[0]
+            assert_true("log_error" in out and "log_ref" not in out
+                        and set(refs[0].parent.iterdir()) == before,
+                        "a session cannot redirect diagnostic writes into another session")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 _REVIEW_NO_CHECKS = _REVIEW.replace("- traced the change and its callers", "- none")
@@ -813,8 +999,9 @@ def _check_timeout_kills_the_tree() -> None:
         # One expression, no `;` (refused as shell syntax) and no inner double quotes, so it
         # tokenizes the same under Windows and POSIX rules; chr() spells "time".
         script = (
+            "(print('PARTIAL_TIMEOUT',flush=True),"
             "__import__('subprocess').Popen([__import__('sys').executable,'-c',"
-            "'__import__(chr(116)+chr(105)+chr(109)+chr(101)).sleep(60)']).wait()"
+            "'__import__(chr(116)+chr(105)+chr(109)+chr(101)).sleep(60)']).wait())"
         )
         _request(root, {"commands": [f'{python} -c "{script}"'], "reason": "r"})
         started = time.monotonic()
@@ -825,6 +1012,9 @@ def _check_timeout_kills_the_tree() -> None:
             outcome["status"] == "timeout" and elapsed < 20 and verdict["verdict"] == "fail",
             f"a hung test tree times out and is killed: {outcome} after {elapsed:.1f} s",
         )
+        saved = json.loads(Path(outcome["log_ref"]).read_text(encoding="utf-8"))
+        assert_true("PARTIAL_TIMEOUT" in saved["stdout"],
+                    "a real process-tree timeout retains diagnostics from its original run")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -884,7 +1074,7 @@ def _check_a_new_job_never_reruns_an_old_request() -> None:
         assert_true(found.get("reason") == "job 4", "a request written for the next job replaces the earlier claim")
         verify_dir = verify_tests.request_path(root, "s1").parent
         assert_true(
-            sorted(p.name for p in verify_dir.iterdir()) == ["tests.used.json"],
+            sorted(p.name for p in verify_dir.iterdir() if p.is_file()) == ["tests.used.json"],
             f"the claimed request is consumed once merged: {sorted(p.name for p in verify_dir.iterdir())}",
         )
     finally:

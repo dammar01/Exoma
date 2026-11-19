@@ -261,6 +261,38 @@ partial observations and `measurement_errors` lists safe reason codes. Unknown i
 Unbound test outcomes carry `fingerprint_reason`: `identity_before_unavailable`,
 `identity_after_unavailable`, or `inputs_changed_during_test`.
 
+Runtime test outcomes expose first-run diagnostic artifacts through `log_ref`, an absolute
+path under the named session's `verify/test-output/test-*.json`. Read that JSON file to
+inspect the original captured stdout and stderr without rerunning the test. Both the CLI
+`test` response and delegated verify include the reference in text and outcome metadata;
+both ledger-writing paths retain it with exit/status and `log_output`. Reused passes carry
+their earlier reference, not a new log. Existing ledger rows without diagnostics remain
+valid for reuse under the existing identity rules.
+
+Each stream is redacted with the existing credential-shape rules **before** persistence
+or tail slicing, then retains its first 256 KiB of UTF-8 payload. `log_output.stdout` and
+`.stderr` report captured/redacted/stored/omitted byte counts, truncation and redaction
+kinds/counts. JSON escaping adds bounded envelope overhead. Byte counts describe decoded,
+newline-normalized capture, not original wire bytes; redaction is heuristic, not a
+guarantee that arbitrary sensitive text is recognized. Display tails remain short and
+can contain later output omitted by the artifact cap. Timeout artifacts retain whatever
+partial output the process runner returned; this is not a guarantee of complete pipe
+drainage. This retention cap does not bound the existing process runner's memory capture.
+
+Artifacts have unique exclusive filenames, are not overwritten by concurrent runs, and
+new files request owner-only permissions on POSIX; effective permissions depend on the
+filesystem and its ACL/mount policy (including WSL files on Windows drives).
+No new API accepts an arbitrary path for
+retrieval. `log_error` explicitly reports unavailable diagnostics, with no `log_ref` and
+zero stored bytes, when storage fails; the test's exit status and pass-reuse invalidation
+remain authoritative. Zero stored bytes means no usable published payload, not proof that
+the filesystem contains no partial file. After a failed write, `log_cleanup.status` is
+`removed` when deletion completed or `uncertain` with `path` and error type when cleanup
+also failed. The latter is reported in text and both ledgers; its path is not advertised
+as a readable JSON `log_ref`. There is no automatic expiry: artifacts remain until their session
+data is removed. Preserve required evidence before cleanup; a retained ledger reference
+cannot restore a deleted artifact. No diagnostics change turns a failed test into a pass.
+
 Task reports expose `event_stream.status` and `invalid_rows`; malformed JSON and wrong-type
 events are isolated without discarding valid following rows. Session-export manifests
 describe each stream as available, missing, or unreadable with malformed/matched row counts.

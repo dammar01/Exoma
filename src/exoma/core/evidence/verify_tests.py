@@ -51,6 +51,7 @@ import contextlib
 import json
 import os
 import re
+import tempfile
 import time
 from contextvars import ContextVar
 from pathlib import Path
@@ -64,6 +65,9 @@ from exoma.utils.redact import redact
 MAX_COMMANDS = 5
 DEFAULT_TIMEOUT_SECONDS = 900
 OUTPUT_TAIL_CHARS = 1200
+# Payload budget per stream after redaction, not a promise of unlimited/full capture.
+OUTPUT_LOG_BYTES = 256 * 1024
+_DIAGNOSTIC_FIELDS = ("exit_code", "log_ref", "log_output", "log_error", "log_cleanup")
 _SHELL_SYNTAX = re.compile(r"[&|;<>`\n\r]|\$\(")
 # NUL and the other C0 controls. Popen refuses an embedded NUL with ValueError — after the
 # paid provider call, and with the request left in place so every retry crashed the same
@@ -274,8 +278,91 @@ def _beat(on_progress, started: float, **fields) -> None:
         pass
 
 
+def _store_output(project_root, session_id, outcome: dict, stdout, stderr) -> None:
+    """Keep first-run diagnostics with credential-shape redaction and unique filenames.
+
+    Capture is owned by run_bounded; this bounds retained UTF-8 payload, not process memory.
+    No retrieval command accepts paths: callers read the returned artifact directly.
+    """
+    streams, metadata = {}, {}
+    for name, value in (("stdout", stdout), ("stderr", stderr)):
+        text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+        clean, hits = redact(text)
+        encoded = clean.encode("utf-8", errors="replace")
+        # Ignore only an incomplete final codepoint: stored payload stays valid UTF-8.
+        stored = encoded[:OUTPUT_LOG_BYTES].decode("utf-8", errors="ignore")
+        size = len(stored.encode("utf-8"))
+        streams[name] = stored
+        metadata[name] = {
+            "captured_bytes": len(text.encode("utf-8", errors="replace")),
+            "redacted_bytes": len(encoded), "stored_bytes": size,
+            "omitted_bytes": len(encoded) - size, "truncated": size < len(encoded),
+            "redactions": hits,
+        }
+    outcome["log_output"] = metadata
+
+    def unavailable(message):
+        outcome["log_error"] = message
+        for stream in metadata.values():
+            stream.update(stored_bytes=0, omitted_bytes=stream["redacted_bytes"],
+                          truncated=bool(stream["redacted_bytes"]))
+
+    if not session_id:
+        unavailable("session unavailable; diagnostic artifact not stored")
+        return
+    path = None
+    try:
+        session = workflow_paths(Path(project_root), session_id)["session_dir"].resolve()
+        directory = session / "verify" / "test-output"
+        if not directory.resolve().is_relative_to(session):
+            raise OSError("diagnostic directory escapes the session")
+        directory.mkdir(parents=True, exist_ok=True)
+        # mkstemp semantics: exclusive creation, unique across concurrent runs, mode 0600
+        # on POSIX. Serialize only redacted text; JSON escaping may exceed payload size.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix="test-", suffix=".json",
+            dir=directory, delete=False,
+        ) as handle:
+            path = Path(handle.name)
+            json.dump({"version": 1, "status": outcome["status"],
+                       "exit_code": outcome.get("exit_code"), "output": metadata,
+                       **streams}, handle, ensure_ascii=False)
+            handle.write("\n")
+        outcome["log_ref"] = str(path.resolve())
+    except (OSError, ValueError) as exc:
+        # Never publish a partial artifact as available. The command's exit status stays
+        # authoritative; inability to save diagnostics is reported separately.
+        unavailable(f"diagnostic artifact not stored ({type(exc).__name__})")
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                outcome["log_cleanup"] = {
+                    "status": "uncertain", "path": str(path),
+                    "error": type(cleanup_exc).__name__,
+                }
+            else:
+                outcome["log_cleanup"] = {"status": "removed"}
+
+
+def diagnostic_note(outcome: dict) -> str:
+    """One-line pointer/status for both CLI test and delegated verify presentation."""
+    if outcome.get("log_error"):
+        note = _one_line(outcome["log_error"])
+        cleanup = outcome.get("log_cleanup", {})
+        if cleanup.get("status") == "uncertain":
+            note += " — partial artifact may remain: " + _one_line(cleanup["path"])
+            note += " (cleanup failed: " + _one_line(cleanup["error"]) + ")"
+        return note
+    if outcome.get("log_ref"):
+        clipped = any(s.get("truncated") for s in outcome.get("log_output", {}).values())
+        return "log: " + _one_line(outcome["log_ref"]) + (" (output truncated)" if clipped else "")
+    return ""
+
+
 def run_tests(
     project_root, request: dict, on_progress=None, reuse: dict | None = None, identity=None,
+    session_id: str | None = None,
 ) -> list[dict]:
     """One outcome per requested command: passed | failed | timeout | error | refused.
 
@@ -309,6 +396,7 @@ def run_tests(
             outcomes.append({
                 "command": command, "status": "passed", "reused": True,
                 "seconds": 0.0, "ran_at": earlier.get("at"), "ran_seconds": earlier.get("seconds"),
+                **{k: earlier[k] for k in _DIAGNOSTIC_FIELDS if k in earlier},
             })
             continue
         if identity is not None and current is unsampled:
@@ -316,6 +404,7 @@ def run_tests(
         started = time.monotonic()
         progress = {"command_index": index, "commands": min(len(commands), MAX_COMMANDS)}
         _beat(on_progress, run_started, **progress)
+        stdout, stderr = "", ""
         try:
             # Bounded and tree-killed: a runner whose worker outlives it must not hang verify.
             code, stdout, stderr = osutil.run_bounded(
@@ -329,13 +418,14 @@ def run_tests(
                 outcome = {"command": command, "status": "timeout", "detail": f"over {timeout} s"}
             else:
                 status = "passed" if code == 0 else "failed"
-                tail = (stdout + "\n" + stderr).strip()[-OUTPUT_TAIL_CHARS:]
-                outcome = {"command": command, "status": status, "exit_code": code, "tail": tail}
+                outcome = {"command": command, "status": status, "exit_code": code}
         except (OSError, ValueError) as exc:  # ValueError: an argument Popen will not pass
-            outcome = {"command": command, "status": "error", "detail": str(exc)[:200]}
+            outcome = {"command": command, "status": "error", "detail": redact(str(exc))[0][:200]}
         outcome["seconds"] = round(time.monotonic() - started, 1)
-        if outcome.get("tail"):
-            outcome["tail"] = redact(outcome["tail"])[0]
+        _store_output(project_root, session_id, outcome, stdout, stderr)
+        # Redact before truncating: a cut through a credential must not expose its suffix.
+        text = lambda v: v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v or ""
+        outcome["tail"] = redact(text(stdout) + "\n" + text(stderr))[0].strip()[-OUTPUT_TAIL_CHARS:]
         if identity is not None:
             after = identity()
             outcome["fingerprint"] = current if current is not None and current == after else None
@@ -392,6 +482,9 @@ def _findings(request: dict | None, outcomes: list[dict]) -> dict[str, list[str]
                 f"`{command}` {detail}" + (f" — tail: {tail}" if tail else "")
                 + " — fix the failure or show it is unrelated, then re-verify"
             )
+        note = diagnostic_note(outcome)
+        if note:
+            add["checks_run"][-1] += " — " + note
     return add
 
 
@@ -465,7 +558,8 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
     """
     request = read_request(project_root, session_id)
     outcomes = (
-        run_tests(project_root, request, on_progress, reusable(project_root, session_id))
+        run_tests(project_root, request, on_progress, reusable(project_root, session_id),
+                  session_id=session_id)
         if request and not request.get("invalid")
         else []
     )
@@ -517,6 +611,7 @@ def _record_verify_failures(project_root, session_id: str, outcomes: list[dict])
             "command": o["command"], "status": o["status"], "seconds": o.get("seconds"),
             "fingerprint": None, "at": _now(), "source": "verify",
             "fingerprint_reason": "verification_test_failed",
+            **{k: o[k] for k in _DIAGNOSTIC_FIELDS if k in o},
         }) + "\n"
         for o in failed
     )
@@ -744,7 +839,7 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
     def identity():
         return first.pop() if first else _identity(project_root)
 
-    outcomes = run_tests(project_root, {"commands": commands}, identity=identity)
+    outcomes = run_tests(project_root, {"commands": commands}, identity=identity, session_id=session_id)
     ran = [o for o in outcomes if o["status"] != "refused"]
     bound = {id(o): o.pop("fingerprint", None) for o in ran}
     # The batch's own identity only when no command changed it: nothing it proved is
@@ -757,6 +852,7 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
             "command": outcome["command"], "status": outcome["status"],
             "seconds": outcome.get("seconds"), "fingerprint": bound[id(outcome)], "at": _now(),
             "fingerprint_reason": outcome.get("fingerprint_reason"),
+            **{k: outcome[k] for k in _DIAGNOSTIC_FIELDS if k in outcome},
         }) + "\n"
         for outcome in ran
     )
