@@ -1,5 +1,20 @@
 # Metrics
 
+## Comparing risk-based test selection
+
+Pair the same fixture and labeled defect (or clean control) on the 1.1.2 baseline
+`6c0b98e42d6540717ddb818f55162ac649d6646f` and the wheel built from the final
+candidate SHA. Include a bounded edit, a cross-component contract defect, and an
+edit whose affected callers cannot be bounded. Hold host, provider/model, configuration,
+fixture inputs and cache conditions constant. Repeat each pair in alternating order.
+
+Record elapsed wall time from execute-begin to the final verify verdict, including
+selection, queuing, provider work and tests. Report median, range, number of pairs,
+fresh and reused commands, detected and missed defects, and clean controls incorrectly
+blocked. An auto-off execution that stops before verify has no latency observation.
+Keep release-only checks visible in the receipt. A defect caught on baseline and missed
+by the candidate blocks promotion. Claim a speed improvement only for measured pairs.
+
 The calculation contract for every benchmark figure this project reports. The registry in
 `core/audit/metrics.py` is the source; this page renders it, and a test keeps the two in step.
 

@@ -26,7 +26,7 @@ from exoma.core.evidence.e2e.preflight import is_local_dev_host, same_origin
 from exoma.core.evidence.e2e.network import NetworkLedger
 from exoma.core.evidence.e2e.redact import sanitize_endpoint
 from exoma.core.evidence.e2e.request import blocked_request_target, destructive_request_target, read_only_request_target
-from exoma.core.evidence.e2e.spec import DESTRUCTIVE_METHODS, SAFE_METHODS, SELECTOR_RANK, WRITE_METHODS, carries_method_override, e2e_css, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
+from exoma.core.evidence.e2e.spec import DESTRUCTIVE_METHODS, SAFE_METHODS, SELECTOR_RANK, WRITE_METHODS, carries_method_override, e2e_css, evidence_url, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
 
 HEARTBEAT_EVERY_S = 2.0
 POLL_S = 0.1
@@ -321,6 +321,7 @@ class Session:
         # address, because leaving a denied page and coming back to it later is a second
         # violation by a second step, and a run-wide key would have shown only the first.
         self._navigation_seen: set[tuple[str | None, str]] = set()
+        self.main_frame_generation = 0
         # Which entries of `blocked` a step's window already claimed, BY POSITION. A
         # `pushState` scheduled by the last click lands after `_execute` has compared its
         # counter, so without this the address was recorded and then read by nobody. By
@@ -907,6 +908,7 @@ class Session:
         try:
             if frame != self.page.main_frame:
                 return
+            self.main_frame_generation += 1
             url = str(frame.url or "")
         except Exception:
             return
@@ -1165,6 +1167,8 @@ class Session:
     def _text_matches(self, actual: str, step: dict) -> bool:
         if "equals" in step:
             target = str(step["equals"])
+            if step.get("action") == "expect_url":
+                return evidence_url(actual) == evidence_url(urljoin(self.base_url, target))
             return actual == target or (bool(self.base_url) and actual == urljoin(self.base_url, target))
         if "contains" in step:
             return str(step["contains"]) in actual
@@ -1220,6 +1224,9 @@ class Session:
 
         if action == "expect_title":
             ok, actual = self._poll_text(lambda: str(self.page.title()), step)
+            if self.has_secrets:
+                # A title may contain even a two-character input, below the redactor's threshold.
+                actual = "(withheld)"
             if ok:
                 return {"status": "passed", "expected": expectation, "actual": {"title": _cut(actual, 120)}}
             return {"status": "failed", "expected": expectation, "actual": {"title": _cut(actual, 120)},
@@ -1351,7 +1358,15 @@ class Session:
                     "kind": "not_ready",
                     "detail": f"not ready within {self.step_timeout_s:g}s: {'; '.join(readiness['unmet'])}"}}
             else:
-                outcome = self.perform(step)
+                if step.get("action") in ("expect_dom", "expect_title"):
+                    generation = self.main_frame_generation
+                    before = self._page_url()
+                    outcome = self.perform(step)
+                    after = self._page_url()
+                    outcome["url_after"] = after
+                    outcome["stable_assertion_page"] = generation == self.main_frame_generation and before == after
+                else:
+                    outcome = self.perform(step)
                 if ready and step.get("action") == "goto" and outcome.get("status") == "passed":
                     readiness = self.wait_ready(ready, shown_ready)
                     if readiness["unmet"]:
@@ -1455,7 +1470,9 @@ class Session:
             started = self.clock()
             outcome = self._execute(step, step_id)
             duration_ms = int((self.clock() - started) * 1000)
-            url_after = self._page_url()
+            url_after = outcome["url_after"] if "url_after" in outcome else self._page_url()
+            if step.get("action") in ("expect_dom", "expect_title"):
+                outcome.setdefault("stable_assertion_page", False)
             artifacts: list[dict] = []
             if outcome.get("status") == "failed":
                 failed = self.failed = True

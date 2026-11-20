@@ -26,12 +26,13 @@ the runtime rechecks policy when verification actually runs.
 ## Pick the tests (verify_mode=delegated — REQUIRED before the run)
 The second agent only reads and traces; the runtime runs the tests. You choose them:
 1. From the diff + dependents (who calls what changed), pick the tests that cover the change.
-   Targeted — related files/suites only, NOT the whole suite. No relevant test (docs, pure
-   config) OR the project has no test suite at all → STILL write tests.json with
+   Use targeted tests for a bounded change, integration tests across component contracts,
+   or the full suite when the impact cannot be bounded or project policy requires it.
+   A change without a relevant behavior test (e.g. docs) → STILL write tests.json with
    `commands: []` + a reason (e.g. "project without a test suite"). That is an explicit request
    for "zero tests", NOT a gap: the runtime only records `runtime: no test requested` and the
    verdict rests on the review. Skipping tests.json = a runtime gap, exit nonzero.
-2. Write `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`:
+2. Write the path returned in `meta.request.path` (normally `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`):
    `{"commands": ["<cmd>", ...], "reason": "<why these tests cover the change>"}` (max 5).
 3. Use the argv prefixes in `meta.policy.test_command_prefixes` from prepare; commands must
    start with one of them. Runtime executes without a shell (`&&`/pipe/redirect refused). Outside the allowlist →
@@ -57,6 +58,21 @@ Relay the reused line as is, and say it was reused, not run now.
 `meta.changed_since_execute` non-empty → files changed after `execute-end`: name them; this verdict covers them
 only as far as the listed tests and the review did.
 tests.json belongs to ONE verify job (the runtime claims it when the job is created). A rerun after a failed verify = a new job → write tests.json again; the old choice is not reused.
+
+With `meta.selection_version=1`, add `selection_input` from preparation and a `selection`
+object to the request. Start with `meta.execution_selection`; for standalone verify use
+`{"version":1,"execution_id":null,"tier":"targeted","reason":"...","obligations":[]}`
+and fill the applicable tier, reason, and obligations. Always use the returned execution ID
+(including null). Each obligation has `id`, `behavior`, `due` (verify/release) and
+`commands` (all exact commands required). Preserve existing obligations, add newly
+identified risks, and select runnable commands in the top-level list. Where no test
+exists for a required behavior, leave its command list empty and explain the gap.
+Use tier `none` with a reason and no commands when appropriate. Review a valid pending
+request with the current diff before replacing it. If the input fingerprint changed,
+prepare again and reassess the selection. On older runtimes relay any outstanding coverage.
+Relay `meta.runtime_tests.coverage`, including release-only work. In syntax mode relay
+`meta.unchecked_selection` if present. A known removed assertion remains open until its
+replacement is tested.
 
 ## Protocol (verify_mode=delegated)
 1. Logic: does it solve the problem? are the assumptions valid? consistent with codebase patterns? → PASS/FAIL + reason

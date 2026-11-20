@@ -253,6 +253,26 @@ def _check_polling_keeps_events_flowing() -> None:
     ready = Session(page, config, [].append, clock=clock).wait_ready([{"url": "/home"}])
     assert_true(ready["unmet"] == [], f"a url readiness condition sees it too: {ready}")
 
+    for during_ready in (True, False):
+        clock = _TickingClock()
+        page = _DispatchPage(clock, title="Loading")
+        page.url = BASE + "/login"
+        events = []
+        session = Session(page, config, events.append, clock=clock)
+        def navigate(page):
+            session.main_frame_generation += 1
+            if during_ready:
+                land(page)
+            page._title = "Dashboard"
+        page.pending.append(navigate)
+        title = {"action": "expect_title", "equals": "Dashboard", "id": "title"}
+        if during_ready:
+            title["ready"] = [{"url": "/home"}]
+        session.run({"steps": [title]})
+        event = _progress(events)[0]
+        assert_true(event["status"] == "passed" and event["stable_assertion_page"] is during_ready,
+                    "a ready redirect can precede proof; a same-URL reload during polling cannot")
+
     # The contrast that makes the check mean something: a wait outside Playwright never
     # delivers the event, so the same step fails on the same page.
     clock = _TickingClock()

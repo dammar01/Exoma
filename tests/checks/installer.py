@@ -13,6 +13,7 @@ rather than the process environment, so nothing here can touch the real ~/.claud
 import contextlib
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -943,12 +944,81 @@ def _test_installer_seed_reports_unenforced_provider() -> None:
         )
 
 
+def _check_uv_refresh_chromium() -> None:
+    from exoma.core.evidence.e2e import preflight
+    from exoma.core.evidence.e2e.runner import _AGENT_ROOT, _child_env
+    from exoma.core.jobs import job_manager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data = Path(tmp).resolve()
+        jobs = data / "jobs"
+        jobs.mkdir()
+        reservation = jobs / ".update-reservation.json"
+        operation = data / "updates" / "installation" / "operation"
+        operation.mkdir(parents=True)
+        request = {"token": "fixture-owner", "operation_id": operation.name,
+                   "reservation": str(reservation), "prefix": sys.prefix,
+                   "package": ["/bin/uv", "tool", "upgrade", "exoma"]}
+        reservation.write_text(json.dumps({"token": request["token"], "operation": str(operation)}))
+        state = {"operation_id": operation.name, "phase": "install"}
+        (operation / "state.json").write_text(json.dumps(state))
+        path = operation / "request.json"
+        path.write_text(json.dumps(request))
+        with patch.object(job_manager, "JOB_DIR", jobs), patch.object(job_manager, "DATA_DIR", data), \
+             patch.dict(os.environ, WORKFLOW_UPDATE_OWNER="fixture-owner", PLAYWRIGHT_BROWSERS_PATH="cache"), \
+             patch.object(preflight, "installed_playwright", return_value="1.65.2") as driver, \
+             patch.object(settings_mod, "_probe_update_chromium") as probe, \
+             patch.object(settings_mod, "_install_chromium", return_value=None) as provision:
+            for change in ({"token": "unrelated"}, {"prefix": tmp}, {"operation_id": "other"},
+                           {"package": ["/bin/pipx", "upgrade", "exoma"]}):
+                path.write_text(json.dumps({**request, **change}))
+                assert_true(settings_mod._refresh_uv_chromium(Plan()) is None, "only the active uv target qualifies")
+            path.write_text(json.dumps(request))
+            (operation / "state.json").write_text(json.dumps({**state, "phase": "check"}))
+            settings_mod._refresh_uv_chromium(Plan())
+            (operation / "state.json").write_text(json.dumps(state))
+            driver.return_value = None
+            settings_mod._refresh_uv_chromium(Plan())
+            probe.assert_not_called()
+            provision.assert_not_called()
+
+            driver.return_value = "1.60.0"
+            probe.return_value = (0, "")
+            settings_mod._refresh_uv_chromium(Plan())
+            provision.assert_not_called()
+            driver.return_value = "1.65.2"
+            probe.side_effect = [(2, "missing shell"), (0, "")]
+            assert_true(settings_mod._refresh_uv_chromium(Plan()) is None, "cold cache repaired then probed")
+            assert_true(provision.call_count == 1 and provision.call_args.kwargs["update_env"]["PLAYWRIGHT_BROWSERS_PATH"]
+                        == str((_AGENT_ROOT / "cache").resolve()), "repair uses the player's relative cache")
+            probe.side_effect = [(1, "system library unavailable")]
+            assert_true("system library unavailable" in settings_mod._refresh_uv_chromium(Plan())
+                        and provision.call_count == 1, "other launch faults do not trigger another download")
+            provision.return_value = "offline"
+            probe.side_effect = [(2, "missing"), (2, "missing"), (0, "")]
+            assert_true(settings_mod._refresh_uv_chromium(Plan()) == "offline", "failed download fails refresh")
+            provision.return_value = None
+            assert_true(settings_mod._refresh_uv_chromium(Plan()) is None, "download can be retried")
+
+            with patch.dict(os.environ, XDG_CACHE_HOME=str(data / "xdg-cache")):
+                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+                probe.side_effect = [(2, "missing shell"), (0, "")]
+                assert_true(settings_mod._refresh_uv_chromium(Plan()) is None, "cold XDG cache repaired")
+                repair_env = provision.call_args.kwargs["update_env"]
+                player_env = _child_env(str(_AGENT_ROOT))
+                for env in (repair_env, player_env):
+                    assert_true("PLAYWRIGHT_BROWSERS_PATH" not in env
+                                and env.get("XDG_CACHE_HOME") == str(data / "xdg-cache"),
+                                "refresh and playback share the Linux default cache location")
+
+
 def _test_installer_e2e_deps_are_opt_in() -> None:
     """--with-e2e installs the Playwright extra then its browser; without it, nothing runs.
 
     `subprocess` is replaced on the settings module only, so no pip or browser download can
     happen whatever the assertions decide.
     """
+    _check_uv_refresh_chromium()
     shipped = settings_mod.E2E_REQUIREMENTS_FILE
     body = [line for line in shipped.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
     assert_true(

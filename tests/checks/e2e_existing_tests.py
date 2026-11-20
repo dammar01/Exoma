@@ -71,6 +71,16 @@ def _test_e2e_existing_tests() -> None:
         started = __import__("time").monotonic()
         result = run(runnable, dict(config, existing_test_command=[sys.executable, "-c", _SLEEP], existing_test_timeout_s=1), root, {})
         assert_true(result["status"] == "timeout" and __import__("time").monotonic() - started < 20, f"the timeout ends the run: {result['status']}")
+        from unittest.mock import MagicMock, patch
+        import subprocess
+        process = MagicMock(returncode=None, stdout=[])
+        process.wait.side_effect = subprocess.TimeoutExpired("test", 1)
+        with patch.object(subprocess, "Popen", return_value=process), \
+                patch("exoma.core.evidence.e2e.existing_tests.terminate_tree", return_value={"ok": False}):
+            uncertain = run(runnable, config, root, {})
+        assert_true(uncertain["status"] == "timeout" and uncertain["returncode"] is None
+                    and not uncertain["cleanup_confirmed"] and process.wait.call_count == 2,
+                    "a second timeout cannot acknowledge process cleanup")
 
         result = run(runnable, dict(config, existing_test_command=["definitely-not-a-test-runner-xyz", "{files}"]), root, {})
         assert_true(result["status"] == "launch_failed" and "not found" in result["output_tail"], f"a missing runner is launch_failed: {result}")

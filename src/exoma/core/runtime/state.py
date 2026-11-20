@@ -10,7 +10,12 @@ from exoma.core.workspace.workspace_paths import workflow_paths
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 import json
+import os
+import secrets
+import stat
+import tempfile
 from exoma.core.runtime.agent_output import extract_lines_by_prefix, maybe_extract_plan_readiness, parse_questions
 from exoma.core.runtime.config_defaults import default_command_cache, default_config, default_scope, default_state, merge_config_defaults
 from exoma.core.runtime.scripts import _generate_run_scripts
@@ -349,6 +354,217 @@ def _repeat_bucket_of(record: dict) -> str | None:
     return repeat_bucket("incomplete", str(reason))
 
 
+def _windows_receipt_key(data: bytes, *, protect: bool) -> bytes:
+    """DPAPI binds the stored key to this Windows user, including on Python 3.11."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("data", ctypes.c_void_p)]
+
+    buf = ctypes.create_string_buffer(data)
+    source = Blob(len(data), ctypes.cast(buf, ctypes.c_void_p))
+    output = Blob()
+    crypt = ctypes.WinDLL("crypt32", use_last_error=True)
+    convert = crypt.CryptProtectData if protect else crypt.CryptUnprotectData
+    if not convert(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(output)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(output.data, output.size)
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(output.data))
+
+
+def browser_receipt_key(project_root: Path) -> bytes | None:
+    """Publish one complete key per user. Temporary files and losing creators stay private."""
+    from exoma.config.settings import DATA_DIR
+
+    try:
+        directory = (DATA_DIR / "private").resolve()
+        if directory.is_relative_to(project_root.resolve()):
+            return None
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            info = directory.stat()
+            if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                return None
+        path = directory / "browser-receipt.key"
+        if not path.exists():
+            key = secrets.token_bytes(32)
+            encoded = _windows_receipt_key(key, protect=True) if os.name == "nt" else key
+            fd, name = tempfile.mkstemp(dir=directory)
+            temporary = Path(name)
+            try:
+                with os.fdopen(fd, "wb") as pending:
+                    pending.write(encoded)
+                    pending.flush()
+                    os.fsync(pending.fileno())
+                os.link(temporary, path)
+            except FileExistsError:
+                pass
+            finally:
+                temporary.unlink(missing_ok=True)
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4096:
+            return None
+        if os.name != "nt" and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            return None
+        encoded = path.read_bytes()
+        key = _windows_receipt_key(encoded, protect=False) if os.name == "nt" else encoded
+        return key if len(key) == 32 else None
+    except OSError:
+        return None
+
+
+def e2e_coverage_gaps(project_root: Path, session_id: str, origin: str) -> list[dict]:
+    state = load_workspace_state(project_root, session_id)["state"]
+    by_origin = state.get("e2e_coverage_gaps", {})
+    if not isinstance(by_origin, dict):
+        raise ValueError("invalid browser coverage history")
+    gaps = []
+    canonical = reservation_origin(origin)
+    for spelling, history in by_origin.items():
+        if reservation_origin(spelling) == canonical:
+            if not isinstance(history, list):
+                raise ValueError("invalid browser assertion history")
+            gaps.extend(history)
+    if not all(
+        isinstance(gap, dict) and type(gap.get("attempt")) is int
+        and all(isinstance(gap.get(field), str) for field in ("proof", "claim", "step", "run"))
+        and (gap.get("target") is None or isinstance(gap["target"], str))
+        and all(_receipt_digest(gap[k]) for k in ("miss_page", "input_token")
+                if k in gap and not (k == "input_token" and gap[k] is None))
+        and isinstance(gap.get("legacy_urls", {}), dict)
+        and all(_receipt_digest(digest) for digest in gap.get("legacy_urls", {}).values())
+        and isinstance(gap.get("spent_slots", []), list)
+        and all(_receipt_digest(slot) for slot in gap.get("spent_slots", []))
+        and all(type(gap.get(flag, False)) is bool for flag in ("unseen", "removed"))
+        for gap in gaps
+    ):
+        raise ValueError("invalid browser assertion history")
+    return gaps
+
+
+def _receipt_digest(value) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def e2e_dispatch_reserved(record: dict, prefix: list[str], *, alternatives=None) -> bool:
+    reservations = record.get("admitted", [])
+    # Older builds kept a single digest that could include edits to the unused
+    # tail. Without the original prefix that reservation cannot be compared.
+    if not isinstance(reservations, list):
+        return True
+    choices = alternatives if alternatives is not None else [{key} for key in prefix]
+    for prior in reservations:
+        if not isinstance(prior, list) or not all(_receipt_digest(key) for key in prior):
+            return True
+        if all(key in allowed for key, allowed in zip(prior, choices)):
+            return True
+    return False
+
+
+def reservation_origin(origin: str) -> str:
+    """A project-test reservation follows the HTTP origin, independent of URL spelling."""
+    try:
+        parts = urlsplit(origin)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return origin  # preflight diagnoses an invalid URL
+    defaults = {"http": 80, "https": 443}
+    if not host or parts.scheme not in defaults:
+        return origin
+    authority = f"[{host}]" if ":" in host else host
+    if port is not None and port != defaults[parts.scheme]:
+        authority += f":{port}"
+    return f"{parts.scheme}://{authority}"
+
+
+def e2e_pending_tests(project_root: Path, session_id: str, origin: str) -> dict:
+    """Move interrupted tests out of legacy streaks before any gate can replace them."""
+    loaded = load_workspace_state(project_root, session_id)
+    state = loaded["state"]
+    by_origin = state.setdefault("e2e_pending_tests", {})
+    if not isinstance(by_origin, dict):
+        raise ValueError("invalid pending project tests")
+    repeat = state.get("e2e_repeat")
+    if isinstance(repeat, dict):
+        # The oldest combined reservation did not identify the test command.
+        legacy = repeat.get("test_dispatches", [None] if "admitted" in repeat else [])
+        if legacy != []:
+            previous_origin = repeat.get("origin")
+            if not isinstance(previous_origin, str) or not previous_origin:
+                raise ValueError("missing origin of pending project tests")
+            prior = by_origin.setdefault(previous_origin, [])
+            if not isinstance(prior, list):
+                raise ValueError("invalid pending project tests")
+            prior.extend(legacy if isinstance(legacy, list) else [None])
+            repeat["test_dispatches"] = []
+            atomic_write_json(loaded["paths"]["state"], state)
+    histories = {}
+    for spelling, pending in by_origin.items():
+        if reservation_origin(spelling) == origin:
+            if not isinstance(pending, list):
+                raise ValueError("invalid pending project tests")
+            if pending:
+                histories[spelling] = pending  # legacy HMACs bind the original spelling
+    return histories
+
+
+def record_e2e_test_dispatch(project_root: Path, session_id: str, origin: str, receipt: dict, *, completed=False) -> None:
+    """Reserve before launch or retire this command after its report, under the invocation lock."""
+    loaded = load_workspace_state(project_root, session_id)
+    state = loaded["state"]
+    by_origin = state.setdefault("e2e_pending_tests", {})
+    if not isinstance(by_origin, dict):
+        raise ValueError("invalid pending project tests")
+    pending = by_origin.setdefault(origin, [])
+    if not isinstance(pending, list):
+        raise ValueError("invalid pending project tests")
+    if completed:
+        pending.remove(receipt)
+        if not pending:
+            del by_origin[origin]
+    else:
+        pending.append(receipt)
+    atomic_write_json(loaded["paths"]["state"], state)
+
+
+def e2e_tests_reserved(history: list, candidate: dict) -> bool:
+    for prior in history:
+        if not isinstance(prior, dict) or not _receipt_digest(prior.get("key")) or prior["key"] != candidate["key"]:
+            return True
+        files = prior.get("files")
+        if not isinstance(files, list) or not files or not all(_receipt_digest(item) for item in files):
+            return True
+        if not set(candidate["files"]).isdisjoint(files):
+            return True
+    return False
+
+
+def save_e2e_retry(project_root: Path, session_id: str, origin: str, gaps: list[dict],
+                   admitted: list[str] | None = None) -> None:
+    """Under the invocation lock, reserve a strategy and retain outstanding evidence."""
+    loaded = load_workspace_state(project_root, session_id)
+    state = loaded["state"]
+    by_origin = state.setdefault("e2e_coverage_gaps", {})
+    origin = reservation_origin(origin)
+    for spelling in list(by_origin):
+        if reservation_origin(spelling) == origin:
+            del by_origin[spelling]
+    if gaps:
+        by_origin[origin] = gaps
+    if admitted is not None:
+        repeat = state["e2e_repeat"]
+        if "admitted" not in repeat:
+            repeat.setdefault("test_dispatches", [])
+        reservations = repeat.setdefault("admitted", [])
+        if admitted not in reservations:
+            reservations.append(admitted)
+    atomic_write_json(loaded["paths"]["state"], state)
+
+
 def note_e2e_outcome(
     project_root: Path,
     session_id: str,
@@ -360,6 +576,9 @@ def note_e2e_outcome(
     signature: str | None = None,
     runtime: str | None = None,
     cause: str | None = None,
+    strategy: dict | None = None,
+    legacy_signature: str | None = None,
+    reset_streak: bool = False,
 ) -> int:
     """Fold one finished browser run into the repeat counter; return the new streak.
 
@@ -421,9 +640,10 @@ def note_e2e_outcome(
     if not bucket:
         record = {}
     elif (
-        previous.get("origin") == origin
+        not reset_streak and isinstance(previous.get("origin"), str)
+        and reservation_origin(previous["origin"]) == reservation_origin(origin)
         and previous_bucket == bucket
-        and (bucket != "app" or (signature and previous.get("signature") == signature))
+        and (bucket != "app" or (previous.get("signature") and previous["signature"] in (signature, legacy_signature)))
     ):
         # The newest reason replaces the stored one: when a streak is quoted back it should
         # name what the last run actually said, not the first name the problem went by.
@@ -441,6 +661,7 @@ def note_e2e_outcome(
         # unknown provenance is not preflight's.
         record = {
             **previous,
+            "origin": origin,
             "bucket": bucket,
             "reason": reason,
             "streak": previous_streak + 1,
@@ -455,6 +676,12 @@ def note_e2e_outcome(
             "origin": origin, "bucket": bucket, "reason": reason, "streak": 1, "source": source,
             "fingerprint": fingerprint, "signature": signature, "runtime": runtime, "cause": cause,
         }
+    if bucket == "app":
+        record.pop("admitted", None)
+        record.pop("test_dispatches", None)
+        record.pop("strategy", None)
+        if strategy is not None:
+            record["strategy"] = strategy
     state["e2e_repeat"] = record
     atomic_write_json(loaded["paths"]["state"], state)
     return int(record.get("streak") or 0)

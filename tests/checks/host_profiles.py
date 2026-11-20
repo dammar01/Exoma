@@ -73,6 +73,12 @@ def _test_contract_renders_per_host():
             key = next(key for src, _dest, key in base._targets((host,))
                        if src == source)
             execute = base._render_text(source, key, None, only_command)
+            verify_source = source.with_name("verify.md")
+            verify_key = next(k for src, _dest, k in base._targets((host,)) if src == verify_source)
+            verify = base._render_text(verify_source, verify_key, None, only_command)
+            assert_true("selection_version" in execute and "integration" in execute
+                        and "selection_input" in verify and "meta.request.path" in verify,
+                        f"{host}: both rendered skills carry the risk-based selection contract")
             assert_true("it owns the single" in execute and "→ call the local `verify-prepare`" not in execute,
                         f"{host}: execute hands preparation to verify once")
             assert_true("not returned yet)" in text and "the call killed)" in text

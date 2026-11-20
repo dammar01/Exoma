@@ -9,6 +9,15 @@ fresh-target import/version probe, install, check, and terminal journal. The upd
 spans cwd and storage overrides. New delegated jobs are refused while update admission is
 reserved; the owning installer can refresh its workspace without blocking itself.
 
+During a uv package update the applied `install --no-input` stage checks Chromium when
+the target interpreter contains Playwright. The installer matches the active reservation,
+operation, stage, package command and target prefix. It provisions a missing browser
+with that interpreter and checks the resulting headless launch. A warm cache needs no
+download. A driver or system-library error fails the install stage and is reported in
+`install.log`. The package may already have changed. Ordinary unattended installs,
+drift checks and dry runs keep their existing dependency behavior. The explicit
+`--with-e2e` option installs the bundled package pin and its browser.
+
 Launch exit **3 means accepted/running, not complete**, with an operation ID and
 `completed:false`. This replaces both Windows acceptance-0 and POSIX synchronous update.
 Use the printed `observer_argv` with its external runtime and copied snapshot to wait
@@ -227,6 +236,9 @@ the named session's pending request before provider dispatch, without claiming/c
 the request, removing the delegated marker, running tests, or publishing a verdict.
 The agent supplies test relevance and the request; runtime policy remains authoritative
 when verify actually runs. Preparation does not read an earlier job's claimed request.
+Prepare, worker selection and test reuse compute the Git tree ID in temporary object
+storage with read access to the project's objects. Plan and execution snapshots retain
+their trees so later scope checks can compare them.
 
 Successful `execute-end` preserves its existing content and execution metadata and adds
 fresh `meta.policy` (`auto_verify_after_execute`, `verify_mode`), `meta.config_warnings`,
@@ -235,6 +247,32 @@ and `meta.next_step`: `action` (`verify_prepare` or `offer_verify`), `required`,
 True auto-verify requires the agent to continue through preparation and explicit verify;
 false offers verification. Runtime does not auto-chain or change `verification: not_run`.
 Policy diagnostics cannot turn a successfully closed execution into a close failure.
+
+Both `execute-begin` and `verify-prepare` advertise `meta.selection_version = 1`.
+`execute-end --task-file <file>` accepts an optional UTF-8 selection object.
+It validates the execution ID before atomically closing the execution with its
+selection. An invalid selection leaves the execution active for correction.
+Preparation returns `execution_id`, `execution_selection`, `selection_input`
+(the current test input fingerprint, nullable), and the resolved pending request path.
+The verify request can carry `selection` and `selection_input` alongside `commands`
+and `reason`. The worker checks the claimed selection against the current execution and
+input fingerprint. A later job needs its own request. Legacy requests continue to run,
+with outstanding W3 obligations reported as unchecked. An execution with no historic
+selection has unknown historical coverage.
+
+The primary agent assigns targeted, integration, full, or none from the diff and its
+consumers. A selection ties each behavior to a verify or release deadline and a list of
+exact commands. Verify can add evidence requirements and fill a previously empty list.
+It preserves the existing behaviors, commands and verify deadlines. The runtime reports
+each obligation under `meta.runtime_tests.coverage` and retains verification snapshots in
+`execution.json` (`coverage_history`). An open verify obligation produces an incomplete
+verdict on a clean review and CLI exit 2. Fresh commands can run without a Git
+fingerprint, but cannot establish coverage for one known input state. Browser-only
+success preserves the browser outcome and reports any outstanding execution coverage
+in the combined verdict. An open release obligation remains visible for staging.
+Each verify reassesses coverage using its actual outcomes and eligible reuse. Syntax
+reports outstanding behaviors under `meta.unchecked_selection`; auto-off leaves them in
+the closed execution. The release procedure continues to require the full suite.
 
 Execution mutations and standalone approval writers coordinate through the session's
 `runtime/execution.state.guard`, a byte-0 advisory lock. Acquisition is bounded to ten
@@ -682,6 +720,13 @@ fourth run was refused. `timeout` and `harness` carry no signature and stay coar
 reason above. An `app` record written before signatures existed (no `signature` field) is
 read as no streak.
 
+When a short resolved input hides the observed URL, the runner computes the signature from
+the player's original URL in memory. Query strings and volatile identifiers still fold
+into the same route. If the normalized route itself needs redaction, the session record
+stores a `private-v1:<HMAC>` scoped to the project, session and origin using the private
+browser receipt key. Without that key, a hidden route cannot accumulate a streak. The
+public failure report continues to show `[withheld]` for the hidden URL.
+
 Every counted outcome also records `runtime`, the runtime's own identity
 (`runner.runtime_identity()`: `TOOL_VERSION` plus a digest of `core/evidence/e2e/*.py`). A
 streak at the limit written by a different runtime is released before braking, with
@@ -718,11 +763,11 @@ non-ignored files, all outside `.workflow/`), the newest one kept. Before brakin
 at the limit is compared with the project as it is now; a different fingerprint means the
 application changed since the last failure, the record is cleared, and the run goes ahead
 with `meta.e2e.repeat_released: {by: change_detected, …}`. Scenario and request edits live
-under `.workflow/` and never change it — that loop is still braked. Outside Git there is no
+under `.workflow/` and leave this fingerprint unchanged. Outside Git there is no
 fingerprint and this release never fires. When the brake refuses, the record is also written
 to the browser knowledge store as a `repeat_failure` entry (origin, bucket, reason, streak,
 fingerprint, signature — one entry per distinct app signature), offered first to every later draft for that origin, in any session; a passing
-run against the origin retires it (`meta.e2e.repeat_failures_resolved`). A hint, never a
+run against the origin with no outstanding assertion gaps retires it (`meta.e2e.repeat_failures_resolved`). A hint, never a
 gate. So does a preflight that passes, for a streak preflight itself
 wrote — one whose recorded `source` is `preflight`. Neither the bucket nor the reason can
 carry that. Not the bucket, because `harness` and `timeout` are where a browser run’s own
@@ -735,9 +780,71 @@ record from a build before the field existed; what clears those is a run that pa
 Preflight is evidence about what preflight wrote and nothing else. A streak already at the limit is never overwritten either — an
 `app` streak used to be replaced by the first `playwright_missing` that came along, bucket
 `harness` and the count back at one, so a missing dependency retired the brake that was
-holding a broken application at bay. What clears `app` is the run passing, or
-`settings.ignore_repeat_brake`, set by someone who has fixed the application and is saying
-so. Off by default, and the refusal names it. Pinned in a project’s `config.json` it is
+holding a broken application at bay. A localized app failure also records a versioned
+strategy from the validated placeholder scenario. At the limit, the runtime compares
+the candidate through the failed step, including the ordered prerequisites, action,
+selectors, scope and effective conditions. A material edit or deletion admits a browser
+run. Step renames and edits confined to the unreached tail keep the brake in place.
+`run` uses the validated request. `auto` prepares a fresh ready draft before this
+comparison. A brake with a missing or unsupported strategy retains its previous behavior.
+The decision precedes existing test commands and browser playback.
+The runtime reserves the ordered step fingerprints through the failed action before
+dispatch. Until an outcome replaces that failure record, it retains every reservation.
+After an interruption, a candidate sharing the reserved prefix stays blocked. An
+ambiguous boundary or an old reservation without comparable steps also keeps the brake.
+The runner reserves project tests immediately before launching their command, then
+reserves the browser prefix before playback. Project test reservations use a scoped
+HMAC of the expanded command for each file and the registered credential inputs.
+Within the same origin, changing the base URL affects the reservation only when
+the command expands `{base_url}` into an argument. After an interruption, a batch
+containing any reserved test with the same inputs stays blocked even if the
+browser steps or the file order change.
+Pending project tests are stored per session and origin. Before a runtime upgrade
+can release an old failure streak, the runner moves its pending test reservations
+into this history. It checks the history before every project-test launch, including
+after a runtime change or an explicit repeat-brake override. HTTP port 80 and HTTPS
+port 443 may be explicit or implicit. Legacy receipts are compared using the origin
+spelling that produced their HMAC. A terminal result and its stored report release
+that run's reservation. After a forced timeout, cleanup is best effort and the
+reservation stays pending even if the direct child has exited. That invocation records
+an incomplete timeout report and skips browser playback and retries while cleanup is
+unconfirmed. Browser-only runs and completed unrelated tests
+leave earlier interruptions pending. An old receipt whose key cannot be compared
+keeps project tests blocked for its session and origin. Inspect the previous run's
+side effects before starting a fresh session.
+Unreadable reservation or coverage history yields a blocked draft during preparation
+(including the preparation stage of auto). A run returns an incomplete verification.
+
+`meta.e2e.repeat_released` records `by: strategy_changed`, the original run and attempt,
+and the steps affected. Assertions from the failed receipt remain outstanding until
+observed, even if a later timeout replaces the failure streak. For DOM and title
+assertions the runtime compares fingerprints of the observed page, and for DOM it
+also matches the winning selector candidate. For a URL assertion it checks the
+original predicate on the origin of the URL sample that decided the assertion.
+A repaired redirect can change path. A later navigation cannot replace that sample.
+An unknown historical target keeps a removed assertion in `coverage_gaps`.
+When every candidate in a DOM assertion matched zero elements on the observed page,
+an uninterrupted assertion can recover through a unique match in the same ordered
+candidate list, scope and page. An incomplete search or a run on a different page
+cannot retire that evidence. A previously identified winning candidate still has to match.
+
+For assertions whose predicate, preceding actions, DOM waits or readiness checks use placeholders, the runtime
+compares a session-, project- and origin-specific HMAC of the relevant inputs.
+An older receipt without a required input binding leaves the obligation open.
+For pages with a credential in the URL, the runtime derives a versioned HMAC from
+the observed URL before redaction. Reports continue to use the redacted URL.
+The user key lives outside the project in the private Exoma profile and is protected
+by user permissions on POSIX and DPAPI on Windows. Losing the key leaves earlier
+obligations open. Missing evidence in an older receipt stays unknown. For a title
+or DOM predicate, navigation during the observation prevents a target match.
+The reviewer evidence and canonical `not_verified` include outstanding gaps, even when
+the browser passed every step of the shorter scenario. A claim-level existing test
+cannot discharge the missing browser observation.
+An outstanding runtime assertion declares `INCOMPLETE` with exit 2 on direct, awaited
+and stored verification results. An application failure keeps its failing verdict.
+
+After an external fix, `settings.ignore_repeat_brake` admits a run explicitly.
+Off by default, and the refusal names it. Pinned in a project’s `config.json` it is
 not one run but every run, which is a project deciding it does not want this brake. A run that
 PASSES only on a later attempt is not a clean pass: the verdict carries a gap naming the
 reasons the earlier attempts ended on (`passed only on attempt N of N`), so it is
@@ -788,9 +895,10 @@ name in the wrong case is pointed at its spelling. The process environment is co
 registered names only. The whole selected profile reaches the existing-test command's
 environment and is scrubbed from its output. The resolved values reach the player only
 inside the scenario on stdin. A resolved value shorter than the scrubber's 4-character
-minimum cannot be mapped back to its placeholder, so that run keeps no page HTML
-(`meta.e2e.secrets.unscrubbable` names the credential); structured events are still
-scrubbed only for longer values.
+threshold suppresses page HTML. The credential name appears in
+`meta.e2e.secrets.unscrubbable`. Live events, reviewer evidence, project-test output
+and stored diagnostics withhold text containing short resolved inputs, including
+encoded page echoes. The player evaluates assertions against the original values.
 
 Literal credentials in agent-written input. The task, the stage-1 draft, and the request
 are written by agents, and a credential sometimes arrives typed out instead of as
@@ -1078,7 +1186,7 @@ diagnosis (`reason: repeat_failure`), derived from the reason for a record witho
 `reusable` causes (`scenario_selector`, `scenario_selector_ambiguous`, `selector_not_rendered`) are written to the browser
 knowledge store as `failure_hint` entries (the step's placeholder view, cause, hint),
 offered to the next draft for the origin right after `repeat_failure`, and retired by a
-passing run against it. A same-origin 5xx on the main request, or an uncaught page error thrown by a
+passing run against it with no outstanding assertion gaps. A same-origin 5xx on the main request, or an uncaught page error thrown by a
 same-origin script (attributed by the script URL in its stack, not the page URL), fails
 the run even when every assertion passed. Same-origin console errors fail it only with
 `fail_on_console_error`. Third-party noise stays a warning. A passing existing test proves

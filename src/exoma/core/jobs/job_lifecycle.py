@@ -244,7 +244,11 @@ def submit(
                     if normalized_command == "verify":
                         # A new job, not a recovery or an attach: the test request is this
                         # job's from here on, and an earlier job's leftover is dropped.
-                        verify_tests.claim(detect_project_root(work_dir), session_id)
+                        try:
+                            verify_tests.claim(detect_project_root(work_dir), session_id)
+                        except OSError as exc:
+                            _main().JOB_MANAGER.fail_job(job["job_id"], f"cannot claim test request: {exc}")
+                            raise
                 except ValueError as exc:
                     active = _main().JOB_MANAGER.active_job_for_session(session_id)
                     active_id = active["job_id"] if active else None

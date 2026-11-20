@@ -96,10 +96,11 @@ def run(
     files = [test["path"] for test in runnable]
     covers = sorted({cid for test in runnable for cid in test["covers"]})
     argv = build_argv(config.get("existing_test_command") or [], files, str(config.get("base_url") or ""))
-    base = {"argv": argv, "files": files, "covers": covers, "returncode": None, "duration_seconds": 0.0, "output_tail": "", "redactions": []}
+    base = {"argv": e2e_redact.scrub_resolved(argv, env_values), "files": files, "covers": covers,
+            "returncode": None, "duration_seconds": 0.0, "output_tail": "", "redactions": []}
     executable = shutil.which(argv[0]) if argv else None
     if not executable:
-        return {**base, "status": "launch_failed", "output_tail": f"{argv[0] if argv else '(empty command)'} was not found"}
+        return {**base, "status": "launch_failed", "output_tail": f"{base['argv'][0] if argv else '(empty command)'} was not found"}
     timeout_s = float(config.get("existing_test_timeout_s") or 300)
     started = time.monotonic()
     try:
@@ -118,24 +119,24 @@ def run(
             **hidden_run_kwargs(),
         )
     except (OSError, ValueError) as exc:
-        return {**base, "status": "launch_failed", "output_tail": f"{type(exc).__name__}: {exc}"}
+        return {**base, "status": "launch_failed",
+                "output_tail": e2e_redact.scrub_resolved(f"{type(exc).__name__}: {exc}", env_values)}
 
     tail: deque[str] = deque(maxlen=OUTPUT_TAIL_LINES)
     reader = threading.Thread(target=lambda: tail.extend(proc.stdout), daemon=True)
     reader.start()
-    timed_out = False
+    termination = None
     try:
         proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        timed_out = True
-        terminate_tree(proc)
+        termination = terminate_tree(proc)
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
     reader.join(timeout=5)
     clean, hits = e2e_redact.redact_text(e2e_redact.scrub_resolved("".join(tail)[-OUTPUT_TAIL_CHARS:], env_values))
-    if timed_out:
+    if termination is not None:
         status = "timeout"
     else:
         status = "passed" if proc.returncode == 0 else "failed"
@@ -143,6 +144,9 @@ def run(
         **base,
         "status": status,
         "returncode": proc.returncode,
+        # terminate_tree is best-effort. Even a reaped parent does not prove
+        # that an orphaned descendant has stopped acting on project data.
+        **({"termination": termination, "cleanup_confirmed": False} if termination is not None else {}),
         "duration_seconds": round(time.monotonic() - started, 3),
         "output_tail": clean,
         "redactions": hits,

@@ -8,11 +8,15 @@ reply that is perfectly good evidence and still carries no scenario to run.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
+from collections import Counter, defaultdict, deque
 from collections.abc import Mapping
+from difflib import SequenceMatcher
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, unquote_plus, urljoin, urlsplit
 
 from exoma.core.evidence.e2e.preflight import safe_base_url, same_origin
 
@@ -559,6 +563,372 @@ def step_selectors(step: Mapping) -> list[dict]:
     ]
 
 
+def _strategy_key(value) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _effective_selector(selector: dict) -> dict:
+    key = SELECTOR_RANK[selector_rank(selector)]
+    effective = {key: selector[key]}
+    if key == "role" and "name" in selector:
+        effective["name"] = selector["name"]
+    return effective
+
+
+def evidence_url(url: str) -> str:
+    """Fold a default port without changing path, query, fragment or predicate text."""
+    match = re.match(r"(?i)^(https?://)([^/?#@]+)(?=[/?#]|$)", url)
+    if match:
+        host, colon, port = match[2].rpartition(":")
+        default = "443" if match[1].lower() == "https://" else "80"
+        if colon and port.lstrip("0") == default:
+            return match[1] + host + url[match.end():]
+    return url
+
+
+def default_port_spellings(url: str) -> tuple[str, ...]:
+    """Absolute URL spellings with identical HTTP authority and untouched suffix."""
+    parts = urlsplit(url)
+    port = {"http": 80, "https": 443}.get(parts.scheme)
+    try:
+        actual_port = parts.port
+    except ValueError:  # A validated placeholder operand can still contain a symbolic port.
+        return (url,)
+    if not port or not parts.hostname or parts.username is not None or actual_port not in (None, port):
+        return (url,)
+    implicit = evidence_url(url)
+    end = implicit.find("//") + 2 + len(urlsplit(implicit).netloc)
+    explicit = implicit[:end] + f":{port}" + implicit[end:]
+    return tuple(dict.fromkeys((url, implicit, explicit)))
+
+
+def _legacy_url(url, origin):
+    """Reproduce a historical authority only for a provably equivalent HTTP origin."""
+    if not origin:
+        return url
+    parts = urlsplit(url)
+    authority = f"{parts.scheme}://{parts.netloc}"
+    if evidence_url(authority).lower() == evidence_url(origin).lower():
+        return origin + url[len(authority):]
+    return url
+
+
+def legacy_dispatch_url_keys(step, row, base_url, origins):
+    """Rebuild a reserved row with alternative default ports, keeping all other fields."""
+    field = {"goto": "url", "expect_url": "equals"}.get(step["action"])
+    if field not in row["fields"]:
+        return set()
+    url = urljoin(base_url, str(step[field]))
+    if len(default_port_spellings(url)) == 1:
+        return set()
+    parts = urlsplit(evidence_url(url))
+    port = "0443" if parts.scheme == "https" else "080"
+    padded = f"{parts.scheme}://{parts.netloc}:{port}"
+    # Admissions kept only a digest. Also try the literal authorities we still
+    # have for this origin; a different path, query or fragment stays distinct.
+    spellings = {_legacy_url(url, padded)}
+    spellings.update(_legacy_url(url, origin.rstrip("/")) for origin in origins if isinstance(origin, str))
+    return {_strategy_key({**row["fields"], field: _strategy_key(spelling)}) for spelling in spellings}
+
+
+def remap_legacy_url_fields(scenario, base_url, fields):
+    """Recover renamed URL operands using only equivalent historical field digests."""
+    steps = scenario["steps"]
+    current_ids = {step["id"] for step in steps}
+    positions = defaultdict(deque)
+    for index, (step_id, digest) in enumerate(fields.items()):
+        if step_id not in current_ids:
+            positions[digest].append(index)
+    remapped = dict(fields)
+    for step in steps:
+        if not positions:
+            break
+        if step["id"] in fields:
+            continue
+        field = {"goto": "url", "expect_url": "equals"}.get(step["action"])
+        if field not in step:
+            continue
+        url = urljoin(base_url, str(step[field]))
+        digests = (_strategy_key(spelling) for spelling in default_port_spellings(url))
+        candidates = [(positions[d][0], d) for d in digests if d in positions]
+        if candidates:
+            # Keep the recorded occurrence order when several old fields are
+            # equivalent. Each digest occurrence may supply one spelling only.
+            _, digest = min(candidates)
+            remapped[step["id"]] = digest
+            positions[digest].popleft()
+            if not positions[digest]:
+                del positions[digest]
+    return remapped
+
+
+def strategy_steps(scenario: dict, base_url: str, *, receipt_key=None, receipt_scope=(), values=None,
+                   legacy=False, operand_spelling=None, historical_fields=None) -> list[dict]:
+    """Comparable main steps from a validated placeholder scenario. Persist no input values."""
+    rows = []
+
+    def operand(step, literal):
+        joined = urljoin(base_url, literal)
+        if not legacy:
+            return evidence_url(joined)
+        if historical_fields is not None:
+            digest = historical_fields.get(step["id"])
+            for spelling in default_port_spellings(joined):
+                if _strategy_key(spelling) == digest:
+                    return spelling
+        if operand_spelling is not None and urlsplit(literal).netloc:
+            return operand_spelling(joined)
+        return joined
+
+    context = _strategy_key(base_url if legacy else evidence_url(base_url))
+    occurrences = Counter()
+    path_inputs = set()
+    for step in scenario["steps"]:
+        action = step["action"]
+        inputs = {"action": action}
+        if action in _ACTIONS_WITH_SELECTOR:
+            inputs["selectors"] = [_effective_selector(item["selector"]) for item in step_selectors(step)]
+            inputs["within"] = _effective_selector(step["within"]) if step.get("within") else None
+        if action == "goto":
+            inputs["url"] = operand(step, step["url"])
+        elif action in ("expect_url", "expect_title"):
+            for condition in ("equals", "contains", "matches"):
+                if condition in step:
+                    value = str(step[condition])
+                    inputs[condition] = operand(step, value) if action == "expect_url" and condition == "equals" else value
+                    break
+        elif action == "select":
+            field = "value" if step.get("value") is not None else "label"
+            inputs[field] = str(step[field]) if field == "value" else str(step.get(field) or "")
+        else:
+            field = {"expect_dom": "text", "press": "key", "fill": "value", "upload": "file"}.get(action)
+            if field == "text" and field in step:
+                inputs[field] = str(step[field])
+            elif field and field != "text":
+                inputs[field] = str(step.get(field) or "")
+        conditions = ((key, _effective_selector(value) if key in READY_SELECTOR_KEYS else value)
+                      for c in step.get("ready") or [] for key, value in c.items())
+        ready = sorted({_strategy_key(c) for c in conditions})
+        # Readiness gates the attempt; the observed assertion is its target and condition.
+        # Include preceding page-changing actions so a pass on a different flow cannot
+        # retire a missing assertion just because its ID and selector happen to match.
+        row = {"action": action, "id": step["id"]}
+        step_inputs = env_references([inputs, step.get("ready")])
+        if action in ASSERTION_ACTIONS:
+            claim = step["claim_id"]
+            proof = _strategy_key([context, inputs, claim, ready])
+            occurrences[proof] += 1
+            row.update(claim=claim, proof=_strategy_key([proof, occurrences[proof]]),
+                       dynamic=bool(step_inputs))
+            names = sorted(path_inputs.union(step_inputs))
+            if names and values is not None:
+                row["input_token"] = None
+                if receipt_key is not None:
+                    bindings = [(name, values[name]) for name in names]
+                    message = json.dumps([receipt_scope, bindings], separators=(",", ":")).encode()
+                    row["input_token"] = hmac.digest(receipt_key, message, "sha256").hex()
+            if action == "expect_dom":
+                row["selector_count"] = len(inputs["selectors"])
+        if action in _ACTIONS_WITH_REQUEST or action == "wait_dom":
+            # Preserve older proofs for ordinary actions with no readiness gate.
+            context = _strategy_key([context, inputs, ready] if ready else [context, inputs])
+            path_inputs.update(step_inputs)
+        elif ready:
+            context = _strategy_key([context, "ready", ready])
+            path_inputs.update(env_references(step["ready"]))
+        effective = {**inputs, "ready": ready, "request": step.get("request"), "side_effect": step.get("side_effect") or "none"}
+        row["fields"] = {k: _strategy_key(v) for k, v in effective.items()}
+        row["key"] = _strategy_key(row["fields"])
+        row["observation_only"] = action == "probe" and not ready
+        rows.append(row)
+    return rows
+
+
+def _observed_page(url, display_url, base_url, origin_only, key, scope, short_values, legacy, legacy_origin):
+    if not isinstance(url, str) or not url or not isinstance(display_url, str):
+        return None
+    try:
+        page = urljoin(base_url, url)
+        displayed = urljoin(base_url, display_url)
+        if legacy:
+            page, displayed = _legacy_url(page, legacy_origin), _legacy_url(displayed, legacy_origin)
+        else:
+            page, displayed = evidence_url(page), evidence_url(displayed)
+        parsed = urlsplit(page)
+        if origin_only:
+            # A repaired URL assertion may navigate to a different path on the same origin.
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                return None
+            public = urlsplit(displayed)
+            page, displayed = [parsed.scheme, parsed.netloc], [public.scheme, public.netloc]
+    except ValueError:
+        return None
+    raw = parsed.netloc if origin_only else page
+    if page == displayed and "${" not in raw and not any(
+            value in raw or value in unquote_plus(raw) for value in short_values):
+        return page  # Preserve comparable targets from earlier, fully visible observations.
+    if key is None:
+        return None
+    message = json.dumps(["page-v1", scope, page], separators=(",", ":")).encode()
+    return "page-v1:" + hmac.digest(key, message, "sha256").hex()
+
+
+def assertion_observations(steps, events, base_url, *, raw_events=None, receipt_key=None,
+                           receipt_scope=(), short_values=(), legacy=False, legacy_origin=None):
+    """Bind a predicate to the page and locator the player actually observed."""
+    assertions = {row["id"]: row for row in steps if "proof" in row}
+    observations = {}
+    for event, raw in zip(events, events if raw_events is None else raw_events):
+        if event.get("type") != "progress" or event.get("status") not in ("failed", "passed"):
+            continue
+        row = assertions.get(event.get("step_id"))
+        if not row:
+            continue
+        observation = {"status": event["status"], "target": None}
+        observations[row["proof"]] = observation
+        if "input_token" in row and row["input_token"] is None:
+            continue
+        stable = event.get("stable_assertion_page")
+        is_url = row["action"] == "expect_url"
+        if is_url:
+            # Polling can span a redirect. Bind the sample that decided the
+            # predicate, even if another navigation precedes the progress event.
+            if event["status"] == "failed" and (event.get("error") or {}).get("kind") != "assertion":
+                continue
+            actual, displayed = raw.get("actual"), event.get("actual")
+            if not isinstance(actual, dict) or not isinstance(displayed, dict):
+                continue
+            url, display_url = actual.get("url"), displayed.get("url")
+        else:
+            if stable is False or (row["dynamic"] and stable is not True):
+                continue
+            url, display_url = raw.get("url_after"), event.get("url_after")
+        page = _observed_page(url, display_url, base_url, is_url,
+                              receipt_key, receipt_scope, short_values, legacy, legacy_origin)
+        if page is not None:
+            if row["action"] == "expect_url":
+                # The URL predicate itself identifies the destination. A repaired
+                # redirect can legitimately reach a different path than the failure.
+                observation["target"] = _strategy_key(page)
+            elif row["action"] == "expect_title":
+                if event["status"] == "passed" or (event.get("error") or {}).get("kind") == "assertion":
+                    observation["target"] = _strategy_key(page)
+            else:
+                selection = event.get("selection") or {}
+                winner = selection.get("candidate")
+                counts = selection.get("match_counts")
+                size = row["selector_count"]
+                if stable and isinstance(counts, list):
+                    if (event["status"] == "failed" and winner is None and size > 1
+                            and (event.get("error") or {}).get("kind") == "selector_missing"
+                            and len(counts) == size and all(type(n) is int and n == 0 for n in counts)):
+                        observation["miss_page"] = _strategy_key(page)
+                    elif (event["status"] == "passed" and type(winner) is int and 0 <= winner < size
+                          and winner < len(counts) and type(counts[winner]) is int and counts[winner] == 1):
+                        observation["matched_page"] = _strategy_key(page)
+                if (winner is None and event["status"] == "failed" and row["selector_count"] == 1
+                        and (event.get("error") or {}).get("kind") in ("selector_missing", "not_visible")):
+                    # On this page the sole selector uniquely identifies the attempted
+                    # target, including when its element is not rendered yet.
+                    winner = 0
+                if type(winner) is int and 0 <= winner < row["selector_count"]:
+                    observation["target"] = _strategy_key([page, winner])
+    return observations
+
+
+def comparable_strategy(basis) -> bool:
+    """Unknown and partial on-disk records retain the standing brake."""
+    if not isinstance(basis, dict) or type(basis.get("version")) is not int or basis["version"] not in (2, 3):
+        return False
+    rows = basis.get("steps")
+    failed = basis.get("failed")
+    if not isinstance(rows, list) or type(failed) is not int or not 0 <= failed < len(rows):
+        return False
+    if not isinstance(basis.get("run"), str) or not basis["run"] or type(basis.get("attempt")) is not int or basis["attempt"] < 1:
+        return False
+    observations = basis.get("observations")
+    if not isinstance(observations, dict):
+        return False
+    for observation in observations.values():
+        if not isinstance(observation, dict) or observation.get("status") not in ("passed", "failed") or "target" not in observation:
+            return False
+        target = observation["target"]
+        if target is not None and not (isinstance(target, str) and re.fullmatch("[a-f0-9]{64}", target)):
+            return False
+        for key, status in (("miss_page", "failed"), ("matched_page", "passed")):
+            if key in observation and not (basis["version"] == 3 and observation["status"] == status
+                    and isinstance(observation[key], str) and re.fullmatch("[a-f0-9]{64}", observation[key])):
+                return False
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("action"), str) or row["action"] not in ALLOWED_ACTIONS:
+            return False
+        if not isinstance(row.get("id"), str) or not _STEP_ID.fullmatch(row["id"]):
+            return False
+        if "input_token" in row and not (basis["version"] == 3 and
+                (row["input_token"] is None or (isinstance(row["input_token"], str)
+                                               and re.fullmatch("[a-f0-9]{64}", row["input_token"])))):
+            return False
+        if not isinstance(row.get("key"), str) or not re.fullmatch("[a-f0-9]{64}", row["key"]):
+            return False
+        if type(row.get("observation_only")) is not bool or not isinstance(row.get("fields"), dict) or _strategy_key(row["fields"]) != row["key"]:
+            return False
+        if any(not isinstance(value, str) or not re.fullmatch("[a-f0-9]{64}", value)
+               for value in row["fields"].values()):
+            return False
+        if row["action"] in ASSERTION_ACTIONS and not (
+            type(row.get("dynamic")) is bool and isinstance(row.get("claim"), str) and _CLAIM_ID.fullmatch(row["claim"])
+            and isinstance(row.get("proof"), str) and re.fullmatch("[a-f0-9]{64}", row["proof"])
+        ):
+            return False
+        if row["action"] not in ASSERTION_ACTIONS and ("proof" in row or "claim" in row):
+            return False
+        if row["action"] == "expect_dom" and (type(row.get("selector_count")) is not int or row["selector_count"] < 1):
+            return False
+    failed_proof = rows[failed].get("proof")
+    return failed_proof is None or observations.get(failed_proof, {}).get("status") == "failed"
+
+
+def dispatch_prefix(basis: dict, candidate: list[dict], *, alternatives=None) -> list[str]:
+    """Material step digests through the failed action, ignoring its unexecuted tail."""
+    failed = basis["steps"][basis["failed"]]
+    rows = [row for row in candidate if not row["observation_only"]]
+    choices = alternatives if alternatives is not None else [{row["key"]} for row in rows]
+    boundaries = [i for i, (row, keys) in enumerate(zip(rows, choices))
+                  if row["id"] == failed["id"] or failed["key"] in keys]
+    # A deletion, or an ambiguous replacement, can run once. If interrupted,
+    # it cannot supply a trustworthy boundary for admitting a second dispatch.
+    if len(boundaries) != 1:
+        return []
+    return [row["key"] for row in rows[:boundaries[0] + 1]]
+
+
+def strategy_changes(basis: dict, candidate: list[dict]) -> list[dict]:
+    """Edits through the failed step. A changed tail cannot justify another browser."""
+    # A standalone probe observes the page without changing the path to the failure.
+    previous = [r for r in basis["steps"][:basis["failed"] + 1] if not r["observation_only"]]
+    stop = len(previous)
+    candidate = [r for r in candidate if not r["observation_only"]][:stop]
+    old = [row["key"] for row in previous]
+    new = [row["key"] for row in candidate]
+    if old == new:
+        return []
+    if Counter(old) == Counter(new):
+        moved = [i for i, pair in enumerate(zip(old, new)) if pair[0] != pair[1]]
+        return [{"change": "reorder", "previous": [previous[i]["id"] for i in moved],
+                 "candidate": [candidate[i]["id"] for i in moved]}]
+    changes = []
+    for kind, i, j, k, end in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if kind != "equal" and i < stop:
+            change = {"change": kind, "previous": [r["id"] for r in previous[i:j]],
+                      "candidate": [r["id"] for r in candidate[k:end]]}
+            if kind == "replace" and j - i == end - k == 1:
+                before, after = previous[i]["fields"], candidate[k]["fields"]
+                change["fields"] = sorted(field for field in before.keys() | after.keys() if before.get(field) != after.get(field))
+            changes.append(change)
+    return changes
+
+
 def navigation_error(url: str, policy: Mapping | None) -> str | None:
     """Why a `goto` target is refused, or None when it may be opened.
 
@@ -735,6 +1105,11 @@ def _step_errors(
         errors.append(f"{where}: upload needs `file`, a project-relative path with forward slashes and no `..`")
     if action == "expect_url" and not any(k in step for k in ("contains", "equals", "matches")):
         errors.append(f"{where}: expect_url needs contains|equals|matches")
+    if action == "expect_url" and "equals" in step:
+        try:
+            urlsplit(urljoin(str(policy.get("base_url") or ""), str(step["equals"])))
+        except ValueError:
+            errors.append(f"{where}: expect_url.equals is malformed")
     return errors, asserted
 
 

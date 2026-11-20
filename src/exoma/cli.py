@@ -400,11 +400,23 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
         return {
             "ok": True,
             "content": f"execution open for plan {begun['execution']['plan_id']}; scope {len(scope)} path(s)",
-            "meta": begun["execution"],
+            "meta": {**begun["execution"], "selection_version": 1},
         }
 
-    ended = execution.end_execution(project_root, session_id)
+    selection = None
+    if task:
+        try:
+            selection = json.loads(task)
+            if not isinstance(selection, dict):
+                raise ValueError("expected a selection object")
+        except ValueError as exc:
+            return make_error("test_input_invalid", f"invalid execute-end selection: {exc}",
+                              next_action="Correct the selection JSON and retry execute-end.")
+    ended = execution.end_execution(project_root, session_id, selection=selection)
     if not ended["ok"]:
+        if ended.get("reason") == "selection_invalid":
+            return make_error("test_input_invalid", ended["error"],
+                              next_action="Correct the selection for the active execution and retry execute-end.")
         return make_error(
             "execution_not_active",
             ended["error"],
@@ -416,6 +428,7 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
     required = settings["auto_verify_after_execute"]
     metadata = {
         **closed,
+        "coverage_status": "pending" if "selection" in closed else "unknown",
         "policy": {"auto_verify_after_execute": required, "verify_mode": settings["verify_mode"]},
         "config_warnings": config_warnings,
         "next_step": {

@@ -66,6 +66,18 @@ downloads Chromium, and exits nonzero with the command to run when either step f
 `uv tool install "exoma[e2e]"` (or `uv tool install --reinstall --with playwright==<pin> exoma`)
 keeps Playwright across `uv tool upgrade`; with pipx, `pipx inject` already does.
 
+When you run `exoma update` in a uv tool that includes Playwright, the new Exoma
+installer checks regular Chromium and launches its headless shell. It downloads the
+browser for the Playwright version selected by uv if the executable is missing.
+Set `PLAYWRIGHT_BROWSERS_PATH` to the same absolute location for updates and browser
+verification when using a custom shared cache. Core-only installations skip this step.
+
+Running `uv tool upgrade exoma` directly skips Exoma's refresh. If Chromium is missing
+afterward, use the Python executable from the Exoma tool environment to run
+`-I -m playwright install chromium`. This preserves the resolved Playwright version.
+If uv removed an older `uv pip` injection and the tool has no Playwright requirement,
+use `exoma install --with-e2e` to restore Exoma's pinned package and Chromium.
+
 ### 2. Install for your host
 
 ```bash

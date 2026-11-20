@@ -18,6 +18,10 @@ from exoma.core.evidence.e2e.spec import (
     spec_gap,
     spec_repair_prompt,
     step_selectors,
+    comparable_strategy,
+    assertion_observations,
+    strategy_changes,
+    strategy_steps,
     substitute_env,
     validate_existing_tests,
     validate_read_only_requests,
@@ -60,7 +64,116 @@ def _reply(scenario: dict, *, with_section: bool = True) -> str:
     return head + body + "[DIGEST]\nsummary: one claim.\nconfidence: high\n"
 
 
+def _check_receipt_inputs() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+    from exoma.config import settings
+    from exoma.core.runtime.state import browser_receipt_key, e2e_dispatch_reserved
+    from exoma.core.evidence.e2e.spec import dispatch_prefix
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "project"
+        profile = Path(tmp) / "profile"
+        with patch.object(settings, "DATA_DIR", profile):
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                keys = list(pool.map(browser_receipt_key, [project] * 3))
+            assert_true(keys[0] and keys.count(keys[0]) == 3, "concurrent receipts bind the same private key")
+            assert_true(browser_receipt_key(profile) is None, "project-local key storage is excluded")
+        title = {"id": "title", "action": "expect_title", "equals": "${E2E_USER}", "claim_id": "login"}
+        scenario = {"steps": [_SCENARIO["steps"][2], title]}
+        values = {"E2E_USER": "xy", "E2E_PASS": "fixture-secret"}
+        base = "http://app.test"
+
+        def row(scope, inputs, key):
+            return strategy_steps(scenario, base, receipt_key=key, receipt_scope=scope, values=inputs)[-1]
+
+        expected = row(("session", base), values, keys[0])
+        for changed in (row(("other", base), values, keys[0]),
+                        row(("session", base), dict(values, E2E_PASS="other"), keys[0]),
+                        row(("session", base), values, None)):
+            assert_true(expected["input_token"] != changed["input_token"], "receipt binds session and prior flow inputs")
+        event = {"type": "progress", "status": "failed", "step_id": "title", "url_after": base,
+                 "stable_assertion_page": True, "error": {"kind": "assertion"}}
+        display = dict(event, url_after=base + "/users/${E2E_USER}")
+        def target(path, key, scope=("session", base)):
+            raw = dict(event, url_after=base + path)
+            return assertion_observations([expected], [display], base, raw_events=[raw], receipt_key=key,
+                                          receipt_scope=scope)[expected["proof"]]["target"]
+
+        account = target("/users/fixture-a", keys[0])
+        assert_true(account and account == target("/users/fixture-a", keys[0]) and
+                    account != target("/users/fixture-b", keys[0]) and
+                    account != target("/users/fixture-a", keys[0], ("other", base)) and
+                    target("/users/fixture-a", None) is None, "private page receipt binds raw URL, scope and key")
+        url_row = dict(expected, action="expect_url")
+        def url_target(actual, status="passed", error=None):
+            observed = dict(event, status=status, url_after="http://later.test/page", actual=actual, error=error)
+            observed.pop("stable_assertion_page")
+            return assertion_observations([url_row], [observed], base)[url_row["proof"]]["target"]
+
+        failed_origin = url_target({"url": base + "/old"}, "failed", {"kind": "assertion"})
+        assert_true(failed_origin and failed_origin == url_target({"url": base + "/repaired"}) and
+                    failed_origin != url_target({"url": "http://other.test/repaired"}),
+                    "URL evidence uses the predicate sample, including when a later redirect changes origin")
+        assert_true(url_target({}) is None and url_target({"url": "about:blank"}) is None and
+                    url_target({"url": base}, "failed", {"kind": "not_ready"}) is None,
+                    "a URL receipt requires an observed predicate outcome")
+        for ev in (dict(event, stable_assertion_page=False), dict(event, error={"kind": "not_ready"})):
+            obs = assertion_observations([expected], [ev], base)
+            assert_true(obs[expected["proof"]]["target"] is None, "only an observed title on a stable page is evidence")
+        selector = {"e2e": "${E2E_PASS}"}
+        for gate in ({"action": "wait_dom", "selector": selector},
+                     {"action": "probe", "ready": [{"visible": selector}]},
+                     {"action": "goto", "url": "/login", "ready": [{"visible": selector}]}):
+            scenario["steps"] = [dict(gate, id="gate"), title]
+            original = row(("session", base), values, keys[0])
+            different = row(("session", base), dict(values, E2E_PASS="other"), keys[0])
+            assert_true(original["input_token"] != different["input_token"],
+                        f"{gate['action']} readiness binds its effective input")
+            scenario["steps"][0] = {"action": "probe", "id": "gate"}
+            assert_true(original["proof"] != row(("session", base), values, keys[0])["proof"],
+                        "removing a prerequisite changes the proof")
+
+        steps = strategy_steps(_SCENARIO, base)
+        basis = {"steps": steps, "failed": 3}
+        shifted = [*steps[1:4], steps[4]]
+        prefix = dispatch_prefix(basis, shifted)
+        assert_true(prefix == [step["key"] for step in steps[1:4]], "deleting an earlier step shifts the boundary")
+        for candidate in (shifted[:3], [*shifted[:3], steps[0]], shifted[:2]):
+            assert_true(e2e_dispatch_reserved({"admitted": [prefix]}, dispatch_prefix(basis, candidate)),
+                        "tail edits and an ambiguous boundary cannot replay a dispatch")
+        assert_true(e2e_dispatch_reserved({"admitted": "a" * 64}, prefix),
+                    "a legacy interrupted reservation cannot prove a new candidate is distinct")
+
+
 def _test_e2e_spec_contract() -> None:
+    _check_receipt_inputs()
+    base = "http://app.test"
+    rows = strategy_steps(_SCENARIO, base)
+    assert_true(rows == strategy_steps(_SCENARIO, base + ":80"), "proofs and prefix keys fold the default port")
+    assert_true(rows != strategy_steps(_SCENARIO, base + ":8080"), "non-default origins retain distinct proofs")
+    basis = {"version": 2, "failed": len(rows) - 1, "steps": rows,
+             "observations": {rows[-1]["proof"]: {"status": "failed", "target": "a" * 64}}, "run": "source", "attempt": 1}
+    assert_true(comparable_strategy(basis) and not comparable_strategy(dict(basis, version=9))
+                and not comparable_strategy(dict(basis, failed=999)), "legacy/partial strategy cannot release a brake")
+    malformed = [dict(rows[0], proof=rows[-1]["proof"]), *rows[1:]]
+    assert_true(not comparable_strategy(dict(basis, steps=malformed)), "an action cannot supply assertion evidence")
+    changed = json.loads(json.dumps(_SCENARIO))
+    submit = changed["steps"][-2]
+    submit["selector_candidates"] = [{"selector": submit.pop("selector"), "selector_provenance": {"type": "heuristic"}}]
+    changed["steps"][-1]["id"] = "new-id"
+    changed["steps"][-1]["matches"] = "ignored-after-contains"
+    assert_true(strategy_changes(basis, strategy_steps(changed, base)) == [],
+                "equivalent selector spelling, rename and ineffective match fields are cosmetic")
+    submit["ready"] = [{"enabled": {"role": "button", "name": "Masuk"}}]
+    assert_true(strategy_changes(basis, strategy_steps(changed, base))[0]["previous"] == ["submit"],
+                "changed readiness on a prerequisite is material")
+    changed["steps"].pop(-2)
+    assert_true(strategy_changes(basis, strategy_steps(changed, base))[0]["change"] == "delete",
+                "removal of an executed prerequisite is material")
+    changed["steps"][1:3] = reversed(changed["steps"][1:3])
+    assert_true(strategy_steps(changed, base)[-1]["proof"] != rows[-1]["proof"],
+                "a different action path cannot discharge an old assertion")
     parsed = parse_spec(_reply(_SCENARIO))
     assert_true(parsed["present"] and not parsed["errors"], f"a well-formed reply parses cleanly: {parsed['errors']}")
     assert_true(parsed["claims"][0]["source_refs"] == ["src/pages/Login.tsx:12", "src/routes/auth.ts:40"], "source_refs split on commas")

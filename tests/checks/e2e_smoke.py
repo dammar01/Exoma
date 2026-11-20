@@ -22,13 +22,15 @@ import threading
 import time
 from pathlib import Path
 from urllib.parse import quote, quote_plus
+from unittest.mock import patch
 
 from exoma.core.evidence.e2e import preflight as e2e_preflight
+from exoma.core.evidence.e2e.redact import redact_text, scrub_resolved
 from exoma.core.evidence.e2e.request import request_path
 from exoma.core.evidence.e2e.runner import FAKE_ENV
 from exoma.core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
 from exoma.core.provider.executor import Executor
-from exoma.core.runtime.state import ensure_workflow_workspace
+from exoma.core.runtime.state import E2E_REPEAT_LIMIT, ensure_workflow_workspace
 from tests.checks.e2e_routing import _REVIEW_CLEAN
 from tests.checks.support import assert_true
 from tests.checks.support import no_console
@@ -214,6 +216,16 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/_ready_start":
+            return _send(self, 200, b"<script>setTimeout(() => location.replace('/_w2_account'), 400)</script>",
+                         "text/html")
+        if path == "/_w2_start":
+            self.send_response(302)
+            self.send_header("Location", self.server.retry_route)
+            self.end_headers()
+            return
+        if path in ("/_w2_account", "/_w2_other") or path.startswith("/_w2_users/"):
+            return _send(self, 200, self.server.retry_page.encode(), "text/html; charset=utf-8")
         if path == "/boom":
             return _send(self, 503, b"down", "text/plain")
         if path == "/hang":
@@ -259,8 +271,8 @@ class _ThirdPartyHandler(http.server.BaseHTTPRequestHandler):
         return _send(self, 503, b"down", "text/plain")
 
 
-def _serve(handler) -> tuple[http.server.ThreadingHTTPServer, str]:
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+def _serve(handler, port=0) -> tuple[http.server.ThreadingHTTPServer, str]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"
 
@@ -290,6 +302,89 @@ def _leaks(result: dict, directory: Path) -> list[str]:
     return found
 
 
+def _check_assertion_navigation_windows(base):
+    """Deliver real frame navigations at the polling boundary without wall-clock races."""
+    from playwright.sync_api import sync_playwright
+    from exoma.core.evidence.e2e.browser import Session
+    from exoma.core.evidence.e2e.spec import assertion_observations, strategy_steps
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        for action in ("expect_dom", "expect_title"):
+            for phase in ("ready", "predicate", "after"):
+                page = browser.new_page()
+                page.goto(base + "/login.html")
+                landing = base + "/dashboard.html"
+                def land():
+                    page.goto(landing)
+                    page.set_content('<title>Dashboard ready</title><p data-e2e="proof">Ready</p>')
+                if phase == "after":
+                    land()
+                events = []
+                session = Session(page, {"base_url": base, "step_timeout_ms": 2000}, events.append)
+                page.on("framenavigated", session.on_frame_navigated)
+                # One poll on the starting page, then navigate synchronously.
+                session.pause = land
+                step = {"id": "proof", "claim_id": "login", "action": action}
+                if action == "expect_title":
+                    step["equals"] = "Dashboard ready"
+                else:
+                    step["selector"] = {"e2e": "proof"}
+                if phase == "ready":
+                    step["ready"] = [{"url": "/dashboard.html"}]
+                if phase == "after":
+                    execute = session._execute
+                    def navigate_after(step, step_id):
+                        outcome = execute(step, step_id)
+                        page.goto(base + "/login.html")
+                        return outcome
+                    session._execute = navigate_after
+                scenario = {"steps": [step]}
+                session.run(scenario)
+                event = next(e for e in events if e["type"] == "progress")
+                rows = strategy_steps(scenario, base)
+                obs = assertion_observations(rows, events, base)[rows[0]["proof"]]
+                assert_true(event["status"] == "passed" and event["url_after"] == landing
+                            and bool(obs["target"]) == (phase != "predicate"),
+                            f"{action} navigation during {phase} binds only a stable landing page")
+                page.close()
+        browser.close()
+
+
+def _assert_wrong_text_control(result, report, files):
+    claim = (report.get("claims") or {}).get("login") or {}
+    failures = report.get("failures") or []
+    missing = {"step02.html", "step02.png", "trace.zip"} - files
+    exit_code = _verify_exit_code("verify", result)
+    if (report.get("browser_verdict") == "fail" and exit_code == 2 and claim.get("origin") == "app"
+            and any(f.get("claim_id") == "login" and f.get("error_kind") == "assertion" for f in failures)
+            and not missing):
+        return
+
+    # The fixture removes the temporary workspace. Keep just the two steps'
+    # diagnostics in the assertion message that the test runner archives.
+    def fields(row, *keys):
+        selected = {}
+        for key in keys:
+            value = row.get(key)
+            if isinstance(value, str):
+                clean = scrub_resolved(value, {"E2E_USER": USER, "E2E_PASS": PASSWORD})
+                value = redact_text(clean)[0][:200]
+            if value is None or isinstance(value, (str, bool, int)):
+                selected[key] = value
+        return selected
+
+    diagnostic = {
+        **fields(result.get("meta") or {}, "verdict"), "exit_code": exit_code,
+        **fields(report, "browser_verdict", "reason", "finished"),
+        "claim": fields(claim, "status", "origin", "step"),
+        "trail": [fields(row, "step_id", "action", "status", "error") for row in (report.get("trail") or [])[-2:]],
+        "failures": [fields(row, "step_id", "origin", "error_kind", "detail") for row in failures[:2]],
+        "cleanup": fields(report.get("cleanup") or {}, "status"), "missing_captures": sorted(missing),
+    }
+    raise AssertionError("wrong-text DOM control: " + json.dumps(diagnostic))
+
+
 def _test_e2e_real_browser_smoke() -> None:
     if os.environ.get(SMOKE_ENV) != "1":
         print(f"  e2e-smoke: skipped (set {SMOKE_ENV}=1 to drive real Chromium)")
@@ -310,12 +405,14 @@ def _test_e2e_real_browser_smoke() -> None:
         os.environ["E2E_USER"] = USER
         os.environ["E2E_PASS"] = PASSWORD
         before = _playwright_browser_processes()
+        _check_assertion_navigation_windows(base)
 
-        def case(steps: list[dict], cleanup: list[dict] | None = None, **e2e) -> tuple[dict, dict, set[str], Path]:
+        def case(steps: list[dict], cleanup: list[dict] | None = None, *, root: Path | None = None, **e2e) -> tuple[dict, dict, set[str], Path]:
             steps = [dict(step, id=step.get("id") or f"step-{n}") for n, step in enumerate(steps, 1)]
-            root = Path(tempfile.mkdtemp(prefix="e2e-smoke-"))
-            roots.append(root)
-            ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
+            if root is None:
+                root = Path(tempfile.mkdtemp(prefix="e2e-smoke-"))
+                roots.append(root)
+                ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
             request = request_path(root, "e2e-smoke")
             request.parent.mkdir(parents=True, exist_ok=True)
             request.write_text(
@@ -332,6 +429,7 @@ def _test_e2e_real_browser_smoke() -> None:
             result = Executor(adapter=_Reviewer()).execute("verify-browser", "smoke", {"session_id": "e2e-smoke"}, str(root))
             assert_true(result["meta"].get("command") == "verify", f"a run request is judged as a verification: {result['meta']}")
             result = _finalize_verify_result("verify", result)
+            assert_true("artifacts" in result["meta"]["e2e"], f"browser run stopped before playback: {result['content']}")
             directory = Path(result["meta"]["e2e"]["artifacts"])
             report = json.loads((directory / "report.json").read_text(encoding="utf-8"))
             return result, report, {p.name for p in directory.iterdir() if p.is_file()}, directory
@@ -345,6 +443,45 @@ def _test_e2e_real_browser_smoke() -> None:
                 {"selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
             ]},
         ]
+
+        # Where the loopback default port is available, exercise both regressions in
+        # one real CLI verdict. Else run the readiness flow on the isolated fixture.
+        try:
+            default_app, explicit = _serve(app.RequestHandlerClass, port=80)
+        except OSError:
+            default_app, explicit = None, base
+        try:
+            server = default_app or app
+            implicit = "http://127.0.0.1" if default_app else base
+            start = {"id": "open", "action": "goto", "url": "/_ready_start"}
+            title = {"id": "assert-dashboard", "action": "expect_title", "equals": "Dashboard",
+                     "claim_id": "login", "ready": [{"url": "/_w2_account"}]}
+            other = {"id": "url", "action": "expect_url", "contains": "127.0.0.1", "claim_id": "login"}
+            server.retry_page = "<title>Pending</title>"
+            history_root = None
+            for _ in range(E2E_REPEAT_LIMIT):
+                case([start, other, title], root=history_root, base_url=implicit, step_timeout_ms=1500)
+                history_root = roots[-1]
+            if default_app:
+                # The separate navigation policy compares literal authorities. Chromium
+                # reports the implicit port when configured with the explicit spelling.
+                config_path = history_root / ".workflow" / "config.json"
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                config.setdefault("e2e", {})["allowed_origins"] = [implicit]
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+            partial, report, _, _ = case([start, other], root=history_root, base_url=explicit)
+            assert_true(report["browser_verdict"] == "pass" and _verify_exit_code("verify", partial) == 2 and
+                        any(g["step"] == title["id"] for g in report["coverage_gaps"]),
+                        "a changed base spelling must retain the removed title")
+            server.retry_page = "<title>Dashboard</title>"
+            recovered, report, _, _ = case([start, other, title], root=history_root, base_url=explicit)
+            assert_true(_verify_exit_code("verify", recovered) == 0 and not report["coverage_gaps"],
+                        "Chromium proves the restored title after its ready redirect")
+            print("  ready redirect and retained assertion: exit 2 -> 0 (" + implicit + " -> " + explicit + ")")
+        finally:
+            if default_app:
+                default_app.shutdown()
+                default_app.server_close()
 
         # --- a clean flow passes; the page echoes the typed address and nothing keeps it ----------
         result, report, files, directory = case([
@@ -368,6 +505,45 @@ def _test_e2e_real_browser_smoke() -> None:
         )
         assert_true(_leaks(result, directory) == [], f"no raw or encoded credential anywhere: {_leaks(result, directory)}")
 
+        # Echo the same short input into the redirect, assertion text and DOM probe.
+        from exoma.core.evidence.e2e import runner
+        secret = "j@"
+        app.retry_route = "/_w2_users/" + quote(secret, safe="")
+        app.retry_page = f'<h1 data-e2e="welcome">Welcome {secret}</h1>'
+        with patch.dict(os.environ, {"E2E_USER": secret}), \
+                patch.object(runner.e2e_current, "e2e_event", wraps=runner.e2e_current.e2e_event) as live, \
+                patch.object(_Reviewer, "run", autospec=True, side_effect=_Reviewer.run) as review:
+            protected, public_report, _, protected_dir = case([
+                {"id": "start", "action": "goto", "url": "/_w2_start?user=${E2E_USER}"},
+                {"id": "inspect", "action": "probe"},
+                {"id": "welcome", "action": "expect_dom", "selector": {"e2e": "welcome"},
+                 "text": "${E2E_USER}", "claim_id": "login"},
+            ])
+        assert_true(public_report["browser_verdict"] == "pass" and live.called and review.called,
+                    "private DOM input proves its assertion through Chromium")
+        visible = [json.dumps(protected), str(live.call_args_list), str(review.call_args_list)]
+        visible += [p.read_text(encoding="utf-8") for p in protected_dir.rglob("*") if p.is_file()]
+        assert_true(all(secret not in value and quote(secret, safe="") not in value for value in visible),
+                    "live evidence, reviewer inputs, return value and artifacts protect the short credential")
+
+        # A single entry point redirects the same Chromium assertion to different pages.
+        route_steps = [
+            {"id": "start", "action": "goto", "url": "/_w2_start?user=${E2E_USER}"},
+            {"id": "title", "action": "expect_title", "equals": "Ready", "claim_id": "login"},
+        ]
+        route_root = None
+        with patch.dict(os.environ, {"E2E_USER": "a"}):
+            app.retry_page = "<title>Pending</title>"
+            for section in ("alpha", "beta", "gamma"):
+                app.retry_route = "/_w2_users/" + section
+                _, report, _, _ = case(route_steps, root=route_root, step_timeout_ms=500)
+                route_root = roots[-1]
+                assert_true(report["browser_verdict"] == "fail" and report["failures"][0]["url_after"] == "[withheld]",
+                            "Chromium records a failed title while withholding the redirect URL")
+            app.retry_page = "<title>Ready</title>"
+            _, report, _, _ = case(route_steps, root=route_root, step_timeout_ms=500)
+            assert_true(report["browser_verdict"] == "pass", "three different failed pages allow a fourth Chromium run")
+
         # --- the same flow failing: HTML kept and scrubbed, screenshot and trace withheld ---------
         result, report, files, directory = case([*login, {"action": "expect_url", "contains": "/settings", "claim_id": "login"}])
         assert_true(report["browser_verdict"] == "fail" and _verify_exit_code("verify", result) == 2, f"a failed assertion fails: {report['reason']}")
@@ -381,8 +557,130 @@ def _test_e2e_real_browser_smoke() -> None:
             {"action": "goto", "url": "/wrong_text.html"},
             {"action": "expect_dom", "selector": {"e2e": "banner"}, "selector_provenance": {"type": "source"}, "text": "Welcome back", "claim_id": "login"},
         ])
-        assert_true(report["browser_verdict"] == "fail" and report["claims"]["login"]["origin"] == "app", f"wrong text is the app's: {report['claims']}")
-        assert_true({"step02.html", "step02.png", "trace.zip"} <= files, f"page evidence and trace kept on failure: {sorted(files)}")
+        _assert_wrong_text_control(result, report, files)
+
+        # The same request can redirect to another page or resolve a fallback element.
+        # Only the original page and winning selector can discharge the omitted proof.
+        app.retry_route = "/_w2_account"
+        app.retry_page = '<div data-e2e="primary">Denied</div>'
+        retry_steps = [
+            {"id": "open", "action": "goto", "url": "/_w2_start"},
+            {"id": "status", "action": "expect_dom", "claim_id": "login", "text": "Granted",
+             "selector_candidates": [
+                 {"selector": {"e2e": "primary"}, "selector_provenance": {"type": "source"}},
+                 {"selector": {"css": "#fallback"}, "selector_provenance": {"type": "source"}},
+             ]},
+            {"id": "url", "action": "expect_url", "contains": "/_w2_", "claim_id": "login"},
+        ]
+        case(retry_steps, step_timeout_ms=500)
+        retry_root = roots[-1]
+        for _ in range(E2E_REPEAT_LIMIT - 1):
+            _, report, _, _ = case(retry_steps, root=retry_root, step_timeout_ms=500)
+            assert_true(report["browser_verdict"] == "fail", "the account status fails in Chromium")
+        result, report, _, _ = case([retry_steps[0], retry_steps[2]], root=retry_root, step_timeout_ms=500)
+        assert_true(report["browser_verdict"] == "pass" and result["meta"]["verdict"] == "incomplete"
+                    and report["coverage_gaps"][0]["step"] == "status" and report["repeat_released"]["by"] == "strategy_changed",
+                    "a real pass after deleting the account status keeps its coverage gap")
+        for route, page, expected in [
+            ("/_w2_other", '<div data-e2e="primary">Granted</div>', "incomplete"),
+            ("/_w2_account", '<div id="fallback">Granted</div>', "incomplete"),
+            ("/_w2_account", '<div data-e2e="primary">Granted</div>', "pass"),
+        ]:
+            app.retry_route, app.retry_page = route, page
+            result, report, _, _ = case(retry_steps, root=retry_root, step_timeout_ms=500)
+            assert_true(report["browser_verdict"] == "pass" and result["meta"]["verdict"] == expected
+                        and bool(report["coverage_gaps"]) == (expected == "incomplete"),
+                        f"restored assertion on {route} must match the observed target: {report['coverage_gaps']}")
+
+        # A missing element has no winning candidate. With exactly one declared
+        # locator there is still an identifiable target on the observed page.
+        sole = dict(retry_steps[1], selector={"e2e": "primary"}, selector_provenance={"type": "source"})
+        del sole["selector_candidates"]
+        single_steps = [retry_steps[0], sole, retry_steps[2]]
+        app.retry_page = "<main>Loading</main>"
+        missing_root = None
+        for _ in range(E2E_REPEAT_LIMIT):
+            _, report, _, _ = case(single_steps, root=missing_root, step_timeout_ms=500)
+            missing_root = roots[-1]
+            assert_true(report["browser_verdict"] == "fail" and report["failures"][0]["error_kind"] == "selector_missing",
+                        "the single grounded locator was missing on a settled page")
+        reduced, _, _, _ = case([retry_steps[0], retry_steps[2]], root=missing_root, step_timeout_ms=500)
+        assert_true(reduced["meta"]["verdict"] == "incomplete", "deleting the missing locator leaves a gap")
+        app.retry_page = '<div data-e2e="primary">Granted</div>'
+        restored, report, _, _ = case(single_steps, root=missing_root, step_timeout_ms=500)
+        assert_true(restored["meta"]["verdict"] == "pass" and report["coverage_gaps"] == [],
+                    "the reappearing element on the original page discharges the single-selector gap")
+
+        # No candidate existed during the failed run. Only the unchanged assertion
+        # on its original page can prove the repaired locator set.
+        missing_root = None
+        app.retry_page = "<main>Loading</main>"
+        user_path = f"/_w2_users/{quote(USER, safe='')}"
+        app.retry_route = user_path + "/profile"
+        private_dom_steps = [dict(retry_steps[0], url="/_w2_start?user=${E2E_USER}"), *retry_steps[1:]]
+        for _ in range(E2E_REPEAT_LIMIT):
+            case(private_dom_steps, root=missing_root, step_timeout_ms=500)
+            missing_root = roots[-1]
+        app.retry_page = '<div id="fallback">Granted</div>'
+        for section, expected in (("archive", "incomplete"), ("profile", "pass")):
+            app.retry_route = user_path + "/" + section
+            recovered, _, _, directory = case(private_dom_steps, root=missing_root, ignore_repeat_brake=True)
+            assert_true(recovered["meta"]["verdict"] == expected, f"all-candidate miss recovery on {section}")
+            assert_true(_leaks(recovered, directory) == [], "private DOM page identity stays out of artifacts")
+
+        expected_user = os.environ["E2E_USER"]
+        title_steps = [retry_steps[0],
+                       {"id": "ready", "action": "wait_dom", "selector": {"e2e": "${E2E_PASS}"},
+                        "selector_provenance": {"type": "source"}},
+                       {"id": "account-title", "action": "expect_title",
+                                       "equals": "${E2E_USER}", "claim_id": "login"}, retry_steps[-1]]
+        def profile(user, password, title, section="profile"):
+            app.retry_route = f"/_w2_users/{quote(user, safe='') if user == expected_user else 'test'}/{section}"
+            app.retry_page = f'<title>{title}</title><div data-e2e="{password}">Ready</div>'
+
+        profile(expected_user, PASSWORD, "Pending")
+        title_root = None
+        for _ in range(E2E_REPEAT_LIMIT):
+            case(title_steps, root=title_root, step_timeout_ms=500)
+            title_root = roots[-1]
+        try:
+            for user, password, section, expected in (
+                ("xy", PASSWORD, "profile", "incomplete"),
+                (expected_user, "other-test-input", "profile", "incomplete"),
+                (expected_user, PASSWORD, "archive", "incomplete"),
+                (expected_user, PASSWORD, "profile", "pass"),
+            ):
+                os.environ.update(E2E_USER=user, E2E_PASS=password)
+                profile(user, password, user, section)
+                recovered, report, _, directory = case(title_steps, root=title_root, ignore_repeat_brake=True)
+                assert_true(report["browser_verdict"] == "pass" and recovered["meta"]["verdict"] == expected,
+                            "historical title evidence binds the effective value on the original page")
+                assert_true(_leaks(recovered, directory) == [], "title receipts disclose no credential")
+                if user == "xy":
+                    assert_true('"title": "xy"' not in (directory / "events.jsonl").read_text(encoding="utf-8"),
+                                "a two-character dynamic title stays private")
+        finally:
+            os.environ.update(E2E_USER=expected_user, E2E_PASS=PASSWORD)
+
+        url_steps = [retry_steps[0], {"id": "account-url", "action": "expect_url", "claim_id": "login",
+                                     "contains": "/_w2_users/${E2E_USER}/"}]
+        app.retry_route = "/_w2_account"
+        url_root = None
+        try:
+            os.environ["E2E_USER"] = "fixture-account"
+            for _ in range(E2E_REPEAT_LIMIT):
+                _, report, _, _ = case(url_steps, root=url_root, step_timeout_ms=500)
+                url_root = roots[-1]
+                assert_true(report["browser_verdict"] == "fail", "the URL predicate observed the original redirect")
+            for account, expected in (("other-account", "incomplete"), ("fixture-account", "pass")):
+                os.environ["E2E_USER"] = account
+                app.retry_route = f"/_w2_users/{account}/repaired"
+                recovered, report, _, _ = case(url_steps, root=url_root, ignore_repeat_brake=True)
+                assert_true(report["browser_verdict"] == "pass" and recovered["meta"]["verdict"] == expected and
+                            _verify_exit_code("verify", recovered) == (0 if expected == "pass" else 2),
+                            "only the original dynamic URL input on the same origin resolves the historical gap")
+        finally:
+            os.environ["E2E_USER"] = expected_user
 
         # --- wrong redirect ---------------------------------------------------------------------------
         _, report, _, _ = case([
@@ -607,11 +905,27 @@ def _test_e2e_real_browser_smoke() -> None:
         )
 
         # --- a hung navigation: idle timeout, process tree killed, no browser left behind -----------
-        _, report, _, _ = case([
+        result, report, files, _ = case([
             {"action": "goto", "url": "/hang"},
             {"action": "expect_url", "contains": "/hang", "claim_id": "login"},
         ], idle_timeout_s=4, nav_timeout_ms=25000)
         assert_true(report["browser_verdict"] == "incomplete" and report["reason"] == "stuck", f"a hung page is stuck: {report['reason']}")
+        try:
+            # Exercise the failure message with a real unproven claim. Include a
+            # sensitive detail so the archived exception also checks redaction.
+            interrupted = dict(report, failures=[{"detail": USER + " " + quote_plus(PASSWORD) + "x" * 1000}])
+            _assert_wrong_text_control(result, interrupted, files)
+        except AssertionError as error:
+            message = str(error)
+            diagnostic = json.loads(message.removeprefix("wrong-text DOM control: "))
+            assert_true(diagnostic["claim"]["status"] == "unproven" and diagnostic["reason"] == "stuck"
+                        and diagnostic["browser_verdict"] == "incomplete" and diagnostic["exit_code"] == 2
+                        and "trail" in diagnostic and "cleanup" in diagnostic
+                        and USER not in message and quote_plus(PASSWORD) not in message
+                        and len(diagnostic["failures"][0]["detail"]) <= 200,
+                        "the failure log preserves a bounded, scrubbed explanation after fixture teardown")
+        else:
+            raise AssertionError("the wrong-text control accepted an unproven claim")
         time.sleep(2)
         after = _playwright_browser_processes()
         if before is not None and after is not None:

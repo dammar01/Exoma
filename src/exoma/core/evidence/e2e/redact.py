@@ -18,17 +18,16 @@ from __future__ import annotations
 
 import json
 import re
-from html import escape
+from html import escape, unescape
 from pathlib import Path
-from urllib.parse import quote, quote_plus, unquote, urlsplit
+from urllib.parse import quote, quote_plus, unquote, unquote_plus, urlsplit
 
 from exoma.core.workspace.workspace_paths import atomic_write_text
 from exoma.utils.redact import redact_value
 
 _VALUE_KEYS = frozenset({"value", "password", "secret", "token"})
-# Shorter resolved values are not scrubbed by substring: replacing every "ab" in a
-# report would corrupt URLs and selectors while protecting nothing a 2-character
-# credential could not already be guessed from.
+# Short values need field-aware output redaction. The input-literal scanner uses
+# a separate policy so a common character cannot rewrite a scenario identifier.
 MIN_SCRUB_CHARS = 4
 # Every text form a player could leave behind, not only the HTML it writes today: a file
 # this list misses is stored with whatever resolved value it holds. Binaries (PNG, ZIP)
@@ -112,7 +111,7 @@ def _variants(value: str) -> set[str]:
     for form in list(forms):
         if "%" in form:
             forms.add(re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), form))
-    return {form for form in forms if len(form) >= MIN_SCRUB_CHARS}
+    return forms
 
 
 def scrub_resolved(payload: object, env_values: dict[str, str]) -> object:
@@ -135,26 +134,38 @@ def scrub_resolved(payload: object, env_values: dict[str, str]) -> object:
         key=lambda item: len(item[0]),
         reverse=True,
     )
-    if not pairs:
+    short = {form for value in env_values.values() if isinstance(value, str) and 0 < len(value) < MIN_SCRUB_CHARS
+             for form in _variants(value)}
+    if not pairs and not short:
         return payload
 
-    def visit(item, key=None):
+    def visit(item, path=(), event=False):
         if isinstance(item, str):
-            # A step id or a claim id comes from the placeholder scenario, never from the
-            # page, and a credential that is an ordinary word would otherwise turn the step
-            # `fill-password` into `fill-${E2E_PASS}` in every event, report and signature.
-            if key in _RESOLVED_STRUCTURAL_KEYS:
+            # Only protocol positions are trusted. A DOM probe can itself contain
+            # an input's "type" or "id", which is page data and must be scrubbed.
+            if event and (len(path) == 1 and path[0] in _RESOLVED_STRUCTURAL_KEYS
+                          or path in (("error", "kind"), ("selection", "selector_keys"))):
+                return item
+            if event and path == ("method",) and item in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
                 return item
             for value, placeholder in pairs:
                 if value in item:
                     item = item.replace(value, placeholder)
+            if short:
+                decoded = unescape(unquote(item))
+                form_decoded = unescape(unquote_plus(item))
+                if any(form in item or form in decoded or form in form_decoded for form in short):
+                    return "[withheld]"
             return item
         if isinstance(item, dict):
-            return {visit(k) if isinstance(k, str) else k: visit(v, k) for k, v in item.items()}
+            # The player and browser probe have fixed keys. For generic mappings,
+            # an echoed value can appear in the key as well as the field value.
+            event = event or (not path and isinstance(item.get("type"), str))
+            return {k if event else visit(k): visit(v, (*path, k), event) for k, v in item.items()}
         if isinstance(item, list):
-            return [visit(child, key) for child in item]
+            return [visit(child, path, event) for child in item]
         if isinstance(item, tuple):
-            return tuple(visit(child, key) for child in item)
+            return tuple(visit(child, path, event) for child in item)
         return item
 
     return visit(payload)
@@ -254,11 +265,12 @@ def scrub_literals(payload: object, env_values: dict[str, str]) -> tuple[object,
     return clean, sorted(found)
 
 
-_RESOLVED_STRUCTURAL_KEYS = frozenset({"step_id", "id", "claim_id", "cleans", "action", "type", "kind", "after_step"})
+_RESOLVED_STRUCTURAL_KEYS = frozenset({"step_id", "id", "claim_id", "cleans", "action", "type", "kind", "after_step",
+                                      "status", "reason", "phase", "attribution", "selector_provenance"})
 
 
 def scrub_text_files(
-    directory: Path, env_values: dict[str, str], failures: list[dict] | None = None
+    directory: Path, env_values: dict[str, str], failures: list[dict] | None = None, *, scenario=None
 ) -> list[dict]:
     """Scrub player-written text artifacts in place: resolved values back to placeholders,
     then the shared secret scanner. Returns the scanner's hits for the audit trail.
@@ -278,8 +290,15 @@ def scrub_text_files(
     hits_all: list[dict] = []
     for path in paths:
         try:
+            if scenario is not None and path == directory / "spec.json":
+                # Project tests ran after publication. Restore the trusted placeholder
+                # scenario instead of exempting a file based only on its name.
+                hits_all.extend(write_json(path, scenario))
+                continue
             text = path.read_bytes().decode("utf-8", errors="ignore")  # a bounded capture may cut a character
             clean, hits = redact_value(scrub_resolved(text, env_values))
+            if clean == "[withheld]" and path.suffix.lower() in (".json", ".jsonl"):
+                clean = json.dumps(clean)
             atomic_write_text(path, str(clean))
         except OSError as exc:
             # One unreadable file must not leave the rest unscrubbed, nor survive itself.

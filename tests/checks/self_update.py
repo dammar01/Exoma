@@ -25,8 +25,12 @@ REPO = Path(__file__).resolve().parents[2]
 def _test_self_update() -> None:
     handoff = os.environ.get("EXOMA_UPDATE_HANDOFF_SMOKE") == "1"
     historical = os.environ.get("EXOMA_UPDATE_UPGRADE_SMOKE") == "1"
-    if handoff and historical:
-        raise ValueError("historical upgrade smoke and strict handoff are separate modes")
+    browser_house = os.environ.get("EXOMA_UPDATE_BROWSER_WHEELHOUSE")
+    if sum((handoff, historical, bool(browser_house))) > 1:
+        raise ValueError("historical upgrade, browser upgrade and strict handoff are separate modes")
+    if browser_house:
+        _check_browser_wheel_upgrade(Path(browser_house))
+        return
     if handoff:
         _check_handoff_wheel_upgrade()
         return
@@ -434,6 +438,99 @@ def _check_workflow_refresh() -> None:
             _assert_migrated_user_data(run, home, project)
 
 
+def _uv_upgrade_env(root: Path, home: Path) -> dict:
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith(("EXOMA_", "WORKFLOW_", "AGENT_", "UV_", "PIP_", "XDG_",
+                                       "CLAUDE_", "GEMINI_", "OPENCODE_"))
+        and key.upper() not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "CODEX_HOME")
+    }
+    for key, folder in {
+        "HOME": home, "USERPROFILE": home, "AGENT_HOME": home,
+        "EXOMA_HOME": root / "exoma-state", "APPDATA": home / "AppData/Roaming",
+        "LOCALAPPDATA": home / "AppData/Local", "UV_TOOL_DIR": root / "tools",
+        "UV_TOOL_BIN_DIR": root / "bin", "UV_CACHE_DIR": root / "cache",
+        "UV_CONFIG_DIR": root / "uv-config", "XDG_CONFIG_HOME": home / ".config",
+        "XDG_DATA_HOME": home / ".local/share", "XDG_CACHE_HOME": home / ".cache",
+    }.items():
+        folder.mkdir(parents=True, exist_ok=True)
+        env[key] = str(folder)
+    env.update(UV_NO_CONFIG="1", UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_LINK_MODE="copy",
+               PATH=str(root / "bin") + os.pathsep + env.get("PATH", ""))
+    return env
+
+
+def _check_browser_wheel_upgrade(wheelhouse: Path) -> None:
+    """Exercise the published worker and its fresh installer with two real uv resolutions."""
+    from exoma.config.settings import TOOL_VERSION
+
+    baseline = wheelhouse / "before/exoma-1.1.2-py3-none-any.whl"
+    candidate = Path(os.environ["EXOMA_UPDATE_WHEEL"]).resolve()
+    assert_true(hashlib.sha256(baseline.read_bytes()).hexdigest() ==
+                "a755330e3977429da65994e249074d0f7465656fd76bab1651f5de70c9f3ec2e",
+                "the caller and the copied update worker come from the published v1.1.2 wheel")
+    uv = shutil.which("uv")
+    assert_true(uv, "the browser upgrade fixture needs uv")
+    with tempfile.TemporaryDirectory(prefix="exoma-browser-upgrade-") as tmp:
+        root = Path(tmp).resolve()
+        wheels, home, project = root / "index", root / "home", root / "project"
+        project.mkdir()
+        shutil.copytree(baseline.parent, wheels)
+        env = _uv_upgrade_env(root, home)
+        env.update(PLAYWRIGHT_BROWSERS_PATH=str(root / "browsers"), WORKFLOW_E2E_SMOKE="1")
+        target = root / "tools/exoma"
+        python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        exe = root / "bin" / ("exoma.exe" if os.name == "nt" else "exoma")
+
+        def run(argv, expected=0):
+            result = subprocess.run(argv, env=env, cwd=project, capture_output=True,
+                                    encoding="utf-8", errors="replace", timeout=900, **no_console())
+            assert_true(result.returncode == expected, (result.stdout + result.stderr)[-3500:])
+            return result.stdout
+
+        browser_probe = """
+from importlib.metadata import version
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+import sys
+assert version("playwright") == sys.argv[1]
+with sync_playwright() as pw:
+    assert sys.argv[2] in Path(pw.chromium.executable_path).parts
+    pw.chromium.launch(headless=True).close()
+"""
+        run([uv, "tool", "install", "exoma", "--with", "playwright", "--python", sys._base_executable,
+             "--no-index", "--find-links", wheels])
+        run([exe, "install", "claude", "--no-input", "--provider", "opencode"])
+        run([python, "-I", "-m", "playwright", "install", "chromium"])
+        run([python, "-I", "-c", browser_probe, "1.65.1", "chromium-1254"])
+        assert_true(not (root / "browsers/chromium-1255").exists(), "new revision absent before upgrade")
+        for path in (wheelhouse / "after").glob("*.whl"):
+            shutil.copyfile(path, wheels / path.name)
+        shutil.copyfile(candidate, wheels / candidate.name)
+        run([exe, "update", "--manager", "uv", "--timeout", "600"], expected=3)
+        state, state_path = _poll_handoff(root / "exoma-state", 720)
+        assert_true((state["version_before"], state["version_after"]) == ("1.1.2", TOOL_VERSION)
+                    and all(state["stages"][s]["exit_code"] == 0 for s in ("package", "probe", "install", "check")),
+                    "old worker completes transition, including refresh and check, without manual recovery")
+        run([python, "-I", "-c", browser_probe, "1.65.2", "chromium-1255"])
+        smoke = run([python, "-I", "-c",
+                     "import sys; sys.path.append(sys.argv[1]); "
+                     "from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke; _test_e2e_real_browser_smoke()",
+                     str(REPO)])
+        assert_true("ready redirect and retained assertion: exit 2 -> 0" in smoke,
+                    "installed candidate actually ran the Chromium loopback smoke")
+        output = run([exe, "update", "--manager", "uv", "--timeout", "600"], expected=3)
+        noop, noop_path = _poll_handoff(root / "exoma-state", 720)
+        assert_true(noop_path != state_path and noop_path.parent.name in output
+                    and noop["version_before"] == noop["version_after"] == TOOL_VERSION,
+                    "the second update completes as a separate warm-cache operation")
+        log = (noop_path.parent / "install.log").read_text(encoding="utf-8", errors="replace")
+        assert_true("headless Chromium launched" in log and "playwright install chromium" not in log,
+                    "warm refresh checked Chromium without another install")
+        print(f"Browser upgrade: 1.1.2 -> {TOOL_VERSION}; Chromium 1254 -> 1255; "
+              f"loopback smoke and warm update passed; candidate SHA256={hashlib.sha256(candidate.read_bytes()).hexdigest()}")
+
+
 def _check_installed_upgrade() -> None:
     """Opt-in artifact test: published baseline -> local wheel, with every write isolated."""
     from exoma.utils import osutil
@@ -457,24 +554,7 @@ def _check_installed_upgrade() -> None:
         for folder in (wheels, home, project):
             folder.mkdir()
         (wheels / baseline["filename"]).write_bytes(payload)
-        env = {
-            key: value for key, value in os.environ.items()
-            if not key.upper().startswith(("EXOMA_", "WORKFLOW_", "AGENT_", "UV_", "PIP_", "XDG_",
-                                           "CLAUDE_", "GEMINI_", "OPENCODE_"))
-            and key.upper() not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "CODEX_HOME")
-        }
-        for key, folder in {
-            "HOME": home, "USERPROFILE": home, "AGENT_HOME": home,
-            "EXOMA_HOME": root / "exoma-state", "APPDATA": home / "AppData/Roaming",
-            "LOCALAPPDATA": home / "AppData/Local", "UV_TOOL_DIR": root / "tools",
-            "UV_TOOL_BIN_DIR": root / "bin", "UV_CACHE_DIR": root / "cache",
-            "UV_CONFIG_DIR": root / "uv-config", "XDG_CONFIG_HOME": home / ".config",
-            "XDG_DATA_HOME": home / ".local/share", "XDG_CACHE_HOME": home / ".cache",
-        }.items():
-            folder.mkdir(parents=True, exist_ok=True)
-            env[key] = str(folder)
-        env.update(UV_NO_CONFIG="1", UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_LINK_MODE="copy",
-                   PATH=str(root / "bin") + os.pathsep + env.get("PATH", ""))
+        env = _uv_upgrade_env(root, home)
         exe = root / "bin" / ("exoma.exe" if os.name == "nt" else "exoma")
 
         def run(argv):

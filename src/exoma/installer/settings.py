@@ -713,23 +713,97 @@ def _install_e2e_deps(plan: Plan, apply: bool) -> str | None:
         plan.warn(f"--with-e2e: {E2E_BROWSER} download skipped because the playwright package is not installed")
         # An empty pin file asks for nothing, so nothing failed; only a failed step does.
         return failure
+    return _install_chromium(plan, apply)
+
+
+def _refresh_uv_chromium(plan: Plan) -> str | None:
+    from exoma.core.evidence.e2e.preflight import installed_playwright
+    from exoma.core.jobs.job_manager import uv_update_install_active
+
+    if installed_playwright() is None:
+        return None
+    try:
+        if not uv_update_install_active():
+            return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        message = f"could not confirm the browser refresh stage ({type(exc).__name__}); inspect the update log"
+        plan.warn(message)
+        return message
+
+    env = os.environ.copy()
+    cache = env.get("PLAYWRIGHT_BROWSERS_PATH")
+    if cache and cache != "0" and not Path(cache).is_absolute():
+        from exoma.core.evidence.e2e.runner import _AGENT_ROOT
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str((_AGENT_ROOT / cache).resolve())
+    code, detail = _probe_update_chromium(env)
+    if code == 2:  # Missing executable. A system-library or driver failure needs a different repair.
+        failure = _install_chromium(plan, True, update_env=env)
+        if failure:
+            plan.warn("The package update has already run. Retry the browser repair before checking the install.")
+            return failure
+        code, detail = _probe_update_chromium(env)
+    if code:
+        failure = f"package updated, Chromium launch check failed: {detail}"
+        if code == 2:
+            failure += f'; repair the same cache: "{sys.executable}" -I -m playwright install --force chromium'
+        plan.warn(failure)
+        return failure
+    plan.add("check", "Chromium", "regular executable present and headless Chromium launched")
+    return None
+
+
+# Isolate the optional driver's import and event loop in the upgraded tool's
+# interpreter. Headless launch can select a different binary from executable_path.
+_CHROMIUM_PROBE = """
+import sys
+from pathlib import Path
+from playwright.sync_api import Error, sync_playwright
+with sync_playwright() as pw:
+    if not Path(pw.chromium.executable_path).is_file():
+        print("Chromium executable missing")
+        sys.exit(2)
+    try:
+        pw.chromium.launch(headless=True, timeout=15000).close()
+    except Error as exc:
+        print(str(exc).splitlines()[0])
+        sys.exit(2 if "Executable doesn't exist" in str(exc) else 1)
+"""
+
+
+def _probe_update_chromium(env: dict) -> tuple[int, str]:
+    try:
+        probe = subprocess.run([sys.executable, "-I", "-c", _CHROMIUM_PROBE],
+                               capture_output=True, encoding="utf-8", errors="replace",
+                               env=env, timeout=30, **osutil.hidden_run_kwargs())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, f"could not run Chromium check ({type(exc).__name__})"
+    return probe.returncode, (probe.stderr or probe.stdout).strip()[-500:]
+
+
+def _install_chromium(plan: Plan, apply: bool, *, update_env=None) -> str | None:
     plan.add(
         "run",
         f"python -m playwright install {E2E_BROWSER}",
         "browser for /.verify-browser (large download, needs network)",
     )
     if apply:
+        # Old update workers use the isolated tool interpreter. Explicit installs
+        # also support pip installations whose dependencies live in the user site.
+        flags = ["-I"] if update_env is not None else []
+        command = [sys.executable, *flags, "-m", "playwright", "install", E2E_BROWSER]
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "playwright", "install", E2E_BROWSER],
+                command, env=update_env,
                 capture_output=True,
-                text=True,
+                encoding="utf-8", errors="replace",
                 **osutil.hidden_run_kwargs(),  # Windows: no console flash
             )
         except OSError as exc:
             result = SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()[-300:]
-            plan.warn(f"playwright install {E2E_BROWSER} failed: {detail}")
-            return f"playwright install {E2E_BROWSER} failed: {detail}; run: {sys.executable} -m playwright install {E2E_BROWSER}"
+            failure = (f"playwright install {E2E_BROWSER} failed: {detail}; "
+                       f'run with the same browser cache: "{sys.executable}" {" ".join(command[1:])}')
+            plan.warn(failure)
+            return failure
     return None

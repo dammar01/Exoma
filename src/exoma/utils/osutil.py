@@ -750,6 +750,7 @@ def run_bounded(
     tick_seconds: float = 20.0,
     *,
     inherit_output: bool = False,
+    env: dict[str, str] | None = None,
 ) -> tuple[int | None, str, str]:
     """Run `args` to completion or `timeout`; (returncode, stdout, stderr). None = timed out.
 
@@ -777,6 +778,7 @@ def run_bounded(
     proc = subprocess.Popen(
         args,
         cwd=cwd,
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=None if inherit_output else subprocess.PIPE,
         stderr=None if inherit_output else subprocess.PIPE,

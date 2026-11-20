@@ -169,6 +169,16 @@ def _test_e2e_classification_and_verdicts() -> None:
     assert_true(norm["declared"] == "DONE" and norm["verdict"] == "incomplete" and _agrees(norm), "no reviewer = honest gap")
     assert_true("hybrid review: not run" in norm["content"], "the missing review is named, not silently absent")
     assert_true(verify_exit_status(norm["verdict"], validate_verification_contract(norm["content"])) == 0, "a declared gap alone still exits 0")
+    from exoma.cli import _browser_exit_commands, _verify_exit_code, _finalize_verify_result
+    gap = {"claim": "login", "step": "status", "run": "earlier", "attempt": 1}
+    for report, expected in ((passing, "incomplete"), (failing, "fail")):
+        norm = to_verification({**report, "coverage_gaps": [gap]}, reviewer_content=clean_review)
+        result = _finalize_verify_result("verify", {"ok": True, "meta": {"command": "verify"}, "content": norm["content"]})
+        for command in ("verify-browser", "await", "result"):
+            payload = {"output": result} if command == "result" else result
+            name, job = _browser_exit_commands(command, payload, "verify-browser")
+            assert_true(result["meta"]["verdict"] == expected and _verify_exit_code(name, payload, job) == 2,
+                        f"{command} refuses incomplete historical coverage and preserves failures")
     norm = to_verification(failing, reviewer_error="invalid_evidence")
     assert_true(norm["verdict"] == "fail" and "hybrid review: not obtained" in norm["content"] and _agrees(norm), "a reviewer failure does not soften a browser fail")
 

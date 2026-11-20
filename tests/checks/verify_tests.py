@@ -57,6 +57,9 @@ def _verify(root: Path) -> tuple[dict, dict]:
 
 def _test_verify_runtime_tests() -> None:
     _check_verify_preparation()
+    _check_prepare_unicode_git_path()
+    _check_worker_selection()
+    _check_selection_roundtrip()
     _check_first_run_diagnostics()
     _check_diagnostic_limits_and_errors()
     _check_diagnostic_session_isolation()
@@ -149,6 +152,8 @@ def _test_verify_runtime_tests() -> None:
     _check_unrunnable_commands_never_crash()
     _check_tests_beat_the_heartbeat()
     _check_exited_runner_is_not_held_by_its_orphan()
+    if sys.platform == "linux":
+        _check_linux_zombie_state()
     _check_inherited_output_deadlines()
     _check_attached_windows_console()
 
@@ -310,6 +315,8 @@ def _check_diagnostic_session_isolation() -> None:
         with patch.object(verify_tests.osutil, "run_bounded", return_value=(1, "diagnostic", "")):
             with ThreadPoolExecutor(max_workers=3) as pool:
                 outcomes = list(pool.map(run, range(3)))
+        assert_true(all("log_ref" in out for out in outcomes),
+                    f"each concurrent writer publishes its log: {[out.get('log_error') for out in outcomes]}")
         refs = [Path(out["log_ref"]) for out in outcomes]
         assert_true(len(set(refs)) == 3 and all(p.is_file() for p in refs)
                     and refs[0].parent == refs[1].parent != refs[2].parent,
@@ -337,6 +344,238 @@ def _check_diagnostic_session_isolation() -> None:
 
 
 _REVIEW_NO_CHECKS = _REVIEW.replace("- traced the change and its callers", "- none")
+
+
+def _check_prepare_unicode_git_path() -> None:
+    """The repository location must not change prepare's selection identity."""
+    import subprocess
+
+    with tempfile.TemporaryDirectory(prefix="verify-prepare-path-") as tmp:
+        base = Path(tmp)
+        env = {**os.environ, "EXOMA_HOME": str(base / "data"),
+               "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}
+        identities = []
+        for name in ("work-a", "work-ā"):
+            root = base / name
+            subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console())
+            (root / "pending.txt").write_bytes(b"not in the object store yet")
+            objects = root / ".git" / "objects"
+            before = set(objects.rglob("*"))
+            proc = subprocess.run([sys.executable, "-X", "utf8=0", "-m", "exoma", "--command", "verify-prepare",
+                                   "--work-dir", str(root), "--session", "unicode-path"],
+                                  cwd=root, env=env, capture_output=True, timeout=60, **no_console())
+            assert_true(proc.returncode == 0, f"verify-prepare in {name!a}: {proc.stderr[-1500:]!r}")
+            result = json.loads(proc.stdout)
+            identity = result["meta"]["selection_input"]
+            assert_true(result["ok"] and identity, "prepare returns JSON with a usable Git-bound identity")
+            assert_true(set(objects.rglob("*")) == before, "prepare leaves the original object store untouched")
+            identities.append(identity)
+        assert_true(identities[0] == identities[1], "identical trees in ASCII and Unicode paths have the same identity")
+
+
+def _check_worker_selection() -> None:
+    """Keep the real worker, claim, child test and CLI exit; only the provider is offline."""
+    import shlex
+    import subprocess
+
+    command = f'"{sys.executable}" check_inputs.py'
+    root = _workspace([command])
+    try:
+        with tempfile.TemporaryDirectory(prefix="offline-verify-") as tmp:
+            home = Path(tmp)
+            provider = home / ("codex.cmd" if os.name == "nt" else "codex")
+            reply = home / "provider.py"
+            reply.write_text(
+                "import sys, json\n"
+                "if '--version' in sys.argv: print('codex-cli 0.163.0'); sys.exit()\n"
+                "sys.stdin.read()\n"
+                "print(json.dumps({'type':'thread.started','thread_id':'54e2ad21-4cdf-46be-94a7-336e0ceab350'}))\n"
+                f"print(json.dumps({{'type':'item.completed','item':{{'type':'agent_message','text':{_REVIEW!r}}}}}))\n",
+                encoding="utf-8")
+            if os.name == "nt":
+                launcher = f'@echo off\n"{sys.executable}" "{reply}" %*\n'
+            else:
+                launcher = f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(reply))} "$@"\n'
+            provider.write_text(launcher, encoding="utf-8")
+            provider.chmod(0o755)
+            (root / ".workflow/second_agent.json").write_text(json.dumps({
+                "provider": "codex", "provider_command": str(provider), "default_model": "fixture",
+            }), encoding="utf-8")
+            (root / "check_inputs.py").write_text(
+                "import os, pathlib\nassert 'WORKFLOW_JOB_WORKER' not in os.environ\n"
+                "with pathlib.Path('.workflow/test-observed').open('a') as log: log.write('x')\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console())
+            env = {**os.environ, "EXOMA_HOME": str(home / "data"), "CODEX_HOME": str(home),
+                   "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}
+
+            def cli(*args, code=0):
+                proc = subprocess.run([sys.executable, "-m", "exoma", "--work-dir", str(root),
+                                       "--session", session, *args], env=env, cwd=root, capture_output=True,
+                                      encoding="utf-8", errors="replace", timeout=90, **no_console())
+                assert_true(proc.returncode == code, f"{args}: {proc.stdout[-2000:]} {proc.stderr[-500:]}")
+                return json.loads(proc.stdout)
+
+            selection = {"version": 1, "execution_id": None, "tier": "targeted", "reason": "check worker",
+                         "obligations": [{"id": "child", "behavior": "child runs", "due": "verify",
+                                          "commands": [command]}]}
+            session = "syntax-check"
+            objects = root / ".git" / "objects"
+            config_path = workflow_paths(root)["config"]
+            original_config = config_path.read_bytes()
+            syntax_config = json.loads(original_config)
+            syntax_config["commands"]["verify_mode"] = "syntax"
+            config_path.write_text(json.dumps(syntax_config), encoding="utf-8")
+            before = set(objects.rglob("*"))
+            syntax = cli("--command", "verify-prepare")["meta"]
+            assert_true(syntax["policy"]["verify_mode"] == "syntax" and before == set(objects.rglob("*")),
+                        "syntax preparation leaves the repository object inventory intact")
+            config_path.write_bytes(original_config)
+            for entry, changed in (("await", False), ("await", True), ("submit", False), ("submit", True)):
+                session = f"s-{entry}-{int(changed)}"
+                env.pop("WORKFLOW_TEST_INPUT", None)
+                before = {p.relative_to(objects) for p in objects.rglob("*") if p.is_file()}
+                prepared = cli("--command", "verify-prepare")["meta"]
+                fp = prepared["selection_input"]
+                assert_true(bool(fp), "the CLI prepared a Git-bound selection")
+                assert_true(before == {p.relative_to(objects) for p in objects.rglob("*") if p.is_file()},
+                            "CLI prepare cannot add working-tree contents to the project object store")
+                request = Path(prepared["request"]["path"])
+                request.parent.mkdir(parents=True, exist_ok=True)
+                request.write_text(json.dumps({"commands": [command], "selection": selection, "selection_input": fp}))
+                marker = root / ".workflow/test-observed"
+                marker.unlink(missing_ok=True)
+                if changed:
+                    env["WORKFLOW_TEST_INPUT"] = "changed-after-prepare"
+                code = 2 if changed else 0
+                if entry == "submit":
+                    job = cli("--command", "submit", "--job-command", "verify", "--prompt", "review")["job_id"]
+                    deadline = time.monotonic() + 60
+                    while cli("--command", "status", "--job-id", job)["status"] in ("pending", "running"):
+                        assert_true(time.monotonic() < deadline, "submitted worker completed within its deadline")
+                        time.sleep(0.1)
+                else:
+                    result = cli("--command", "await", "--job-command", "verify", "--prompt", "review",
+                                 "--poll-interval", "0.1", "--poll-timeout", "60", code=code)
+                    job = result["meta"]["job_id"]
+                stored = cli("--command", "result", "--job-command", "verify", "--job-id", job, code=code)
+                assert_true(cli("--command", "status", "--job-id", job)["status"] == "completed",
+                            "a completed job retains its verification verdict")
+                meta = stored["output"]["meta"]
+                assert_true(meta["verdict"] == ("incomplete" if changed else "pass")
+                            and (marker.read_text() if marker.exists() else "") == ("" if changed else "x"),
+                            "only the prepared inputs run the test, exactly once")
+                if not changed:
+                    assert_true(meta["runtime_tests"]["coverage"]["obligations"][0]["status"] == "covered",
+                                "prepare and the real worker agree")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_selection_roundtrip() -> None:
+    import subprocess
+    from exoma import cli
+    from exoma.core.runtime import execution
+    from tests.checks.execution import _plan, _token
+
+    python = f'"{sys.executable}"'
+    target = f"{python} -c pass"
+    integration = f"{python} -c exit(0)"
+    root = _workspace([f"{python} -c"])
+    try:
+        execution.record_plan(root, "s1", _plan())
+        _token(root, "s1")
+        opened = cli.run("execute-begin", "", "s1", str(root))["meta"]
+        selected = {"version": 1, "execution_id": opened["execution_id"], "tier": "integration",
+                    "reason": "the host consumes this outcome", "obligations": [
+                        {"id": "host", "behavior": "the host receives the outcome",
+                         "due": "verify", "commands": [target, integration]},
+                        {"id": "package", "behavior": "the wheel installs", "due": "release", "commands": []}]}
+        wrong = dict(selected, execution_id="another")
+        assert_true(cli.run("execute-end", json.dumps(wrong), "s1", str(root))["meta"]["error_type"] == "test_input_invalid",
+                    "a stale selection does not close the execution")
+        closed = cli.run("execute-end", json.dumps(selected), "s1", str(root))["meta"]
+        assert_true(closed["selection"] == selected and closed["verification"] == "not_run",
+                    "execute-end retains the chosen tier and outstanding coverage in auto-off mode")
+        prepared = cli.run("verify-prepare", "", "s1", str(root))["meta"]
+        assert_true(prepared["execution_selection"] == selected and prepared["selection_input"] is None,
+                    "without Git a later verify still sees the execution's obligations")
+        body = {"selection": selected, "selection_input": None, "commands": [target]}
+        _request(root, body)
+        result, verdict = _verify(root)
+        rows = result["meta"]["runtime_tests"]["coverage"]["obligations"]
+        assert_true(verdict["verdict"] == "incomplete" and rows[0]["missing_commands"] == [integration],
+                    "a green subset leaves the cross-component behavior unverified")
+        assert_true(cli._verify_exit_code("verify", cli._finalize_verify_result("verify", result)) == 2,
+                    "a required coverage gap yields a nonzero CLI exit")
+        for changed in (dict(selected, obligations=selected["obligations"][1:]), wrong):
+            _request(root, dict(body, selection=changed, invalid=False))
+            result, verdict = _verify(root)
+            assert_true(verdict["verdict"] == "incomplete" and not result["meta"]["runtime_tests"]["outcomes"],
+                        "a weakened or replaced selection cannot run commands or earn coverage")
+        execution.record_verification(root, "s1", result)
+        assert_true(execution.current_execution(root, "s1")["verification"] == "not_run",
+                    "a stale job cannot write its verdict onto a replacement execution")
+        _request(root, {"commands": [target, integration]})
+        assert_true(_verify(root)[1]["verdict"] == "incomplete", "legacy requests preserve bound gaps")
+        _request(root, dict(body, commands=[], reason="no runnable integration suite"))
+        assert_true(_verify(root)[1]["verdict"] == "incomplete", "zero commands cannot close a required behavior")
+        _request(root, dict(body, commands=["not-allowlisted"]))
+        assert_true(_verify(root)[1]["verdict"] == "incomplete", "refused evidence leaves the obligation open")
+        _request(root, dict(body, commands=[target, integration]))
+        verify_tests.claim(root, "s1")
+        with verify_tests.job("recovered"):
+            result, verdict = _verify(root)
+        assert_true(verdict["verdict"] == "incomplete" and result["meta"]["runtime_tests"]["reused"] == 0
+                    and all(o["status"] == "passed" for o in result["meta"]["runtime_tests"]["outcomes"]),
+                    "without a common input fingerprint fresh passes remain visible and coverage stays open")
+        result["meta"]["verdict"] = verdict["verdict"]
+        execution.record_verification(root, "s1", result)
+        saved = execution.current_execution(root, "s1")["coverage_history"][-1]
+        assert_true([row["status"] for row in saved["obligations"]] == ["open", "open"],
+                    "the execution receipt cannot combine unbound passes")
+        browser = {"ok": True, "content": _REVIEW, "meta": {"command": "verify", "e2e": {"browser_verdict": "pass"}}}
+        cli._finalize_verify_result("verify", browser)
+        execution.record_verification(root, "s1", browser)
+        assert_true(browser["meta"]["verdict"] == execution.current_execution(root, "s1")["verification"] == "incomplete"
+                    and browser["meta"]["e2e"]["browser_verdict"] == "pass"
+                    and cli._verify_exit_code("verify", cli._finalize_verify_result("verify", browser)) == 2,
+                    "browser evidence survives while the combined CLI and stored verdict expose open checks")
+        quick = {"ok": True, "meta": {"mode": "quick"}}
+        execution.record_verification(root, "s1", quick)
+        assert_true(quick["meta"]["unchecked_selection"] == selected
+                    and execution.current_execution(root, "s1")["verification"] == "syntax_only",
+                    "syntax-only verification preserves and reports uncovered behaviors")
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True, **no_console())
+        verify_tests.run_and_record(root, "s1", [target])
+        prepared = verify_tests.prepare(root, "s1")["meta"]
+        bound = dict(body, selection_input=prepared["selection_input"], commands=[target, integration])
+        _request(root, bound)
+        result, verdict = _verify(root)
+        assert_true(verdict["verdict"] == "pass" and result["meta"]["runtime_tests"]["reused"] == 1,
+                    "an exact execute pass and a fresh integration pass cover the same input")
+        _request(root, bound)
+        (root / "changed.py").write_text("value = 1\n", encoding="utf-8")
+        assert_true(verify_tests.prepare(root, "s1")["meta"]["request"]["status"] == "invalid"
+                    and _verify(root)[1]["verdict"] == "incomplete", "tree drift requires reselection")
+        failed = f"{python} -c exit(1)"
+        extended = dict(selected, tier="full", obligations=selected["obligations"] + [
+            {"id": "all", "behavior": "all callers work", "due": "verify", "commands": [failed]}])
+        _request(root, {"selection": extended, "selection_input": verify_tests.prepare(root, "s1")["meta"]["selection_input"],
+                        "commands": [target, failed]})
+        assert_true(_verify(root)[1]["verdict"] == "fail", "a detected defect still blocks alongside an open gap")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    with tempfile.TemporaryDirectory(prefix="legacy-selection-") as directory:
+        legacy = Path(directory)
+        (legacy / ".workflow" / "sessions").mkdir(parents=True)
+        prepared = verify_tests.prepare(legacy, "s1")["meta"]
+        assert_true(Path(prepared["request"]["path"]) == legacy / ".workflow/sessions/s1/verify/tests.json"
+                    and prepared["execution_id"] is None, "standalone selection resolves the old workspace layout")
+        _request(legacy, {"commands": [], "reason": "prose only", "selection_input": prepared["selection_input"],
+                          "selection": {"version": 1, "execution_id": None, "tier": "none",
+                                        "reason": "prose only", "obligations": []}})
+        assert_true(_verify(legacy)[1]["verdict"] == "pass", "standalone documentation change can omit behavior tests")
 
 
 def _check_verify_preparation() -> None:
@@ -651,6 +890,49 @@ def _check_exited_runner_is_not_held_by_its_orphan() -> None:
     assert_true(code == 4, f"a nonzero exit is returned as is: {code}")
 
 
+def _linux_task_state(pid: int, identity: str | None) -> str | None:
+    """Read the kernel task state only for the recorded process generation."""
+    from exoma.utils import osutil
+
+    try:
+        # comm can contain spaces and parentheses. Field 3 follows its final ')'.
+        stat = Path(f"/proc/{pid}/stat").read_bytes().rsplit(b")", 1)[1].split()
+        if not stat[19].isdigit():  # Field 22 is the process start time in ticks.
+            return None
+        state = stat[0].decode("ascii")
+    except (OSError, IndexError, UnicodeError):
+        return None
+    # Recheck after the snapshot in case the PID changed hands during the read.
+    if identity is None or osutil.process_identity(pid) != identity:
+        return None
+    return state
+
+
+def _check_linux_zombie_state() -> None:
+    import subprocess
+
+    from exoma.utils import osutil
+
+    with subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"],
+                          stdin=subprocess.PIPE, **no_console()) as child:
+        try:
+            identity = osutil.process_identity(child.pid)
+            live = _linux_task_state(child.pid, identity)
+            assert_true(live is not None and live != "Z", f"live child has kernel state {live!r}")
+            child.stdin.close()
+            deadline = time.monotonic() + 5
+            flags = os.WEXITED | os.WNOWAIT | os.WNOHANG
+            while os.waitid(os.P_PID, child.pid, flags) is None:
+                assert_true(time.monotonic() < deadline, "child exits after stdin closes")
+                time.sleep(0.02)
+            assert_true(_linux_task_state(child.pid, identity) == "Z",
+                        "the same generation has exited and is waiting to be reaped")
+            assert_true(_linux_task_state(child.pid, "other-generation") is None,
+                        "a zombie cannot prove exit for a different generation")
+        finally:
+            child.kill()
+
+
 def _check_inherited_output_deadlines() -> None:
     """Exercise live inherited handles and real descendant cleanup, including cancellation."""
     import json
@@ -772,6 +1054,7 @@ def _check_inherited_output_deadlines() -> None:
                             generation = osutil.process_generation(pid, created, identity)
                             stopped = generation in (osutil.PROCESS_DEAD, osutil.PROCESS_REUSED)
                             native = None
+                            kernel_state = None
                             if osutil.IS_WINDOWS:
                                 handle, gone = osutil._windows_open(pid)
                                 try:
@@ -782,12 +1065,16 @@ def _check_inherited_output_deadlines() -> None:
                                         osutil._windows_kernel32().CloseHandle(handle)
                                 stopped = gone or (native["created"] is not None
                                                    and (native["created"] != created or native["wait"] == 0))
+                            elif sys.platform == "linux" and generation == osutil.PROCESS_MATCHED:
+                                kernel_state = _linux_task_state(pid, identity)
+                                stopped = kernel_state == "Z"
                             if stopped or time.monotonic() >= until:
                                 break
                             time.sleep(0.05)
                         assert_true(stopped,
                                     f"{mode}: recorded descendant {pid} stopped; generation={generation}, "
-                                    f"state={osutil.process_state(pid)}, expected_created={created}, native={native}, "
+                                    f"state={osutil.process_state(pid)}, kernel_state={kernel_state!r}, "
+                                    f"expected_created={created}, native={native}, "
                                     f"supervisor stdout={output[-7000:]}, stderr={errors[-1000:]}")
                 finally:
                     if proc.poll() is None:
@@ -1050,12 +1337,14 @@ def _check_a_new_job_never_reruns_an_old_request() -> None:
         _request(root, {"commands": [f"{python} -c pass"], "reason": "job 1"})
         verify_tests.claim(root, "s1")  # job 1; its provider call fails, nothing consumes
         verify_tests.claim(root, "s1")  # job 2; main_agent wrote no new request
+        _request(root, {"commands": [f"{python} -c pass"], "reason": "pending for another job"})
         with verify_tests.job("job-2"):
             result, verdict = _verify(root)
         assert_true(
             not result["meta"]["runtime_tests"]["requested"] and verdict["verdict"] == "incomplete",
             f"a new job does not run an earlier job's request: {result['meta']['runtime_tests']}",
         )
+        assert_true(verify_tests.request_path(root, "s1").is_file(), "an unclaimed later request survives")
 
         _request(root, {"commands": [f"{python} -c pass"], "reason": "job 3"})
         verify_tests.claim(root, "s1")
@@ -1168,6 +1457,11 @@ def _check_submit_claims_only_for_a_new_job() -> None:
             f"the job after a failed one drops the leftover claim: {again}",
         )
         manager.fail_job(again["job_id"], "cleanup")
+        from unittest.mock import patch
+        with patch.object(verify_tests, "claim", side_effect=PermissionError(errno.EACCES, "held", str(claimed))):
+            refused = main.submit("verify", "check it", "s1", str(root), None)
+        assert_true(not refused["ok"] and not manager.active_job_for_session("s1"),
+                    "a failed claim never launches a worker against an earlier selection or strands a job")
     finally:
         main.JOB_MANAGER, main._spawn_worker = original_manager, original_spawn
         shutil.rmtree(root, ignore_errors=True)
@@ -2012,8 +2306,55 @@ def _check_tree_fingerprint_edge_cases() -> None:
 
     from exoma.core.evidence import tree_fingerprint as tf
 
+    # Git writes LF even on Windows. The preceding space belongs to the path.
+    pathname = "work-ā/index "
+    output = subprocess.CompletedProcess([], 0, stdout=os.fsencode(pathname) + b"\n")
+    with patch.object(tf.subprocess, "run", return_value=output) as git_run:
+        decoded = tf._git(Path("."), ["rev-parse", "--git-path", "index"])
+        assert_true(decoded == pathname and not git_run.call_args.kwargs.get("text"),
+                    "Git path bytes survive locale decoding and retain their trailing whitespace")
+
     root, git, _python = _stale_reuse_repo()
     try:
+        with tempfile.TemporaryDirectory(prefix="exoma-linked-") as directory:
+            linked = Path(directory) / "checkout-ā"
+            subprocess.run([*git, "worktree", "add", "-q", "--detach", str(linked)], check=True, **no_console())
+            link_git = ["git", "-C", str(linked)]
+            (linked / "state.txt").write_text("staged")
+            subprocess.run([*link_git, "add", "state.txt"], check=True, **no_console())
+            raw_index = subprocess.check_output([*link_git, "rev-parse", "--path-format=absolute", "--git-path", "index"],
+                                                **no_console())
+            index = Path(os.fsdecode(raw_index.removesuffix(b"\n")))
+            (linked / "state.txt").write_text("dirty")
+            (linked / "new.txt").write_text("untracked")
+            alternate = Path(directory) / "extra-objects"
+            alternate.mkdir()
+            blob = subprocess.check_output([*link_git, "hash-object", "-w", "--stdin"],
+                                           input=b"content held only in the alternate\n",
+                                           env={**os.environ, "GIT_OBJECT_DIRECTORY": str(alternate)},
+                                           **no_console()).decode("ascii").strip()
+            # A required clean filter forces git add in the scratch index to read
+            # the alternate. The working file alone cannot reconstruct that content.
+            (linked / ".gitattributes").write_text("filtered.txt filter=alternate-proof\n")
+            (linked / "filtered.txt").write_text("filter input\n")
+            for setting, value in (("clean", f"git cat-file blob {blob}"), ("required", "true")):
+                subprocess.run([*link_git, "config", f"filter.alternate-proof.{setting}", value], check=True, **no_console())
+            original_index = index.read_bytes()
+            objects = root / ".git" / "objects"
+            before_objects = set(objects.rglob("*"))
+            assert_true(tf.tree_fingerprint(linked, persist=False) is None,
+                        "without the alternate the required filter cannot read its blob")
+            with patch.dict(os.environ, {"GIT_ALTERNATE_OBJECT_DIRECTORIES": str(alternate)}):
+                digest = tf.tree_fingerprint(linked, persist=False)
+                assert_true(digest and before_objects == set(objects.rglob("*")) and index.read_bytes() == original_index,
+                            "digest-only fingerprint leaves the linked index and shared object store alone")
+                assert_true(tf.tree_fingerprint(linked) == digest, "persistent and temporary snapshots produce the same OID")
+                stored_blob = subprocess.check_output([*link_git, "rev-parse", f"{digest}:filtered.txt"],
+                                                      text=True, **no_console()).strip()
+                assert_true(stored_blob == blob, "the fingerprint includes the blob returned by the inherited alternate")
+                (linked / "new.txt").write_text("changed again")
+                assert_true(tf.changed_paths(linked, digest, tf.tree_fingerprint(linked)) == [{"status": "M", "path": "new.txt"}],
+                            "execution snapshots remain readable after scratch storage is removed")
         if os.name != "nt":  # Windows refuses control characters in file names
             odd = root / "a\rb.txt"
             odd.write_text("1", encoding="utf-8")

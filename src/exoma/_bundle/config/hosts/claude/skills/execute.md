@@ -33,6 +33,14 @@ explicit approval for that path. The rule is the same for every write path; what
 - Bash/script patches → NOT checked by a hook. Nothing blocks them; only you enforce the rule.
 
 ## Tests after the edits
+Select the smallest tier that covers the changed behavior and its callers.
+Use `targeted` for a bounded change, `integration` when a value or action crosses a component
+boundary, and `full` when affected callers cannot be bounded or project policy requires it.
+Use `none` with a reason for a change requiring no behavior test. When a behavior needs a
+test and none exists, record that behavior as an open obligation. Identify each obligation
+by a stable ID, the behavior, when it is due (verify or release), and all exact commands
+needed as evidence. Include a known removed assertion until equivalent coverage is established.
+Run the useful early tests now and report what still needs checking at verify.
 Run the project's tests through the runtime, not a plain shell call:
   bash '<work_dir>/.workflow/run.sh' test{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<allowlisted command>'
 (one command, or a JSON list of up to 5; same allowlist as {{CMD:verify}}: `commands.verify_test_commands`).
@@ -50,6 +58,11 @@ A test run is evidence, not verification: `verification` stays `not_run` until {
 
 ## Post (runtime policy and next step)
 Close the execution first: bash '<work_dir>/.workflow/run.sh' execute-end{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'
+(When execute-begin returns `meta.selection_version=1`, add `--task-file '<selection-json-path>'`
+to this call. Write the JSON under this session's runtime directory. Example shape:
+`{"version":1,"execution_id":"<from execute-begin>","tier":"integration","reason":"Outcome crosses the host boundary","obligations":[{"id":"host-result","behavior":"Host receives the outcome","due":"verify","commands":["<exact integration command>"]}]}`.
+An empty obligation command list records a gap. With an older runtime, use the plain
+close call and list outstanding behaviors explicitly in the execution result.)
 (status `implemented`, verification `not_run`; a finished {{CMD:verify}} writes its verdict here).
 Its `meta.changed_files` lists what changed since execute-begin (Git tree snapshots, so edits the tree
 already carried are not counted) and `meta.outside_scope` those outside the plan's `files` — Bash

@@ -408,14 +408,59 @@ def begin_execution(project_root: Path, session_id: str) -> dict:
     return {"ok": True, "execution": execution}
 
 
+def selection_error(selection, execution_id, *, previous=None) -> str | None:
+    """Validate the durable part of an execute/verify test selection."""
+    if not isinstance(selection, dict) or type(selection.get("version")) is not int or selection["version"] != 1:
+        return "selection.version must be 1"
+    if "execution_id" not in selection or selection["execution_id"] != execution_id:
+        return "selection belongs to another execution"
+    if selection.get("tier") not in ("targeted", "integration", "full", "none"):
+        return "selection.tier must be targeted, integration, full or none"
+
+    def line(value):
+        return isinstance(value, str) and bool(value.strip()) and value.splitlines() == [value] and value == value.strip()
+
+    if not line(selection.get("reason")):
+        return "selection.reason must be a nonempty single line"
+    obligations = selection.get("obligations")
+    if not isinstance(obligations, list):
+        return "selection.obligations must be a list"
+    ids = set()
+    for item in obligations:
+        if not isinstance(item, dict) or not line(item.get("id")) or item["id"] in ids:
+            return "each obligation needs a distinct single-line id"
+        ids.add(item["id"])
+        if not line(item.get("behavior")) or item.get("due") not in ("verify", "release"):
+            return "each obligation needs a behavior and due stage (verify or release)"
+        commands = item.get("commands")
+        if not isinstance(commands, list) or not all(line(c) for c in commands) or len(commands) != len(set(commands)):
+            return "each obligation needs a list of distinct command strings"
+    if selection["tier"] != "none" and not obligations:
+        return "a test tier needs at least one coverage obligation"
+    if previous:
+        items = {item["id"]: item for item in obligations}
+        for original in previous["obligations"]:
+            new = items.get(original["id"])
+            if (not new or new["behavior"] != original["behavior"]
+                    or (original["due"] == "verify" and new["due"] != "verify")
+                    or not set(original["commands"]).issubset(new["commands"])):
+                return f"selection removed or weakened obligation {original['id']}"
+    return None
+
+
 @_transactional
-def end_execution(project_root: Path, session_id: str, *, expected=_UNSPECIFIED) -> dict:
+def end_execution(project_root: Path, session_id: str, *, expected=_UNSPECIFIED, selection=None) -> dict:
     path = _runtime_file(project_root, session_id, EXECUTION_FILE)
     execution = _read(path)
     if expected is not _UNSPECIFIED and execution_identity(execution) != expected:
         return {"ok": False, "reason": "not_active", "error": "execution was replaced while closing it"}
     if execution is None or execution.get("status") != STATUS_ACTIVE:
         return {"ok": False, "reason": "not_active", "error": "no active execution for this session"}
+    if selection is not None:
+        error = selection_error(selection, execution.get("execution_id"))
+        if error:
+            return {"ok": False, "reason": "selection_invalid", "error": error}
+        execution["selection"] = selection
     end_tree = _tree(project_root)
     changed = _changed(project_root, execution.get("begin_tree"), end_tree)
     scope = execution.get("scope") or []
@@ -457,6 +502,10 @@ def record_verification(project_root: Path, session_id: str, result: dict, *, ex
     if execution is None or not isinstance(result, dict):
         return
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    runtime_tests = meta.get("runtime_tests") or {}
+    if runtime_tests.get("stale_execution"):
+        meta["execution_state_error"] = "stale selection: verdict not attached"
+        return
     if meta.get("mode") == "quick" or "quick_verify" in meta:
         verdict = "syntax_only"
     else:
@@ -469,6 +518,35 @@ def record_verification(project_root: Path, session_id: str, result: dict, *, ex
         if execution.get("status") == STATUS_IMPLEMENTED else None
     )
     execution.update(verification=verdict, verified_at=now_iso(), changed_since_execute=changed)
+    coverage = runtime_tests.get("coverage")
+    if coverage:
+        previous = execution.get("selection")
+        execution_id = execution.get("execution_id")
+        error = selection_error(previous, execution_id) if previous is not None else None
+        error = error or selection_error(coverage["selection"], execution_id, previous=previous)
+        if error:
+            meta["execution_state_error"] = f"stale coverage: {error}; verdict not attached"
+            return
+        execution["selection"] = coverage["selection"]
+        execution.setdefault("coverage_history", []).append({
+            "at": execution["verified_at"], "verdict": verdict, **coverage,
+        })
+    elif "selection" in execution:
+        # Quick verification, a provider failure, or a browser-only review has no
+        # runner evidence for this selection.
+        meta["unchecked_selection"] = execution["selection"]
+        selection = execution["selection"]
+        if verdict != "syntax_only" and result.get("ok"):
+            from exoma.core.evidence import verify_tests
+            from exoma.core.evidence.result_shaping import _finalize_verify_result
+
+            error = selection_error(selection, execution.get("execution_id"))
+            pending = [error] if error else [item["id"] for item in selection["obligations"] if item["due"] == "verify"]
+            if pending:
+                result["content"] = verify_tests.merge_gap(result.get("content") or "",
+                    "tests: execution coverage unchecked: " + ", ".join(pending))
+                _finalize_verify_result("verify", result)
+                execution["verification"] = result["meta"]["verdict"]
     _write(path, execution)
     if changed and isinstance(result.get("meta"), dict):
         result["meta"]["changed_since_execute"] = changed

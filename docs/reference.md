@@ -1,4 +1,4 @@
-# Exoma v1.1.2
+# Exoma v1.2.0
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.1.2)
+## Install (v1.2.0)
 
 ### New team member — full sequence from scratch
 
@@ -1385,7 +1385,7 @@ table differ, fix one of them in the same change.
 
 ² All three `promote-*` stages take a **path to a JSON file** via `--prompt`, not the document itself: a single knowledge document easily exceeds Windows' 8191-character argv limit. The stages are split because user approval happens between them — the CLI cannot ask anything, so verification stops at a verdict, main_agent runs the review, and writing is a separate call that can only happen afterwards. `promote-write` refuses outside `policies.production_branch`.
 
-³ `verify-browser` is a **delegated** command: it is registered in the DELEGATED registry and goes through the pre-flight gate like `explore`/`plan`/`analyze`/`verify`. It reads the **per-session request** (`.workflow/data/sessions/<session>/e2e/request.json`) on top of the project defaults from the `e2e` section in `config.json`. The work is split into three stages: second_agent drafts the spec (stage 1) and reviews the browser evidence (stage 3); in between, the **runtime player** — a child process run by the runtime (`python -m core.evidence.e2e.player`) — drives Playwright (stage 2). Neither main_agent nor second_agent runs the browser (read-only sandbox). The skill writes `phase: auto`: the runtime prepares and validates a fresh spec, then runs the player and review under the same lock without an agent copying draft.json. Auto refuses supplied scenario/existing_tests/spec_notes fields. Invalid/blocked preparation, missing credentials, or read-only proposals not covered by existing approvals return a draft before starting the player; after missing input or approval is supplied, a new auto invocation prepares afresh. Explicit `draft` and `run` remain available. The interview happens in main_agent only after preparation reports that the target is not configured yet. The `draft` stage carries no verdict; the `run` stage is finalized as `verify`, so its verdict and exit code match other verifications. An `[E2E SPEC]` section that fails validation gets one repair in the same provider thread (`meta.e2e.repair`); the only test attribute is `data-e2e`, via the `e2e` selector key — `testid` is rejected (**breaking**); the `repeat_failure` brake releases by itself when the project (outside `.workflow/`, via Git) or the runtime (`TOOL_VERSION` + the code digest of `core/evidence/e2e/`) has changed since the last failure, the `app` bucket streak only grows for failures with the same signature (page, field, condition), and it is recorded as `repeat_failure` knowledge for the next draft. Credential values typed literally in the task, draft, or `request.json` are found via a `secrets.json` lookup and turned back into `${NAME}` (`request.json` is rewritten; key names are reported in `meta.e2e.secret_literals`, values never are), and a `fill` into a password field without a placeholder → `spec_invalid`; failures caused by the scenario itself — a guessed selector that misses, any selector that matches >1 element, a write/navigation rejected by the run policy — have origin `scenario` and end as `incomplete: scenario_error`, are not retried, and do not count toward the brake; every non-pass run and every brake refusal carries `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), and reusable causes are stored as `failure_hint` knowledge; every draft writes a `kind: e2e_draft` row (validator error category, repair result) that `--command report` summarizes in `e2e.drafts`. Network: every run always records metadata of all page requests (order, URL without query, type, status, timing, size; no body/headers/cookies), the latest 500 rows plus a summary over all requests, in `report.json` → `network` and `meta.e2e.page_requests`, including `since_last_run` (changes compared with the previous run on the same origin). Selector order: candidates follow role+name > label > e2e > text > css, except two kinds that may lead — an `e2e` with `source` provenance and a `path:line` ref, and a `proven` selector recorded in browser knowledge for the origin, the route (the last `goto` path, identifier segments become `:id`: `/users/123` and `/users/456` are one route), and that step's `within` (checked against the store; a `proven` claim without basis or on another route/scope → `spec_invalid`); a `proven` selector that misses drops to the normal order, two consecutive runs that miss retire it (one run weakens an entry at most once); a step that fails after its selector matched is not a miss; a pass is recorded only from a run that passed on the first attempt. Network URLs are cleaned of `;…` path parameters and token-shaped segments (16+ alphanumerics without separators, 16+ mixed upper/lower case, 24+ with digits) to `:id`. Full contract: `docs/runtime-contracts.md`, section `/.verify-browser`.
+³ `verify-browser` is a **delegated** command: it is registered in the DELEGATED registry and goes through the pre-flight gate like `explore`/`plan`/`analyze`/`verify`. It reads the **per-session request** (`.workflow/data/sessions/<session>/e2e/request.json`) on top of the project defaults from the `e2e` section in `config.json`. The work is split into three stages: second_agent drafts the spec (stage 1) and reviews the browser evidence (stage 3); in between, the **runtime player** — a child process run by the runtime (`python -m core.evidence.e2e.player`) — drives Playwright (stage 2). Neither main_agent nor second_agent runs the browser (read-only sandbox). The skill writes `phase: auto`: the runtime prepares and validates a fresh spec, then runs the player and review under the same lock without an agent copying draft.json. Auto refuses supplied scenario/existing_tests/spec_notes fields. Invalid/blocked preparation, missing credentials, or read-only proposals not covered by existing approvals return a draft before starting the player; after missing input or approval is supplied, a new auto invocation prepares afresh. Explicit `draft` and `run` remain available. The interview happens in main_agent only after preparation reports that the target is not configured yet. The `draft` stage carries no verdict; the `run` stage is finalized as `verify`, so its verdict and exit code match other verifications. An `[E2E SPEC]` section that fails validation gets one repair in the same provider thread (`meta.e2e.repair`); the only test attribute is `data-e2e`, via the `e2e` selector key — `testid` is rejected (**breaking**); the `repeat_failure` brake releases by itself when the project (outside `.workflow/`, via Git) or the runtime (`TOOL_VERSION` + the code digest of `core/evidence/e2e/`) has changed since the last failure, a validated strategy edit through the failed application step can also admit a retry (`meta.e2e.repeat_released.by = strategy_changed`). Removed assertions appear in `meta.e2e.coverage_gaps` and `not_verified` until an equivalent browser assertion passes in the same session and origin. The `app` bucket streak only grows for failures with the same signature (page, field, condition), and it is recorded as `repeat_failure` knowledge for the next draft. Credential values typed literally in the task, draft, or `request.json` are found via a `secrets.json` lookup and turned back into `${NAME}` (`request.json` is rewritten; key names are reported in `meta.e2e.secret_literals`, values never are), and a `fill` into a password field without a placeholder → `spec_invalid`; failures caused by the scenario itself — a guessed selector that misses, any selector that matches >1 element, a write/navigation rejected by the run policy — have origin `scenario` and end as `incomplete: scenario_error`, are not retried, and do not count toward the brake; every non-pass run and every brake refusal carries `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), and reusable causes are stored as `failure_hint` knowledge; every draft writes a `kind: e2e_draft` row (validator error category, repair result) that `--command report` summarizes in `e2e.drafts`. Network: every run always records metadata of all page requests (order, URL without query, type, status, timing, size; no body/headers/cookies), the latest 500 rows plus a summary over all requests, in `report.json` → `network` and `meta.e2e.page_requests`, including `since_last_run` (changes compared with the previous run on the same origin). Selector order: candidates follow role+name > label > e2e > text > css, except two kinds that may lead — an `e2e` with `source` provenance and a `path:line` ref, and a `proven` selector recorded in browser knowledge for the origin, the route (the last `goto` path, identifier segments become `:id`: `/users/123` and `/users/456` are one route), and that step's `within` (checked against the store; a `proven` claim without basis or on another route/scope → `spec_invalid`); a `proven` selector that misses drops to the normal order, two consecutive runs that miss retire it (one run weakens an entry at most once); a step that fails after its selector matched is not a miss; a pass is recorded only from a run that passed on the first attempt. Network URLs are cleaned of `;…` path parameters and token-shaped segments (16+ alphanumerics without separators, 16+ mixed upper/lower case, 24+ with digits) to `:id`. Full contract: `docs/runtime-contracts.md`, section `/.verify-browser`.
 
 There is no Python `execute` command that writes code: `/.execute -y` remains a main_agent command, and writing code is deliberately not delegated to the runtime or second_agent. What the runtime holds since agent-workflow 3.9.0 is the execution's **state** — `execute-begin` / `execute-end` and the hooks that read it.
 
@@ -1605,7 +1605,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.1.2):
+Reliability keys (v1.2.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1761,6 +1761,43 @@ actual boolean (the string `"false"` is not true). A malformed allowlist permits
 Preparation is a snapshot: actual verification rechecks policy and claims the request as
 usual. Agents need not read config or pending requests directly; old read exemptions remain
 available for compatibility.
+
+#### Risk-based test selection
+
+Choose targeted for bounded behavior, integration for a contract crossing, and full for
+unbounded impact or an explicit project requirement. For a change with no behavior to
+test use tier `none` with a reason. An applicable behavior with no runnable test remains
+an obligation. For example, pass the following selection to `execute-end --task-file`,
+using the ID returned by execute-begin:
+
+```json
+{"version":1,"execution_id":"<execution_id>","tier":"integration",
+ "reason":"The host consumes the runner outcome",
+ "obligations":[{"id":"host-result","behavior":"The host receives the failed outcome",
+                 "due":"verify","commands":["python tests/run.py --only verify-runtime-tests"]}]}
+```
+
+After `verify-prepare`, write to `meta.request.path`. Include the selected top-level
+`commands`, a `reason`, the complete `selection` and the returned `selection_input`.
+For standalone verification use the returned ID (null when there is no execution).
+The worker keeps its internal `WORKFLOW_JOB_WORKER` ownership marker out of both
+the test environment and the selection fingerprint. Starting a fresh worker can
+therefore run the selected commands against the inputs seen by preparation.
+Each behavior needs every listed command to pass, either freshly or through exact reuse.
+An empty list within an obligation records missing evidence. Reassess the diff and
+selection after input drift. Without a fingerprint, fresh command outcomes are reported
+individually and required coverage stays open. An open verify obligation produces a runtime
+gap and a nonzero CLI exit, including when a browser-only check passed. Older hosts can submit plain commands/reason. When using
+an older runtime without `selection_version`, report deferred work explicitly.
+`coverage_status: unknown` identifies a response without historical selection evidence.
+When a verification assesses a selection, its receipt includes command outcomes and
+available log pointers. Unchecked verify obligations remain visible on subsequent attempts.
+
+For browser verification, a passing playback with an outstanding historical assertion
+returns `incomplete` and exit 2. A dynamic title can recover when the effective inputs
+and page match. A retained DOM assertion whose entire selector list previously missed
+can recover on the same page with a unique match in that list. See [browser retry
+evidence](runtime-contracts.md) for the receipt and upgrade rules.
 
 The configuration contract in question separates two settings:
 
@@ -2263,7 +2300,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.1.2)
+### Liveness worker (v1.2.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

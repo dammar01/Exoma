@@ -112,6 +112,7 @@ from exoma.installer.settings import (  # noqa: E402,F401
     _drop_intent_hook,
     _hook_script_ids,
     _install_deps,
+    _refresh_uv_chromium,
     _pin_python,
     _install_provider_config,
     _install_settings,
@@ -873,6 +874,8 @@ def main() -> int:
     # like a workspace upgrade: /.verify-browser would otherwise stop on playwright_missing
     # behind an install that said nothing was wrong.
     e2e_failure = _install_deps(plan, apply, args.with_e2e)
+    if apply and args.no_input and not args.with_e2e and os.environ.get("WORKFLOW_UPDATE_OWNER"):
+        e2e_failure = _refresh_uv_chromium(plan)
 
     targets = _targets(hosts)
     for source, dest, key in targets:

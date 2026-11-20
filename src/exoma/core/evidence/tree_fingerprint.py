@@ -21,6 +21,7 @@ A caller then treats the tree as unknown and reuses nothing.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -32,22 +33,6 @@ from exoma.utils.osutil import hidden_run_kwargs
 GIT_TIMEOUT_S = 60
 # Flagged paths per `update-index` call: short enough for any platform's command line.
 FLAG_CHUNK = 100
-
-
-def _git(root: Path, args: list[str], env: dict | None = None) -> str | None:
-    try:
-        done = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT_S,
-            check=False,
-            env=env,
-            **hidden_run_kwargs(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout.strip() if done.returncode == 0 else None
 
 
 def _git_bytes(root: Path, args: list[str], env: dict | None = None) -> bytes | None:
@@ -69,6 +54,17 @@ def _git_bytes(root: Path, args: list[str], env: dict | None = None) -> bytes | 
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
+
+
+def _git(root: Path, args: list[str], env: dict | None = None) -> str | None:
+    """Read a single Git result, preserving pathname bytes up to the terminating LF."""
+    out = _git_bytes(root, args, env)
+    if out is None:
+        return None
+    try:
+        return os.fsdecode(out.removesuffix(b"\n"))
+    except UnicodeError:
+        return None
 
 
 def _flagged(root: Path, env: dict) -> list[str] | None:
@@ -116,8 +112,8 @@ def _clear_index_flags(root: Path, scratch: Path, env: dict) -> bool:
     return True
 
 
-def tree_fingerprint(project_root) -> str | None:
-    """The Git tree id of the working tree's content outside `.workflow/`, or None."""
+def tree_fingerprint(project_root, *, persist=True) -> str | None:
+    """Return the tree id. Only persistent snapshots must remain available for diff-tree."""
     root = Path(project_root)
     if _git(root, ["rev-parse", "--is-inside-work-tree"]) != "true":
         return None
@@ -137,6 +133,18 @@ def tree_fingerprint(project_root) -> str | None:
         except OSError:
             pass  # an empty index still gives the right answer, only slower
         env = dict(os.environ, GIT_INDEX_FILE=str(scratch))
+        if not persist:
+            objects = _git(root, ["rev-parse", "--path-format=absolute", "--git-path", "objects"])
+            if not objects:
+                return None
+            store = Path(tmp) / "objects"
+            store.mkdir()
+            # Git accepts C-quoted alternate entries, including paths containing the
+            # platform list separator. Keep alternates inherited from the caller too.
+            original = json.dumps(objects, ensure_ascii=False)
+            alternates = env.get("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+            env.update(GIT_OBJECT_DIRECTORY=str(store),
+                       GIT_ALTERNATE_OBJECT_DIRECTORIES=original + (os.pathsep + alternates if alternates else ""))
         if scratch.is_file() and not _clear_index_flags(root, scratch, env):
             return None
         # Exclude runtime state BEFORE add reads contents. Removing it only afterwards

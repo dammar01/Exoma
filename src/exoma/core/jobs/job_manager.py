@@ -3,6 +3,7 @@ import json
 import os
 import re
 import secrets
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from exoma.config.settings import (
     DEFAULT_JOB_MAX_RUNTIME_SECONDS,
     DEFAULT_MAX_GLOBAL_WORKERS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
+    DATA_DIR,
     JOB_DIR,
 )
 from exoma.core.workspace.workspace_paths import atomic_write_json
@@ -31,6 +33,36 @@ _CANCEL_WAIT_SECONDS = 10.0
 
 class JobCancellation(BaseException):
     """Deliberate control flow through adapter finally blocks, never a callback error."""
+
+
+def uv_update_install_active() -> bool:
+    """Recognize the target-side install stage, including the released 1.1.2 worker."""
+    token = os.environ.get("WORKFLOW_UPDATE_OWNER")
+    if not token:
+        return False
+    reservation = (JOB_DIR / ".update-reservation.json").resolve()
+    try:
+        with osutil.open_snapshot(reservation) as stream:
+            claim = json.load(stream)
+    except FileNotFoundError:
+        return False
+    if not isinstance(claim, dict) or claim.get("token") != token:
+        return False
+    operation = Path(claim["operation"]).resolve()
+    if operation.parent.parent != (DATA_DIR / "updates").resolve():
+        raise ValueError("unexpected update operation directory")
+    with osutil.open_snapshot(operation / "request.json") as stream:
+        request = json.load(stream)
+    with osutil.open_snapshot(operation / "state.json") as stream:
+        state = json.load(stream)
+    if not (request["token"] == token and Path(request["reservation"]) == reservation
+            and request["operation_id"] == state["operation_id"] == operation.name
+            and Path(request["prefix"]).resolve() == Path(sys.prefix).resolve()
+            and state["phase"] == "install"):
+        return False
+    package = request["package"]
+    return (package[1:] == ["tool", "upgrade", "exoma"]
+            and Path(package[0]).name.lower() in ("uv", "uv.exe"))
 
 
 def _cleanup_unconfirmed(job):

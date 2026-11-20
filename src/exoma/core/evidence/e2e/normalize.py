@@ -93,6 +93,29 @@ def _probe_summary(probe: object) -> str:
     return _short(" | ".join(parts) or "no visible elements", 300)
 
 
+def _historical_gaps(report: dict) -> list[str]:
+    return [
+        f"e2e:{g['claim']}: assertion {g['step']} from {g['run']} attempt {g['attempt']} "
+        "has no observed pass on its original target and condition"
+        for g in report.get("coverage_gaps") or []
+    ]
+
+
+def _strategy_notes(report: dict) -> list[str]:
+    release = report.get("repeat_released")
+    if not release:
+        return []
+    notes = []
+    for change in release["changes"]:
+        old = ", ".join(change["previous"]) or "(none)"
+        new = ", ".join(change["candidate"]) or "(none)"
+        fields = ", ".join(change.get("fields", []))
+        notes.append(f"e2e retry: {change['change']} {old} -> {new}"
+                     + (f" ({fields})" if fields else "")
+                     + f" relative to {release['run']} attempt {release['attempt']}")
+    return notes
+
+
 def evidence_block(report: dict, *, artifacts: str | None = None, spec_notes: list[str] | None = None) -> str:
     claims = report.get("claims") or {}
     steps = report.get("steps") or {}
@@ -101,6 +124,8 @@ def evidence_block(report: dict, *, artifacts: str | None = None, spec_notes: li
         f"browser_verdict: {report.get('browser_verdict')}"
         + (f" ({report.get('reason')})" if report.get("reason") else ""),
     ]
+    lines.extend(_strategy_notes(report))
+    lines.extend("coverage gap: " + gap for gap in _historical_gaps(report))
     diagnosis = report.get("diagnosis")
     if diagnosis:
         failed = diagnosis.get("failed") or {}
@@ -283,7 +308,7 @@ def to_verification(
     escalations: list[str] = list(sections["escalations"])
     notes: list[str] = list(sections["notes"])
     checks: list[str] = []
-    gaps: list[str] = []
+    gaps = _historical_gaps(report)
 
     if preflight and not preflight.get("ok"):
         reason = preflight.get("reason") or "harness_error"
@@ -372,6 +397,7 @@ def to_verification(
                 f"({item.get('side_effect')}) has no cleanup by plan: {_short(item.get('reason'))}"
             )
 
+    checks.extend(_strategy_notes(report))
     checks.extend(sections["checks_run"])
     gaps.extend(sections["not_verified"])
 
@@ -415,9 +441,9 @@ def to_verification(
         # Cannot happen for a browser fail (it always adds a finding), kept as a guard so
         # the contract never carries a NEEDS FIX the validator would reject.
         declared, verdict = "INCOMPLETE", "incomplete"
-    if cleanup_unsettled and verdict != "fail":
+    if (cleanup_unsettled or report.get("coverage_gaps")) and verdict != "fail":
         # Declared INCOMPLETE, never DONE-with-a-gap: the gap-only exit 0 is for a judgement
-        # nobody made, not for data left behind in the target.
+        # nobody made. Cleanup and historical assertion gaps are runtime observations.
         declared, verdict = "INCOMPLETE", "incomplete"
 
     def section(name: str, items: list[str]) -> list[str]:

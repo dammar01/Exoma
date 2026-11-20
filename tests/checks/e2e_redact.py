@@ -43,9 +43,17 @@ def _test_e2e_redaction_variants() -> None:
         "nested payloads are walked",
     )
     assert_true(
-        scrub_resolved("pin 123 order 1234", env) == "pin 123 order 1234",
-        f"values under {MIN_SCRUB_CHARS} characters are not substring-scrubbed",
+        scrub_resolved("pin 123 order 1234", env) == "[withheld]",
+        "short credentials echoed inside a diagnostic are withheld",
     )
+    for secret, echo in (("a", "%61"), ("+!", "%2b%21"), ("<7>", "&lt;7&gt;")):
+        event = {"type": "progress", "status": "passed", "step_id": "a-step", "url_after": "/user/" + echo,
+                 "actual": {"probe": {"inputs": [{"type": secret}], "title": "hello " + secret}}}
+        public = scrub_resolved([event], {"E2E_PASS": secret})[0]
+        assert_true(public["status"] == "passed" and public["step_id"] == "a-step"
+                    and public["url_after"] == "[withheld]" and public["actual"]["probe"]["title"] == "[withheld]"
+                    and public["actual"]["probe"]["inputs"][0]["type"] == "[withheld]",
+                    "page data is protected independently of the protocol field names it contains")
     assert_true(
         scrub_resolved("x alpha-secret-long y", {"E2E_A": "alpha-secret", "E2E_B": "alpha-secret-long"}) == "x ${E2E_B} y",
         "the longest value is restored whole",
@@ -88,6 +96,15 @@ def _test_e2e_redaction_variants() -> None:
             )
 
         # Fail-closed: a file the pass cannot scrub does not survive it unscrubbed.
+        spec = root / "spec.json"
+        spec.write_text('{"copied": "xy"}')
+        project_log = root / "existing_tests.log"
+        project_log.write_text("echo: xy")
+        trusted = {"version": 1, "id": "xy-scenario"}
+        scrub_text_files(root, {"E2E_SHORT": "xy"}, scenario=trusted)
+        assert_true(json.loads(spec.read_text()) == trusted and project_log.read_text() == "[withheld]",
+                    "files modified after publication cannot bypass redaction by name")
+
         from exoma.core.evidence.e2e import redact as redact_module
 
         stuck = root / "stuck.html"

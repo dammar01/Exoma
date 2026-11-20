@@ -426,6 +426,612 @@ def _scenario(reply: str = _SPEC_REPLY) -> dict:
     return parse_spec(reply)["scenario"]
 
 
+def _check_strategy_retry(workspace) -> None:
+    from exoma.core.runtime.state import E2E_REPEAT_LIMIT
+
+    root = workspace("e2e-strategy-")
+    adapter = _adapter()
+    env = {"E2E_USER": "private-fixture@example.test"}
+    malformed = _SPEC_REPLY.replace('"contains": "/dashboard"', '"equals": "http://["')
+    invalid_run = _run(root, adapter, _scenario(malformed), env=env)
+    _write_request(root, "auto")
+    invalid_auto = _execute(root, _adapter(spec=[malformed, malformed]), "verify-browser", env=env)
+    for result in (invalid_run, invalid_auto):
+        assert_true(result["meta"]["e2e"].get("reason") == "spec_invalid" and
+                    not result["meta"]["e2e"].get("artifacts") and "expect_url.equals" in result["content"],
+                    "malformed URL expectation is diagnosed before playback")
+    original = _scenario()
+    sibling = {"id": "title", "action": "expect_title", "equals": "Dashboard", "claim_id": "login-valid-user"}
+    original["steps"].append(sibling)
+    for _ in range(E2E_REPEAT_LIMIT):
+        _run(root, adapter, original, fake="app_fail", env=env)
+    state_path = workflow_paths(root, _SESSION_ID)["state"]
+    state_text = state_path.read_text(encoding="utf-8")
+    legacy_repeat = json.loads(state_text)["e2e_repeat"]
+    assert_true(env["E2E_USER"] not in state_text and "/dashboard" not in json.dumps(
+        json.loads(state_text)["e2e_repeat"]["strategy"]), "snapshot persists fingerprints rather than input values")
+    edited = _scenario()
+    edited["steps"][-1]["id"] = "rename-only"
+    edited["steps"].append(dict(sibling, equals="Unreached"))
+    held = _run(root, adapter, edited, env=env)
+    assert_true(held["meta"]["e2e"]["reason"] == "repeat_failure", "IDs and the unreached tail cannot open a retry")
+    # An auto draft is generated under this invocation, and an identical failing prefix
+    # is refused before playback despite the validated draft and its different tail.
+    _write_request(root, "auto")
+    auto = _execute(root, _adapter(), "verify-browser", env=env)
+    assert_true(auto["meta"]["e2e"]["reason"] == "repeat_failure" and not auto["meta"]["e2e"].get("artifacts"),
+                "auto compares its fresh draft before opening the browser")
+    invalid = _scenario()
+    invalid["steps"].pop()
+    assert_true(_run(root, adapter, invalid, env=env)["meta"]["e2e"]["reason"] == "spec_invalid",
+                "a retry never admits an invalid candidate")
+    # A second assertion covers the same claim. The new player run can really pass
+    # without ever exercising the old condition.
+    shortened = _scenario()
+    shortened["steps"][-1] = sibling
+    start = _SPEC_REPLY.index('{"version": 1')
+    end = _SPEC_REPLY.index("\n```", start)
+    shortened_spec = _SPEC_REPLY[:start] + json.dumps(shortened) + _SPEC_REPLY[end:]
+    prepared = _draft(root, _adapter(spec=shortened_spec), env=env)
+    assert_true(_draft_info(prepared)["status"] == "ready", "draft alone does not spend the retry")
+    _write_request(root, "auto")
+    material_auto = _execute(root, _adapter(spec=shortened_spec), "verify-browser", env=env)
+    for invocation, result in enumerate([material_auto, _run(root, adapter, shortened, env=env)]):
+        meta = result["meta"]["e2e"]
+        if invocation == 0:
+            assert_true(meta["repeat_released"]["by"] == "strategy_changed" and
+                        "assert-dashboard" in meta["repeat_released"]["changes"][0]["previous"], "removed failed assertion admits retry")
+        gap = meta["coverage_gaps"][0]
+        assert_true(gap["step"] == "assert-dashboard" and meta["browser_verdict"] == "pass" and
+                    result["meta"]["verdict"] == "incomplete" and "assert-dashboard" in result["content"],
+                    "a current browser pass retains the prior assertion in verification")
+        directory = Path(meta["artifacts"])
+        assert_true(read_json_file(directory / "report.json")["coverage_gaps"] == [gap] and
+                    gap["run"] in (directory / "evidence.md").read_text(encoding="utf-8"), "reviewer receives the original receipt")
+        assert_true("repeat_failures_resolved" not in meta, "a partial pass cannot retire the failure hint")
+    fake_player = e2e_runner.run_player
+    def pass_url_predicate(*args, **kwargs):
+        playback = fake_player(*args, **kwargs)
+        # Supply the sample Chromium's URL predicate returns. The generic fake
+        # only reports the end-of-step URL, which cannot stand in for that sample.
+        base = json.loads(kwargs["stdin_payload"])["config"]["base_url"]
+        for event in playback["events"]:
+            if event.get("action") == "expect_url" and event.get("status") == "passed":
+                event["actual"] = {"url": base.rstrip("/") + "/dashboard"}
+        return playback
+
+    with patch.object(e2e_runner, "run_player", side_effect=pass_url_predicate):
+        restored = _run(root, adapter, original, env=env)["meta"]["e2e"]
+    assert_true(restored["coverage_gaps"] == [] and restored.get("repeat_failures_resolved"),
+                "an observed equivalent pass discharges the gap")
+    state_text = workflow_paths(root, _SESSION_ID)["state"].read_text(encoding="utf-8")
+    assert_true(env["E2E_USER"] not in state_text, "retry state cannot contain a resolved credential")
+
+    # A v2 receipt identifies the target but did not bind the preceding dynamic fill.
+    prior = legacy_repeat["strategy"]
+    prior["version"] = 2
+    for row in prior["steps"]:
+        row.pop("input_token", None)
+    state = read_json_file(state_path)
+    state["e2e_repeat"] = legacy_repeat
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with patch.object(e2e_runner, "run_player", side_effect=pass_url_predicate):
+        legacy = _run(root, adapter, original, env=env, settings={"ignore_repeat_brake": True})
+    assert_true(legacy["meta"]["verdict"] == "incomplete" and
+                any(g["step"] == "assert-dashboard" for g in legacy["meta"]["e2e"]["coverage_gaps"]),
+                "legacy evidence without the required input binding cannot discharge a known target")
+
+    root = workspace("e2e-interrupted-strategy-")
+    baseline = _scenario()
+    baseline["steps"][-1] = dict(sibling, contains=404)
+    del baseline["steps"][-1]["equals"]
+    baseline["steps"].append(_scenario()["steps"][-1])
+    for _ in range(E2E_REPEAT_LIMIT):
+        _run(root, adapter, baseline, fake="app_fail", env=env)
+    baseline["steps"][-2]["contains"] = "404"
+    held = _run(root, adapter, baseline, env=env)["meta"]["e2e"]
+    assert_true(held["reason"] == "repeat_failure" and not held.get("artifacts"),
+                "numeric and string predicates with identical player behavior remain blocked")
+    # Lose the outcome after dispatch. Cleanup releases the invocation lock, while
+    # the next worker must still remember every candidate that may have acted.
+    class Interrupted(BaseException):
+        pass
+
+    for predicate, tail, dispatch in (("A", "/a", True), ("A", "/other", False),
+                                      ("B", "/b", True), ("A", "/a", False)):
+        candidate = json.loads(json.dumps(baseline))
+        candidate["steps"][-2]["contains"] = predicate
+        candidate["steps"][-1]["contains"] = tail
+        with patch.object(e2e_runner, "run_player", side_effect=Interrupted) as player:
+            try:
+                outcome = _run(root, adapter, candidate, env=env)
+            except Interrupted:
+                assert_true(dispatch, f"duplicate dispatch for {predicate}, {tail}")
+            else:
+                assert_true(not dispatch and outcome["meta"]["e2e"]["reason"] == "repeat_failure",
+                            "an interrupted candidate must be refused before playback")
+            assert_true(player.call_count == int(dispatch), "only material new candidates reach the player")
+    baseline["steps"][0]["ready"] = [{"url": "/login"}]
+    interrupted = _run(root, adapter, baseline, fake="launch_fail", env=env)["meta"]["e2e"]
+    assert_true(interrupted["repeat_released"]["by"] == "strategy_changed" and interrupted["browser_verdict"] == "incomplete",
+                "a material attempt with the retained assertion can stop before any step")
+    del baseline["steps"][-2]
+    reduced = _run(root, adapter, baseline, env=env)
+    assert_true(reduced["meta"]["verdict"] == "incomplete" and
+                any(g["step"] == "title" for g in reduced["meta"]["e2e"]["coverage_gaps"]),
+                "a harness outcome does not erase the unexercised assertion's receipt")
+    state_path = workflow_paths(root, _SESSION_ID)["state"]
+    state = read_json_file(state_path)
+    retained = next(iter(state["e2e_coverage_gaps"].values()))
+    retained[0]["target"] = []
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    broken = _run(root, adapter, baseline, env=env)["meta"]["e2e"]
+    assert_true(broken["reason"] == "harness_error" and not broken.get("artifacts"),
+                "malformed stored target stops with a structured history error before playback")
+
+    root = workspace("e2e-interrupted-project-tests-")
+    marker = root / ".workflow" / "dispatch-count"
+    script = "from pathlib import Path\nwith Path('.workflow/dispatch-count').open('a') as out: out.write('x')\n"
+    for path in ("one.py", "two.py"):
+        (root / path).write_text(script, encoding="utf-8")
+    url_log = root / ".workflow" / "url-arguments"
+    (root / "receive_url.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "with Path('.workflow/url-arguments').open('a') as out: print(sys.argv[1], file=out)\n",
+        encoding="utf-8",
+    )
+    settings = {"existing_test_command": [sys.executable, "{files}"], "existing_test_allowlist": ["*.py"],
+                "base_url": "http://localhost:8000/a"}
+    other_url = "http://localhost:8000/b"
+    original = _scenario()
+    for _ in range(E2E_REPEAT_LIMIT):
+        _run(root, adapter, original, fake="app_fail", env=env, settings=settings)
+    first = [{"path": "one.py", "covers": ["login-valid-user"]}]
+    second = [{"path": "two.py", "covers": ["login-valid-user"]}]
+    run_tests = e2e_runner.e2e_existing.run
+
+    def interrupt_after_tests(*args, **kwargs):
+        assert_true(run_tests(*args, **kwargs)["status"] == "passed", "real command reached the fixture")
+        raise Interrupted
+
+    original["steps"][-1]["contains"] = "/changed"
+    with patch.object(e2e_runner.e2e_existing, "run", side_effect=interrupt_after_tests), \
+            patch.object(e2e_runner, "run_player") as player:
+        try:
+            _run(root, adapter, original, env=env, settings=settings, existing_tests=first)
+        except Interrupted:
+            pass
+        assert_true(marker.read_text() == "x" and not player.called, "interruption falls between the two stages")
+    original["steps"][-1]["contains"] = "/different"
+    held = _run(root, adapter, original, env=env, settings=settings, existing_tests=first)
+    assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure" and marker.read_text() == "x",
+                "changing the browser predicate cannot rerun an interrupted project command")
+    held = _run(root, adapter, original, env=env, settings=dict(settings, base_url=other_url), existing_tests=first)
+    assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure" and marker.read_text() == "x",
+                "a different base path that never reaches the command cannot replay the same subprocess")
+    held = _run(root, adapter, original, env=env, settings=settings, existing_tests=second + first)
+    assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure" and marker.read_text() == "x",
+                "adding or reordering files cannot rerun a reserved test")
+    with patch.object(e2e_runner.e2e_existing, "run", side_effect=interrupt_after_tests):
+        try:
+            _run(root, adapter, original, env=dict(env, E2E_USER="alternate-fixture"),
+                 settings=settings, existing_tests=first)
+        except Interrupted:
+            pass
+    assert_true(marker.read_text() == "xx", "a distinct project-test input has its own reservation")
+    held = _run(root, adapter, original, env=env, settings=settings, existing_tests=first)
+    state_text = workflow_paths(root, _SESSION_ID)["state"].read_text(encoding="utf-8")
+    assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure" and
+                all(value not in state_text for value in (env["E2E_USER"], "alternate-fixture")),
+                "the first reservation survives the second without persisting either input")
+    url_test = [{"path": "receive_url.py", "covers": ["login-valid-user"]}]
+    url_settings = dict(settings, existing_test_command=[sys.executable, "{files}", "--target={base_url}"])
+    with patch.object(e2e_runner.e2e_existing, "run", side_effect=interrupt_after_tests):
+        for url in (settings["base_url"], other_url):
+            try:
+                _run(root, adapter, original, env=env, settings=dict(url_settings, base_url=url), existing_tests=url_test)
+            except Interrupted:
+                pass
+    expected_args = ["--target=" + url for url in (settings["base_url"], other_url)]
+    held = _run(root, adapter, original, env=env, settings=url_settings, existing_tests=url_test)
+    assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure" and url_log.read_text().splitlines() == expected_args,
+                "each distinct expanded URL argument reaches the subprocess once, including after interruption")
+    original["steps"][-1]["contains"] = "/changed"
+    fresh = _run(root, adapter, original, env=env, settings=settings, existing_tests=second)
+    assert_true(fresh["meta"]["e2e"]["existing_tests"]["status"] == "passed" and marker.read_text() == "xxx",
+                "a disjoint project test and the never-dispatched browser prefix can run")
+
+
+def _check_origin_alias_history(workspace):
+    from exoma.core.evidence.e2e.spec import assertion_observations, dispatch_prefix, strategy_steps
+    from exoma.core.runtime.state import browser_receipt_key, load_workspace_state
+
+    for before, after in (("http://localhost:80", "http://localhost"),
+                          ("https://localhost", "https://localhost:443")):
+        root = workspace("e2e-browser-alias-")
+        adapter, original = _adapter(), _scenario()
+        values = {"E2E_USER": "alias-fixture"}
+        loaded = load_workspace_state(root, _SESSION_ID)
+        path = loaded["paths"]["state"]
+        key = browser_receipt_key(root)
+        scope = (str(root.resolve()), _SESSION_ID, before)
+        rows = strategy_steps(original, before, values=values, receipt_key=key,
+                              receipt_scope=scope, legacy=True)
+        row = rows[-1]
+        sample = {"type": "progress", "status": "failed", "error": {"kind": "assertion"},
+                  "step_id": row["id"], "actual": {"url": before + "/login"}}
+        target = assertion_observations(rows, [sample], before, legacy=True)[row["proof"]]["target"]
+        gap = {"step": row["id"], "claim": row["claim"], "proof": row["proof"], "target": target,
+               "input_token": row["input_token"], "attempt": 1, "run": "original"}
+        state = loaded["state"]
+        state["e2e_coverage_gaps"] = {before: [dict(gap, removed=True)], after: [gap]}
+        path.write_text(json.dumps(state), encoding="utf-8")
+        reduced = dict(original, steps=[*original["steps"][:-1], {
+            "id": "title", "action": "expect_title", "equals": "Dashboard", "claim_id": row["claim"]}])
+        def run(scenario, base):
+            return _run(root, adapter, scenario, env=values, settings={"base_url": base})
+
+        partial = run(reduced, after)
+        gaps = partial["meta"]["e2e"]["coverage_gaps"]
+        assert_true(_verify_exit_code("verify", partial) == 2 and len(gaps) == 1 and gaps[0]["removed"]
+                    and gaps[0]["step"] == "assert-dashboard", "both spellings retain the stricter old gap")
+        other = run(reduced, "http://localhost:8080")
+        assert_true(_verify_exit_code("verify", other) == 0, "the other port has independent obligations")
+        player = e2e_runner.run_player
+        def passed(*args, **kwargs):
+            playback = player(*args, **kwargs)
+            for event in playback["events"]:
+                if event.get("action") == "expect_url" and event.get("status") == "passed":
+                    event["actual"] = {"url": after + "/dashboard"}
+            return playback
+        with patch.object(e2e_runner, "run_player", side_effect=passed):
+            restored = run(original, after)
+        assert_true(_verify_exit_code("verify", restored) == 0 and not restored["meta"]["e2e"]["coverage_gaps"],
+                    "the matching observation under the other spelling retires the original receipt")
+
+        # An older executable reserved the changed prefix, then stopped. Neither
+        # a new base spelling nor release of its runtime streak proves it finished.
+        basis = {"version": 3, "steps": rows, "failed": len(rows) - 1, "run": "prior", "attempt": 1,
+                 "observations": {row["proof"]: {"target": target, "status": "failed"}}}
+        candidate = _scenario()
+        candidate["steps"][-1]["contains"] = "/repair"
+        prior_rows = strategy_steps(candidate, before, legacy=True)
+        state = read_json_file(path)
+        state["e2e_repeat"] = {"strategy": basis, "admitted": [dispatch_prefix(basis, prior_rows)],
+                               "origin": before, "bucket": "app", "streak": 3, "signature": "historical",
+                               "test_dispatches": [], "runtime": "older"}
+        path.write_text(json.dumps(state), encoding="utf-8")
+        with patch.object(e2e_runner, "run_player") as player:
+            for _ in range(2):
+                held = run(candidate, after)
+                assert_true(held["meta"]["e2e"]["reason"] == "repeat_failure" and not player.called,
+                            "legacy dispatch stays reserved across the default port and runtime change")
+
+
+def _check_padded_dispatch_history(workspace):
+    from exoma.core.evidence.e2e.spec import dispatch_prefix, strategy_steps
+    from exoma.core.runtime.state import load_workspace_state
+
+    for scheme, port in (("http", "80"), ("https", "443")):
+        host = f"{scheme}://localhost:"
+        standard, padded, pinned, old_base = [host + zeros + port for zeros in ("", "0", "000", "00000")]
+        other_port = host + "8080"
+        root = workspace("e2e-padded-reservation-")
+        loaded = load_workspace_state(root, _SESSION_ID)
+        state, path = loaded["state"], loaded["paths"]["state"]
+        adapter = _adapter()
+        settings = {"base_url": standard, "allowed_origins": [pinned, other_port]}
+
+        number = 0 if scheme == "http" else 123
+
+        def scenario(urls, equals, assertion_id="check-url"):
+            navigation = [{"action": "goto", "id": f"open-{n}", "url": url} for n, url in enumerate(urls)]
+            navigation.insert(1, {"action": "expect_url", "id": assertion_id, "equals": equals,
+                                  "claim_id": "login-valid-user"})
+            return dict(_scenario(), steps=[*navigation, {
+                "action": "expect_title", "id": "title", "equals": "Ready", "claim_id": "login-valid-user"}])
+
+        suffix = "/replacement?q=1#top"
+        failed = scenario(["/first", "/second", "/old"], "/old-predicate")
+        basis = {"version": 3, "steps": strategy_steps(failed, old_base, legacy=True),
+                 "failed": 3, "observations": {}, "run": "legacy", "attempt": 1}
+        replacement = scenario([padded + "/first", pinned + "/second", old_base + suffix], str(number))
+        reserved = dispatch_prefix(basis, strategy_steps(replacement, old_base, legacy=True))
+        state["e2e_repeat"] = {"origin": old_base, "bucket": "app", "streak": 3, "runtime": "older",
+                               "signature": "legacy", "strategy": basis, "admitted": [reserved]}
+        path.write_text(json.dumps(state), encoding="utf-8")
+
+        def retry(last, equals=number, assertion_id="check-url"):
+            steps = scenario([standard + "/first", standard + "/second", last], equals, assertion_id)
+            return _run(root, adapter, steps, settings=settings)
+
+        with patch.object(e2e_runner, "run_player", side_effect=AssertionError("reserved prefix reached playback")):
+            for _ in range(2):
+                assert_true(retry(standard + suffix)["meta"]["e2e"].get("reason") == "repeat_failure",
+                            "reloading a mixed padded prefix must still refuse an equivalent dispatch")
+            assert_true(retry(standard + suffix, assertion_id="renamed")["meta"]["e2e"].get("reason") == "repeat_failure",
+                        "renaming a numeric URL assertion still matches the reserved string operand")
+            assert_true(retry(padded + suffix)["meta"]["e2e"].get("reason") == "spec_invalid",
+                        "a legacy key alternative cannot authorize navigation to an unlisted literal origin")
+
+        for distinct in (standard + "/different?q=1#top", standard + "/replacement?q=2#top",
+                         standard + "/replacement?q=1#other", other_port + suffix):
+            path.write_text(json.dumps(state), encoding="utf-8")
+            with patch.object(e2e_runner, "run_player", wraps=e2e_runner.run_player) as player:
+                retry(distinct)
+            player.assert_called_once()
+
+        path.write_text(json.dumps(state), encoding="utf-8")
+        with patch.object(e2e_runner, "run_player", wraps=e2e_runner.run_player) as player:
+            retry(standard + suffix, equals=number + 1)
+        player.assert_called_once()
+
+
+def _check_legacy_occurrences_and_operands(workspace):
+    from exoma.core.evidence.e2e.spec import assertion_observations, dispatch_prefix, strategy_steps
+    from exoma.core.runtime.state import load_workspace_state
+
+    implicit, explicit = "http://localhost", "http://localhost:80"
+    root = workspace("e2e-legacy-occurrences-")
+    adapter = _adapter()
+    loaded = load_workspace_state(root, _SESSION_ID)
+    state, path = loaded["state"], loaded["paths"]["state"]
+    start = {"action": "goto", "id": "start", "url": "/start"}
+    absolute = {"action": "goto", "id": "open", "url": explicit + "/account"}
+    more = {"action": "goto", "id": "details", "url": implicit + "/details"}
+    first = {"action": "expect_url", "id": "first", "equals": explicit + "/dashboard", "claim_id": "login-valid-user"}
+    second = dict(first, id="second", equals=implicit + "/dashboard")
+    original = dict(_scenario(), steps=[start, absolute, more, first, second])
+    rows = strategy_steps(original, implicit, legacy=True)
+    sample = {"type": "progress", "status": "failed", "error": {"kind": "assertion"},
+              "step_id": "first", "actual": {"url": implicit + "/details"}}
+    observations = assertion_observations(rows, [sample], implicit, legacy=True)
+    basis = {"version": 3, "steps": rows, "failed": 3, "run": "old-run", "attempt": 1, "observations": observations}
+    state["e2e_repeat"] = {"strategy": basis, "admitted": [], "origin": implicit, "bucket": "app",
+                           "test_dispatches": [], "streak": 3, "signature": "old-signature", "runtime": "older"}
+    current = [start, dict(absolute, url=implicit + "/account"), dict(more, url=explicit + "/details")]
+    changed = dict(first, equals=implicit + "/repaired")
+    old_candidate = dict(original, steps=[start, absolute, more, dict(changed, equals=explicit + "/repaired")])
+    reserved = dispatch_prefix(basis, strategy_steps(old_candidate, implicit, legacy=True))
+    state["e2e_repeat"]["admitted"] = [reserved]
+    path.write_text(json.dumps(state), encoding="utf-8")
+    padded = "http://localhost:080"
+    def run(steps):
+        return _run(root, adapter, dict(original, steps=steps),
+                    settings={"base_url": explicit, "allowed_origins": [implicit, explicit, padded]})
+
+    with patch.object(e2e_runner, "run_player") as player:
+        held = run([*current, changed])
+        assert_true(held["meta"]["e2e"]["reason"] == "repeat_failure" and not player.called,
+                    f"mixed-prefix reservation should block dispatch: {held['content']}")
+
+    # The reservation contains a replacement URL absent from the failed basis.
+    replacement = dict(absolute, url=explicit + "/replaced")
+    reserved_steps = [start, replacement, more, changed]
+    state["e2e_repeat"]["admitted"] = [dispatch_prefix(
+        basis, strategy_steps(dict(original, steps=reserved_steps), implicit, legacy=True))]
+    path.write_text(json.dumps(state), encoding="utf-8")
+    with patch.object(e2e_runner, "run_player", side_effect=AssertionError("reserved prefix reached playback")) as player:
+        held = run([start, dict(replacement, url=padded + "/replaced"), more, changed])
+        assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure" and not player.called,
+                    "a padded default port must match the persisted standard-port reservation before playback")
+    path.write_text(json.dumps(state), encoding="utf-8")
+    with patch.object(e2e_runner, "run_player", wraps=e2e_runner.run_player) as player:
+        distinct = run([start, dict(replacement, url=padded + "/different"), more, changed])
+        release = distinct["meta"]["e2e"]["repeat_released"]
+        assert_true(player.call_count == 1 and release["by"] == "runtime_changed" and release["changes"],
+                    "a different replacement path can run and report its strategy changes after upgrade")
+
+    state["e2e_repeat"]["admitted"] = []
+    def reset():
+        path.write_text(json.dumps(state), encoding="utf-8")
+    reset()
+    actual_player = e2e_runner.run_player
+    def passed(*args, **kwargs):
+        playback = actual_player(*args, **kwargs)
+        for event in playback["events"]:
+            if event.get("action") == "expect_url" and event.get("status") == "passed":
+                event["actual"] = {"url": implicit + "/dashboard"}
+        return playback
+    with patch.object(e2e_runner, "run_player", side_effect=passed):
+        partial = run([*current, first])
+        gaps = partial["meta"]["e2e"]["coverage_gaps"]
+        assert_true(_verify_exit_code("verify", partial) == 2 and [g["step"] for g in gaps] == ["second"]
+                    and gaps[0]["removed"], "one observed occurrence leaves the other removed and outstanding")
+        again = run([*current, first])
+        assert_true(_verify_exit_code("verify", again) == 2, "repeating a reduced run cannot reuse its witness")
+        reset()
+        restored = run([*current, first, second])
+        assert_true(_verify_exit_code("verify", restored) == 0 and not restored["meta"]["e2e"]["coverage_gaps"],
+                    "two observed occurrences close the two receipts on the original mixed-spelling flow")
+        # Both original targets are known when the later assertion failed. A
+        # repeated single observation must still be insufficient, even after a
+        # fresh invocation reloads the gap. Restoring both must allow recovery.
+        basis["failed"] = 4
+        basis["observations"] = assertion_observations(rows, [
+            dict(sample, status="passed", error=None),
+            dict(sample, step_id="second")], implicit, legacy=True)
+        reset()
+        for _ in range(2):
+            reduced = run([*current, first])
+            assert_true(_verify_exit_code("verify", reduced) == 2, "a known target cannot reuse a spent occurrence")
+        restored = run([*current, first, second])
+        assert_true(_verify_exit_code("verify", restored) == 0, "restoring the second known target closes the ledger")
+
+        # Write an explicit-base history whose field order differs from ID
+        # sort order. The restored operands both use the implicit spelling.
+        first = dict(first, id="z-first", equals=implicit + "/dashboard")
+        second = dict(second, id="a-second", equals=explicit + "/dashboard")
+        rows = strategy_steps(dict(original, steps=[start, absolute, more, first, second]), explicit, legacy=True)
+        basis.update(steps=rows, observations=assertion_observations(rows, [
+            dict(sample, step_id=first["id"], status="passed", error=None),
+            dict(sample, step_id=second["id"])], explicit, legacy=True))
+        state["e2e_repeat"]["origin"] = explicit
+        reset()
+        partial = run([*current, first])
+        assert_true(_verify_exit_code("verify", partial) == 2, "the reduced run persists one outstanding receipt")
+        renamed = dict(first, id="renamed-first", equals=implicit + "/dashboard")
+        partial = run([*current, renamed])
+        assert_true(_verify_exit_code("verify", partial) == 2, "renaming one occurrence cannot spend it twice")
+        renamed_second = dict(renamed, id="renamed-second")
+        wrong = run([*current, renamed, dict(renamed_second, equals=implicit + "/other")])
+        assert_true(_verify_exit_code("verify", wrong) == 2, "a different URL predicate cannot retire the receipt")
+        restored = run([*current, renamed, renamed_second])
+        assert_true(_verify_exit_code("verify", restored) == 0 and not restored["meta"]["e2e"]["coverage_gaps"],
+                    "two renamed equivalent assertions recover both known legacy targets after reload")
+
+
+def _check_interrupted_test_upgrade(workspace) -> None:
+    from exoma.core.runtime.state import E2E_REPEAT_LIMIT
+
+    class Interrupted(BaseException):
+        pass
+
+    run_tests = e2e_runner.e2e_existing.run
+    def stop_after_command(*args, **kwargs):
+        assert_true(run_tests(*args, **kwargs)["status"] == "passed", "the subprocess ran before interruption")
+        raise Interrupted
+
+    for layout, before, after in (
+        ("embedded-v1", "http://localhost:80", "http://localhost"),
+        ("embedded-v2", "https://localhost:443", "https://localhost"),
+        ("legacy-map", "http://localhost", "http://localhost:80"),
+        ("current", "https://localhost", "https://localhost:443"),
+        ("legacy-map", "http://localhost:80", "http://localhost"),
+        ("current", "http://localhost:8000", "http://localhost:8000"),
+    ):
+        root = workspace("e2e-test-upgrade-")
+        settings = {"base_url": before + "/a", "existing_test_command": [sys.executable, "{files}"],
+                    "existing_test_allowlist": ["*.py"]}
+        script = ("from pathlib import Path\n"
+                  "with Path('.workflow/calls').open('a') as f: print(Path(__file__).name, file=f)\n")
+        for name in ("original.py", "unrelated.py"):
+            (root / name).write_text(script, encoding="utf-8")
+        selected = [{"path": "original.py", "covers": ["login-valid-user"]}]
+        unrelated = [{"path": "unrelated.py", "covers": ["login-valid-user"]}]
+        adapter, scenario = _adapter(), _scenario()
+        env = {"E2E_USER": "upgrade-fixture"}
+        with patch.object(e2e_runner, "runtime_identity", return_value="prior-build"):
+            for _ in range(E2E_REPEAT_LIMIT):
+                _run(root, adapter, scenario, settings=settings, env=env, fake="app_fail")
+            scenario["steps"][-1]["contains"] = "/repair"
+            origin_key = e2e_runner.reservation_origin if layout == "current" else str
+            with patch.object(e2e_runner, "reservation_origin", origin_key), \
+                    patch.object(e2e_runner.e2e_existing, "run", side_effect=stop_after_command):
+                try:
+                    _run(root, adapter, scenario, settings=settings, env=env, existing_tests=selected)
+                except Interrupted:
+                    pass
+        calls = root / ".workflow" / "calls"
+        assert_true(calls.read_text().splitlines() == ["original.py"], "old build dispatched exactly once")
+        other = dict(settings, base_url="http://localhost:8001/a")
+        if layout.startswith("embedded-"):
+            # Both candidate builds originally kept receipts inside the streak.
+            # The v1 key is incomparable; an embedded v2 receipt still identifies the file.
+            path = workflow_paths(root, _SESSION_ID)["state"]
+            state = read_json_file(path)
+            state["e2e_repeat"]["origin"] = before
+            receipts = state.pop("e2e_pending_tests")[before]
+            if layout == "embedded-v1":
+                receipts = [{"key": "a" * 64, "files": ["b" * 64]}]
+            state["e2e_repeat"]["test_dispatches"] = receipts
+            path.write_text(json.dumps(state), encoding="utf-8")
+        if layout == "embedded-v2":
+            # Visiting a different origin first can replace the old streak too.
+            _run(root, adapter, scenario, settings=other, env=env)
+        settings["base_url"] = after + "/a"
+        held = _run(root, adapter, scenario, settings=settings, env=env, existing_tests=selected)["meta"]["e2e"]
+        if before == after:
+            assert_true(held.get("repeat_released", {}).get("by") == "runtime_changed", "runtime change releases the old streak")
+        assert_true(held.get("reason") == "repeat_failure" and calls.read_text().splitlines() == ["original.py"],
+                    "releasing an old runtime streak must preserve its interrupted subprocess")
+        _run(root, adapter, scenario, settings=other, env=env, existing_tests=selected)
+        _run(root, adapter, scenario, settings=settings, env=env)
+        if layout != "embedded-v1":
+            for _ in range(2):
+                _run(root, adapter, scenario, settings=settings, env=env, existing_tests=unrelated)
+        held = _run(root, adapter, scenario, settings=dict(settings, ignore_repeat_brake=True),
+                    env=env, existing_tests=selected)["meta"]["e2e"]
+        expected = ["original.py", "original.py"] + ([] if layout == "embedded-v1" else ["unrelated.py"] * 2)
+        assert_true(held.get("reason") == "repeat_failure" and calls.read_text().splitlines() == expected,
+                    "other outcomes clear only their own reservation; the interrupted command stays held")
+        if layout == "current" and before != after:
+            settings["existing_test_command"] = [sys.executable, "{files}", "{base_url}"]
+            with patch.object(e2e_runner.e2e_existing, "run", side_effect=stop_after_command):
+                for spelling in (before, after):
+                    try:
+                        _run(root, adapter, scenario, env=env, existing_tests=selected,
+                             settings=dict(settings, base_url=spelling + "/a", ignore_repeat_brake=True))
+                    except Interrupted:
+                        pass
+            assert_true(calls.read_text().splitlines() == expected + ["original.py"] * 2,
+                        "canonical origins preserve differences in actual expanded argv")
+
+
+def _check_corrupt_history_and_timeout(workspace):
+    from exoma.core.runtime.state import load_workspace_state
+
+    root = workspace("e2e-corrupt-history-")
+    loaded = load_workspace_state(root, _SESSION_ID)
+    path = loaded["paths"]["state"]
+    for field in ("e2e_pending_tests", "e2e_coverage_gaps"):
+        path.write_text(json.dumps({**loaded["state"], field: "broken"}))
+        for phase in ("draft", "auto", "run"):
+            _write_request(root, phase, scenario=_scenario() if phase == "run" else None)
+            with patch.object(e2e_runner, "run_player") as player, patch.object(e2e_runner, "_draft") as provider:
+                meta = _execute(root, _adapter(), "verify-browser")["meta"]
+            assert_true(meta["e2e"]["reason"] == "harness_error" and not player.called and not provider.called
+                        and read_json_file(path)[field] == "broken", "invalid history is preserved before dispatch")
+            if phase == "run":
+                assert_true(meta["verdict"] == "incomplete", "run retains its verification envelope")
+            else:
+                assert_true(meta["phase"] == "draft" and "verdict" not in meta
+                            and meta["e2e"]["draft"]["status"] == "blocked", "preparation returns a blocked draft")
+
+    root = workspace("e2e-timeout-reservation-")
+    (root / "sample.py").write_text("pass")
+    selected = [{"path": "sample.py", "covers": ["login-valid-user"]}]
+    settings = {"existing_test_command": [sys.executable, "{files}"], "existing_test_allowlist": ["*.py"]}
+    kwargs = dict(settings=settings, env={"E2E_USER": "fixture"}, existing_tests=selected)
+    timeout = {"status": "timeout", "returncode": None, "duration_seconds": 1, "files": ["sample.py"],
+               "covers": ["login-valid-user"], "output_tail": "", "cleanup_confirmed": False}
+    with patch.object(e2e_runner.e2e_existing, "run", return_value=timeout) as command:
+        with patch.object(e2e_runner, "run_player", wraps=e2e_runner.run_player) as player:
+            interrupted = _run(root, _adapter(), _scenario(), **kwargs)
+        player.assert_not_called()
+        meta = interrupted["meta"]
+        details = meta["e2e"]
+        report = read_json_file(Path(details["artifacts"]) / "report.json")
+        stage = next(s for s in details["stages"] if s["stage"] == 2)
+        assert_true(meta["verdict"] == "incomplete" and report["reason"] == "timeout"
+                    and not report["finished"] and report["steps"]["total"] == 0
+                    and report["existing_tests"][0]["cleanup_confirmed"] is False
+                    and stage["status"] == "skipped" and stage["attempts"] == 0,
+                    "an uncertain project timeout produces a durable incomplete report before any browser attempt")
+        _run(root, _adapter(), _scenario(), settings=settings, env=kwargs["env"])
+        settings["ignore_repeat_brake"] = True
+        held = _run(root, _adapter(), _scenario(), **kwargs)
+        assert_true(command.call_count == 1 and held["meta"]["e2e"]["reason"] == "repeat_failure",
+                    "even a durable timeout report cannot release a possibly live subprocess")
+
+    (root / "second.py").write_text("from pathlib import Path\nwith Path('.workflow/effects').open('a') as f: f.write('x')\n")
+    selected[0] = dict(selected[0], path="second.py")
+    write_json = e2e_runner.e2e_redact.write_json
+    def fail_report(path, payload):
+        if path.name == "report.json":
+            raise OSError("report unavailable")
+        return write_json(path, payload)
+
+    with patch.object(e2e_runner.e2e_redact, "write_json", side_effect=fail_report):
+        try:
+            _run(root, _adapter(), _scenario(), **kwargs)
+        except OSError:
+            pass
+    held = _run(root, _adapter(), _scenario(), **kwargs)
+    assert_true(held["meta"]["e2e"]["reason"] == "repeat_failure" and (root / ".workflow/effects").read_text() == "x",
+                "a command whose report could not be stored stays reserved")
+
+
 def _check_auto_browser_flow(workspace) -> None:
     """One invocation owns preparation, gates, player and review, without file handoff."""
     root = workspace("e2e-auto-current-")
@@ -651,6 +1257,53 @@ def _check_browser_usage_is_one_row_per_invocation(root: Path) -> None:
     assert_true(statusline_calls == report["calls"], f"statusline and report agree on second-agent calls: {statusline_calls} vs {report['calls']}")
 
 
+def _check_withheld_repeat_routes(workspace) -> None:
+    from exoma.core.runtime.state import e2e_repeat_state
+
+    scenario = _scenario()
+    adapter = _adapter()
+    play = e2e_runner.run_player
+    for routes, expected in (
+        (["alpha", "beta", "gamma", "delta"], [1, 1, 1, 1]),
+        (["alpha/12?q=1", "alpha/34?q=2", "alpha/56?q=3"], [1, 2, 3]),
+        (["items/12?q=a", "items/34?q=z", "items/56?q=a"], [1, 2, 3]),
+    ):
+        root = workspace("e2e-private-repeat-")
+        for route, streak in zip(routes, expected):
+            url = "http://127.0.0.1/" + route
+
+            def redirected(*args, **kwargs):
+                run = play(*args, **kwargs)
+                for event in run["events"]:
+                    if event.get("type") == "progress" and event.get("status") == "failed":
+                        event["url_after"] = url
+                return run
+
+            with patch.object(e2e_runner, "run_player", side_effect=redirected) as player:
+                result = _run(root, adapter, scenario, fake="app_fail", env={"E2E_USER": "a"})
+            meta = result["meta"]["e2e"]
+            assert_true(player.call_count == 1 and meta.get("browser_verdict") == "fail",
+                        "a different failed route must reach the player")
+            record = e2e_repeat_state(root, _SESSION_ID)
+            assert_true(record["streak"] == streak, f"expected streak {streak} after {route}, got {record['streak']}")
+            prefix = "v1:" if route.startswith("items/") else "private-v1:"
+            assert_true(record["signature"].startswith(prefix), "only a private normalized route requires a keyed signature")
+            failure = read_json_file(Path(meta["artifacts"]) / "report.json")["failures"][0]
+            if "a" in route:
+                assert_true(failure["url_after"] == "[withheld]" and url not in json.dumps(record),
+                            "a private route stays out of the report and repeat state")
+        if expected[-1] == 3:
+            with patch.object(e2e_runner, "run_player") as player:
+                result = _run(root, adapter, scenario, fake="app_fail", env={"E2E_USER": "a"})
+            assert_true(not player.called and result["meta"]["e2e"]["reason"] == "repeat_failure",
+                        "three failures on the same normalized route block a fourth playback")
+
+    raw = {"type": "progress", "status": "failed", "step_id": "assert-dashboard", "url_after": "http://127.0.0.1/alpha"}
+    report = {"browser_verdict": "fail", "failures": [{**raw, "url_after": "[withheld]"}]}
+    assert_true(e2e_runner._repeat_signature(report, scenario, [raw], {"E2E_USER": "a"}, None, ()) is None,
+                "a missing private key cannot turn a hidden route into a shared signature")
+
+
 def _test_e2e_routing() -> None:
     roots: list[Path] = []
 
@@ -667,6 +1320,13 @@ def _test_e2e_routing() -> None:
     e2e_runner.display_available = lambda: True
     try:
         _check_failure_context()
+        _check_withheld_repeat_routes(workspace)
+        _check_strategy_retry(workspace)
+        _check_origin_alias_history(workspace)
+        _check_legacy_occurrences_and_operands(workspace)
+        _check_padded_dispatch_history(workspace)
+        _check_interrupted_test_upgrade(workspace)
+        _check_corrupt_history_and_timeout(workspace)
         _check_auto_browser_flow(workspace)
         # --- pass: draft (stage 1) → confirmed run → fake player → stage 3 clean → pass ---
         root = workspace("e2e-pass-")
