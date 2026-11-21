@@ -40,8 +40,18 @@ DIAGNOSTICS_WINDOW_DAYS = 7
 _DIAGNOSTIC_STAGES = frozenset({"git_rev_parse", "git_log", "append", "snapshot"})
 _DIAGNOSTIC_REASONS = frozenset({
     "git_timeout", "git_deadline_exceeded", "git_spawn_error",
-    "git_nonzero", "io_error", "lock_contention",
+    "git_nonzero", "io_error", "lock_contention", "invalid_snapshot",
 })
+
+
+def _parse_iso_aware(value: str | None) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
 
 
 def record_skill(project_root, session_id: str | None, skill: str, *, verdict: str | None = None,
@@ -71,9 +81,11 @@ def record_skill(project_root, session_id: str | None, skill: str, *, verdict: s
 def _valid_event(event) -> bool:
     if not isinstance(event, dict) or not isinstance(event.get("kind"), str) or event["kind"] not in ("skill", "edit", "commit"):
         return False
-    for key in ("session_id", "at", "skill", "path", "commit", "verdict", "derived", "prompt_id"):
+    for key in ("session_id", "at", "committed_at", "skill", "path", "commit", "verdict", "derived", "prompt_id"):
         if event.get(key) is not None and not isinstance(event[key], str):
             return False
+    if event.get("delayed") is not None and not isinstance(event["delayed"], bool):
+        return False
     paths = event.get("paths")
     return paths is None or isinstance(paths, str) or isinstance(paths, list) and all(isinstance(p, str) for p in paths)
 
@@ -89,6 +101,8 @@ def load_events(project_root, *, diagnostics: dict | None = None) -> list[dict]:
         return []
     events = []
     for line in text.splitlines():
+        if not line.strip():
+            continue
         try:
             event = json.loads(line)
         except (ValueError, RecursionError):
@@ -112,8 +126,10 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
     """Tasks in the order they started, and the number of commits no task claimed."""
     tasks: list[dict] = []
     current: dict[str | None, dict] = {}
-    # The task each session last completed: the commit recommended after its pass joins it.
-    closed: dict[str | None, dict] = {}
+    # Completed tasks per session in completion order: normal commits consider only the most
+    # recent closed task, while delayed retry commits can match earlier completed tasks whose
+    # start precedes `committed_at`.
+    closed: dict[str | None, list[dict]] = {}
     # A commit is recorded once per session whose turn saw HEAD move, so several copies of it
     # can arrive. Only the copy a task claims marks it taken: a copy from another session that
     # arrives first must not hide it from the session that made it. A commit is unclaimed when
@@ -133,9 +149,28 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
             listed = event.get("paths") or []
             paths = {str(p) for p in ([listed] if isinstance(listed, str) else listed)}
             owner = None
+            is_delayed = event.get("delayed") is True
             if session is not None:
-                for candidate in (current.get(session), closed.get(session)):
-                    if candidate is not None and candidate["edited"] & paths:
+                cur = current.get(session)
+                prev_list = closed.get(session) or []
+                committed_ts = _parse_iso_aware(event.get("committed_at")) if is_delayed else None
+                candidates = []
+                if is_delayed and committed_ts is not None:
+                    if cur is not None:
+                        cur_started = _parse_iso_aware(cur.get("started_at"))
+                        if cur_started is None or committed_ts >= cur_started.replace(microsecond=0):
+                            candidates.append(cur)
+                    for prev in reversed(prev_list):
+                        prev_started = _parse_iso_aware(prev.get("started_at"))
+                        if prev_started is None or committed_ts >= prev_started.replace(microsecond=0):
+                            candidates.append(prev)
+                else:
+                    if cur is not None:
+                        candidates.append(cur)
+                    if prev_list:
+                        candidates.append(prev_list[-1])
+                for candidate in candidates:
+                    if candidate["edited"] & paths:
                         owner = candidate
                         break
             if owner is None:
@@ -144,7 +179,11 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
             claimed_commits.add(commit)
             owner["sequence"].append("commit")
             owner["commit"] = commit
-            owner["ended_at"] = at
+            commit_at = (event.get("committed_at") if is_delayed else None) or at
+            owner_end_ts = _parse_iso_aware(owner.get("ended_at"))
+            commit_end_ts = _parse_iso_aware(commit_at)
+            if not is_delayed or owner_end_ts is None or commit_end_ts is None or commit_end_ts >= owner_end_ts:
+                owner["ended_at"] = commit_at
             continue
         task = current.get(session)
         if task is None:
@@ -165,7 +204,7 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
             task["verdict"] = verdict or None
             if str(event.get("derived") or "").strip().lower() == "pass" and task["edited"] and session is not None:
                 task["state"] = "completed"
-                closed[session] = task
+                closed.setdefault(session, []).append(task)
                 del current[session]
     for task in current.values():
         if task["session_id"] is None:
@@ -201,6 +240,7 @@ def load_hook_diagnostics(project_root, *, window_days: int = DIAGNOSTICS_WINDOW
     total = 0
     invalid = 0
     last_at: str | None = None
+    last_ts: datetime | None = None
     for line in text.splitlines():
         if not line.strip():
             continue
@@ -223,19 +263,14 @@ def load_hook_diagnostics(project_root, *, window_days: int = DIAGNOSTICS_WINDOW
             invalid += 1
             continue
         at = row.get("at")
-        if not isinstance(at, str):
+        ts = _parse_iso_aware(at)
+        if ts is None:
             invalid += 1
             continue
-        try:
-            ts = datetime.fromisoformat(at.replace("Z", "+00:00"))
-        except ValueError:
-            invalid += 1
-            continue
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
         if ts < cutoff:
             continue
-        if last_at is None or at > last_at:
+        if last_ts is None or ts > last_ts:
+            last_ts = ts
             last_at = at
         stage = row["stage"]
         reason = row["reason"]

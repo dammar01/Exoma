@@ -400,7 +400,10 @@ def _test_session_export() -> None:
         task_rows[0]["detail"] = "credential ghp_" + "c" * 36
         task_rows.append({"session_id": "other", "event": "edit"})
         (data / "tasks.jsonl").write_text(
-            "\n".join(json.dumps(row) for row in task_rows) + "\n{torn", encoding="utf-8")
+            json.dumps(task_rows[0]) + "\n\n"
+            + "\n".join(json.dumps(row) for row in task_rows[1:]) + "\n{torn",
+            encoding="utf-8",
+        )
         home = Path(tmp) / "home"
         home.mkdir()
 

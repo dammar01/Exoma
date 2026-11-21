@@ -1566,21 +1566,36 @@ blocking finding), `derived` (verify only: the runtime's derived verdict, `pass`
   independently of any local skill append. Each `Stop`, and each later `UserPromptSubmit`,
   acquires an OS-backed lock across snapshot read, commit append, and atomic cursor replacement,
   and runs Git observation (`rev-parse` + `git log`) within one shared 2-second monotonic wait
-  budget (sampled before each wait, with bounded post-timeout process-tree cleanup). On lock
-  contention, independent `skill`/`edit` events still append while Git observation is deferred.
-  When HEAD moved, the hook appends one row per commit in
-  `git log --reverse --first-parent -m --name-only --relative <snapshot>..HEAD` (`commit`,
-  `paths`) to `tasks.jsonl` before atomically advancing the snapshot. If `rev-parse` or
-  `git log` fails or times out (while ordinary non-repositories and unborn repositories stay
-  quiet before a baseline exists), independent `skill`/`edit` events still append, the previous
-  snapshot stays unchanged for retry, and the hook makes a best-effort attempt under a bounded
-  100 ms OS lock (dropping the diagnostic row on contention rather than racing with compaction)
-  to append a privacy-safe failure record (`stage`, `reason`, no prompt/path/command/stderr
-  text) to `.workflow/data/task-hook/diagnostics.jsonl` (surfaced by `task_telemetry.report()`
-  and `/.doctor`). Both task-stream writers run a best-effort read probe decoupled from write-only
-  append to guard against a prior torn line missing a trailing newline. A commit is therefore
-  recorded at the end of the turn that made it, after any verify in that turn; one made between
-  turns is recorded on the next prompt.
+  budget (re-sampled immediately before each `wait()`, with bounded post-timeout process-tree
+  cleanup). On lock contention, independent `skill`/`edit` events still append while Git
+  observation is deferred (without modifying `<session_id>.head.retry` outside the lock). When HEAD
+  moved, the hook appends one row per commit in
+  `git log --reverse --first-parent -m --format=commit:%H%x09%cI --name-only --relative <snapshot>..HEAD`
+  (`commit`, optional `committed_at`, `paths`, plus `delayed: true` strictly for commits up to and
+  including the proven failed `HEAD` OID recorded under the snapshot lock in
+  `<session_id>.head.retry`) to `tasks.jsonl` before atomically advancing the snapshot and clearing
+  the retry marker. Commits strictly after that bound (such as a newly fast-forwarded commit in the
+  same recovery batch) — or batches where no failed `HEAD` OID was known — stay untagged so
+  observation-order attribution is preserved. If `.head` holds invalid UTF-8, a
+  malformed OID, or an object that `git log` rejects as an invalid revision/bad object and
+  `git cat-file -t <oid>` confirms missing — AND `git cat-file -t <HEAD>` confirms the target
+  `HEAD` commit object is readable in the object store (so a temporarily unavailable object store
+  cannot trigger a false rebaseline) — the hook records `snapshot`/`invalid_snapshot` in diagnostics
+  and atomically rebaselines `.head` to the verified `HEAD` without dropping independent
+  `skill`/`edit` events.
+  If `rev-parse` or `git log` fails transiently or times out (while ordinary non-repositories and
+  unborn repositories stay quiet before a baseline exists), independent `skill`/`edit` events still
+  append, the previous snapshot stays unchanged for retry (recording the known failed `HEAD` OID in
+  `<session_id>.head.retry` under the snapshot lock when `rev-parse` succeeded), and
+  the hook makes a best-effort attempt under a bounded 100 ms OS lock (dropping the diagnostic row
+  on contention rather than racing with compaction) to append a privacy-safe failure record (`stage`,
+  `reason`, no prompt/path/command/stderr text) to `.workflow/data/task-hook/diagnostics.jsonl`
+  (surfaced by `task_telemetry.report()` and `/.doctor`, with `last_at` chosen by timezone-aware
+  timestamp order). Both task-stream writers run a best-effort read probe decoupled from write-only
+  append to guard against a prior torn line missing a trailing newline; `tasks.jsonl` readers
+  (`load_events`, `export_session`) ignore blank lines produced by concurrent probes while still
+  counting torn JSON and invalid rows. A commit is therefore recorded at the end of the turn that
+  made it, after any verify in that turn; one made between turns is recorded on the next prompt.
 
 Version 1 events (before 3.8.0) came from every `Read` and `Bash` call: a skill was a `Read`
 of `~/.claude/skills/<name>.md`, and a commit was a `git commit` that moved HEAD between
@@ -1591,12 +1606,17 @@ MAIN_SESSION_ID through `~/.claude/session_registry.json`, writes only when
 Nothing is derived at write time. `derive_tasks` walks the events in order per session: the
 first event opens a task; an `edit` clears a verdict seen before it; a verify whose
 `derived` is `pass`, on a task that edited something, closes it as `completed`.
-A commit closes nothing: one whose `paths` include a file the open task edited joins that
-task's sequence, otherwise one that includes a file of the task the session last completed
-joins that one; a commit hash is taken once it is claimed (a copy another session logged first does not hide
-it from its own session); a distinct commit no copy claims is `unclaimed_commits`. A task still open at the end is `open`, or `read_only` (no edits);
-events without a session are `unknown`. Older events carry no `derived`,
-so their tasks stay `open`.
+A commit closes nothing: on normal observations (without `delayed: true`, including clean
+fast-forward merges), one whose `paths` include a file the open task edited joins that task's
+sequence, otherwise one that includes a file of the task the session last completed joins that one.
+When a commit carries `delayed: true` (retried after a prior failure/deferral) and `committed_at`,
+`derive_tasks` skips tasks whose `started_at` (whole-second floor, matching Git's 1-second
+committer timestamp resolution) is after `committed_at` and searches earlier completed tasks in
+reverse completion order so delayed commits still join the task that made them. A commit hash is
+taken once it is claimed (a copy another session logged first does not hide it from its own
+session); a distinct commit no copy claims is `unclaimed_commits`. A task still open at the end is
+`open`, or `read_only` (no edits); events without a session are `unknown`. Older events carry no
+`derived`, so their tasks stay `open`.
 
 ## Workspace layout
 

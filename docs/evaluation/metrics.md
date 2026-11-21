@@ -1,5 +1,25 @@
 # Metrics
 
+## Implemented metric categories
+
+Exoma currently records operational and evaluation signals across six categories. Some figures
+are versioned in the benchmark registry below (`core/audit/metrics.py`); others are
+operational report or per-run metadata fields produced alongside them (`core/audit/telemetry.py`,
+`core/audit/task_telemetry.py`, `core/evidence/verify_tests.py`, `core/evidence/e2e/runner.py`).
+
+| Category | What is currently recorded | Where it appears |
+| --- | --- | --- |
+| **Operational metrics** | Delegated command counts (`runtime.command@1`), provider invocations (`runtime.provider_call@2`), command duration (`runtime.time_to_completion@1`), graph activity, and availability/hook diagnostics | `exoma report` (`telemetry.py`, `task_telemetry.py`) |
+| **Usage & cost metrics** | Input/output token totals (`runtime.cost_tokens@1`, measured vs. estimated `token_source`), cache/reasoning splits, effort/thread breakdowns, and context proxies (`runtime.context_avoided@1`, `outcome.context_saved@2`) | `exoma report`, `measure_task_outcomes.py` |
+| **Task metrics** | Session-level task event runs (`runtime.workflow_task@1`), hook diagnostics, transcript activity (`real_use.*`), and offline Git-landing outcomes (`outcome.*`) | `exoma report`, `measure_real_use.py`, `measure_task_outcomes.py` |
+| **Verification metrics** | Judged acceptance (`runtime.accepted_task@1`), first-pass rate (`runtime.first_pass_correctness@1`), rework (`runtime.rework@1`), recorded security/test-suite pass rates, and per-verify test reuse/coverage (`meta.runtime_tests`) | `exoma report`, per-verify metadata |
+| **Browser metrics** | Browser run and draft aggregates split by project/smoke/fake, stage usage joined by `prompt_id`, verdicts, failure origins, repeatability, and delegated-verify baseline | `exoma report` browser section (`telemetry.py`), per-run metadata |
+| **Evidence & knowledge lifecycle metrics** | Whole-artifact reuse (`runtime.evidence_reuse_rate@1`), fact-store ingest/serve/drop counts (`runtime.fact_lifecycle@1`), offline fact-retrieval replay (`replay.*`), and per-run browser knowledge updates/offers | `exoma report`, `replay_facts.py`, per-run metadata |
+
+**Scope boundary:** these telemetry streams record operational, verification, and lifecycle
+signals — **not** a complete semantic history of how an agent reasoned through or solved a
+problem.
+
 ## Comparing risk-based test selection
 
 Pair the same fixture and labeled defect (or clean control) on the 1.1.2 baseline
@@ -46,9 +66,11 @@ Registry version: **2**.
 Availability diagnostics are separate from benchmark values. Scope-width measurements
 with failed inputs expose `measurement: partial|unknown`, nullable totals, and observed
 partial counts; they must not be counted as zero changes. Task-stream reports and session
-exports describe invalid/missing input separately. Test-run `fingerprint_reason` explains
-why an outcome is unbound; such an outcome remains ineligible for reuse. These fields do
-not turn missing events or unavailable provider usage into measured data.
+exports describe invalid/missing input separately. When `.workflow/data/task-hook/diagnostics.jsonl`
+is present, `telemetry.report()` includes its raw bytes in the provenance input hash while
+`tasks.hook_diagnostics` summarizes only rows inside the active lookback window. Test-run
+`fingerprint_reason` explains why an outcome is unbound; such an outcome remains ineligible for
+reuse. These fields do not turn missing events or unavailable provider usage into measured data.
 
 ## Interpretation boundaries
 

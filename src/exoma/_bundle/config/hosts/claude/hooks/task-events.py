@@ -35,6 +35,8 @@ GIT_DEADLINE_SECONDS = 2.0
 DIAGNOSTICS_VERSION = 1
 DIAGNOSTICS_MAX_BYTES = 256 * 1024
 SNAPSHOT_LOCK_WAIT_SECONDS = 0.25
+OID_RE = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
+REBASELINE_SNAPSHOT = "__REBASELINE__"
 
 
 def project_root(start):
@@ -257,6 +259,39 @@ def is_ordinary_no_head(rc, stderr_text):
     return rc == 1 and not head_line
 
 
+def is_invalid_revision_error(rc, stderr_text):
+    """True for C-locale git log errors indicating an invalid or missing snapshot revision."""
+    if rc != 128:
+        return False
+    first = (stderr_text or "").lstrip().splitlines()[:1]
+    head_line = first[0].lower() if first else ""
+    return head_line.startswith((
+        "fatal: invalid revision range",
+        "fatal: bad revision",
+        "fatal: bad object",
+    ))
+
+
+def commit_object_state(root, oid, deadline):
+    """Verify an OID against Git's object store: 'commit', 'missing', or 'error'."""
+    if not oid or not OID_RE.fullmatch(oid):
+        return "missing"
+    out, err, rc, stderr = git_out(
+        root, "cat-file", "-t", oid, deadline=deadline, capture_err=True,
+    )
+    if not err:
+        return "commit" if (out or "").strip() == "commit" else "missing"
+    if err == "git_nonzero" and rc == 128:
+        first = (stderr or "").lstrip().splitlines()[:1]
+        head_line = first[0].lower() if first else ""
+        if head_line.startswith((
+            "fatal: not a valid object name",
+            "fatal: git cat-file: could not get object info",
+        )):
+            return "missing"
+    return "error"
+
+
 def git_out(root, *args, deadline=None, capture_err=False):
     remaining = GIT_DEADLINE_SECONDS if deadline is None else deadline - time.monotonic()
     if remaining <= 0:
@@ -275,8 +310,12 @@ def git_out(root, *args, deadline=None, capture_err=False):
                 startupinfo=info, creationflags=flags,
                 start_new_session=(os.name != "nt"),
             )
+            wait_remaining = GIT_DEADLINE_SECONDS if deadline is None else deadline - time.monotonic()
+            if wait_remaining <= 0:
+                kill_process_tree(proc)
+                return (None, "git_deadline_exceeded", None, "") if capture_err else (None, "git_deadline_exceeded")
             try:
-                rc = proc.wait(timeout=remaining)
+                rc = proc.wait(timeout=wait_remaining)
             except subprocess.TimeoutExpired:
                 kill_process_tree(proc)
                 return (None, "git_timeout", None, "") if capture_err else (None, "git_timeout")
@@ -302,10 +341,47 @@ def write_snapshot(path, head):
     atomic_write_text(path, head)
 
 
+def retry_marker_path(snap):
+    return snap + ".retry" if snap else None
+
+
+def mark_retry(snap, bound_oid):
+    """Record the highest known failed HEAD OID under the snapshot lock."""
+    path = retry_marker_path(snap)
+    if not path or not bound_oid or not OID_RE.fullmatch(bound_oid):
+        return
+    try:
+        atomic_write_text(path, bound_oid + "\n")
+    except OSError:
+        pass
+
+
+def read_retry_bound(snap):
+    path = retry_marker_path(snap)
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            bound = fh.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return bound if OID_RE.fullmatch(bound) else None
+
+
+def clear_retry(snap):
+    path = retry_marker_path(snap)
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def collect_commits(payload, root, deadline, session):
     """Return (commit_events, pending_snapshot) without advancing .head on disk.
 
-    pending_snapshot is (path, expected_before_or_None, new_head). The caller appends the
+    pending_snapshot is (path, expected_before_or_sentinel, new_head). The caller appends the
     commit batch first and advances the snapshot only after the append succeeds."""
     path = snapshot_path(root, payload)
     if not path:
@@ -327,15 +403,44 @@ def collect_commits(payload, root, deadline, session):
     try:
         with open(path, encoding="utf-8") as fh:
             before = fh.read().strip()
+    except UnicodeDecodeError:
+        if now and commit_object_state(root, now, deadline) == "commit":
+            log_diagnostic(root, hook_event, session, "snapshot", "invalid_snapshot")
+            return [], (path, REBASELINE_SNAPSHOT, now)
+        mark_retry(path, now)
+        log_diagnostic(root, hook_event, session, "git_rev_parse", "git_nonzero")
+        return [], None
     except OSError:
+        mark_retry(path, now)
         log_diagnostic(root, hook_event, session, "snapshot", "io_error")
         return [], None
-    if not now or now == before:
+    if not now:
         return [], None
-    span = f"{before}..{now}" if before else now
-    out, err = git_out(root, "log", "--reverse", "--first-parent", "-m", "--format=commit:%H",
-                       "--name-only", "--relative", span, deadline=deadline)
+    if not OID_RE.fullmatch(before):
+        if commit_object_state(root, now, deadline) == "commit":
+            log_diagnostic(root, hook_event, session, "snapshot", "invalid_snapshot")
+            return [], (path, REBASELINE_SNAPSHOT, now)
+        mark_retry(path, now)
+        log_diagnostic(root, hook_event, session, "git_rev_parse", "git_nonzero")
+        return [], None
+    if now == before:
+        clear_retry(path)
+        return [], None
+    span = f"{before}..{now}"
+    out, err, log_rc, log_err = git_out(
+        root, "log", "--reverse", "--first-parent", "-m", "--format=commit:%H%x09%cI",
+        "--name-only", "--relative", span, deadline=deadline, capture_err=True,
+    )
     if err or out is None:
+        if (
+            err == "git_nonzero"
+            and is_invalid_revision_error(log_rc, log_err)
+            and commit_object_state(root, now, deadline) == "commit"
+            and commit_object_state(root, before, deadline) == "missing"
+        ):
+            log_diagnostic(root, hook_event, session, "snapshot", "invalid_snapshot")
+            return [], (path, REBASELINE_SNAPSHOT, now)
+        mark_retry(path, now)
         log_diagnostic(root, hook_event, session, "git_log", err or "git_nonzero")
         return [], None
     commits, current = [], None
@@ -346,11 +451,21 @@ def collect_commits(payload, root, deadline, session):
         if text.startswith("commit:"):
             if current:
                 commits.append(current)
-            current = {"kind": "commit", "commit": text[len("commit:"):], "paths": []}
+            body = text[len("commit:"):]
+            oid, _, committed_at = body.partition("\t")
+            current = {"kind": "commit", "commit": oid, "paths": []}
+            if committed_at:
+                current["committed_at"] = committed_at
         elif current:
             current["paths"].append(text)
     if current:
         commits.append(current)
+    retry_bound = read_retry_bound(path)
+    if retry_bound:
+        bound_idx = next((i for i, c in enumerate(commits) if c["commit"] == retry_bound), None)
+        if bound_idx is not None:
+            for idx in range(bound_idx + 1):
+                commits[idx]["delayed"] = True
     return commits, (path, before, now)
 
 
@@ -563,6 +678,9 @@ def append_events(root, session, events):
 def commit_snapshot(pending):
     """Advance .head atomically only if the on-disk cursor still matches expected_before."""
     path, expected_before, new_head = pending
+    if expected_before == REBASELINE_SNAPSHOT:
+        write_snapshot(path, new_head)
+        return
     if expected_before is None:
         if os.path.isfile(path):
             return
@@ -570,7 +688,7 @@ def commit_snapshot(pending):
         try:
             with open(path, encoding="utf-8") as fh:
                 current = fh.read().strip()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             return
         if current != expected_before:
             return
@@ -596,7 +714,7 @@ try:
             lock_fh = acquire_lock(snap + ".lock") if snap else None
             if snap and lock_fh is None:
                 # Contention: preserve independent events and defer Git observation
-                # rather than risking concurrent cursor regression.
+                # rather than risking concurrent cursor or retry-marker races.
                 log_diagnostic(root, hook_event, session, "snapshot", "lock_contention")
                 if other_events:
                     try:
@@ -607,11 +725,12 @@ try:
                 try:
                     deadline = time.monotonic() + GIT_DEADLINE_SECONDS
                     commit_events, pending_snapshot = collect_commits(payload, root, deadline, session)
-                    if pending_snapshot is not None and pending_snapshot[1] is None:
-                        # Initial baseline has no commit rows; seed it independently of
-                        # whether a local skill append succeeds.
+                    if pending_snapshot is not None and pending_snapshot[1] in (None, REBASELINE_SNAPSHOT):
+                        # Initial baseline or invalid-snapshot recovery has no commit rows;
+                        # update .head independently of whether a local skill append succeeds.
                         try:
                             commit_snapshot(pending_snapshot)
+                            clear_retry(snap)
                         except OSError:
                             log_diagnostic(root, hook_event, session, "snapshot", "io_error")
                         if other_events:
@@ -631,8 +750,12 @@ try:
                         if append_ok and pending_snapshot is not None:
                             try:
                                 commit_snapshot(pending_snapshot)
+                                clear_retry(snap)
                             except OSError:
+                                mark_retry(snap, pending_snapshot[2])
                                 log_diagnostic(root, hook_event, session, "snapshot", "io_error")
+                        elif not append_ok and pending_snapshot is not None:
+                            mark_retry(snap, pending_snapshot[2])
                 finally:
                     release_lock(lock_fh)
         elif other_events:

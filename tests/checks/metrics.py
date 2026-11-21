@@ -53,6 +53,17 @@ def _test_metrics_contract() -> None:
             and "machine holding the inputs only" in stamp["recount"],
             f"report() carries its provenance: {stamp}",
         )
+        diag_path = root / ".workflow" / "data" / "task-hook" / "diagnostics.jsonl"
+        diag_path.parent.mkdir(parents=True, exist_ok=True)
+        diag_path.write_text(
+            json.dumps({"v": 1, "at": "2026-11-21T00:00:00+00:00", "stage": "git_log", "reason": "git_timeout"}) + "\n",
+            encoding="utf-8",
+        )
+        stamp_with_diag = telemetry.report(root)["provenance"]
+        assert_true(
+            stamp_with_diag["inputs"]["sha256"] != stamp["inputs"]["sha256"],
+            "mutating task-hook diagnostics.jsonl must change report() provenance input hash",
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

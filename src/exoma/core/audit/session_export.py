@@ -108,7 +108,13 @@ def _inside(path: Path, base: Path) -> bool:
     return True
 
 
-def _rows_for(path: Path, session_id: str, *, diagnostics: dict | None = None) -> list[str]:
+def _rows_for(
+    path: Path,
+    session_id: str,
+    *,
+    diagnostics: dict | None = None,
+    skip_blank: bool = False,
+) -> list[str]:
     diagnostics = {} if diagnostics is None else diagnostics
     diagnostics.update(status="available", malformed_rows=0)
     if not path.is_file():
@@ -121,6 +127,8 @@ def _rows_for(path: Path, session_id: str, *, diagnostics: dict | None = None) -
         diagnostics["status"] = "unreadable"
         return []
     for line in text.splitlines():
+        if skip_blank and not line.strip():
+            continue
         try:
             row = json.loads(line)
         except ValueError:
@@ -239,7 +247,12 @@ def export_session(
         stream_diagnostics = {}
         for stream_path in stream_paths:
             diagnostic = {}
-            rows = _rows_for(stream_path, session_id, diagnostics=diagnostic)
+            rows = _rows_for(
+                stream_path,
+                session_id,
+                diagnostics=diagnostic,
+                skip_blank=(stream_path.name == TASK_STREAM_NAME),
+            )
             diagnostic["matched_rows"] = len(rows)
             stream_diagnostics[stream_path.name] = diagnostic
             if rows:

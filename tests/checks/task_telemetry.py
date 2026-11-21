@@ -220,6 +220,11 @@ def _check_hook_flavours() -> None:
                 row.pop("at", None)
                 if row.get("kind") == "commit":
                     row["commit"] = len(row["commit"])
+                    committed_at = row.pop("committed_at", None)
+                    assert_true(
+                        isinstance(committed_at, str) and "T" in committed_at,
+                        f"[{name}] commit row must carry ISO committed_at: {row}",
+                    )
             results[name] = rows
         expected = [
             {"v": 2, "source": "hook", "session_id": "main_x", "kind": "skill", "skill": "execute"},
@@ -765,20 +770,482 @@ def _check_diagnostics_permissions_and_write_only_streams() -> None:
         finally:
             runtime_io._needs_leading_newline = orig_probe
 
-        # Write-only fallback: even if read probe fails with PermissionError, task append succeeds.
+        # Write-only fallback: real PermissionError on the read probe of BOTH writers
+        # (hook open(..., "rb") and runtime_io Path.open("rb")) must still append cleanly.
+        import builtins
+
+        stream = project / ".workflow" / "data" / "tasks.jsonl"
+        stream.write_text(
+            json.dumps({"v": 2, "kind": "skill", "skill": "plan", "session_id": "s0", "at": "t"}) + "\n",
+            encoding="utf-8",
+        )
         mod = _load_hook_module("task_events_wo_unit")
-        orig_hook_probe = mod.needs_leading_newline
-        mod.needs_leading_newline = lambda _p: False
+        orig_builtin_open = builtins.open
+        hook_probe_denied = [0]
+
+        def _deny_hook_rb(file, mode="r", *args, **kwargs):
+            if str(file) == str(stream) and mode == "rb":
+                hook_probe_denied[0] += 1
+                raise PermissionError("read probe denied")
+            return orig_builtin_open(file, mode, *args, **kwargs)
+
+        builtins.open = _deny_hook_rb
         try:
             mod.append_events(str(project), "s1", [{"kind": "edit", "path": "src/wo.py"}])
         finally:
-            mod.needs_leading_newline = orig_hook_probe
+            builtins.open = orig_builtin_open
+        assert_true(hook_probe_denied[0] == 1, f"hook probe must hit real PermissionError: {hook_probe_denied}")
+
+        orig_path_open = Path.open
+        rt_probe_denied = [0]
+
+        def _deny_rt_rb(self, mode="r", *args, **kwargs):
+            if self == stream and mode == "rb":
+                rt_probe_denied[0] += 1
+                raise PermissionError("runtime read probe denied")
+            return orig_path_open(self, mode, *args, **kwargs)
+
+        Path.open = _deny_rt_rb  # type: ignore[method-assign]
+        try:
+            runtime_io.write_task_event(
+                project, {"v": 2, "kind": "skill", "skill": "verify", "session_id": "s1", "at": "t"},
+            )
+        finally:
+            Path.open = orig_path_open  # type: ignore[method-assign]
+        assert_true(rt_probe_denied[0] == 1, f"runtime probe must hit real PermissionError: {rt_probe_denied}")
         events = task_telemetry.load_events(project)
         assert_true(
-            any(e.get("kind") == "edit" and e.get("path") == "src/wo.py" for e in events),
-            f"write-only fallback must append hook events: {events}",
+            any(e.get("kind") == "edit" and e.get("path") == "src/wo.py" for e in events)
+            and any(e.get("kind") == "skill" and e.get("skill") == "verify" for e in events),
+            f"write-only fallback must append both hook and runtime events: {events}",
         )
     finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        SYNCHRONIZE = 0x00100000
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid,
+        )
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    stat_path = Path(f"/proc/{pid}/stat")
+    if stat_path.is_file():
+        try:
+            state = stat_path.read_bytes().rsplit(b")", 1)[1].split()[0]
+            if state == b"Z":
+                return False
+        except (OSError, IndexError):
+            pass
+    return True
+
+
+def _force_kill_pid(pid: int) -> None:
+    if pid <= 0 or not _pid_alive(pid):
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0, **no_console(),
+            )
+        else:
+            os.kill(pid, 9)
+    except Exception:
+        pass
+
+
+def _check_snapshot_recovery_retry_attribution_deadline_and_cleanup() -> None:
+    """Audit follow-ups:
+    - Corrupt UTF-8 and pruned/missing OID .head self-heal to HEAD without dropping skills.
+    - Delayed commit retry with committed_at attributes to closed task rather than newer open task.
+    - git_out resamples remaining deadline right before proc.wait().
+    - Timeout cleanup terminates spawned grandchild processes.
+    - Blank lines in tasks.jsonl are ignored (no false invalid_rows) while torn rows stay counted.
+    - load_hook_diagnostics compares last_at as timezone-aware datetimes across offsets."""
+    from datetime import datetime, timedelta, timezone
+
+    # 1) Delayed commit retry attribution vs normal fast-forward vs retry after T2 completed.
+    t1_edit = {"kind": "edit", "session_id": "s", "path": "a.py", "at": "2026-11-21T10:00:00+00:00"}
+    t1_pass = {"kind": "skill", "session_id": "s", "skill": "verify", "verdict": "DONE",
+               "derived": "pass", "at": "2026-11-21T10:00:05+00:00"}
+    t2_edit = {"kind": "edit", "session_id": "s", "path": "a.py", "at": "2026-11-21T10:05:00.250000+00:00"}
+    delayed_c1 = {
+        "kind": "commit", "session_id": "s", "commit": "c1", "paths": ["a.py"],
+        "committed_at": "2026-11-21T10:00:10+00:00", "delayed": True, "at": "2026-11-21T10:06:00+00:00",
+    }
+    same_sec_c2 = {
+        "kind": "commit", "session_id": "s", "commit": "c2", "paths": ["a.py"],
+        "committed_at": "2026-11-21T10:05:00+00:00", "delayed": True, "at": "2026-11-21T10:05:01+00:00",
+    }
+    tasks, unclaimed = derive_tasks([t1_edit, t1_pass, t2_edit, delayed_c1, same_sec_c2])
+    assert_true(
+        len(tasks) == 2 and unclaimed == 0
+        and tasks[0]["commit"] == "c1" and tasks[0]["ended_at"] == "2026-11-21T10:00:10+00:00"
+        and tasks[1]["commit"] == "c2",
+        f"delayed commit must join closed T1 while same-second commit joins open T2: {tasks} unclaimed={unclaimed}",
+    )
+
+    # Normal (non-retry) fast-forward commit with an older committer timestamp MUST still join active T2.
+    ff_commit = {
+        "kind": "commit", "session_id": "s", "commit": "c_ff", "paths": ["a.py"],
+        "committed_at": "2026-11-20T09:00:00+00:00", "at": "2026-11-21T10:05:30+00:00",
+    }
+    ff_tasks, ff_unclaimed = derive_tasks([t1_edit, t1_pass, t2_edit, ff_commit])
+    assert_true(
+        len(ff_tasks) == 2 and ff_unclaimed == 0
+        and ff_tasks[0]["commit"] is None
+        and ff_tasks[1]["commit"] == "c_ff" and ff_tasks[1]["ended_at"] == "2026-11-21T10:05:30+00:00",
+        f"normal fast-forward without delayed flag must preserve observation-order attribution to open T2: {ff_tasks}",
+    )
+
+    # Escalation: delayed retry arriving AFTER T2 already completed must still attribute to earlier closed T1.
+    t2_pass = {"kind": "skill", "session_id": "s", "skill": "verify", "verdict": "DONE",
+               "derived": "pass", "at": "2026-11-21T10:06:00+00:00"}
+    late_tasks, late_unclaimed = derive_tasks([t1_edit, t1_pass, t2_edit, t2_pass, delayed_c1])
+    assert_true(
+        len(late_tasks) == 2 and late_unclaimed == 0
+        and late_tasks[0]["commit"] == "c1" and late_tasks[1]["commit"] is None,
+        f"delayed retry after T2 completed must attribute to T1 via closed history: {late_tasks}",
+    )
+
+    base = Path(tempfile.mkdtemp(prefix="task-hook-audit-"))
+    gc_pid_file = base / "grandchild.pid"
+    grandchild_pid = 0
+    try:
+        home = base / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "session_registry.json").write_text(
+            json.dumps({"claude-1": {"main_session_id": "main_aud"}}), encoding="utf-8",
+        )
+        project = base / "proj"
+        head_a = _init_repo_with_commit(project)
+        snap_file = project / ".workflow" / "data" / "task-hook" / "claude-1.head"
+        snap_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # 2) Corrupt non-UTF-8 .head must rebaseline to head_a, preserve skill, and log invalid_snapshot.
+        snap_file.write_bytes(b"\xff\xfe\xfd")
+        proc, _ = _run_py_hook(
+            project, home,
+            {"session_id": "claude-1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": "/.execute -y"},
+        )
+        assert_true(proc.returncode == 0, "non-UTF-8 snapshot must exit 0")
+        assert_true(snap_file.read_text(encoding="utf-8").strip() == head_a, "non-UTF-8 .head must rebaseline to head_a")
+        events = task_telemetry.load_events(project)
+        assert_true(
+            [(e.get("kind"), e.get("skill")) for e in events] == [("skill", "execute")],
+            f"non-UTF-8 .head must not drop UserPromptSubmit skill: {events}",
+        )
+        diag = task_telemetry.load_hook_diagnostics(project)
+        assert_true(
+            diag["by_stage"].get("snapshot") == 1 and diag["by_reason"].get("invalid_snapshot") == 1,
+            f"non-UTF-8 .head must record snapshot/invalid_snapshot: {diag}",
+        )
+
+        # 3) Missing/pruned Git OID in .head must self-heal and allow subsequent commits to be observed.
+        snap_file.write_text("1" * 40, encoding="utf-8")
+        proc, _ = _run_py_hook(
+            project, home,
+            {"session_id": "claude-1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": "/.commit"},
+        )
+        assert_true(proc.returncode == 0, "missing OID snapshot must exit 0")
+        assert_true(snap_file.read_text(encoding="utf-8").strip() == head_a, "missing OID .head must rebaseline to head_a")
+        diag = task_telemetry.load_hook_diagnostics(project)
+        assert_true(
+            diag["by_reason"].get("invalid_snapshot") == 2,
+            f"missing OID .head must record snapshot/invalid_snapshot: {diag}",
+        )
+        (project / "src" / "a.py").write_text("x = 99\n", encoding="utf-8")
+        _git(project, "commit", "-q", "-am", "commit-after-recovery")
+        head_b = subprocess.run(
+            ["git", "-C", str(project), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True, **no_console(),
+        ).stdout.strip()
+        _run_py_hook(project, home, {"session_id": "claude-1", "cwd": str(project), "hook_event_name": "Stop"})
+        assert_true(snap_file.read_text(encoding="utf-8").strip() == head_b, "commit after recovery must advance .head")
+        commits = [e for e in task_telemetry.load_events(project) if e.get("kind") == "commit"]
+        assert_true(
+            len(commits) == 1 and commits[0]["commit"] == head_b
+            and bool(commits[0].get("committed_at")) and not commits[0].get("delayed"),
+            f"normal commit after recovery must carry hash and committed_at without delayed flag: {commits}",
+        )
+
+        # 3b) Temporarily unavailable Git object store must NOT rebaseline .head to unreadable HEAD;
+        #     once objects return, the missed commit is captured with delayed=True and retry marker clears.
+        (project / "src" / "a.py").write_text("x = 100\n", encoding="utf-8")
+        _git(project, "commit", "-q", "-am", "commit-during-missing-objdir")
+        head_c = subprocess.run(
+            ["git", "-C", str(project), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True, **no_console(),
+        ).stdout.strip()
+        empty_objdir = base / "empty_objects"
+        empty_objdir.mkdir()
+        retry_marker = Path(str(snap_file) + ".retry")
+        proc, _ = _run_py_hook(
+            project, home,
+            {"session_id": "claude-1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": "/.sweep"},
+            extra_env={"GIT_OBJECT_DIRECTORY": str(empty_objdir)},
+        )
+        assert_true(proc.returncode == 0, "missing object store must exit 0")
+        assert_true(
+            snap_file.read_text(encoding="utf-8").strip() == head_b,
+            "missing object store must NOT rebaseline .head to unreadable head_c",
+        )
+        assert_true(
+            retry_marker.is_file() and retry_marker.read_text(encoding="utf-8").strip() == head_c,
+            "failed observation with known HEAD must record failed HEAD OID in .retry marker",
+        )
+        assert_true(
+            any(e.get("kind") == "skill" and e.get("skill") == "sweep" for e in task_telemetry.load_events(project)),
+            "missing object store must still preserve UserPromptSubmit skill event",
+        )
+        _run_py_hook(project, home, {"session_id": "claude-1", "cwd": str(project), "hook_event_name": "Stop"})
+        assert_true(snap_file.read_text(encoding="utf-8").strip() == head_c, "recovered object store must advance .head to head_c")
+        assert_true(not retry_marker.exists(), "successful retry must clear .retry marker")
+        commit_c = [e for e in task_telemetry.load_events(project) if e.get("kind") == "commit" and e.get("commit") == head_c]
+        assert_true(
+            len(commit_c) == 1 and commit_c[0].get("delayed") is True and bool(commit_c[0].get("committed_at")),
+            f"retried commit after object-store recovery must carry delayed=True and committed_at: {commit_c}",
+        )
+
+        # 3c) Mixed recovery batch through the hook: git log A..B fails (recording bound B),
+        #     then task 2 starts, edits a.py & b.py, and fast-forwards/adds commit C (b.py) with an
+        #     older committer date. Recovery A..C must tag ONLY B as delayed=True (joining closed T1)
+        #     and leave C untagged (joining active T2).
+        real_git = shutil.which("git")
+        assert_true(bool(real_git), "real git required for mixed recovery batch test")
+        mixed = base / "mixed_proj"
+        mixed_a = _init_repo_with_commit(mixed)
+        _run_py_hook(mixed, home, {"session_id": "claude-1", "cwd": str(mixed), "hook_event_name": "Stop"})
+        mixed_snap = mixed / ".workflow" / "data" / "task-hook" / "claude-1.head"
+        mixed_retry = Path(str(mixed_snap) + ".retry")
+        assert_true(mixed_snap.read_text(encoding="utf-8").strip() == mixed_a, "mixed fixture baseline seeded")
+
+        # Task 1 edits src/a.py, passes verify, and commits B.
+        _run_py_hook(
+            mixed, home,
+            {"session_id": "claude-1", "cwd": str(mixed), "hook_event_name": "PostToolUse",
+             "tool_name": "Edit", "tool_input": {"file_path": str(mixed / "src" / "a.py")}},
+        )
+        task_telemetry.record_skill(mixed, "main_aud", "verify", verdict="DONE", derived="pass")
+        (mixed / "src" / "a.py").write_text("x = 200\n", encoding="utf-8")
+        _git(mixed, "commit", "-q", "-am", "commit-b-delayed")
+        mixed_b = subprocess.run(
+            ["git", "-C", str(mixed), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True, **no_console(),
+        ).stdout.strip()
+
+        shim_mixed_fail = base / "shim_mixed_fail"
+        _make_git_shim(
+            shim_mixed_fail,
+            f"import subprocess, sys\n"
+            f"if 'log' in sys.argv:\n"
+            f"    sys.exit(128)\n"
+            f"res = subprocess.run([{real_git!r}, *sys.argv[1:]])\n"
+            f"sys.exit(res.returncode)\n",
+        )
+        _run_py_hook(
+            mixed, home,
+            {"session_id": "claude-1", "cwd": str(mixed), "hook_event_name": "Stop"},
+            extra_env={"PATH": f"{shim_mixed_fail}{os.pathsep}{os.environ.get('PATH', '')}"},
+        )
+        assert_true(mixed_snap.read_text(encoding="utf-8").strip() == mixed_a, "failed git log A..B must keep .head at A")
+        assert_true(
+            mixed_retry.is_file() and mixed_retry.read_text(encoding="utf-8").strip() == mixed_b,
+            "failed git log A..B must record bound OID B in .head.retry",
+        )
+
+        # Advance past B's 1-second committer timestamp, then Task 2 edits a.py and b.py and brings in
+        # commit C (touching b.py) carrying an older committer date (simulating fast-forward merge).
+        time.sleep(1.1)
+        for rel_file in ("src/a.py", "src/b.py"):
+            _run_py_hook(
+                mixed, home,
+                {"session_id": "claude-1", "cwd": str(mixed), "hook_event_name": "PostToolUse",
+                 "tool_name": "Edit", "tool_input": {"file_path": str(mixed / rel_file)}},
+            )
+        (mixed / "src" / "b.py").write_text("y = 1\n", encoding="utf-8")
+        _git(mixed, "add", "src/b.py")
+        old_env = {**os.environ, "GIT_COMMITTER_DATE": "2026-11-20T09:00:00+00:00",
+                   "GIT_AUTHOR_DATE": "2026-11-20T09:00:00+00:00"}
+        subprocess.run(
+            ["git", "-C", str(mixed), "commit", "-q", "-m", "commit-c-old-ff"],
+            check=True, capture_output=True, env=old_env, **no_console(),
+        )
+        mixed_c = subprocess.run(
+            ["git", "-C", str(mixed), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True, **no_console(),
+        ).stdout.strip()
+
+        _run_py_hook(mixed, home, {"session_id": "claude-1", "cwd": str(mixed), "hook_event_name": "Stop"})
+        assert_true(mixed_snap.read_text(encoding="utf-8").strip() == mixed_c, "mixed recovery must advance .head to C")
+        assert_true(not mixed_retry.exists(), "mixed recovery must clear .head.retry")
+        mixed_events = task_telemetry.load_events(mixed)
+        mixed_commits = [e for e in mixed_events if e.get("kind") == "commit"]
+        assert_true(
+            len(mixed_commits) == 2
+            and mixed_commits[0]["commit"] == mixed_b and mixed_commits[0].get("delayed") is True
+            and mixed_commits[1]["commit"] == mixed_c and not mixed_commits[1].get("delayed"),
+            f"mixed recovery must tag ONLY B<=bound as delayed and leave new C untagged: {mixed_commits}",
+        )
+        mixed_tasks, mixed_unclaimed = derive_tasks(mixed_events)
+        assert_true(
+            len(mixed_tasks) == 2 and mixed_unclaimed == 0
+            and mixed_tasks[0]["commit"] == mixed_b and mixed_tasks[1]["commit"] == mixed_c,
+            f"mixed recovery must attribute delayed B to closed T1 and new old-date C to active T2: {mixed_tasks} unclaimed={mixed_unclaimed}",
+        )
+
+        # 4) git_out must resample remaining deadline right before proc.wait().
+        mod = _load_hook_module("task_events_deadline_unit")
+        orig_popen = mod.subprocess.Popen
+        wait_before_kill = [False]
+        kill_called = [False]
+        orig_kill = mod.kill_process_tree
+
+        def _slow_popen(*args, **kwargs):
+            time.sleep(0.08)
+            proc_obj = orig_popen(*args, **kwargs)
+            orig_wait = proc_obj.wait
+            def _spy_wait(*wargs, **wkwargs):
+                if not kill_called[0]:
+                    wait_before_kill[0] = True
+                return orig_wait(*wargs, **wkwargs)
+            proc_obj.wait = _spy_wait
+            return proc_obj
+
+        def _spy_kill(proc_obj):
+            kill_called[0] = True
+            return orig_kill(proc_obj)
+
+        mod.subprocess.Popen = _slow_popen
+        mod.kill_process_tree = _spy_kill
+        try:
+            out, err = mod.git_out(str(project), "rev-parse", "HEAD", deadline=time.monotonic() + 0.03)
+        finally:
+            mod.subprocess.Popen = orig_popen
+            mod.kill_process_tree = orig_kill
+        assert_true(
+            out is None and err == "git_deadline_exceeded" and kill_called[0] and not wait_before_kill[0],
+            f"expired deadline after spawn must kill immediately without wait(): out={out} err={err} kill={kill_called} wait_before_kill={wait_before_kill}",
+        )
+
+        # Also verify positive remaining time is resampled downward after slow spawn.
+        seen_timeouts: list[float] = []
+
+        def _slow_popen_positive(*args, **kwargs):
+            time.sleep(0.15)
+            proc_obj = orig_popen(*args, **kwargs)
+            orig_wait = proc_obj.wait
+            def _spy_wait(*wargs, **wkwargs):
+                if "timeout" in wkwargs:
+                    seen_timeouts.append(float(wkwargs["timeout"]))
+                return orig_wait(*wargs, **wkwargs)
+            proc_obj.wait = _spy_wait
+            return proc_obj
+
+        mod.subprocess.Popen = _slow_popen_positive
+        try:
+            out2, err2 = mod.git_out(str(project), "rev-parse", "HEAD", deadline=time.monotonic() + 0.8)
+        finally:
+            mod.subprocess.Popen = orig_popen
+        assert_true(
+            err2 is None and bool(out2) and len(seen_timeouts) == 1 and seen_timeouts[0] < 0.7,
+            f"proc.wait timeout must reflect resampled post-spawn remaining budget: err={err2} timeouts={seen_timeouts}",
+        )
+
+        # 5) Timeout cleanup must terminate spawned grandchild process.
+        shim_gc = base / "shim_gc"
+        _make_git_shim(
+            shim_gc,
+            f"import os, subprocess, sys, time\n"
+            f"gc_file = {str(gc_pid_file)!r}\n"
+            f"if 'rev-parse' in sys.argv:\n"
+            f"    p = subprocess.Popen([\n"
+            f"        sys.executable, '-c',\n"
+            f"        'import os, pathlib, sys, time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)',\n"
+            f"        gc_file,\n"
+            f"    ])\n"
+            f"    t0 = time.monotonic()\n"
+            f"    while not os.path.isfile(gc_file) and time.monotonic() - t0 < 1.5:\n"
+            f"        time.sleep(0.02)\n"
+            f"    time.sleep(6.0)\n"
+            f"    sys.exit(0)\n"
+            f"sys.exit(1)\n",
+        )
+        proc, elapsed = _run_py_hook(
+            project, home,
+            {"session_id": "claude-1", "cwd": str(project), "hook_event_name": "Stop"},
+            extra_env={"PATH": f"{shim_gc}{os.pathsep}{os.environ.get('PATH', '')}"},
+        )
+        if gc_pid_file.is_file():
+            try:
+                grandchild_pid = int(gc_pid_file.read_text(encoding="utf-8").strip())
+            except ValueError:
+                grandchild_pid = 0
+        assert_true(proc.returncode == 0 and elapsed < 4.5, f"grandchild timeout hook must exit 0 near 2s: rc={proc.returncode} elapsed={elapsed:.2f}s")
+        assert_true(grandchild_pid > 0, "grandchild handshake pid file must exist before timeout")
+        wait_end = time.monotonic() + 2.0
+        while time.monotonic() < wait_end and _pid_alive(grandchild_pid):
+            time.sleep(0.05)
+        assert_true(not _pid_alive(grandchild_pid), f"grandchild pid {grandchild_pid} must be terminated on timeout")
+
+        # 6) Blank lines from concurrent newline probe must NOT count as invalid_rows in tasks.jsonl.
+        stream = project / ".workflow" / "data" / "tasks.jsonl"
+        stream.write_text(
+            '{"kind":"edit","broken\n\n'
+            + json.dumps({"v": 2, "kind": "skill", "skill": "plan", "session_id": "s1", "at": "t"}) + "\n\n",
+            encoding="utf-8",
+        )
+        sdiag: dict = {}
+        loaded = task_telemetry.load_events(project, diagnostics=sdiag)
+        assert_true(
+            len(loaded) == 1 and sdiag == {"status": "partial", "invalid_rows": 1},
+            f"blank lines must be skipped while torn row stays counted: loaded={loaded} diag={sdiag}",
+        )
+
+        # 7) load_hook_diagnostics must order last_at by aware datetime across timezone offsets.
+        diag_file = project / ".workflow" / "data" / "task-hook" / "diagnostics.jsonl"
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        earlier_plus7 = (now_utc - timedelta(hours=3)).astimezone(timezone(timedelta(hours=7))).isoformat()
+        later_utc = (now_utc - timedelta(hours=1)).isoformat()
+        # Sanity: string comparison would wrongly pick earlier_plus7 over later_utc when +07:00 wall time > UTC wall time.
+        diag_file.write_text(
+            json.dumps({"v": 1, "at": earlier_plus7, "stage": "git_log", "reason": "git_timeout"}) + "\n"
+            + json.dumps({"v": 1, "at": later_utc, "stage": "snapshot", "reason": "invalid_snapshot"}) + "\n",
+            encoding="utf-8",
+        )
+        diag_tz = task_telemetry.load_hook_diagnostics(project)
+        assert_true(
+            diag_tz["total"] == 2 and diag_tz["last_at"] == later_utc,
+            f"last_at must pick chronologically newest aware timestamp ({later_utc}), got {diag_tz}",
+        )
+    finally:
+        if grandchild_pid <= 0 and gc_pid_file.is_file():
+            try:
+                grandchild_pid = int(gc_pid_file.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                grandchild_pid = 0
+        _force_kill_pid(grandchild_pid)
         shutil.rmtree(base, ignore_errors=True)
 
 
@@ -791,3 +1258,4 @@ def _test_task_telemetry() -> None:
     _check_durability_replay_torn_and_concurrency()
     _check_initial_baseline_and_lock_contention()
     _check_diagnostics_permissions_and_write_only_streams()
+    _check_snapshot_recovery_retry_attribution_deadline_and_cleanup()

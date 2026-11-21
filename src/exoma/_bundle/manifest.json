@@ -357,8 +357,8 @@
     },
     {
       "path": "hosts/claude/hooks/task-events.py",
-      "sha256": "02a83427629186103dcdaaf5e95052130252d9db1f653b4f1b92d14ffd3c1f74",
-      "bytes": 25534,
+      "sha256": "d15505592983c9f97943b273a1fcdb1c2acce02b0e813aa5188e6bc33b019072",
+      "bytes": 30256,
       "merge": "replace",
       "component": "runtime"
     },

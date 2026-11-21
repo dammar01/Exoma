@@ -775,12 +775,16 @@ def report(project_root) -> dict:
 
 def _report_provenance(project_root) -> dict:
     from exoma.core.audit import metrics
+    from exoma.core.audit.task_telemetry import TASK_HOOK_DIAGNOSTICS_REL
     from exoma.core.evidence.contracts import TASK_STREAM_NAME
+    from exoma.core.workspace.workspace_paths import data_dir
 
     streams = [USAGE_STREAM_NAME, QUALITY_STREAM_NAME, TASK_STREAM_NAME]
+    inputs = [_stream_path(project_root, name) for name in streams]
+    inputs.append(data_dir(Path(project_root)) / TASK_HOOK_DIAGNOSTICS_REL)
     return metrics.provenance(
         "core/audit/telemetry.py report()",
         {},
-        [_stream_path(project_root, name) for name in streams],
+        inputs,
         metric_ids=[mid for mid in metrics.REGISTRY if mid.startswith("runtime.")],
     )
