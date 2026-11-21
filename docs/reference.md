@@ -1,4 +1,4 @@
-# Exoma v1.2.0
+# Exoma v1.2.1
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.2.0)
+## Install (v1.2.1)
 
 ### New team member — full sequence from scratch
 
@@ -1605,7 +1605,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.2.0):
+Reliability keys (v1.2.1):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -2263,6 +2263,21 @@ two projects cannot resume each other's provider sessions.
 
 ## Async jobs & recovery
 
+`exoma jobs clean-stale` lists each job and session claim in the current user's
+store, including other workspaces. Preview shows the status, proposed action and
+reason. It can inspect an empty store without creating it.
+
+`exoma jobs clean-stale --apply` rechecks each eligible owner. On Windows, recovery
+requires the latest attempt and its session claim to identify the same machine
+and an earlier boot. A dead worker or an old heartbeat leaves the status of its
+descendants unknown. A missing record, a changed token, legacy evidence, or a
+platform without a supported boot probe produces a skip reason.
+
+Recovery preserves the job ID and history. An abandoned running job becomes
+failed. An existing failed job keeps its error, output and completion time.
+Both record a verified reboot. Apply prints remaining update admission blockers
+and exits 1 for a blocker or a failed repair. Preview exits 0 after reporting findings.
+
 Delegated commands automatically run through a separate worker. On Claude Code, the runner
 must be launched as a background tool task so the foreground tool call immediately
 returns a task ID; Claude then fetches that task's result. The runtime stays
@@ -2300,7 +2315,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.2.0)
+### Liveness worker (v1.2.1)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

@@ -211,6 +211,16 @@ Native ownership is recorded before provider dispatch. Cleanup uncertainty on or
 or exception also retains the session lock and blocks reclaim, recovery and update; it reports
 `cleanup_pending` without inventing cancellation provenance. The lock carries that requirement
 even if the job record becomes unreadable.
+
+Windows submissions and recovery attempts bind a random attempt ID, timestamp,
+machine fingerprint and boot generation to both the job and its session claim.
+The fingerprint combines the installation ID and SMBIOS system UUID. Recovery
+requires a changed kernel boot GUID and a verified restart after the attempt.
+Under the capacity, job mutation and session guards, `jobs clean-stale --apply`
+checks ownership again, retains admission, persists the terminal job and its
+`reboot_cleanup` entry, then removes the matching claim. A retry after a failed
+release reuses the entry. Ordinary history retention applies after release.
+
 Only confirmed cleanup publishes typed `cancelled` (exit 130) and releases ownership;
 unconfirmed cleanup remains active and blocks recovery/update. Completed jobs stay completed,
 late output cannot erase intent, and an unmarked external taskkill remains unattributed.

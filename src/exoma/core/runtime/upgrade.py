@@ -288,7 +288,7 @@ def upgrade_workflow_workspace(
         "tool": tool,
     }
 
-def active_jobs_for_workspace(project_root: Path) -> list[dict]:
+def active_jobs_for_workspace(project_root: Path, *, manager=None) -> list[dict]:
     """Live jobs and retained cleanup claims that block workspace mutation.
 
     Cleanup admission is fail-closed: unreadable or non-object job/lock records
@@ -298,7 +298,8 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
     try:
         from exoma.core.jobs.job_manager import JobManager
 
-        manager = JobManager()
+        if manager is None:
+            manager = JobManager()
         target = str(Path(project_root).resolve())
         out: list[dict] = manager.retained_cleanup_claims(project_root)
         retained_ids = {job.get("job_id") for job in out}

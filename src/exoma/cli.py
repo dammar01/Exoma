@@ -17,6 +17,9 @@ if sys.version_info < (3, 11):
 # `_main().subprocess`, and tests/scenario.py patches `main.subprocess.Popen` to
 # intercept worker spawn. Deleting it breaks both, silently and at runtime only.
 # Inspect must bypass eager managers, including when invoked through the public CLI.
+if sys.argv[1:2] == ["jobs"]:
+    from exoma.core.jobs.clean_stale import main as jobs_main
+    raise SystemExit(jobs_main(sys.argv[2:]))
 if (sys.argv[1:2] == ["inspect"] or "--command=inspect" in sys.argv[1:] or
         any(sys.argv[index] in {"--command", "-c"} and sys.argv[index + 1] == "inspect"
             for index in range(1, len(sys.argv) - 1))):
@@ -846,10 +849,15 @@ def _run_session(argv: list[str]) -> int:
     return session_export.main(argv)
 
 
+def _run_jobs(argv: list[str]) -> int:
+    from exoma.core.jobs.clean_stale import main as jobs_main
+    return jobs_main(argv)
+
+
 # Entry points that keep their own argument parser: `exoma check ...` is the old
 # `python check.py ...`, `exoma install ...` the old `python install.py ...`.
 _DELEGATED_ENTRY_POINTS = {"check": _run_check, "install": _run_install, "update": _run_update,
-                           "session": _run_session}
+                           "session": _run_session, "jobs": _run_jobs}
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -883,7 +891,8 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         prog="exoma", description="Exoma CLI",
-        epilog="Package commands: exoma install, exoma check, exoma update [--check | --status], exoma session export",
+        epilog="Package commands: exoma install, exoma check, exoma update [--check | --status], "
+               "exoma jobs clean-stale [--apply], exoma session export",
     )
     parser.add_argument(
         "--command",

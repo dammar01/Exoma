@@ -23,11 +23,14 @@ from tests.checks.support import (
     assert_true,
     clean_output,
     extract_session_id,
+    no_console,
 )
 
 def _test_submit_admission() -> None:
     """Initial dispatch and global capacity must admit exactly one worker."""
     _check_mutation_admission()
+    _check_reboot_cleanup()
+    _check_replaced_cleanup_owner()
     import shutil as _shutil
 
     root = Path(tempfile.mkdtemp(prefix="submit-admission-"))
@@ -450,6 +453,238 @@ def _check_mutation_admission() -> None:
                 raise AssertionError("retained cleanup lock must override dead-owner proof")
             assert_true(store.get_job(job["job_id"])["status"] == "pending" and path.exists(),
                         "retained cleanup cannot be converted into startup retirement")
+
+
+def _check_reboot_cleanup():
+    import io
+    import subprocess
+    import sys
+    from contextlib import redirect_stdout
+    from unittest.mock import patch
+
+    from exoma.core.jobs import clean_stale
+    from exoma.utils import osutil
+
+    old = {"machine": "a" * 64, "boot_id": "1" * 32, "boot_us": 1_500_000_000_000_000}
+    new = {**old, "boot_id": "2" * 32, "boot_us": 1_700_000_000_000_000}
+    with tempfile.TemporaryDirectory(prefix="jobs-reboot-") as tmp:
+        root = Path(tmp)
+        empty = root / "empty"
+        env = {**os.environ, "EXOMA_HOME": str(empty),
+               "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}
+        for flags, role, expected in (([], "", 0), (["--apply"], " SECOND_AGENT ", 1)):
+            proc = subprocess.run([sys.executable, "-B", "-m", "exoma", "jobs", "clean-stale", *flags],
+                                  cwd=root, env={**env, "WORKFLOW_AGENT_ROLE": role},
+                                  timeout=15, capture_output=True, text=True, **no_console())
+            assert_true(proc.returncode == expected and not empty.exists(),
+                        f"public CLI respects read-only store and role: {proc.stdout} {proc.stderr}")
+
+        # Exercise the real Windows probe in a separate CLI process. Only the prior
+        # boot is synthetic; a firmware/OS without machine evidence cannot run this case.
+        observed = osutil.windows_boot_evidence()
+        if observed:
+            from datetime import datetime, timezone
+            import uuid
+            isolated = JobManager(empty / "storage/jobs")
+            earlier = {**observed, "boot_id": uuid.uuid4().hex, "boot_us": observed["boot_us"] - 120_000_000}
+            stamp = datetime.fromtimestamp((earlier["boot_us"] + 60_000_000) / 1e6, timezone.utc).isoformat()
+            birth = 116444736000000000 + 10 * earlier["boot_us"]
+            with patch.object(osutil, "windows_boot_evidence", return_value=earlier), \
+                 patch.object(osutil, "pid_create_time", return_value=birth), \
+                 patch.object(isolated, "_now", return_value=stamp):
+                seeded = isolated.create_job("plan", "", "native-cli", str(root), None)
+                seeded.update(status="running", started_at=stamp, reservation_owner_pid=None)
+                isolated._save(seeded)
+            for flags, expected in (([], "eligible"), (["--apply"], "recovered")):
+                proc = subprocess.run([sys.executable, "-B", "-m", "exoma", "jobs", "clean-stale", *flags],
+                                      cwd=root, env={**env, "WORKFLOW_AGENT_ROLE": ""},
+                                      timeout=15, capture_output=True, text=True, **no_console())
+                assert_true(proc.returncode == 0 and expected in proc.stdout, proc.stdout + proc.stderr)
+            assert_true(isolated._load(seeded["job_id"])["reboot_cleanup"]["observed_boot"]["boot_id"]
+                        == observed["boot_id"], "native CLI records the current kernel boot GUID")
+
+        store = JobManager(root / "jobs")
+        birth = 116444736000000000 + 10 * old["boot_us"]
+        identity = f"native:{birth}"
+
+        def fixture(session):
+            with patch.object(osutil, "windows_boot_evidence", return_value=old), \
+                 patch.object(osutil, "pid_create_time", return_value=birth), \
+                 patch.object(osutil, "process_identity", return_value=identity), \
+                 patch.object(store, "_now", return_value="2020-01-01T00:00:00+00:00"):
+                job = store.create_job("plan", "private task", session, str(root / session), None)
+                store.set_worker_pid(job["job_id"], os.getpid())
+                store.mark_running(job["job_id"])
+                store.begin_worker_ownership(job["job_id"])
+            return store._load(job["job_id"])
+
+        def results(apply=False):
+            return {row[0]: row[2:] for row in clean_stale.inspect_jobs(store, apply=apply)}
+
+        job = fixture("running")
+        failed = fixture("failed")
+        failed.update(status="failed", error="original error", output={"typed": "original"},
+                      completed_at="2020-01-02T00:00:00+00:00")
+        failed["cancellation"] = {"reason": "original request", "cleanup_confirmed": False}
+        store._save(failed)
+        jid, fid = job["job_id"], failed["job_id"]
+        lock = store._lock_path(job["session_id"])
+        owner = store._read_lock(lock)
+        stalled = fixture("reaped-running")
+        with patch.object(store, "_kill_worker", return_value={"ok": False}), \
+             patch.object(store, "_now", return_value="2020-01-02T00:00:00+00:00"):
+            store.reap_stalled(stalled["job_id"], "worker_died", "stalled while still owning children", "inspect")
+        before = store._load(stalled["job_id"])
+        assert_true(before["status"] == "running" and before["reaped"], "stall reaper retained ownership")
+        with patch.object(osutil, "process_state", return_value="dead"):
+            for boot in (None, old, {**new, "boot_id": "0" * 32}, {**new, "machine": "f" * 64},
+                         {**new, "boot_us": old["boot_us"]}):
+                with patch.object(osutil, "windows_boot_evidence", return_value=boot):
+                    assert_true(results(True)[jid][0] == "skipped" and lock.exists(),
+                                "missing, same, foreign or chronologically conflicting boot retains descendants")
+            with patch.object(osutil, "windows_boot_evidence", return_value=new):
+                assert_true(results()[jid][0] == "eligible" and store._load(jid) == job,
+                            "preview recognizes prior boot and preserves history")
+                with patch.object(osutil, "process_state", return_value="alive"), \
+                     patch.object(osutil, "process_identity", return_value=identity):
+                    assert_true(results(True)[jid][0] == "skipped", "a matching live worker wins")
+                too_late = 116444736000000000 + 10 * new["boot_us"]
+                store._save({**job, "worker_create_time": too_late, "worker_identity": f"native:{too_late}"})
+                assert_true(results(True)[jid][0] == "skipped" and lock.exists(),
+                            "an absent PID created on the current boot contradicts the recorded origin")
+                store._save({**job, "cancellation": {"targets": [{"worker_pid": 73, "worker_identity": identity}]}})
+                with patch.object(osutil, "process_state", side_effect=lambda pid: "alive" if pid == 73 else "dead"), \
+                     patch.object(osutil, "process_identity", return_value=identity):
+                    assert_true(results()[jid][0] == "skipped", "conflicting live descendant evidence retains ownership")
+                store._save({**job, "attempt_origin": None})
+                assert_true(results()[jid][0] == "skipped", "legacy record retains its claim")
+                store._save(job)
+                lock.write_text(json.dumps({**owner, "token": "replacement"}), encoding="utf-8")
+                assert_true(clean_stale._repair(store, job, owner)[0] == "skipped"
+                            and store._read_lock(lock)["token"] == "replacement", "replacement lock survives")
+                lock.write_text(json.dumps(owner), encoding="utf-8")
+                with patch.object(store, "_save", side_effect=OSError("disk full")):
+                    assert_true(results(True)[jid][0] == "error" and lock.exists()
+                                and store._load(jid) == job, "persistence failure retains ownership")
+
+                original_unlink = Path.unlink
+                def interrupt_release(path, *args, **kwargs):
+                    if path == lock:
+                        raise OSError("interrupted release")
+                    return original_unlink(path, *args, **kwargs)
+
+                with patch.object(Path, "unlink", interrupt_release):
+                    assert_true(results(True)[jid][0] == "error", "interrupted after audit publication")
+                terminal = store._load(jid)
+                saved = store._load(fid)
+                fenced = store._load(stalled["job_id"])
+                assert_true(fenced["status"] == "failed" and "reboot_cleanup" in fenced
+                            and all(fenced[k] == before[k] for k in ("error", "completed_at", "output"))
+                            and store.get_result(stalled["job_id"])["content"] == before["error"],
+                            "reboot recovery preserves the stall reaper's original failure")
+                assert_true(all(saved[k] == failed[k] for k in ("error", "output", "completed_at"))
+                            and saved["cancellation"]["cleanup_confirmed"]
+                            and saved["ownership"]["cleanup_confirmed"], "failed history survives")
+                assert_true(terminal["status"] == "failed" and terminal["reboot_cleanup"]["prior_status"] == "running"
+                            and jid in store.update_job_blockers(), "retained lock blocks update until retry")
+                snapshot = osutil.open_snapshot
+                def unreadable_claim(path, *args, **kwargs):
+                    if path == lock:
+                        raise PermissionError("fixture transient claim read failure")
+                    return snapshot(path, *args, **kwargs)
+                with patch.object(osutil, "open_snapshot", side_effect=unreadable_claim):
+                    store.prune_jobs(ttl_days=-1, keep_last=0)
+                assert_true(store._load(jid) == terminal, "pruning preserves retained recovery history")
+                mutation = store._mutation_path(jid)
+                pending = mutation.with_suffix(".claim.pending")
+                crash_writer = """
+import json, os, sys
+from exoma.core.jobs.job_manager import JobManager
+def interrupt(payload, stream):
+    stream.write("{")
+    stream.flush()
+    os._exit(29)
+json.dump = interrupt
+with JobManager(sys.argv[1], initialize=False)._job_mutation(sys.argv[2], reclaim=False):
+    raise AssertionError("unpublished claim entered critical section")
+"""
+                crash = subprocess.run([sys.executable, "-B", "-c", crash_writer, str(store.job_dir), jid],
+                                       cwd=root, env=env, timeout=15, capture_output=True, **no_console())
+                assert_true(crash.returncode == 29 and pending.exists() and not mutation.exists() and lock.exists(),
+                            "process exit while staging leaves no partial published claim")
+                with store._job_mutation(jid, reclaim=False):
+                    assert_true(store._read_side(mutation)["guarded_mutation"] and not pending.exists(),
+                                "next writer acquires a complete claim after interruption")
+                # Abrupt process exit releases the kernel guard but leaves the mutation claim.
+                store._mutation_path(jid).write_text(json.dumps({"guarded_mutation": True, "token": "old"}),
+                                                     encoding="utf-8")
+                assert_true(results(True)[jid][0] == "recovered" and store._load(jid) == terminal
+                            and not lock.exists(), "retry releases exact owner and keeps original audit")
+                assert_true(results(True)[jid][0] == "skipped" and not store.update_job_blockers(),
+                            "repeated cleanup has no further action")
+                orphan = store.lock_dir / "orphan.lock"
+                orphan.write_text(json.dumps({"job_id": "lost", "cleanup_required": True}), encoding="utf-8")
+                (store.job_dir / "job_bad.json").write_text("{", encoding="utf-8")
+                output = io.StringIO()
+                with patch.object(clean_stale, "JobManager", return_value=store), redirect_stdout(output):
+                    code = clean_stale.main(["clean-stale", "--apply"])
+                assert_true(code == 1 and orphan.exists() and "Update blocker lost" in output.getvalue()
+                            and "Update blocker job_bad.json" in output.getvalue()
+                            and "private task" not in output.getvalue(), "reports all remaining blockers")
+
+        retry = fixture("recovery")
+        rid = retry["job_id"]
+        # Recovery only begins when prior ownership has already been confirmed.
+        with patch.object(osutil, "process_identity", return_value=identity):
+            store.confirm_worker_cleanup(rid)
+        with patch.object(osutil, "windows_boot_evidence", return_value=new), \
+             patch.object(osutil, "process_generation", return_value=osutil.PROCESS_DEAD):
+            selected = store.claim_recovery(rid)
+            store.release_recovery_claim(rid)
+            assert_true(selected["action"] == "recover", "fixture recovered the same job")
+            origin = selected["job"]["attempt_origin"]
+            assert_true(origin["boot"] == new and origin["attempt"] != retry["attempt_origin"]["attempt"]
+                        and store._read_lock(store._lock_path("recovery"))["attempt_origin"] == origin,
+                        "recovery replaces both copies of the latest attempt before launch")
+            store.mark_running(rid)
+            assert_true(results(True)[rid][0] == "skipped", "first creation before reboot cannot retire a new attempt")
+
+
+def _check_replaced_cleanup_owner():
+    """An old failed job with a busy guard must not affect its session's next owner."""
+    import io
+    from contextlib import redirect_stdout
+    from unittest.mock import patch
+
+    from exoma.core.jobs import clean_stale
+    from exoma.utils import osutil
+
+    with tempfile.TemporaryDirectory(prefix="jobs-replaced-owner-") as tmp:
+        root = Path(tmp)
+        store = JobManager(root / "jobs")
+        old = store.create_job("plan", "first", "shared", str(root), None)
+        old = store.fail_job(old["job_id"], "original failure")
+        new = store.create_job("plan", "second", "shared", str(root), None)
+        store.set_launcher_pid(new["job_id"], os.getpid())
+        lock = store._lock_path("shared")
+        owner = store._read_lock(lock)
+        # Exercise a real session takeover and each independent ownership mismatch.
+        claims = (owner, {**owner, "token": old["lock_token"]},
+                  {**owner, "job_id": old["job_id"]},
+                  {**owner, "job_id": old["job_id"], "token": old["lock_token"], "session_id": "other"})
+        with store._job_mutation(old["job_id"]), \
+             patch.object(store, "_job_mutation", side_effect=AssertionError("unexpected mutation guard")), \
+             patch.object(osutil, "process_state", return_value="dead"), \
+             patch.object(clean_stale, "JobManager", return_value=store):
+            for claim in claims:
+                lock.write_text(json.dumps(claim), encoding="utf-8")
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    code = clean_stale.main(["clean-stale", "--apply"])
+                assert_true(code == 0 and f"{old['job_id']} [failed] skipped: session owner or token differs"
+                            in output.getvalue(), "obsolete owner skips without failing an unblocked batch")
+                assert_true(store._load(old["job_id"]) == old and store._read_lock(lock) == claim,
+                            "failed history and session claim survive")
 
 
 def _test_worker_log_preservation() -> None:

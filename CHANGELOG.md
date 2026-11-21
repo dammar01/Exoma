@@ -11,6 +11,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 1.2.1 (candidate) | [docs/releases/v1.2.1.md](docs/releases/v1.2.1.md) | Inspect stale jobs and recover Windows session locks after a verified reboot |
 | 1.2.0 (candidate) | [docs/releases/v1.2.0.md](docs/releases/v1.2.0.md) | Risk-based test selection across workers and browser retry evidence that preserves missing assertions through the CLI exit status |
 | 1.1.2 (candidate) | [docs/releases/v1.1.2.md](docs/releases/v1.1.2.md) | Darwin cleanup inventory retains terminal process identity and birth lineage without executable lookup; conservative ownership checks and native release gates retained |
 | 1.1.1 (candidate) | [docs/releases/v1.1.1.md](docs/releases/v1.1.1.md) | Updater guardian tolerates the macOS post-exit EPERM only with proof the group is gone; native Windows handoff is a mandatory release-staging gate and CI skips only the GitHub-hosted Windows handoff step; release gates pending |

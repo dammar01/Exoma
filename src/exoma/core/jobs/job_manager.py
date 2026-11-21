@@ -17,7 +17,7 @@ from exoma.config.settings import (
     DATA_DIR,
     JOB_DIR,
 )
-from exoma.core.workspace.workspace_paths import atomic_write_json
+from exoma.core.workspace.workspace_paths import atomic_write_json, atomic_write_text
 from exoma.utils import osutil
 from exoma.utils.path_guard import safe_path_component
 
@@ -168,6 +168,7 @@ class JobManager:
         max_runtime_seconds: int = DEFAULT_JOB_MAX_RUNTIME_SECONDS,
         idle_stall_seconds: int = DEFAULT_IDLE_STALL_SECONDS,
         max_global_workers: int = DEFAULT_MAX_GLOBAL_WORKERS,
+        *, initialize: bool = True,
     ) -> None:
         self.job_dir = Path(job_dir).resolve()
         self.lock_dir = self.job_dir / "locks"
@@ -175,12 +176,9 @@ class JobManager:
         self.recovery_dir = self.job_dir / "recovery"
         self.mutation_dir = self.job_dir / "mutations"
         self.log_dir = self.job_dir / "logs"
-        self.job_dir.mkdir(parents=True, exist_ok=True)
-        self.lock_dir.mkdir(parents=True, exist_ok=True)
-        self.beat_dir.mkdir(parents=True, exist_ok=True)
-        self.recovery_dir.mkdir(parents=True, exist_ok=True)
-        self.mutation_dir.mkdir(parents=True, exist_ok=True)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        if initialize:
+            for directory in (self.lock_dir, self.beat_dir, self.recovery_dir, self.mutation_dir, self.log_dir):
+                directory.mkdir(parents=True, exist_ok=True)
         self.stall_threshold_seconds = stall_threshold_seconds
         self.max_runtime_seconds = max_runtime_seconds
         self.idle_stall_seconds = idle_stall_seconds
@@ -207,7 +205,8 @@ class JobManager:
             return existing
 
         job_id = self._new_job_id()
-        lock_token = self._acquire_session_lock(session_id, job_id)
+        origin = self._attempt_origin()
+        lock_token = self._acquire_session_lock(session_id, job_id, origin)
         job = {
             "job_id": job_id,
             "request_hash": request_hash,
@@ -215,6 +214,7 @@ class JobManager:
             "task": task,
             "session_id": session_id,
             "lock_token": lock_token,
+            "attempt_origin": origin,
             "work_dir": work_dir,
             "model": model,
             "allow_reuse": bool(allow_reuse),
@@ -351,6 +351,16 @@ class JobManager:
                 job["error"] = None
                 job["output"] = None
                 job.pop("reaped", None)
+                path = self._lock_path(job["session_id"])
+                with self._exclusive_file_guard(path.with_suffix(".lock.guard")):
+                    claim = self._read_lock(path)
+                    if (not claim or claim.get("cleanup_required") or not job.get("lock_token")
+                            or claim.get("token") != job["lock_token"] or claim.get("job_id") != job_id
+                            or claim.get("session_id") != job["session_id"]):
+                        self.release_recovery_claim(job_id)
+                        return {"action": "wait", "job": self._load(job_id)}
+                    job["attempt_origin"] = self._attempt_origin()
+                    atomic_write_json(path, {**claim, "attempt_origin": job["attempt_origin"]})
                 self._save(job)
                 exhausted = False
 
@@ -379,6 +389,15 @@ class JobManager:
             job = self._load(job_id)
             if job.get("status") not in {"pending", "running", "recovering"}:
                 return
+            # A manually invoked worker can register from another machine/boot.
+            # Invalidate any old proof before it can start descendants.
+            origin = job.get("attempt_origin")
+            if origin:
+                observed = osutil.windows_boot_evidence() or {}
+                previous = origin.get("boot") if isinstance(origin, dict) else None
+                if (not isinstance(previous, dict) or not observed or
+                        any(observed[k] != previous.get(k) for k in ("machine", "boot_id"))):
+                    job["attempt_origin"] = None
             job["worker_pid"] = pid
             job["worker_registered"] = True
             job["worker_create_time"] = osutil.pid_create_time(pid)
@@ -937,11 +956,36 @@ class JobManager:
                     job = json.load(file)
             except (OSError, json.JSONDecodeError):
                 continue
-            if job.get("status") not in {"completed", "failed"}:
+            if not isinstance(job, dict) or job.get("status") not in ("completed", "failed"):
                 continue
             try:
                 if path.stat().st_mtime < cutoff:
-                    path.unlink()
+                    # A stale-cleanup apply can be between its terminal write and
+                    # lock release. Keep the record required to resume that repair.
+                    with self._job_mutation(path.stem):
+                        current = self._load(path.stem)
+                        if (current != job or path.stat().st_mtime >= cutoff
+                                or any(current.get(k) is not None and not isinstance(current[k], dict)
+                                       for k in ("ownership", "cancellation"))
+                                or _cleanup_unconfirmed(current)):
+                            continue
+                        lock = self._lock_path(current.get("session_id", ""))
+                        with self._exclusive_file_guard(lock.with_suffix(".lock.guard")):
+                            try:
+                                with osutil.open_snapshot(lock) as stream:
+                                    claim = json.load(stream)
+                            except FileNotFoundError:
+                                pass
+                            except (OSError, ValueError):
+                                continue  # An unreadable claim can still retain the repair.
+                            else:
+                                if (not isinstance(claim, dict) or not isinstance(claim.get("job_id"), str)
+                                        or not claim["job_id"]):
+                                    continue
+                                if claim["job_id"] == path.stem and (
+                                        "reboot_cleanup" in current or claim.get("cleanup_required")):
+                                    continue
+                            path.unlink()
                     # Side files outlive their job otherwise: they are never rewritten
                     # after it ends, so nothing else would ever clean them up.
                     for side in (
@@ -1386,6 +1430,69 @@ class JobManager:
             raise ValueError("unconfirmed Exoma cleanup owns admission: " +
                              ", ".join(str(row["job_id"]) for row in retained[:3]))
 
+    def admission_records(self):
+        """Read each record independently so one unreadable claim has its own finding."""
+        # Claims first: consumers can join each job to its owner without buffering
+        # the task text and output of every historical job in the store.
+        for directory, pattern in ((self.lock_dir, "*.lock"), (self.job_dir, "job_*.json")):
+            try:
+                paths = sorted(p for p in directory.iterdir() if p.match(pattern))
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                yield directory, None, str(exc)
+                continue
+            for path in paths:
+                try:
+                    with osutil.open_snapshot(path) as stream:
+                        record = json.load(stream)
+                    if not isinstance(record, dict):
+                        raise ValueError("expected a JSON object")
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError) as exc:
+                    yield path, None, str(exc)
+                else:
+                    yield path, record, None
+
+    def update_job_blockers(self, *, after_retirement=False):
+        """Global job preflight shared by package update and reboot recovery."""
+        blockers = {}
+        for path, record, error in self.admission_records():
+            if error:
+                blockers[path.name] = f"unreadable admission record: {error}"
+                continue
+            if path.parent == self.lock_dir:
+                if record.get("cleanup_required"):
+                    blockers[str(record.get("job_id") or path.name)] = "session lock retains cleanup"
+                continue
+            try:
+                decision = self.mutation_admission(record)
+            except (ValueError, TypeError) as exc:
+                blockers[path.name] = str(exc)
+                continue
+            if decision == "block" or (after_retirement and decision == "retire_startup"):
+                blockers.setdefault(path.stem, "job is active or cleanup is unconfirmed")
+            elif decision == "retire_startup" or self._startup_retired(record):
+                reason = self._startup_ownership_error(path, record)
+                if reason:
+                    blockers[path.stem] = reason
+        return blockers
+
+    @staticmethod
+    def _startup_retired(job):
+        return (isinstance(job, dict) and job.get("status") == "failed"
+                and job.get("error") == "startup_reservation_retired_for_update")
+
+    def _startup_ownership_error(self, path, job):
+        if (job.get("job_id") != path.stem or not isinstance(job.get("session_id"), str)
+                or not job["session_id"] or not isinstance(job.get("lock_token"), str) or not job["lock_token"]):
+            return "cannot establish orphan reservation ownership"
+        claim = self._read_lock(self._lock_path(job["session_id"]))
+        if claim and claim.get("job_id") == path.stem and claim.get("token") != job["lock_token"]:
+            return "startup reservation ownership token differs"
+        return None
+
     @staticmethod
     def _admission_process_gone(job, prefix):
         """Prove exit/reuse without interpreting an inaccessible process as dead."""
@@ -1452,8 +1559,7 @@ class JobManager:
         for path in self.job_dir.glob("job_*.json"):
             with osutil.open_snapshot(path) as file:
                 job = json.load(file)
-            retired = (isinstance(job, dict) and job.get("status") == "failed" and
-                       job.get("error") == "startup_reservation_retired_for_update")
+            retired = self._startup_retired(job)
             if self.mutation_admission(job) != "retire_startup" and not retired:
                 continue
             if target is not None:
@@ -1463,12 +1569,13 @@ class JobManager:
                 root = Path(work_dir).resolve()
                 if root != target and not root.is_relative_to(target) and not target.is_relative_to(root):
                     continue
+            reason = self._startup_ownership_error(path, job)
+            if reason:
+                raise ValueError(reason)
             if retired:
                 self._release_retired_startup_lock(job)
                 continue
             job_id = job.get("job_id")
-            if job_id != path.stem or not isinstance(job.get("session_id"), str) or not job.get("lock_token"):
-                raise ValueError("cannot establish orphan reservation ownership")
             with self._job_mutation(job_id):
                 job = self._load(job_id)
                 self.assert_cleanup_admission(workspace)
@@ -1495,19 +1602,53 @@ class JobManager:
         with self.capacity_guard():
             self.assert_update_admission()
             self.retire_startup_reservations()
-            for path in self.job_dir.glob("job_*.json"):
-                with osutil.open_snapshot(path) as file:
-                    job = json.load(file)
-                if not isinstance(job, dict):
-                    raise ValueError("unreadable job admission record")
-                if self.mutation_admission(job) != "ignore":
-                    raise ValueError("active Exoma jobs exist; finish or confirm cleanup before updating")
+            if self.update_job_blockers(after_retirement=True):
+                raise ValueError("active Exoma jobs exist; finish or confirm cleanup before updating")
             path = self.job_dir / ".update-reservation.json"
             atomic_write_json(path, {"token": token, "operation": str(operation), "owner_pid": os.getpid()})
             return path
 
+    @staticmethod
+    def _publish_mutation_claim(path, payload, *, reclaim):
+        """Publish a complete claim without replacing a concurrent legacy writer."""
+        if path.exists():
+            raise FileExistsError(path)
+        staged = path.with_suffix(".claim.pending")
+        # Caller owns the OS guard. Discard any staging name left by its last
+        # holder before writing, including a hard link to a published claim.
+        staged.unlink(missing_ok=True)
+        try:
+            with staged.open("x", encoding="utf-8") as stream:
+                json.dump(payload, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if os.name == "nt":
+                os.rename(staged, path)  # Windows rename refuses an existing destination.
+            else:
+                try:
+                    os.link(staged, path)
+                except FileExistsError:
+                    raise
+                except OSError as exc:
+                    import errno
+                    if not reclaim or exc.errno not in (errno.EOPNOTSUPP, errno.EPERM, errno.ENOSYS):
+                        raise
+                    # Preserve ordinary POSIX job submission on volumes without
+                    # links. Strict reboot recovery never uses partial publication.
+                    stream = path.open("x", encoding="utf-8")
+                    try:
+                        with stream:
+                            json.dump(payload, stream)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+        finally:
+            staged.unlink(missing_ok=True)
+
     @contextmanager
-    def _job_mutation(self, job_id: str):
+    def _job_mutation(self, job_id: str, *, reclaim=True):
         path = self._mutation_path(job_id)
         token = secrets.token_hex(16)
         deadline = time.monotonic() + _MUTATION_WAIT_SECONDS
@@ -1518,33 +1659,32 @@ class JobManager:
             "owner_identity": osutil.process_identity(os.getpid()),
             "created_at": self._now(),
             "token": token,
+            "guarded_mutation": True,
         }
 
+        # Hold the existing release guard for the entire transition. Acquiring it
+        # proves a prior guarded writer has left, including after a process crash.
+        # Older writers release through this guard but do not hold it while working.
+        guard = path.with_suffix(".claim.guard")
         while True:
-            try:
-                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                break
-            except FileExistsError:
-                existing = self._read_side(path)
-                if self._claim_is_stale(path, _CLAIM_STALE_SECONDS, existing):
-                    self._release_claim_path(
-                        path,
-                        expected_token=(existing or {}).get("token"),
-                        force=existing is None,
-                    )
-                    continue
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f"timed out waiting to update job {job_id}")
-                time.sleep(0.01)
-
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(payload, file)
-                file.flush()
-                os.fsync(file.fileno())
-            yield
-        finally:
-            self._release_claim_path(path, expected_token=token)
+            with self._exclusive_file_guard(guard, timeout=_MUTATION_WAIT_SECONDS):
+                try:
+                    self._publish_mutation_claim(path, payload, reclaim=reclaim)
+                except FileExistsError:
+                    existing = self._read_side(path)
+                    if ((existing or {}).get("guarded_mutation") is True or
+                            (reclaim and self._claim_is_stale(path, _CLAIM_STALE_SECONDS, existing))):
+                        path.unlink(missing_ok=True)
+                        continue
+                else:
+                    try:
+                        yield
+                    finally:
+                        path.unlink(missing_ok=True)
+                    return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting to update job {job_id}")
+            time.sleep(0.01)
 
     @staticmethod
     def _claim_is_stale(
@@ -1607,16 +1747,27 @@ class JobManager:
         with osutil.open_snapshot(self._path(job_id)) as file:
             return json.load(file)
 
-    def _save(self, job: dict) -> None:
-        atomic_write_json(self._path(job["job_id"]), job)
+    def _save(self, job: dict, *, durable=False) -> None:
+        path = self._path(job["job_id"])
+        if durable:
+            atomic_write_text(path, json.dumps(job, indent=2), fsync=True)
+        else:
+            atomic_write_json(path, job)
 
-    def _acquire_session_lock(self, session_id: str, job_id: str) -> str:
+    def _attempt_origin(self):
+        boot = osutil.windows_boot_evidence()
+        if boot:
+            return {"boot": boot, "attempt": secrets.token_hex(16), "at": self._now()}
+        return None
+
+    def _acquire_session_lock(self, session_id: str, job_id: str, origin=None) -> str:
         lock_path = self._lock_path(session_id)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         token = secrets.token_hex(16)
         payload = {
             "session_id": session_id,
             "job_id": job_id,
+            "attempt_origin": origin,
             "created_at": self._now(),
             "owner_pid": os.getpid(),
             "owner_create_time": osutil.pid_create_time(os.getpid()),

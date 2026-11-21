@@ -121,6 +121,15 @@ def _check_workspace_admission_errors() -> None:
         descriptor.assert_called_once_with()
         spawn.assert_not_called()
         assert_true(manager.get_job(job["job_id"])["status"] == "pending", "advisory preflight leaves retirement to reservation")
+        (manager.lock_dir / "other.lock").write_text(json.dumps({
+            "job_id": "other-project", "work_dir": str(root / "other"), "cleanup_required": True,
+        }), encoding="utf-8")
+        errors = io.StringIO()
+        with patch("exoma.core.jobs.job_manager.JobManager", return_value=manager), \
+             patch.object(self_update.install_method, "update_descriptor") as descriptor, redirect_stderr(errors):
+            assert_true(self_update._handoff("pip", [sys.executable, "-m", "pip"], project, 1) == 1
+                        and "other-project" in errors.getvalue(), "global preflight includes lock-only blockers")
+        descriptor.assert_not_called()
 
 
 def _check_update_dispatch() -> None:
@@ -1415,6 +1424,7 @@ def _check_handoff_uncertainty():
         jobs = MagicMock()
         jobs.job_dir = root / "jobs"
         jobs.job_dir.mkdir()
+        jobs.update_job_blockers.return_value = {}
         jobs.reserve_update.side_effect = lambda operation, token: root / "reservation.json"
         api = MagicMock()
         api.user.return_value, api.in_job.return_value = "fixture-user", False

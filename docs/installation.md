@@ -175,6 +175,11 @@ last. The operation observer returns a nonzero status when any step fails. Witho
 is created. A missing, unreadable, or malformed workspace `config.json` is reported before
 the package is changed. Global configuration keeps the last host, mode, and provider choices.
 
+If job ownership blocks an update, run `exoma jobs clean-stale` to inspect the
+user store. On Windows, `exoma jobs clean-stale --apply` can release ownership
+after a verified reboot and reports any jobs that still block update. Records
+created before boot evidence was available require independent investigation.
+
 `exoma update` uses the same asynchronous handoff on Windows, Linux and macOS.
 A verified Python runtime and immutable worker snapshot outside the target installation
 own one operation: preflight/reservation, READY/COMMIT/ACCEPTED, caller exit, package,

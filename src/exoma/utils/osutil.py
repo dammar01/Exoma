@@ -10,6 +10,76 @@ from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
 
+
+def _smbios_system_uuid():
+    """Read the UUID in the SMBIOS Type 1 (System Information) record."""
+    import ctypes
+
+    query = ctypes.WinDLL("kernel32").GetSystemFirmwareTable
+    provider = int.from_bytes(b"RSMB", "big")
+    size = query(provider, 0, None, 0)
+    if not 8 < size <= 16 * 1024 * 1024:
+        return None
+    buffer = ctypes.create_string_buffer(size)
+    if query(provider, 0, buffer, size) != size:
+        return None
+    data = buffer.raw
+    if int.from_bytes(data[4:8], "little") != size - 8:
+        return None
+    pos = 8
+    while pos + 4 <= size:
+        kind, length = data[pos:pos + 2]
+        if length < 4 or pos + length > size:
+            return None
+        if kind == 1 and length >= 24:
+            value = data[pos + 8:pos + 24]
+            return value if value not in (bytes(16), b"\xff" * 16) else None
+        end = data.find(b"\0\0", pos + length)
+        if end < 0 or kind == 127:
+            break
+        pos = end + 2
+    return None
+
+
+def windows_boot_evidence() -> dict | None:
+    """Identify this Windows installation, boot generation and UTC boot time.
+
+    A boot GUID makes a wall-clock adjustment insufficient to prove a reboot.
+    An unavailable firmware or kernel interface leaves the job usable without
+    automatic reboot recovery. No raw hardware identifiers enter the store.
+    """
+    if not IS_WINDOWS:
+        return None
+    import ctypes
+    import hashlib
+    import uuid
+
+    try:
+        import winreg
+        hardware = _smbios_system_uuid()
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography",
+                            access=winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            install = uuid.UUID(winreg.QueryValueEx(key, "MachineGuid")[0])
+        if hardware is None or install.int in (0, (1 << 128) - 1):
+            return None
+        query = ctypes.WinDLL("ntdll").NtQuerySystemInformation
+        environment = ctypes.create_string_buffer(32)  # SYSTEM_BOOT_ENVIRONMENT_INFORMATION
+        times = ctypes.create_string_buffer(48)  # SYSTEM_TIMEOFDAY_INFORMATION
+        returned = ctypes.c_ulong()
+        if query(90, environment, len(environment), ctypes.byref(returned)) or returned.value < 16:
+            return None
+        if query(3, times, len(times), ctypes.byref(returned)) or returned.value < 16:
+            return None
+        boot_id = uuid.UUID(bytes_le=environment.raw[:16])
+        boot, current = (int.from_bytes(times.raw[i:i + 8], "little") for i in (0, 8))
+        epoch = 116444736000000000  # FILETIME ticks from 1601 to 1970
+        if not epoch < boot <= current or not boot_id.int:
+            return None
+        return {"machine": hashlib.sha256(hardware + install.bytes).hexdigest(),
+                "boot_id": boot_id.hex, "boot_us": (boot - epoch) // 10}
+    except (AttributeError, ImportError, OSError, ValueError, TypeError):
+        return None
+
 # The oldest Python the code runs on: 3.11, for stdlib `tomllib` (the installer parses
 # Codex's config.toml before it writes it). pyproject's requires-python says the same.
 # main.py, install.py and check.py repeat it inline in their version guard, because a guard

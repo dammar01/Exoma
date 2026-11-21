@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 
 from exoma.installer import method as install_method
-from exoma.utils.osutil import agent_home, open_snapshot, run_bounded
+from exoma.utils.osutil import agent_home, run_bounded
 
 STAGE_TIMEOUT_SECONDS = 900
 HEARTBEAT_SECONDS = 15
@@ -276,13 +276,10 @@ def _handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int
         from exoma.core.jobs.job_manager import JobManager
 
         jobs = JobManager()
-        for path in jobs.job_dir.glob("job_*.json"):
-            with open_snapshot(path) as stream:
-                job = json.load(stream)
-            if not isinstance(job, dict):
-                raise ValueError("expected a JSON object")
-            if jobs.mutation_admission(job) == "block":
-                raise ValueError("active Exoma jobs exist in this user store; finish them before updating")
+        blockers = jobs.update_job_blockers()
+        if blockers:
+            raise ValueError("active Exoma jobs or unresolved records in this user store: " +
+                             ", ".join(blockers) + "; run exoma jobs clean-stale for details")
         descriptor = install_method.update_descriptor()
         api = worker.platform_api()
         key = worker.installation_key(descriptor["prefix"], api.user())
