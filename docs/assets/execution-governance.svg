@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="t d">
+  <title id="t">Exoma execution governance and verification lifecycle</title>
+  <desc id="d">Implementation diagram of Exoma execution governance and verification verified against core/runtime/execution.py and core/evidence/verify_tests.py: plan-record, execute-begin, primary agent edits with host-dependent file-write hooks, execute-end with Git tree snapshots detecting out-of-scope edits including shell writes, verify-prepare and delegated verify with allowlisted runtime tests and fingerprinted reuse, and derived verdict.</desc>
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .flow { stroke: #4F6970; stroke-width: 2.2; fill: none; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#4F6970" stroke-width="1.8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="440" fill="#F5F1EA"/>
+  <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
+    <path d="M28 52 V28 H52"/><path d="M1148 28 H1172 V52"/>
+    <path d="M28 388 V412 H52"/><path d="M1148 412 H1172 V388"/>
+  </g>
+
+  <!-- Header -->
+  <text x="56" y="56" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F6F73">ARCHITECTURE / EXECUTION GOVERNANCE &amp; VERIFICATION</text>
+  <text x="56" y="92" class="sans" font-size="28" font-weight="800" fill="#1F3A44">Planned → Implemented → Verified Lifecycle</text>
+  <rect x="944" y="54" width="200" height="28" rx="14" fill="#E6ECEA" stroke="#4F6F73" stroke-width="1.2"/>
+  <text x="1044" y="72" class="mono" font-size="10.5" font-weight="700" fill="#2F4F55" text-anchor="middle">IMPLEMENTATION · VERIFIED</text>
+  <line x1="56" y1="112" x2="1144" y2="112" stroke="#C9CFCB" stroke-width="1.4"/>
+
+  <!-- 5 Stage Cards across 1088px: 5*196 + 4*27 = 980 + 108 = 1088 -->
+  <g transform="translate(56 142)">
+    <rect width="196" height="176" rx="9" fill="#FCFAF5" stroke="#C3CAC6" stroke-width="1.5"/>
+    <rect width="196" height="5" rx="2.5" fill="#4A6F85"/>
+    <text x="14" y="28" class="mono" font-size="10.5" font-weight="700" fill="#4A6F85">01 · PLAN</text>
+    <text x="14" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">plan-record</text>
+    <text x="14" y="78" class="sans" font-size="12" fill="#4F6266">• Validates proceed</text>
+    <text x="14" y="97" class="sans" font-size="12" fill="#4F6266">• Checks files + options</text>
+    <text x="14" y="116" class="sans" font-size="12" fill="#4F6266">• Snapshots base_tree</text>
+    <rect x="14" y="138" width="168" height="24" rx="5" fill="#EFF4F5"/>
+    <text x="98" y="154" class="mono" font-size="10" font-weight="700" fill="#4A6F85" text-anchor="middle">status: planned</text>
+  </g>
+
+  <g transform="translate(279 142)">
+    <rect width="196" height="176" rx="9" fill="#FCFAF5" stroke="#4A7A6E" stroke-width="1.6"/>
+    <rect width="196" height="5" rx="2.5" fill="#4A7A6E"/>
+    <text x="14" y="28" class="mono" font-size="10.5" font-weight="700" fill="#4A7A6E">02 · APPROVE</text>
+    <text x="14" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">execute-begin</text>
+    <text x="14" y="78" class="sans" font-size="12" fill="#4F6266">• Needs proceed plan</text>
+    <text x="14" y="97" class="sans" font-size="12" fill="#4F6266">• Single-use -y token</text>
+    <text x="14" y="116" class="sans" font-size="12" fill="#4F6266">• Snapshots begin_tree</text>
+    <rect x="14" y="138" width="168" height="24" rx="5" fill="#F1F5F3"/>
+    <text x="98" y="154" class="mono" font-size="10" font-weight="700" fill="#4A7A6E" text-anchor="middle">opens scope gate</text>
+  </g>
+
+  <g transform="translate(502 142)">
+    <rect width="196" height="176" rx="9" fill="#E7EFEE" stroke="#3F6F73" stroke-width="1.8"/>
+    <rect width="196" height="5" rx="2.5" fill="#3F6F73"/>
+    <text x="14" y="28" class="mono" font-size="10.5" font-weight="700" fill="#3F6F73">03 · IMPLEMENT</text>
+    <text x="14" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">Primary Edits</text>
+    <text x="14" y="78" class="sans" font-size="12" fill="#2F3F44">• Hooks guard supported</text>
+    <text x="14" y="95" class="sans" font-size="12" fill="#2F3F44">  file-write tools</text>
+    <text x="14" y="116" class="sans" font-size="11.5" fill="#5B6B70">• Enforcement varies by</text>
+    <text x="14" y="131" class="sans" font-size="11.5" fill="#5B6B70">  host; shell not blocked</text>
+    <rect x="14" y="142" width="168" height="22" rx="5" fill="#FCFAF5"/>
+    <text x="98" y="157" class="mono" font-size="9.5" font-weight="700" fill="#3F6F73" text-anchor="middle">primary agent owns code</text>
+  </g>
+
+  <g transform="translate(725 142)">
+    <rect width="196" height="176" rx="9" fill="#FCFAF5" stroke="#B08A5E" stroke-width="1.6"/>
+    <rect width="196" height="5" rx="2.5" fill="#B08A5E"/>
+    <text x="14" y="28" class="mono" font-size="10.5" font-weight="700" fill="#8C6A43">04 · CLOSE</text>
+    <text x="14" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">execute-end</text>
+    <text x="14" y="78" class="sans" font-size="12" fill="#4F6266">• Snapshots end_tree</text>
+    <text x="14" y="97" class="sans" font-size="12" fill="#4F6266">• Flags outside_scope</text>
+    <text x="14" y="116" class="sans" font-size="12" fill="#4F6266">  (incl. shell edits)</text>
+    <rect x="14" y="138" width="168" height="24" rx="5" fill="#FAF2E4"/>
+    <text x="98" y="154" class="mono" font-size="9.5" font-weight="700" fill="#8C6A43" text-anchor="middle">implemented · not_run</text>
+  </g>
+
+  <g transform="translate(948 142)">
+    <rect width="196" height="176" rx="9" fill="#EFF4F5" stroke="#1F3A44" stroke-width="1.8"/>
+    <rect width="196" height="5" rx="2.5" fill="#1F3A44"/>
+    <text x="14" y="28" class="mono" font-size="10.5" font-weight="700" fill="#1F3A44">05 · VERIFY</text>
+    <text x="14" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">/.verify Verdict</text>
+    <text x="14" y="78" class="sans" font-size="12" fill="#2F3F44">• verify-prepare + review</text>
+    <text x="14" y="97" class="sans" font-size="12" fill="#2F3F44">• Allowlisted runtime tests</text>
+    <text x="14" y="116" class="sans" font-size="12" fill="#2F3F44">• Reuse via fingerprint</text>
+    <rect x="14" y="138" width="168" height="24" rx="5" fill="#1F3A44"/>
+    <text x="98" y="154" class="mono" font-size="10" font-weight="700" fill="#FBF9F4" text-anchor="middle">pass | fail | incomplete</text>
+  </g>
+
+  <!-- Arrows -->
+  <path class="flow" d="M252 230 H275" marker-end="url(#a)"/>
+  <path class="flow" d="M475 230 H498" marker-end="url(#a)"/>
+  <path class="flow" d="M698 230 H721" marker-end="url(#a)"/>
+  <path class="flow" d="M921 230 H944" marker-end="url(#a)"/>
+
+  <!-- Qualification note bar -->
+  <rect x="56" y="336" width="1088" height="56" rx="7" fill="#E8EEEA" stroke="#A9BDB4" stroke-width="1.2"/>
+  <text x="76" y="359" class="sans" font-size="12.5" fill="#2F3F44"><tspan font-weight="700">Boundary note:</tspan> Host write-scope hooks cover supported file-write tools only (enforcement varies by host).</text>
+  <text x="76" y="379" class="sans" font-size="12.5" fill="#2F3F44">Shell/script writes are detected via Git tree snapshots when Git is available; unavailable snapshots report unknown (<tspan class="mono" font-size="11.5">null</tspan>).</text>
+
+  <!-- Footer -->
+  <text x="56" y="420" class="mono" font-size="11" font-weight="700" fill="#4F6970">PLANNED ≠ IMPLEMENTED ≠ VERIFIED</text>
+  <text x="1144" y="420" class="mono" font-size="10.5" fill="#6B787C" text-anchor="end">Source: core/runtime/execution.py · core/evidence/verify_tests.py</text>
+</svg>

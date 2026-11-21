@@ -1,7 +1,14 @@
 # Developing Exoma
 
-For maintainers working on this repository. Using Exoma in a project is covered by the
-[installation guide](installation.md) and the [team guide](team-guide/README.md).
+For maintainers and contributors working on this repository.
+
+- **New to contributing?** Start with [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution
+  principles, repository layout, local setup, testing, and PR expectations.
+- **Using Exoma in a project?** See the [installation guide](installation.md) and the
+  [team guide](team-guide/README.md).
+
+This page covers repository ownership, the Exoma ↔ `agent-workflow` relationship, isolated
+development installs, and release staging.
 
 ## Two repositories, two jobs
 
@@ -84,7 +91,7 @@ uv run exoma init --work-dir "$(mktemp -d)"
 ```
 
 `AGENT_HOME` redirects the install target and `EXOMA_HOME` the per-user data; their exact
-behavior is in the [reference](reference.md#detail-installer).
+behavior is in the [reference](reference.md#installer-details).
 
 ## Staging a release in agent-workflow
 

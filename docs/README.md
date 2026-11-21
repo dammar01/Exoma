@@ -1,41 +1,31 @@
 # Documentation
 
-Exoma documentation is split into two layers. Each answers a different question, and each
-has one job.
+Exoma documentation is organized by audience and responsibility so each topic has one
+authoritative home.
 
-| Layer | Answers | Audience | Where |
-| --- | --- | --- | --- |
-| **Team guide** | How and when do I use this? What does a good request look like? | Developers using Exoma day to day | [team-guide/](team-guide/README.md) |
-| **Reference** | Exactly what does the runtime do? | Anyone who needs precise behavior: commands, config keys, contracts, storage | [reference.md](reference.md), [runtime-contracts.md](runtime-contracts.md), [architecture/](architecture/README.md) |
+## Quick navigation
 
-Getting it on a machine: [installation.md](installation.md) (requirements, install,
-per-project setup, updating, uninstalling; it carries the exact commands so a new user finds
-them in one place) and [security.md](security.md) (what each provider can read and change).
-
-Working on Exoma itself: [development.md](development.md) (the checkout, tests, keeping a
-development build away from your daily `~/.claude` and `~/.gemini`, and staging a release in
-agent-workflow). Its
-[Development and Research Relationship](development.md#development-and-research-relationship)
-defines independent development, optional research entry paths, and reciprocal learning.
-
-Future work: [roadmap.md](roadmap.md) records deferred compatibility and provider-contract
-work, plus low-priority architecture and evidence-quality proposals.
-
-Supporting documents: [limitations.md](limitations.md),
-[why-not-subagent.md](why-not-subagent.md) (why evidence goes to a second agent rather than
-a native subagent, with the figures behind it), the
-[metrics registry](evaluation/metrics.md) behind every figure `report` prints, and the
-release history: the index in [CHANGELOG.md](../CHANGELOG.md), per-version notes in
-[releases/](releases/).
+| What you need | Where to look |
+| --- | --- |
+| **Philosophy & design principles** | [philosophy.md](philosophy.md) — 5 core principles, human/agent/runtime authority, and evidence vs. facts vs. knowledge vs. task state vs. experience |
+| **Installation & security** | [installation.md](installation.md) (install, per-project init, update, uninstall) · [security.md](security.md) (per-provider read/write boundaries) |
+| **Day-to-day usage (Team guide)** | [team-guide/](team-guide/README.md) — getting started, when to use delegation, task framing, examples, troubleshooting |
+| **Architecture** | [architecture/](architecture/README.md) — verified request flow, execution governance, browser pipeline, and storage boundaries |
+| **Runtime reference & contracts** | [reference.md](reference.md) (authoritative commands, config, jobs, hosts, sessions) · [runtime-contracts.md](runtime-contracts.md) (enforced vs. non-enforced config keys) |
+| **Known limitations** | [limitations.md](limitations.md) — epistemic, host/provider, security, and operational boundaries |
+| **Evaluation & metrics** | [evaluation/metrics.md](evaluation/metrics.md) — implemented metric categories, versioned registry, and interpretation limits |
+| **Contributing & development** | [CONTRIBUTING.md](../CONTRIBUTING.md) (external contributor guide) · [development.md](development.md) (maintainer workflow, Exoma ↔ agent-workflow relationship, release staging) |
+| **Background & history** | [why-not-subagent.md](why-not-subagent.md) · [CHANGELOG.md](../CHANGELOG.md) · [releases/](releases/) · [roadmap.md](roadmap.md) (deferred backlog, non-binding) |
 
 ## Rules between layers
 
-- **Reference is authoritative.** When the team guide disagrees with the reference, the
-  reference describes what the code does; fix the team guide.
-- **The team guide links, it does not copy.** Command flags, config keys, provider security
-  details, and storage layouts stay in the reference. The team guide explains when and why
-  to use them and links there.
-- **Release notes say what changed, not how it works.** They link to the reference for
-  behavior instead of restating it, so there is one description to keep current.
-- **Neither layer is runtime input.** The runtime reads `.workflow/` and
-  `docs/project-knowledge/` (written only by `promote-write`), never these documents.
+- **Reference is authoritative.** Exact runtime behavior, command flags, config keys,
+  provider security details, and storage layouts belong in [reference.md](reference.md),
+  [runtime-contracts.md](runtime-contracts.md), and [architecture/](architecture/README.md).
+  When another page disagrees with the reference, fix that page.
+- **Link instead of duplicating.** `README.md`, `philosophy.md`, and `team-guide/` explain
+  purpose, principles, and usage, and link to the reference rather than copying contracts.
+- **Release notes say what changed, not how it works.** Per-version notes link to the
+  reference for current behavior.
+- **Public docs are not runtime input.** The runtime reads `.workflow/` and
+  `docs/project-knowledge/` (written only by `promote-write`), never these pages.

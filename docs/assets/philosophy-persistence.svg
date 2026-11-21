@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="t d">
+  <title id="t">Exoma conceptual distinction between evidence, facts, knowledge, browser experience, and task state</title>
+  <desc id="d">Conceptual diagram distinguishing traceable Evidence index and session logs, auto-ingested Project Facts, manually promoted Git-tracked Project Knowledge, origin-scoped Bounded Browser Experience, and temporary Task State for operational continuity.</desc>
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .flow { stroke: #4F6970; stroke-width: 2.2; fill: none; }
+      .dash { stroke: #B08A5E; stroke-width: 1.8; stroke-dasharray: 5 4; fill: none; }
+      .lbl { font-size: 10.5px; font-weight: 700; fill: #3F5A60; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#4F6970" stroke-width="1.8"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#B08A5E" stroke-width="1.8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="490" fill="#F5F1EA"/>
+  <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
+    <path d="M28 52 V28 H52"/><path d="M1148 28 H1172 V52"/>
+    <path d="M28 438 V462 H52"/><path d="M1148 462 H1172 V438"/>
+  </g>
+
+  <!-- Header -->
+  <text x="56" y="56" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F6F73">PHILOSOPHY / PERSISTENCE SPECTRUM</text>
+  <text x="56" y="92" class="sans" font-size="28" font-weight="800" fill="#1F3A44">Evidence, Facts, Knowledge, Experience, and Task State</text>
+  <rect x="972" y="54" width="172" height="28" rx="14" fill="#FAF2E4" stroke="#C4A57F" stroke-width="1.2"/>
+  <text x="1058" y="72" class="mono" font-size="10.5" font-weight="700" fill="#8C6A43" text-anchor="middle">CONCEPTUAL MODEL</text>
+  <line x1="56" y1="112" x2="1144" y2="112" stroke="#C9CFCB" stroke-width="1.4"/>
+
+  <!-- Top row: Evidence -> Facts -> Project Knowledge -->
+  <rect x="56" y="136" width="300" height="118" rx="9" fill="#FCFAF5" stroke="#4F6F73" stroke-width="1.7"/>
+  <rect x="56" y="134" width="300" height="5" rx="2.5" fill="#4A6F85"/>
+  <text x="74" y="160" class="mono" font-size="11" font-weight="700" fill="#4A6F85">1. EVIDENCE</text>
+  <text x="74" y="185" class="sans" font-size="15.5" font-weight="700" fill="#1F3A44">Traceable observations</text>
+  <text x="74" y="209" class="sans" font-size="12.5" fill="#4F6266">Index: .workflow/data/evidence.jsonl</text>
+  <text x="74" y="229" class="sans" font-size="11.5" fill="#4F6266">Raw artifacts in session logs · exact anchors</text>
+
+  <rect x="448" y="136" width="304" height="118" rx="9" fill="#F1F5F3" stroke="#4A7A6E" stroke-width="1.7"/>
+  <rect x="448" y="134" width="304" height="5" rx="2.5" fill="#4A7A6E"/>
+  <text x="466" y="160" class="mono" font-size="11" font-weight="700" fill="#4A7A6E">2. PROJECT FACTS</text>
+  <text x="466" y="185" class="sans" font-size="15.5" font-weight="700" fill="#1F3A44">Evidence-derived leads</text>
+  <text x="466" y="209" class="sans" font-size="12.5" fill="#4F6266">.workflow/data/facts.jsonl (untracked)</text>
+  <text x="466" y="229" class="sans" font-size="12.5" fill="#4F6266">Freshness-checked at ingest &amp; retrieval</text>
+
+  <rect x="844" y="136" width="300" height="236" rx="9" fill="#E7EFEE" stroke="#3F6F73" stroke-width="2"/>
+  <rect x="844" y="134" width="300" height="5" rx="2.5" fill="#3F6F73"/>
+  <text x="862" y="162" class="mono" font-size="11" font-weight="700" fill="#3F6F73">3. PROJECT KNOWLEDGE</text>
+  <text x="862" y="190" class="sans" font-size="17" font-weight="800" fill="#1F3A44">Reviewed &amp; Git-tracked</text>
+  <text x="862" y="218" class="sans" font-size="13" fill="#2F3F44">docs/project-knowledge/</text>
+  <text x="862" y="246" class="sans" font-size="12.5" fill="#4F6266">• Written only via manual /.promote</text>
+  <text x="862" y="268" class="sans" font-size="12.5" fill="#4F6266">• Branch-gated (production_branch)</text>
+  <text x="862" y="290" class="sans" font-size="12.5" fill="#4F6266">• Checked for validity &amp; branch</text>
+  <text x="862" y="308" class="sans" font-size="12.5" fill="#4F6266">  applicability before injection</text>
+  <text x="862" y="346" class="mono" font-size="10.5" font-weight="700" fill="#3F6F73">NO AUTO-PROMOTION FROM STORES</text>
+
+  <!-- Arrows top row -->
+  <path class="flow" d="M356 195 H444" marker-end="url(#a)"/>
+  <text x="401" y="184" class="mono lbl" text-anchor="middle">recurs / durable</text>
+  <text x="401" y="212" class="mono" font-size="9.5" fill="#5B6B70" text-anchor="middle">anchored claims</text>
+
+  <path class="flow" d="M752 195 H840" marker-end="url(#a)"/>
+  <text x="796" y="184" class="mono lbl" text-anchor="middle">manual review</text>
+  <text x="796" y="212" class="mono" font-size="9.5" fill="#5B6B70" text-anchor="middle">/.promote</text>
+
+  <!-- Second row: Bounded Browser Experience -->
+  <rect x="56" y="274" width="696" height="98" rx="9" fill="#FAF6EE" stroke="#B08A5E" stroke-width="1.6"/>
+  <rect x="56" y="272" width="696" height="5" rx="2.5" fill="#B08A5E"/>
+  <text x="74" y="298" class="mono" font-size="11" font-weight="700" fill="#8C6A43">4. BOUNDED BROWSER EXPERIENCE (DOMAIN-SPECIFIC, NOT GENERAL MEMORY)</text>
+  <text x="74" y="324" class="sans" font-size="15" font-weight="700" fill="#1F3A44">.workflow/data/e2e-knowledge.jsonl — Origin-scoped browser observations</text>
+  <text x="74" y="348" class="sans" font-size="11.5" fill="#4F6266">Clean 1st-attempt proof · placeholders only (no credentials) · 2 fails retire · anchors pruned</text>
+
+  <path class="dash" d="M752 323 H840" marker-end="url(#ab)"/>
+  <text x="796" y="312" class="mono" font-size="10" font-weight="700" fill="#8C6A43" text-anchor="middle">3 passes + anchor</text>
+  <text x="796" y="340" class="mono" font-size="9.5" fill="#8C6A43" text-anchor="middle">candidate</text>
+
+  <!-- Bottom separated bar: Task State -->
+  <rect x="56" y="394" width="1088" height="56" rx="9" fill="#ECEAE3" stroke="#9AA4A0" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="76" y="418" class="mono" font-size="11.5" font-weight="700" fill="#4F6970">5. TASK STATE — TEMPORARY CONTINUITY (NOT PERMANENT EXPERIENCE)</text>
+  <text x="76" y="438" class="sans" font-size="12.5" fill="#4F6266">Sessions · recorded plans · active execution scope · verify requests · async jobs — supports operational continuity, not permanent learning</text>
+
+  <!-- Footer -->
+  <text x="56" y="474" class="mono" font-size="11" font-weight="700" fill="#4F6970">PERSISTENCE ≠ LEARNING · TASK STATE ≠ EXPERIENCE</text>
+  <text x="1144" y="474" class="sans" font-size="11.5" fill="#6B787C" text-anchor="end">Conceptual categories; Exoma does not claim a general-purpose experience subsystem.</text>
+</svg>

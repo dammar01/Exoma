@@ -1,69 +1,132 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="t d">
-  <title id="t">Exoma — Evidence-driven problem solving for AI agents</title>
-  <desc id="d">Exoma banner. Three principles: context over prescription, evidence over expectation, effective coordination over unnecessary complexity. An agent at the centre is surrounded by context, tools, memory, delegation, and evidence. Give agents the context to solve, not the answer to repeat.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="t d">
+  <title id="t">Exoma — Evidence-driven problem solving for AI coding agents</title>
+  <desc id="d">Exoma banner showing how Exoma extends an AI coding agent across Human intent and approval, Primary Agent reasoning, deterministic Exoma Runtime governance, bounded Secondary Agent investigation, and traceable evidence and knowledge stores, backed by five philosophy principles: Problem-Solving First, Context over Prescription, Evidence over Expectation, Effective Coordination, and Cognitive Extension.</desc>
   <defs>
     <style>
       .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .flow { stroke: #4F6970; stroke-width: 2; fill: none; }
+      .dash { stroke: #B08A5E; stroke-width: 1.8; stroke-dasharray: 5 4; fill: none; }
     </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#4F6970" stroke-width="1.8"/>
+    </marker>
+    <marker id="arr-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#B08A5E" stroke-width="1.8"/>
+    </marker>
   </defs>
 
-  <rect width="1200" height="430" fill="#F5F1EA"/>
+  <rect width="1200" height="520" fill="#F5F1EA"/>
   <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
     <path d="M28 52 V28 H52"/><path d="M1148 28 H1172 V52"/>
-    <path d="M28 378 V402 H52"/><path d="M1148 402 H1172 V378"/>
+    <path d="M28 468 V492 H52"/><path d="M1148 492 H1172 V468"/>
   </g>
 
-  <text x="64" y="76" class="mono" font-size="13" font-weight="700" letter-spacing="2" fill="#3F6F73">LIBRARY / EVIDENCE-DRIVEN PROBLEM SOLVING</text>
-  <text x="62" y="150" class="sans" font-size="76" font-weight="800" fill="#1F3A44">Exoma</text>
-  <text x="64" y="194" class="sans" font-size="24" fill="#5B6B70">Evidence-driven problem solving for AI agents</text>
+  <!-- Left hero identity -->
+  <text x="60" y="72" class="mono" font-size="12.5" font-weight="700" letter-spacing="1.8" fill="#3F6F73">COGNITIVE EXTENSION / AI CODING AGENTS</text>
+  <text x="58" y="144" class="sans" font-size="72" font-weight="800" fill="#1F3A44">Exoma</text>
+  <text x="60" y="184" class="sans" font-size="21" fill="#4F6266">Evidence-driven problem solving</text>
+  <text x="60" y="210" class="sans" font-size="21" fill="#4F6266">for AI coding agents</text>
 
-  <!-- an agent inside its extended resources -->
-  <g transform="translate(1030 132)">
-    <circle r="78" fill="none" stroke="#B08A5E" stroke-width="1.5" stroke-dasharray="5 6"/>
-    <circle r="30" fill="#3F6F73"/>
-    <text y="4" class="mono" font-size="12" font-weight="700" fill="#FBF9F4" text-anchor="middle">agent</text>
-    <g fill="#FBF9F4" stroke="#3F6F73" stroke-width="2">
-      <circle cx="0" cy="-78" r="7"/>
-      <circle cx="74.2" cy="-24.1" r="7"/>
-      <circle cx="45.8" cy="63.1" r="7"/>
-      <circle cx="-45.8" cy="63.1" r="7"/>
-      <circle cx="-74.2" cy="-24.1" r="7"/>
-    </g>
-    <g class="mono" font-size="12" fill="#3F5A60">
-      <text x="0" y="-94" text-anchor="middle">context</text>
-      <text x="88" y="-20">tools</text>
-      <text x="58" y="86">evidence</text>
-      <text x="-58" y="86" text-anchor="end">memory</text>
-      <text x="-88" y="-20" text-anchor="end">delegation</text>
-    </g>
-  </g>
+  <rect x="60" y="228" width="388" height="30" rx="15" fill="#E6ECEA"/>
+  <text x="254" y="247" class="mono" font-size="11" font-weight="700" fill="#2F4F55" text-anchor="middle">PYTHON STDLIB · 4 HOSTS · 4 PROVIDERS · APACHE-2.0</text>
 
-  <line x1="64" y1="236" x2="1136" y2="236" stroke="#C9CFCB" stroke-width="1.5"/>
+  <!-- Right philosophy visual panel -->
+  <rect x="492" y="48" width="648" height="214" rx="12" fill="#FCFAF5" stroke="#C3CAC6" stroke-width="1.6"/>
+  <rect x="492" y="46" width="648" height="5" rx="2.5" fill="#3F6F73"/>
+  <text x="514" y="74" class="mono" font-size="11" font-weight="700" letter-spacing="1.4" fill="#3F6F73">HOW EXOMA EXTENDS PROBLEM SOLVING</text>
+  <text x="1120" y="74" class="mono" font-size="10.5" font-weight="700" fill="#8C6A43" text-anchor="end">INTENT → EVIDENCE → VERDICT</text>
 
+  <!-- Mini flow row -->
+  <rect x="514" y="92" width="122" height="72" rx="8" fill="#F5F1EA" stroke="#C3CAC6" stroke-width="1.3"/>
+  <text x="575" y="114" class="mono" font-size="10" font-weight="700" fill="#4F6970" text-anchor="middle">HUMAN</text>
+  <text x="575" y="135" class="sans" font-size="12.5" font-weight="700" fill="#1F3A44" text-anchor="middle">Intent &amp; Rules</text>
+  <text x="575" y="153" class="sans" font-size="10.5" fill="#5B6B70" text-anchor="middle">Approves execution</text>
+
+  <rect x="664" y="92" width="140" height="72" rx="8" fill="#E7EFEE" stroke="#3F6F73" stroke-width="1.6"/>
+  <text x="734" y="114" class="mono" font-size="10" font-weight="700" fill="#3F6F73" text-anchor="middle">PRIMARY AGENT</text>
+  <text x="734" y="135" class="sans" font-size="12.5" font-weight="700" fill="#1F3A44" text-anchor="middle">Reason &amp; Edit</text>
+  <text x="734" y="153" class="sans" font-size="10.5" fill="#4F6266" text-anchor="middle">Weighs alternatives</text>
+
+  <rect x="832" y="92" width="144" height="72" rx="8" fill="#EFF4F5" stroke="#4A6F85" stroke-width="1.6"/>
+  <text x="904" y="114" class="mono" font-size="10" font-weight="700" fill="#4A6F85" text-anchor="middle">EXOMA RUNTIME</text>
+  <text x="904" y="135" class="sans" font-size="12.5" font-weight="700" fill="#1F3A44" text-anchor="middle">Control Plane</text>
+  <text x="904" y="153" class="sans" font-size="10.5" fill="#4F6266" text-anchor="middle">Scope · anchors · tests</text>
+
+  <rect x="1004" y="92" width="116" height="72" rx="8" fill="#FAF6EE" stroke="#B08A5E" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="1062" y="114" class="mono" font-size="10" font-weight="700" fill="#8C6A43" text-anchor="middle">SECONDARY</text>
+  <text x="1062" y="135" class="sans" font-size="12.5" font-weight="700" fill="#1F3A44" text-anchor="middle">Investigate</text>
+  <text x="1062" y="153" class="sans" font-size="10.5" fill="#5B6B70" text-anchor="middle">Candidate evidence</text>
+
+  <!-- Horizontal connectors -->
+  <path class="flow" d="M636 128 H660" marker-end="url(#arr)"/>
+  <path class="flow" d="M804 128 H828" marker-start="url(#arr)" marker-end="url(#arr)"/>
+  <path class="flow" d="M976 128 H1000" marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- Evidence & persistence substrate bar -->
+  <path class="dash" d="M904 164 V188" marker-end="url(#arr-b)"/>
+  <path class="dash" d="M1062 164 V188" marker-end="url(#arr-b)"/>
+  <rect x="514" y="192" width="606" height="52" rx="8" fill="#E8EEEA" stroke="#A9BDB4" stroke-width="1.3"/>
+  <text x="532" y="213" class="mono" font-size="10.5" font-weight="700" fill="#3F6F6A">OBSERVABLE EVIDENCE &amp; BOUNDED STORES</text>
+  <text x="532" y="233" class="sans" font-size="12" fill="#2F3F44">Code · Git · Tests · Browser  |  Facts · Promoted Knowledge · Bounded E2E Experience</text>
+
+  <!-- Divider -->
+  <line x1="60" y1="284" x2="1140" y2="284" stroke="#C9CFCB" stroke-width="1.5"/>
+
+  <!-- Five core philosophy pillars -->
   <g class="sans">
-    <g transform="translate(64 258)">
-      <rect width="344" height="110" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
-      <rect width="344" height="5" rx="2" fill="#3F6F73"/>
-      <text x="22" y="34" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F6F73">01</text>
-      <text x="22" y="66" font-size="24" font-weight="700" fill="#1F3A44">Context</text>
-      <text x="22" y="92" font-size="16" fill="#5B6B70">over prescription</text>
+    <g transform="translate(60 304)">
+      <rect width="204" height="142" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="204" height="5" rx="2" fill="#1F3A44"/>
+      <text x="16" y="30" class="mono" font-size="11" font-weight="700" letter-spacing="1.2" fill="#1F3A44">01</text>
+      <text x="16" y="56" font-size="16.5" font-weight="800" fill="#1F3A44">Problem-Solving</text>
+      <text x="16" y="76" font-size="16.5" font-weight="800" fill="#1F3A44">First</text>
+      <text x="16" y="104" font-size="12" fill="#5B6B70">Define the problem,</text>
+      <text x="16" y="122" font-size="12" fill="#5B6B70">not a fixed answer</text>
     </g>
-    <g transform="translate(428 258)">
-      <rect width="344" height="110" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
-      <rect width="344" height="5" rx="2" fill="#4A7A6E"/>
-      <text x="22" y="34" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#4A7A6E">02</text>
-      <text x="22" y="66" font-size="24" font-weight="700" fill="#1F3A44">Evidence</text>
-      <text x="22" y="92" font-size="16" fill="#5B6B70">over expectation</text>
+
+    <g transform="translate(279 304)">
+      <rect width="204" height="142" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="204" height="5" rx="2" fill="#3F6F73"/>
+      <text x="16" y="30" class="mono" font-size="11" font-weight="700" letter-spacing="1.2" fill="#3F6F73">02</text>
+      <text x="16" y="56" font-size="16.5" font-weight="800" fill="#1F3A44">Context over</text>
+      <text x="16" y="76" font-size="16.5" font-weight="800" fill="#1F3A44">Prescription</text>
+      <text x="16" y="104" font-size="12" fill="#5B6B70">Govern boundaries,</text>
+      <text x="16" y="122" font-size="12" fill="#5B6B70">keep reasoning free</text>
     </g>
-    <g transform="translate(792 258)">
-      <rect width="344" height="110" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
-      <rect width="344" height="5" rx="2" fill="#B08A5E"/>
-      <text x="22" y="34" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#8C6A43">03</text>
-      <text x="22" y="66" font-size="24" font-weight="700" fill="#1F3A44">Effective coordination</text>
-      <text x="22" y="92" font-size="16" fill="#5B6B70">over unnecessary complexity</text>
+
+    <g transform="translate(498 304)">
+      <rect width="204" height="142" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="204" height="5" rx="2" fill="#4A7A6E"/>
+      <text x="16" y="30" class="mono" font-size="11" font-weight="700" letter-spacing="1.2" fill="#4A7A6E">03</text>
+      <text x="16" y="56" font-size="16.5" font-weight="800" fill="#1F3A44">Evidence over</text>
+      <text x="16" y="76" font-size="16.5" font-weight="800" fill="#1F3A44">Expectation</text>
+      <text x="16" y="104" font-size="12" fill="#5B6B70">Traceable proof</text>
+      <text x="16" y="122" font-size="12" fill="#5B6B70">beats assumptions</text>
+    </g>
+
+    <g transform="translate(717 304)">
+      <rect width="204" height="142" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="204" height="5" rx="2" fill="#4A6F85"/>
+      <text x="16" y="30" class="mono" font-size="11" font-weight="700" letter-spacing="1.2" fill="#4A6F85">04</text>
+      <text x="16" y="56" font-size="16.5" font-weight="800" fill="#1F3A44">Effective</text>
+      <text x="16" y="76" font-size="16.5" font-weight="800" fill="#1F3A44">Coordination</text>
+      <text x="16" y="104" font-size="12" fill="#5B6B70">Every mechanism</text>
+      <text x="16" y="122" font-size="12" fill="#5B6B70">must earn its cost</text>
+    </g>
+
+    <g transform="translate(936 304)">
+      <rect width="204" height="142" rx="10" fill="#FBF9F4" stroke="#C9CFCB" stroke-width="1.5"/>
+      <rect width="204" height="5" rx="2" fill="#B08A5E"/>
+      <text x="16" y="30" class="mono" font-size="11" font-weight="700" letter-spacing="1.2" fill="#8C6A43">05</text>
+      <text x="16" y="56" font-size="16.5" font-weight="800" fill="#1F3A44">Cognitive</text>
+      <text x="16" y="76" font-size="16.5" font-weight="800" fill="#1F3A44">Extension</text>
+      <text x="16" y="104" font-size="12" fill="#5B6B70">External context,</text>
+      <text x="16" y="122" font-size="12" fill="#5B6B70">not human memory</text>
     </g>
   </g>
 
-  <text x="64" y="402" class="mono" font-size="13" font-weight="700" letter-spacing="1" fill="#3F6F73">GIVE AGENTS THE CONTEXT TO SOLVE, NOT THE ANSWER TO REPEAT.</text>
+  <!-- Footer -->
+  <text x="60" y="484" class="mono" font-size="12.5" font-weight="700" letter-spacing="0.8" fill="#3F6F73">GIVE AGENTS THE CONTEXT TO SOLVE, NOT THE ANSWER TO REPEAT.</text>
+  <text x="1140" y="484" class="mono" font-size="11" font-weight="700" fill="#8C6A43" text-anchor="end">EXPERIENCE GUIDES INVESTIGATION — NEVER REPLACES EVIDENCE</text>
 </svg>

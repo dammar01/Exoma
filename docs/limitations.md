@@ -5,25 +5,124 @@ points here.
 
 Provider-specific security boundaries (write prevention, secret-file reads, shell
 restriction) are summarized in the [security page](security.md) and
-detailed in [`reference.md`](reference.md).
+detailed in [`reference.md`](reference.md). For the design principles behind these
+boundaries, see [Philosophy](philosophy.md).
 
-Stated openly because staying silent about them would make the runtime look like it guarantees more than it does:
+Stated openly because staying silent about them would make the runtime look like it
+guarantees more than it does.
 
-- **main_agent mutations are only partly attributable, on every host.** `/.execute` compares working-tree content snapshots at execution begin/end, including further edits to already-dirty files. Those snapshots omit Git-ignored files and `.workflow/`, normalize content as Git stores it, and report unknown when unavailable. They cannot identify a writer when other editors/processes act in the same interval. Host hooks hold supported file-write tools to scope and root, but cannot inspect every shell/script write. The main agent's output contract (`[OPTIONS]`, confidence, attribution) is not validated.
-- **Edits through Bash are not held back or recorded.** Since 3.9.0 the `execution-gate` hook blocks Edit/Write outside the session's project root (except the temp dir, `~/.claude` and `policies.write_allowed_outside_root`) and outside an active execution's scope. Edits made through Bash or a patch script do not go through that hook or the Edit/Write `task-events` hook (it deliberately records no Bash edits), so a script can still write into another project. The prohibition on that remains a prompt contract (`CLAUDE.md`). Observed in real use.
-- **Agy can write as second_agent, and its separate workspace guard remains detection only.** Its boundary is `writes: unbounded`. The guard compares status entries plus content fingerprints for non-secret dirty/untracked files, detecting edits that keep the same status. Tracked submodules use parent-index gitlink metadata and parent status without recursive content hashing, so further internal edits with unchanged parent status/index can be missed; they do not disable observation of ordinary files. Secret-pattern files, including ignored `.env`, are checked only by size/mtime. Ignored non-secret files, symlink-target changes, and fully restored writes can be missed. Unsupported/unreadable files, ambiguous/failed gitlink lookup, an exhausted content-snapshot budget, or missing Git produce `checked: false`. Other processes can cause the observed changes. Per-provider details are in the [security page](security.md).
-- **Gate availability cannot be inferred from silence.** Claude execution-gate failures report warnings and skip observations when Python can run, including a helper/session fallback. Doctor distinguishes configuration from recent failures; an empty log does not prove hooks are loaded or trusted. No Python means this fallback itself cannot run.
-- **Claude subfolder approval bindings remain a limitation.** Approval writers use the registry's cwd, while the runtime can resolve the containing repository root. Starting a session in a subfolder can put approval tokens in a different runtime, and can create an incidental subfolder `.workflow/`. Ancestor lookup in skip reporting does not change enforcement roots or repair these bindings. Start the host at the project root for execution approvals and scope checks; a shared binding fix needs a separate change across approval writers/readers.
-- **Codex may reject the runner before Exoma starts.** A host auto-review denial is not a shell or job failure and returns no Exoma JSON. Follow the current approval/network policy, report the rejection reason, and do not retry through another shell or weaker settings. Exoma cannot guarantee approval. See [Hosts](reference.md#hosts).
-- **The recursion guard trusts an environment variable.** A second_agent process is refused `recursion_refused` when it asks the runtime to delegate, queue a job or change execution state, recognised by `WORKFLOW_AGENT_ROLE=second_agent`. A child that can run commands (agy) can unset that variable first; the guard stops inherited recursion, not a deliberate one. Host hooks and plugins installed by someone else also still load in an OpenCode child: Exoma's plugin stays off there, third-party plugins do not.
-- **The contract is still partly prompt-based.** The runtime validates the structure and routing of verify findings, but the semantic correctness of claims and of the contract output owned by main_agent still cannot be proven from markers alone.
-- **Telemetry is still partial.** Duration, exit code, kill result, prompt/output size, and estimated tokens are recorded per call in `call.meta.json`; the number of tool calls and the provider's actual tokens are not always available.
-- **Availability diagnostics do not prove event completeness.** Reports isolate malformed events and exports name missing/unreadable streams, but an event absent from every source cannot be reconstructed. Partial scope observations are not authoritative clean-tree measurements. Permission-mode preservation by atomic writers does not imply ACL/ownership preservation.
-- **Real OpenCode is only tested opt-in.** The default suite simulates the provider; the `Popen` path, persistence, installer, and process lifecycle are still run locally. Use `tools/e2e/e2e.py --full --model <id> [--provider ...]` for a quota-consuming smoke test.
-- **The PING probe uses quota.** A job that stays stalled can be probed repeatedly according to the cadence; the default `await` is 120 seconds.
-- **Liveness tuning is not yet uniform on the attach path.** `exoma check --wait` uses the tool defaults for the stalled threshold and re-probe, not project-local values.
-- **Upgrade detection can be masked by a partial stamp.** A delegated load updates the `config.json` version marker without regenerating scripts or `second_agent.json`, so the next warning can treat the workspace as current. Old layouts are still detected from their contents, not from the stamp.
-- **Graph staleness detection follows a fixed source list.** The runtime fingerprint and the Graphify Stop hook scan the same twelve extensions and skip directories; a language outside that list does not mark the graph stale. The Stop hook is a separate Claude layer: under Agy it is not registered, so the graph is not refreshed after an implementing turn.
-- **Cross-OS graph paths are not fully normalized yet.** A snapshot built on Windows and then read from POSIX/WSL can still produce backslashed candidate paths; refresh the graph manually from the active environment if this happens.
-- **A host sandbox limited to the workspace must be granted the storage directory.** Every delegated call writes the global job store under the per-user data directory's `storage/` from the host's own process. Codex on a `workspace-write` sandbox refuses it, so each call ends in `job_submit_error` (`meta.reason: job_store_not_writable`) until `writable_roots` in `~/.codex/config.toml` covers that `storage/` directory (not the data directory above it, which holds `.env`) or the host starts with `EXOMA_HOME` pointing somewhere it can write. An install whose hosts include `codex` writes that grant as a managed block, and `exoma install --check` reports it missing or drifted. It stays a manual step when the file already holds a `[sandbox_workspace_write]` table of the user's: the install leaves the file alone and prints the snippet. The error, doctor's `checks.job_store_writable` and the [reference](reference.md#hosts) give the snippet too (CASE-034).
-- **Runner scripts are not portable across OSes.** Absolute paths are baked in at init/upgrade; moving the repo, path, or OS means running upgrade from the new environment.
+## Epistemic and semantic boundaries
+
+- **Evidence provenance does not prove every semantic claim.** Verified `file:line` anchors
+  confirm that cited source lines exist at a recorded hash; they do not prove that an agent's
+  interpretation, causal explanation, or proposed design is semantically correct.
+- **Runtime correctness and semantic correctness are distinct.** The runtime validates
+  structure, routing, scope, and test-command outcomes, but the semantic correctness of claims
+  and of the contract output owned by `main_agent` (`[OPTIONS]`, confidence, attribution) still
+  cannot be proven from markers alone.
+- **Agent output remains subject to model limitations.** Neither primary nor secondary agents
+  are immune to hallucination, omitted context, or flawed reasoning. Secondary-agent digests
+  remain evidence candidates, not ground truth.
+- **Persistent information can become stale or inapplicable.** Project facts, promoted project
+  knowledge, and browser experience entries are bounded aids that still require freshness and
+  branch-applicability checks; persistence is not learning.
+- **Current telemetry does not represent a complete problem-solving trajectory.** Usage rows,
+  task events, verification verdicts, and diagnostics capture operational signals — not a full
+  semantic history of how an agent reasoned through a problem.
+
+## Execution governance and host enforcement
+
+- **Host and provider enforcement capabilities differ.** Hook registration, write-scope
+  blocking, secret-file guards, and sandbox behavior vary across Claude Code, Agy, Codex, and
+  OpenCode ([Hosts](reference.md#hosts), [Security](security.md)).
+- **`main_agent` mutations are only partly attributable, on every host.** `/.execute` compares
+  working-tree content snapshots at execution begin/end, including further edits to
+  already-dirty files. Those snapshots omit Git-ignored files and `.workflow/`, normalize
+  content as Git stores it, and report unknown when unavailable. They cannot identify a writer
+  when other editors/processes act in the same interval. Host hooks hold supported file-write
+  tools to scope and root, but cannot inspect every shell/script write. The main agent's
+  output contract (`[OPTIONS]`, confidence, attribution) is not validated.
+- **Edits through Bash are not held back or recorded.** Since 3.9.0 the `execution-gate` hook
+  blocks Edit/Write outside the session's project root (except the temp dir, `~/.claude` and
+  `policies.write_allowed_outside_root`) and outside an active execution's scope. Edits made
+  through Bash or a patch script do not go through that hook or the Edit/Write `task-events`
+  hook (it deliberately records no Bash edits), so a script can still write into another
+  project. The prohibition on that remains a prompt contract (`CLAUDE.md`). Observed in real
+  use.
+- **Gate availability cannot be inferred from silence.** Claude execution-gate failures report
+  warnings and skip observations when Python can run, including a helper/session fallback.
+  Doctor distinguishes configuration from recent failures; an empty log does not prove hooks
+  are loaded or trusted. No Python means this fallback itself cannot run.
+- **Claude subfolder approval bindings remain a limitation.** Approval writers use the
+  registry's cwd, while the runtime can resolve the containing repository root. Starting a
+  session in a subfolder can put approval tokens in a different runtime, and can create an
+  incidental subfolder `.workflow/`. Ancestor lookup in skip reporting does not change
+  enforcement roots or repair these bindings. Start the host at the project root for execution
+  approvals and scope checks; a shared binding fix needs a separate change across approval
+  writers/readers.
+- **Codex may reject the runner before Exoma starts.** A host auto-review denial is not a
+  shell or job failure and returns no Exoma JSON. Follow the current approval/network policy,
+  report the rejection reason, and do not retry through another shell or weaker settings. Exoma
+  cannot guarantee approval. See [Hosts](reference.md#hosts).
+- **A host sandbox limited to the workspace must be granted the storage directory.** Every
+  delegated call writes the global job store under the per-user data directory's `storage/`
+  from the host's own process. Codex on a `workspace-write` sandbox refuses it, so each call
+  ends in `job_submit_error` (`meta.reason: job_store_not_writable`) until `writable_roots` in
+  `~/.codex/config.toml` covers that `storage/` directory (not the data directory above it,
+  which holds `.env`) or the host starts with `EXOMA_HOME` pointing somewhere it can write. An
+  install whose hosts include `codex` writes that grant as a managed block, and
+  `exoma install --check` reports it missing or drifted. It stays a manual step when the file
+  already holds a `[sandbox_workspace_write]` table of the user's: the install leaves the file
+  alone and prints the snippet. The error, doctor's `checks.job_store_writable` and the
+  [reference](reference.md#hosts) give the snippet too (CASE-034).
+
+## Secondary providers and isolation
+
+- **Agy can write as `second_agent`, and its separate workspace guard remains detection only.**
+  Its boundary is `writes: unbounded`. The guard compares status entries plus content
+  fingerprints for non-secret dirty/untracked files, detecting edits that keep the same status.
+  Tracked submodules use parent-index gitlink metadata and parent status without recursive
+  content hashing, so further internal edits with unchanged parent status/index can be missed;
+  they do not disable observation of ordinary files. Secret-pattern files, including ignored
+  `.env`, are checked only by size/mtime. Ignored non-secret files, symlink-target changes,
+  and fully restored writes can be missed. Unsupported/unreadable files, ambiguous/failed
+  gitlink lookup, an exhausted content-snapshot budget, or missing Git produce
+  `checked: false`. Other processes can cause the observed changes. Per-provider details are
+  in the [security page](security.md).
+- **The recursion guard trusts an environment variable.** A `second_agent` process is refused
+  `recursion_refused` when it asks the runtime to delegate, queue a job or change execution
+  state, recognised by `WORKFLOW_AGENT_ROLE=second_agent`. A child that can run commands (agy)
+  can unset that variable first; the guard stops inherited recursion, not a deliberate one.
+  Host hooks and plugins installed by someone else also still load in an OpenCode child:
+  Exoma's plugin stays off there, third-party plugins do not.
+- **Real OpenCode is only tested opt-in.** The default suite simulates the provider; the
+  `Popen` path, persistence, installer, and process lifecycle are still run locally. Use
+  `tools/e2e/e2e.py --full --model <id> [--provider ...]` for a quota-consuming smoke test.
+
+## Operational, telemetry, and workspace limits
+
+- **Telemetry is still partial.** Duration, exit code, kill result, prompt/output size, and
+  estimated tokens are recorded per call in `call.meta.json`; the number of tool calls and the
+  provider's actual tokens are not always available.
+- **Availability diagnostics do not prove event completeness.** Reports isolate malformed
+  events and exports name missing/unreadable streams, but an event absent from every source
+  cannot be reconstructed. Partial scope observations are not authoritative clean-tree
+  measurements. Permission-mode preservation by atomic writers does not imply ACL/ownership
+  preservation.
+- **The PING probe uses quota.** A job that stays stalled can be probed repeatedly according
+  to the cadence; the default `await` is 120 seconds.
+- **Liveness tuning is not yet uniform on the attach path.** `exoma check --wait` uses the
+  tool defaults for the stalled threshold and re-probe, not project-local values.
+- **Upgrade detection can be masked by a partial stamp.** A delegated load updates the
+  `config.json` version marker without regenerating scripts or `second_agent.json`, so the
+  next warning can treat the workspace as current. Old layouts are still detected from their
+  contents, not from the stamp.
+- **Graph staleness detection follows a fixed source list.** The runtime fingerprint and the
+  Graphify Stop hook scan the same twelve extensions and skip directories; a language outside
+  that list does not mark the graph stale. The Stop hook is a separate Claude layer: under Agy
+  it is not registered, so the graph is not refreshed after an implementing turn.
+- **Cross-OS graph paths are not fully normalized yet.** A snapshot built on Windows and then
+  read from POSIX/WSL can still produce backslashed candidate paths; refresh the graph
+  manually from the active environment if this happens.
+- **Runner scripts are not portable across OSes.** Absolute paths are baked in at init/upgrade;
+  moving the repo, path, or OS means running upgrade from the new environment.

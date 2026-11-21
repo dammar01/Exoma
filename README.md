@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/banner.svg" alt="Exoma — Evidence-driven problem solving for AI agents. Context over prescription. Evidence over expectation. Effective coordination over unnecessary complexity." width="900">
+<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/banner.svg" alt="Exoma — Evidence-driven problem solving for AI coding agents. Five principles: Problem-Solving First, Context over Prescription, Evidence over Expectation, Effective Coordination, and Cognitive Extension." width="900">
 
 # Exoma
 
-**Evidence-driven problem solving for AI agents.**
+**Evidence-driven problem solving for AI coding agents.**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -12,322 +12,171 @@
 [![PyPI](https://img.shields.io/badge/pip-exoma-blue.svg)](docs/installation.md)
 [![Version](https://img.shields.io/badge/version-1.2.1-informational.svg)](CHANGELOG.md)
 
-**[Installation guide](docs/installation.md)** · [Security](docs/security.md) · [Team guide](docs/team-guide/README.md) · [Reference](docs/reference.md)
+**[Quick start](#quick-start)** · [Philosophy](docs/philosophy.md) · [Architecture](docs/architecture/README.md) · [Contributing](CONTRIBUTING.md) · [Docs](docs/README.md)
 
 </div>
 
 ---
 
-## What is Exoma?
+## Why Exoma?
 
-Exoma is a library that supports problem solving by AI agents through context management,
-exploration, tool use, work delegation, and evidence gathering.
+Coding agents on real repositories spend most of their context window hunting for files,
+tracing callers, and guessing conventions before making a single edit — or they follow a
+user's assumptions without checking the code.
 
-It starts from the idea that how well an AI solves a problem is not decided by the model
-alone, but also by how information is provided, how work is organized, and how the results
-of an investigation are evaluated.
+**Exoma** is a zero-dependency Python runtime and CLI (`exoma`) that sits around your primary
+coding agent (**Claude Code**, **Agy**, **Codex**, or **OpenCode**). It moves broad repository
+inspection to a secondary agent in a separate context, enforces deterministic plan/scope/verify
+boundaries, and returns structured, anchored **evidence candidates** (`digest` + `file:line`
+anchors + artifact reference) so the primary agent can focus on reasoning and implementation.
 
-A person who hands a problem to an AI should not have to prescribe every step, or steer it
-toward a conclusion they already had in mind. The person sets the goal, the initial context,
-and the constraints; the AI then uses the capabilities and resources available to it to
-investigate the problem, weigh the possibilities, and reach a solution grounded in evidence.
+> **Give agents the context to solve, not the answer to repeat.**
 
-Exoma supports that process as an external system that organizes the flow of context, work,
-and information between an AI agent and the resources it uses.
+---
+
+## How it works
+
+<p align="center">
+<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/architecture.svg" alt="Exoma architecture. The developer briefs the primary agent (Claude Code, Agy, Codex, or OpenCode) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, browser knowledge, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
+</p>
+
+<sub>Full verified flow, execution governance, browser pipeline, and storage boundaries: [docs/architecture](docs/architecture/README.md).</sub>
+
+### Who owns what
+
+| Participant | Primary authority | Role |
+| --- | --- | --- |
+| **Human** | Problem intent & authorization | Sets goals and constraints; approves execution (`/.execute -y`) and key trade-offs |
+| **Evidence sources** | Observable facts | Repository code, Git state, tests, browser artifacts, and project config |
+| **Primary agent** | Semantic reasoning & edits | Evaluates evidence, weighs alternatives, writes code (`Claude Code`, `Agy`, `Codex`, `OpenCode`) |
+| **Exoma runtime** | Deterministic governance | Routing, sessions, locks, redaction, anchor checks, scope/approval gates, test & browser execution |
+| **Secondary agent** | Bounded investigation | Broad read-only repository exploration and review (`opencode`, `codex`, `agy`, `claude`); returns **evidence candidates**, not truth |
 
 ---
 
 ## Core philosophy
 
-**People define the problem, not the answer to be found.**
+Exoma is grounded in five principles (explained in full in **[docs/philosophy.md](docs/philosophy.md)**):
 
-An AI is not only expected to produce the answer a person asked for. It also needs room to
-check assumptions, weigh alternatives, find what was not yet known, and reach a conclusion
-that may differ from what whoever assigned the task expected.
-
-Exoma focuses on three principles:
-
-1. **Context over prescription.** Provide the relevant context and resources so the AI can
-   investigate the problem, rather than over-specifying the steps and conclusions it must
-   follow.
-2. **Evidence over expectation.** Favor problem solving grounded in evidence and evaluation,
-   not in confirming a person's assumptions.
-3. **Effective coordination over unnecessary complexity.** Organize agents, tools, and
-   compute by what the task needs, without assuming that more agents or more process always
-   produce better quality.
-
-These principles are a design direction to be realized and evaluated through the
-implementation, not a guarantee that any AI agent will always be objective or correct.
+1. **Problem-Solving First** — People define the problem and constraints; agents keep room to
+   investigate, form hypotheses, and evaluate alternatives.
+2. **Context over Prescription** — Govern critical boundaries (authorization, scope, security,
+   verification) deterministically rather than micromanaging reasoning steps.
+3. **Evidence over Expectation** — Ground claims in traceable, reviewable evidence; *experience
+   should guide investigation, not replace evidence*.
+4. **Effective Coordination over Unnecessary Complexity** — Coordinate agents, tools, and
+   context only when the task benefits; more agents or context is not automatically better.
+5. **Cognitive Extension** — Act as an external problem-solving environment (inspired by the
+   *Extended Mind Thesis* and distributed cognition), without claiming human-like memory or
+   cognition.
 
 ---
 
-## How Exoma works
+## What is implemented today
 
-Technically, Exoma is a supporting layer around an AI agent. Depending on the need and the
-implementation, it can manage context retrieval, delegate exploration to another agent,
-gather evidence from external sources, retain relevant information, and control the flow of
-execution.
-
-The AI agent still does the semantic reasoning and makes the decisions its role calls for.
-Exoma organizes the processes and resources that support that work. The aim is not to
-replace the model or to make the whole process fully automatic; it is to let the AI complete
-a task more effectively without a person directing every step or conclusion.
-
-The current implementation targets **coding agents**, with Claude Code, Agy, Codex, or OpenCode as the primary
-agent ([hosts](docs/reference.md#hosts)).
-It is installed as a Python package (`pip install exoma`) with a CLI (`exoma`), and separates
-work that needs **broad repository inspection** from work that needs the **primary agent's
-reasoning and implementation context**. A coding agent on a mature repository spends much of
-its effort locating modules, tracing call sites, and reading conventions before it changes
-anything; Exoma moves that inspection into a separate execution context and returns
-structured evidence: a digest, `file:line` anchors, and a reference to the full evidence on
-disk.
-
-<p align="center">
-<img src="https://raw.githubusercontent.com/dammar01/Exoma/main/docs/assets/architecture.svg" alt="Exoma architecture. The developer briefs the primary agent (Claude Code, Agy, or Codex) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the Exoma runtime, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
-</p>
-
-<sub>The primary agent reasons and writes the code; the developer answers open questions and
-approves implementation. "Read-only" is the secondary agent's role, and how strictly it is
-enforced depends on the provider (see [Security](docs/security.md)). Text version, full verified
-flow, side paths, and storage: [docs/architecture](docs/architecture/README.md).</sub>
-
-Delegated results are treated as **evidence candidates**, not truth. Every delegated call
-returns the same envelope; `digest` appears when the secondary agent's summary parses, and
-`evidence_ref` on the explore/plan/analyze evidence path:
-
-```json
-{ "ok": true, "content": "...", "meta": {}, "digest": {}, "evidence_ref": {} }
-```
-
-The primary agent decides what the evidence means and whether to act on it. A secondary
-agent can be incomplete or wrong even when its output looks plausible.
-
-### Core responsibilities
-
-| Role | Who | Responsibility |
-| --- | --- | --- |
-| **Primary agent** | Claude Code, Agy, Codex, or OpenCode ([hosts](docs/reference.md#hosts)) | Reasoning, decisions, code changes, and final review |
-| **Workflow runtime** | The `exoma` package, Python standard library only | Routing, sessions and locks, policy, prompt building, redaction, evidence contracts, digests, persistence, recovery |
-| **Secondary agent** | `opencode`, `codex`, `agy`, or `claude` | Repository exploration, analysis, planning, and verification evidence |
-
-The design keeps code-writing with the primary agent. The secondary agent's role is
-read-only; the degree to which each provider **enforces** that differs, and the runtime
-states it rather than assuming it. See [Security](docs/security.md).
-
-The principle: let the model do the semantic reasoning, and let deterministic software
-enforce state, contracts, policy, provenance, and execution control.
-
----
-
-## Relationship to agent-workflow
-
-[agent-workflow](https://github.com/dammar01/agent-workflow) is the research and staging
-companion to Exoma. It studies resource-aware agent decomposition: when and to what extent
-delegation produces sufficient marginal task value to justify its additional token and
-compute usage, latency, human intervention, and coordination overhead.
-
-Its supporting research areas include context allocation, persistent repository knowledge,
-evidence quality, and runtime governance. The repository preserves hypotheses, experiments,
-measurement methods, and decision records used to investigate Exoma, while the runtime and
-product implementation remain in Exoma.
-
-Exoma evolves from practical needs, engineering discoveries, and research findings,
-independently of the research agenda or prior formal research validation. Relevant,
-technically feasible ideas may be explored or implemented directly; unclear concepts may
-first be investigated in agent-workflow. These paths can occur in either order and
-continuously inform each other. Agent-workflow helps understand, evaluate, and learn from
-Exoma implementations; it does not control permission to implement them. See the
-[Development and Research Relationship](docs/development.md#development-and-research-relationship)
-for the policy and its boundary with engineering release staging.
-
-This research does not assume that delegation is inherently beneficial, nor does it claim
-that an optimal degree of agent decomposition has already been established.
-
-Exoma grew from agent-workflow's runtime and packages its commands, contracts and workspace
-as a library, installed and upgraded like any other Python tool.
-
----
-
-## The name
-
-**Exoma** is a distinctive name for the project. Conceptually, it is inspired by the idea of
-cognitive resources and processes that reach beyond the individual, including discussions of
-*extrasomatic resources* and the *Extended Mind Thesis*.
-
-That inspiration reflects the view that problem solving can be supported by the interplay of
-an AI model, context, tools, memory, and external systems. It does not assume that tools or
-external components literally have minds, nor that an AI becomes smarter simply by using
-more resources.
-
----
-
-## Vision
-
-Exoma sets out to explore how external systems can help AI agents solve problems more
-effectively: with the right context, a directed investigation, traceable evidence, and a
-compute cost proportionate to its benefit.
-
-The goal is useful context allocation, with task quality and resource cost evaluated
-together. Context size and the amount of delegation alone do not establish that value.
-
-Its value is not measured by how many agents it uses or how complex its architecture is, but
-by how far it actually helps an AI solve problems with better quality and conclusions that
-can be accounted for.
-
-**Give agents the context to solve, not the answer to repeat.**
-
----
-
-## When it is useful
-
-The design hypothesis is context allocation, not context reduction alone. Broad repository
-exploration is handled in a separate execution context and returned as structured,
-traceable evidence, allowing the primary agent to focus its reasoning context on decisions
-and implementation.
-
-However, externalizing work can also introduce latency, additional token usage,
-coordination overhead, and the risk of losing relevant information during evidence
-gathering and summarization. Its value therefore depends on the task and cannot be assumed
-universally.
-
-This remains a design hypothesis, not a benchmark result or a claim that Exoma automatically
-optimizes context allocation.
-
-Typical requests (translated, names removed):
-
-| Situation | What was asked | Command |
-| --- | --- | --- |
-| A feature in an unfamiliar area | "Explore the cash-advance input feature: map its files and code, the permissions it uses, and any explicit or special rules." | `explore` |
-| A feature end to end | "Map the project-template feature: a template is created, applied to a project, and then…" | `explore` |
-| A question about a mechanism | "When the audit delta runs, are the commits it checks based on the anchor hash of the last audited commit?" | `analyze` |
-| Reviewing work in progress | "Analyze the changes made in my worktree on this project." | `analyze` |
-| Merging two features | "Make a plan to merge this meetings page with the meetings feature on the Notes page." | `plan` |
-| A cost or speed problem | "Each step uses many tokens and is slow; plan how to lower token use without reducing detection quality." | `plan` |
-| After an implementation | `/.verify`, straight after `/.execute -y` | `verify` |
-| A UI change | "Test it end to end in the browser, several rounds over every category area that changed." | `verify-browser` |
-| Before a commit | `/.sweep` | `sweep` |
-
-It is less attractive when the change is already localized, the relevant file is known, or
-you need an instant answer: a delegated call takes from under a minute to several minutes,
-because the secondary agent actually reads the code. The
-[team guide](docs/team-guide/when-to-use.md) covers choosing per task and how to phrase
-requests.
+- **Context & knowledge support:** delegated exploration/analysis, optional Graphify file
+  leads, anchored project facts (`.workflow/data/facts.jsonl`), whole-artifact evidence reuse
+  (`evidence.jsonl`), and manually promoted Git-tracked project knowledge
+  (`docs/project-knowledge/`, checked for validity and branch applicability).
+- **Deterministic runtime & coordination:** detached async jobs with heartbeats and bounded
+  recovery, per-session isolation and locks, provider routing across 4 hosts and 4 secondary
+  providers, secret redaction, and response-contract validation.
+- **Execution & verification governance:** recorded plans (`plan-record`), user-approved
+  execution scope (`execute-begin` / `execute-end` with Git tree snapshots), allowlisted
+  runtime test execution with input-fingerprinted test reuse, and derived verification verdicts
+  that keep *planned*, *implemented*, and *verified* distinct.
+- **Browser verification & bounded experience:** `verify-browser` 3-stage pipeline (draft →
+  supervised Playwright player → review), 4-origin failure classification (`app`, `harness`,
+  `scenario`, `unknown`), and origin-scoped browser experience (`.workflow/data/e2e-knowledge.jsonl`,
+  placeholder-only, no credentials).
+- **Operational & evaluation telemetry:** `exoma report` and offline measurement tools covering
+  usage/cost, verification outcomes, task streams, browser runs, and evidence/fact lifecycles.
 
 ---
 
 ## Quick start
 
 ```bash
-uv tool install exoma            # or: pipx install exoma  (pip install exoma inside a venv)
-exoma install --dry-run          # optional: read what it will change first
-exoma install                    # asks the host and its second agent, then installs
+uv tool install exoma        # or: pipx install exoma  (Python 3.11+, stdlib-only runtime)
+exoma install --dry-run      # preview host/provider setup changes
+exoma install                # choose primary host & secondary provider
 ```
 
-Then, in a project, invoke the init and doctor skills. In Codex use `$exoma-init` and
-`$exoma-doctor`; Claude Code uses `/.init` and `/.doctor`. The CLI equivalent is
-`exoma init --work-dir . --host codex` for a Codex workspace.
-A project that already has a `.workflow/` is refreshed by `$exoma-upgrade` in Codex
-(`/.upgrade` in Claude Code), or `exoma upgrade --work-dir .`.
-Details, modes and undo: [installation guide](docs/installation.md).
-To update later, run `exoma update` from inside a project; it refreshes the package and
-global configuration, plus that project's `.workflow/` when present.
-All three OSes hand work to the same standalone updater. Exit 3 means accepted/running,
-not completed. Use the printed external observer command to wait without reopening the
-installation being replaced; afterward `exoma update --status` reports the terminal result.
-`exoma update --check` queries installed/latest public version information
-without upgrading; package-manager constraints still decide eligibility.
-
-If a job blocks the update, run `exoma jobs clean-stale` to see whether its lock
-qualifies for recovery and why. [Job recovery guide](docs/reference.md#async-jobs--recovery)
-
-Ask in natural language; the primary agent routes it (shown in Claude Code):
+Initialize inside a project (Claude Code / Agy: `/.init` & `/.doctor`; Codex: `$exoma-init` &
+`$exoma-doctor`; or CLI with `--host <host>`, e.g. `exoma init --work-dir . --host codex`):
 
 ```text
 you:          where is the authentication logic in this project?
-Claude Code:  [INTENT] explore — location question
-              (runs bash .workflow/run.sh explore --session ... --task '...')
+primary:      [INTENT] explore — location question
+              (runs .workflow/run.sh explore --session '<SESSION_ID>' --task '...')
 ```
-
-Or call the runtime directly:
-
-```bash
-bash .workflow/run.sh explore --session '<SESSION_ID>' --task 'find the authentication entry point'
-```
-
-The generated runner refuses a call that writes session state (a delegated command, `sweep`,
-`plan-record`, `execute-begin`/`execute-end`) without a session id: without one, concurrent
-sessions would share an identifier and overwrite each other's state. Options are named, so a
-shell that drops an empty argument (Windows PowerShell 5.1) cannot shift the session into the task.
 
 | Command | Type | Purpose |
 | --- | --- | --- |
-| `init` / `upgrade` | local | Enable the runtime in a project / refresh it after the tool is updated |
-| `doctor` | local | Readiness check; writes a report |
-| `sweep` | local | Scan the working tree for changes |
-| `clean` | local | Prune jobs, stale facts, and old sessions |
-| `explore` | delegated | Code map, entry points, ownership |
-| `analyze` | delegated | Causal analysis; no code changes |
-| `plan` | delegated | Evidence-backed implementation steps |
-| `verify` | delegated | Verdict on completed work, with evidence — produced by the secondary agent, not an independent check |
-| `verify-browser` | delegated | Verify a running app in a real browser: the secondary agent drafts the scenario and reviews the evidence; a runtime player drives Playwright |
-| `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
+| `init` / `upgrade` / `doctor` | local | Set up `.workflow/`, refresh after updates, check readiness |
+| `sweep` / `clean` | local | Inspect working-tree changes / prune old jobs, facts, sessions |
+| `explore` / `analyze` / `plan` | delegated | Map code, investigate causes, gather planning evidence |
+| `verify` / `verify-browser` | delegated | Verify changes with review + runtime tests / real Playwright run |
+| `promote-*` | local | Turn verified evidence into Git-tracked `docs/project-knowledge/` |
 
-Implementation itself (`/.execute`) is a primary-agent skill, not a delegated
-command; it opens and closes a runtime execution (`plan-record`, `execute-begin`,
-`execute-end`) whose scope the host's hooks enforce for file writes. Asynchronous job commands and the remaining local commands are in the
-[full reference](docs/reference.md#command).
-
-Setup problems and their fixes: [installation guide](docs/installation.md#when-something-is-wrong).
+Implementation (`/.execute -y`) stays in the primary agent and opens a scope-tracked runtime
+execution. Full install, update, uninstall, and recovery steps:
+[docs/installation.md](docs/installation.md) and [docs/reference.md](docs/reference.md).
 
 ---
 
-## Security
+## Limitations (honest boundaries)
 
-What each secondary-agent provider can read and change: [docs/security.md](docs/security.md).
+Exoma is not free and does not guarantee correctness:
+
+- **Latency & cost:** delegated calls take seconds to minutes; localized, known edits are often
+  faster directly ([when to use](docs/team-guide/when-to-use.md)).
+- **Provenance ≠ semantic truth:** verified `file:line` anchors and schema checks do not prove
+  an agent's interpretation is right or eliminate model hallucinations.
+- **Uneven host & provider enforcement:** read-only boundaries, shell-write hooks, and sandbox
+  grants differ by host and provider ([Security](docs/security.md)).
+- **Partial telemetry & stale persistence:** stored facts/knowledge can drift; task telemetry
+  is not a complete semantic history of how a problem was solved.
+
+Full technical list: **[docs/limitations.md](docs/limitations.md)**.
+
+---
+
+## Contributing
+
+Contributions of every kind are welcome — bug fixes, reliability improvements, tests, provider
+compatibility, performance work, and documentation clarity.
+
+- Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** for repository layout, isolated local
+  setup, test commands, and our lightweight review process.
+- Exoma is the implementation source of truth; [agent-workflow](https://github.com/dammar01/agent-workflow)
+  is its companion research and release-staging repository ([relationship policy](docs/development.md#development-and-research-relationship)).
 
 ---
 
 ## Documentation
 
-Documentation is layered: the team guide says **how and when**, and the reference says
-**exactly what the runtime does** — see [docs/](docs/README.md).
-
-| Document | Contents |
+| Document | Purpose |
 | --- | --- |
+| [docs/philosophy.md](docs/philosophy.md) | Core principles, participant authority, knowledge vs. task state vs. experience |
+| [docs/architecture/README.md](docs/architecture/README.md) | Verified request flow, execution governance, browser pipeline, storage |
 | [docs/installation.md](docs/installation.md) | Requirements, install, per-project setup, updating, uninstalling |
-| [docs/security.md](docs/security.md) | What each secondary-agent provider is allowed to read and change |
-| [docs/team-guide](docs/team-guide/README.md) | For developers: getting started, when to use it, task framing, examples, troubleshooting |
-| [docs/architecture](docs/architecture/README.md) | Verified request flow, components, and storage |
-| [docs/reference.md](docs/reference.md) | Complete technical reference: configuration, jobs, fact store, evidence reuse, verify modes, sessions, tests, CI |
-| [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the runtime obeys, and which it cannot enforce |
-| [docs/limitations.md](docs/limitations.md) | Known limitations |
-| [docs/evaluation/metrics.md](docs/evaluation/metrics.md) | How every figure `exoma report` prints is computed |
-| [CHANGELOG.md](CHANGELOG.md) / [RELEASE.md](RELEASE.md) | Release history and procedure |
+| [docs/team-guide/README.md](docs/team-guide/README.md) | Day-to-day usage: when to use, task framing, examples, troubleshooting |
+| [docs/reference.md](docs/reference.md) | Authoritative technical reference: commands, config, jobs, hosts, sessions |
+| [docs/runtime-contracts.md](docs/runtime-contracts.md) | Enforced vs. non-enforced `.workflow/config.json` contracts |
+| [docs/security.md](docs/security.md) | Per-provider read/write boundaries and redaction |
+| [docs/limitations.md](docs/limitations.md) | Known epistemic, host, provider, and operational limits |
+| [docs/evaluation/metrics.md](docs/evaluation/metrics.md) | Implemented metric categories, versioned registry, and interpretation limits |
+| [CONTRIBUTING.md](CONTRIBUTING.md) / [docs/development.md](docs/development.md) | External contribution guide and maintainer/staging workflow |
+| [CHANGELOG.md](CHANGELOG.md) / [RELEASE.md](RELEASE.md) | Release history and release procedure |
 
-[ci.yml](.github/workflows/ci.yml) runs the version stamp, manifest, stdlib-only gate, and
-test suites, plus a clean install of the built wheel, on every push on Linux and Windows,
-spending no provider quota; [publish.yml](.github/workflows/publish.yml) publishes a release
-tag to PyPI; [e2e-full.yml](.github/workflows/e2e-full.yml) is manual because it calls a real
-secondary agent.
+Full index and documentation rules: [docs/README.md](docs/README.md).
 
 ---
 
-## Limitations
-
-Exoma adds an execution layer, and with it additional latency, additional provider calls
-and compute, new failure modes, provider-specific security limits, and maintenance
-complexity. It is not preferable for every task. Full list: [docs/limitations.md](docs/limitations.md).
-
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) for the authoritative text.
-
-Use, modification, and distribution are permitted, including commercially, provided the
-copyright notice and licence are retained and modified files are marked as changed. The
-licence includes an express patent grant that terminates for any party initiating patent
-litigation over the work. The software is provided without warranty of any kind. This
-summary is not legal advice.
+Apache License 2.0 — see [LICENSE](LICENSE).
 
 ```text
 Copyright 2026 dammar01

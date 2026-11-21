@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-labelledby="t d">
+  <title id="t">Exoma browser verification and bounded browser experience pipeline</title>
+  <desc id="d">Implementation diagram of /.verify-browser verified against core/evidence/e2e/runner.py, classify.py, and knowledge.py: preflight and request validation, Stage 1 draft by secondary agent using origin-scoped browser knowledge hints, Stage 2 supervised Playwright player with origin and write guards, Stage 3 review and normalization into canonical verification with four failure origins (app, harness, scenario, unknown). Notes that auto phase runs all three stages under one lock, standalone draft stops after Stage 1, and an incomplete browser verdict skips Stage 3 review.</desc>
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .flow { stroke: #4F6970; stroke-width: 2.2; fill: none; }
+      .dash { stroke: #B08A5E; stroke-width: 1.9; stroke-dasharray: 5 4; fill: none; }
+      .lbl { font-size: 10px; font-weight: 700; fill: #3F5A60; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#4F6970" stroke-width="1.8"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#B08A5E" stroke-width="1.8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="480" fill="#F5F1EA"/>
+  <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
+    <path d="M28 52 V28 H52"/><path d="M1148 28 H1172 V52"/>
+    <path d="M28 428 V452 H52"/><path d="M1148 452 H1172 V428"/>
+  </g>
+
+  <!-- Header -->
+  <text x="56" y="56" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F6F73">ARCHITECTURE / BROWSER VERIFICATION (verify-browser)</text>
+  <text x="56" y="92" class="sans" font-size="28" font-weight="800" fill="#1F3A44">Three-Stage E2E Pipeline &amp; Bounded Browser Experience</text>
+  <rect x="944" y="54" width="200" height="28" rx="14" fill="#E6ECEA" stroke="#4F6F73" stroke-width="1.2"/>
+  <text x="1044" y="72" class="mono" font-size="10.5" font-weight="700" fill="#2F4F55" text-anchor="middle">IMPLEMENTATION · VERIFIED</text>
+  <line x1="56" y1="112" x2="1144" y2="112" stroke="#C9CFCB" stroke-width="1.4"/>
+
+  <!-- 4 Stage Cards across 1088px: 4*248 + 3*32 = 992 + 96 = 1088 -->
+  <g transform="translate(56 138)">
+    <rect width="248" height="156" rx="9" fill="#FCFAF5" stroke="#C3CAC6" stroke-width="1.5"/>
+    <rect width="248" height="5" rx="2.5" fill="#4A6F85"/>
+    <text x="16" y="28" class="mono" font-size="10.5" font-weight="700" fill="#4A6F85">PREFLIGHT &amp; REQUEST</text>
+    <text x="16" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">Policy &amp; Phase Gate</text>
+    <text x="16" y="78" class="sans" font-size="12" fill="#4F6266">• Pinned config.json e2e policy</text>
+    <text x="16" y="97" class="sans" font-size="12" fill="#4F6266">• Phases: auto | draft | run</text>
+    <text x="16" y="116" class="sans" font-size="12" fill="#4F6266">• auto holds one lock across</text>
+    <text x="16" y="133" class="sans" font-size="12" fill="#4F6266">  all three stages</text>
+  </g>
+
+  <g transform="translate(336 138)">
+    <rect width="248" height="156" rx="9" fill="#FAF6EE" stroke="#B08A5E" stroke-width="1.6"/>
+    <rect width="248" height="5" rx="2.5" fill="#B08A5E"/>
+    <text x="16" y="28" class="mono" font-size="10.5" font-weight="700" fill="#8C6A43">STAGE 1 · DRAFT</text>
+    <text x="16" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">Secondary Agent Spec</text>
+    <text x="16" y="78" class="sans" font-size="12" fill="#4F6266">• Drafts [E2E SPEC] from code</text>
+    <text x="16" y="97" class="sans" font-size="12" fill="#4F6266">• Reads e2e-knowledge hints</text>
+    <text x="16" y="116" class="sans" font-size="12" fill="#4F6266">• Validated before browser</text>
+    <text x="16" y="135" class="mono" font-size="10" font-weight="700" fill="#8C6A43">draft phase stops here</text>
+  </g>
+
+  <g transform="translate(616 138)">
+    <rect width="248" height="156" rx="9" fill="#E7EFEE" stroke="#3F6F73" stroke-width="1.8"/>
+    <rect width="248" height="5" rx="2.5" fill="#3F6F73"/>
+    <text x="16" y="28" class="mono" font-size="10.5" font-weight="700" fill="#3F6F73">STAGE 2 · PLAY</text>
+    <text x="16" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">Supervised Player</text>
+    <text x="16" y="78" class="sans" font-size="12" fill="#2F3F44">• Runtime Playwright child</text>
+    <text x="16" y="97" class="sans" font-size="12" fill="#2F3F44">• Origin/write/read-only guards</text>
+    <text x="16" y="116" class="sans" font-size="12" fill="#2F3F44">• Redacts secrets &amp; endpoints</text>
+    <text x="16" y="135" class="sans" font-size="12" fill="#2F3F44">• Bounded env retry (no writes)</text>
+  </g>
+
+  <g transform="translate(896 138)">
+    <rect width="248" height="156" rx="9" fill="#EFF4F5" stroke="#1F3A44" stroke-width="1.8"/>
+    <rect width="248" height="5" rx="2.5" fill="#1F3A44"/>
+    <text x="16" y="28" class="mono" font-size="10.5" font-weight="700" fill="#1F3A44">STAGE 3 · REVIEW</text>
+    <text x="16" y="54" class="sans" font-size="15.5" font-weight="800" fill="#1F3A44">Classify &amp; Normalize</text>
+    <text x="16" y="78" class="sans" font-size="12" fill="#2F3F44">• 4 origins: app | harness |</text>
+    <text x="16" y="95" class="sans" font-size="12" fill="#2F3F44">  scenario | unknown</text>
+    <text x="16" y="116" class="sans" font-size="12" fill="#2F3F44">• Canonical [VERIFICATION]</text>
+    <text x="16" y="135" class="mono" font-size="9.5" font-weight="700" fill="#4A6F85">skipped if Stage 2 incomplete</text>
+  </g>
+
+  <!-- Stage connectors -->
+  <path class="flow" d="M304 216 H332" marker-end="url(#a)"/>
+  <path class="flow" d="M584 216 H612" marker-end="url(#a)"/>
+  <path class="flow" d="M864 216 H892" marker-end="url(#a)"/>
+
+  <!-- Bounded browser experience feedback loop -->
+  <path class="dash" d="M740 294 V344" marker-end="url(#ab)"/>
+  <text x="752" y="324" class="mono" font-size="10" font-weight="700" fill="#8C6A43">clean 1st-attempt proof / failure hints</text>
+
+  <path class="dash" d="M460 348 V298" marker-end="url(#ab)"/>
+  <text x="448" y="324" class="mono" font-size="10" font-weight="700" fill="#8C6A43" text-anchor="end">origin-scoped sidecar hints</text>
+
+  <rect x="56" y="348" width="1088" height="84" rx="9" fill="#FAF6EE" stroke="#B08A5E" stroke-width="1.6"/>
+  <text x="78" y="374" class="mono" font-size="12.5" font-weight="700" fill="#8C6A43">BOUNDED BROWSER EXPERIENCE  ·  .workflow/data/e2e-knowledge.jsonl</text>
+  <text x="78" y="398" class="sans" font-size="13.5" fill="#2F3F44">Records: auth.login · auth.logout · navigation · page_ready · selector · failure_hint · repeat_failure</text>
+  <text x="78" y="420" class="sans" font-size="12" fill="#5B6B70">Placeholders only (no credentials) · 2 consecutive fails retire · source anchors rechecked &amp; pruned · 3 passes + anchor → /.promote candidate</text>
+
+  <!-- Footer -->
+  <text x="56" y="460" class="mono" font-size="11" font-weight="700" fill="#4F6970">ORIGIN-SCOPED BROWSER EXPERIENCE ≠ GENERAL-PURPOSE MEMORY</text>
+  <text x="1144" y="460" class="mono" font-size="10.5" fill="#6B787C" text-anchor="end">Source: core/evidence/e2e/{runner,classify,knowledge}.py</text>
+</svg>

@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="t d">
+  <title id="t">Exoma conceptual responsibility and decision authority</title>
+  <desc id="d">Conceptual diagram showing how Human, Primary Agent, Exoma Runtime and Host Controls, Secondary Agent, and Observable Evidence Sources share responsibility and decision authority.</desc>
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+      .flow { stroke: #4F6970; stroke-width: 2.2; fill: none; }
+      .dash { stroke: #B08A5E; stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+      .lbl { font-size: 10.5px; font-weight: 700; fill: #3F5A60; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#4F6970" stroke-width="1.8"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#B08A5E" stroke-width="1.8"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="440" fill="#F5F1EA"/>
+  <g fill="none" stroke="#B9C2BF" stroke-width="1.5">
+    <path d="M28 52 V28 H52"/><path d="M1148 28 H1172 V52"/>
+    <path d="M28 388 V412 H52"/><path d="M1148 412 H1172 V388"/>
+  </g>
+
+  <!-- Header -->
+  <text x="56" y="56" class="mono" font-size="12" font-weight="700" letter-spacing="1.5" fill="#3F6F73">PHILOSOPHY / RESPONSIBILITY &amp; DECISION AUTHORITY</text>
+  <text x="56" y="92" class="sans" font-size="28" font-weight="800" fill="#1F3A44">Who Owns Intent, Reasoning, Governance, and Facts</text>
+  <rect x="972" y="54" width="172" height="28" rx="14" fill="#FAF2E4" stroke="#C4A57F" stroke-width="1.2"/>
+  <text x="1058" y="72" class="mono" font-size="10.5" font-weight="700" fill="#8C6A43" text-anchor="middle">CONCEPTUAL MODEL</text>
+  <line x1="56" y1="112" x2="1144" y2="112" stroke="#C9CFCB" stroke-width="1.4"/>
+
+  <!-- Row 1: 4 participants -->
+  <rect x="56" y="138" width="224" height="132" rx="9" fill="#FCFAF5" stroke="#C3CAC6" stroke-width="1.6"/>
+  <rect x="56" y="136" width="224" height="5" rx="2.5" fill="#1F3A44"/>
+  <text x="74" y="164" class="mono" font-size="11" font-weight="700" fill="#1F3A44">HUMAN</text>
+  <text x="74" y="190" class="sans" font-size="16" font-weight="700" fill="#1F3A44">Intent &amp; Authority</text>
+  <text x="74" y="214" class="sans" font-size="12.5" fill="#4F6266">Objectives &amp; constraints</text>
+  <text x="74" y="234" class="sans" font-size="12.5" fill="#4F6266">Execution approval (-y)</text>
+  <text x="74" y="254" class="sans" font-size="12.5" fill="#4F6266">Trade-off decisions</text>
+
+  <rect x="342" y="138" width="234" height="132" rx="9" fill="#E7EFEE" stroke="#3F6F73" stroke-width="1.8"/>
+  <rect x="342" y="136" width="234" height="5" rx="2.5" fill="#3F6F73"/>
+  <text x="360" y="164" class="mono" font-size="11" font-weight="700" fill="#3F6F73">PRIMARY AGENT</text>
+  <text x="360" y="190" class="sans" font-size="16" font-weight="700" fill="#1F3A44">Semantic Reasoning</text>
+  <text x="360" y="214" class="sans" font-size="12.5" fill="#4F6266">Interprets evidence</text>
+  <text x="360" y="234" class="sans" font-size="12.5" fill="#4F6266">Evaluates alternatives</text>
+  <text x="360" y="254" class="sans" font-size="12.5" fill="#4F6266">Implements &amp; reviews</text>
+
+  <rect x="638" y="138" width="234" height="132" rx="9" fill="#EFF4F5" stroke="#4A6F85" stroke-width="1.8"/>
+  <rect x="638" y="136" width="234" height="5" rx="2.5" fill="#4A6F85"/>
+  <text x="656" y="164" class="mono" font-size="11" font-weight="700" fill="#4A6F85">EXOMA RUNTIME</text>
+  <text x="656" y="190" class="sans" font-size="16" font-weight="700" fill="#1F3A44">Execution Governance</text>
+  <text x="656" y="214" class="sans" font-size="12.5" fill="#4F6266">Contracts, scope &amp; locks</text>
+  <text x="656" y="234" class="sans" font-size="12.5" fill="#4F6266">Redaction &amp; provenance</text>
+  <text x="656" y="254" class="sans" font-size="12.5" fill="#4F6266">Tests &amp; browser player</text>
+
+  <rect x="934" y="138" width="210" height="132" rx="9" fill="#FAF6EE" stroke="#B08A5E" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <rect x="934" y="136" width="210" height="5" rx="2.5" fill="#B08A5E"/>
+  <text x="952" y="164" class="mono" font-size="11" font-weight="700" fill="#8C6A43">SECONDARY AGENT</text>
+  <text x="952" y="190" class="sans" font-size="16" font-weight="700" fill="#1F3A44">Delegated Search</text>
+  <text x="952" y="214" class="sans" font-size="12.5" fill="#4F6266">Broad code inspection</text>
+  <text x="952" y="234" class="sans" font-size="12.5" fill="#4F6266">Returns evidence</text>
+  <text x="952" y="254" class="sans" font-size="12.5" fill="#8C6A43">Candidates, not truth</text>
+
+  <!-- Horizontal arrows -->
+  <path class="flow" d="M280 184 H338" marker-end="url(#a)"/>
+  <text x="311" y="176" class="mono lbl" text-anchor="middle">intent</text>
+  <path class="flow" d="M342 224 H284" marker-end="url(#a)"/>
+  <text x="311" y="242" class="mono lbl" text-anchor="middle">plans</text>
+
+  <path class="flow" d="M576 184 H634" marker-end="url(#a)"/>
+  <text x="607" y="176" class="mono lbl" text-anchor="middle">calls</text>
+  <path class="flow" d="M638 224 H580" marker-end="url(#a)"/>
+  <text x="607" y="242" class="mono lbl" text-anchor="middle">digests</text>
+
+  <path class="flow" d="M872 184 H930" marker-end="url(#a)"/>
+  <text x="903" y="176" class="mono lbl" text-anchor="middle">task</text>
+  <path class="flow" d="M934 224 H876" marker-end="url(#a)"/>
+  <text x="903" y="242" class="mono lbl" text-anchor="middle">report</text>
+
+  <!-- Evidence sources base -->
+  <path class="dash" d="M459 270 V314" marker-end="url(#ab)"/>
+  <text x="448" y="298" class="mono" font-size="10" font-weight="700" fill="#8C6A43" text-anchor="end">direct checks</text>
+  <path class="dash" d="M755 270 V314" marker-end="url(#ab)"/>
+  <text x="744" y="298" class="mono" font-size="10" font-weight="700" fill="#8C6A43" text-anchor="end">tests · snapshots</text>
+  <path class="dash" d="M1039 270 V314" marker-end="url(#ab)"/>
+  <text x="1028" y="298" class="mono" font-size="10" font-weight="700" fill="#8C6A43" text-anchor="end">reads &amp; traces</text>
+
+  <rect x="56" y="318" width="1088" height="66" rx="9" fill="#E8EEEA" stroke="#A9BDB4" stroke-width="1.6"/>
+  <text x="78" y="344" class="mono" font-size="13" font-weight="700" fill="#3F6F6A">OBSERVABLE EVIDENCE SOURCES (AUTHORITY FOR OBSERVED FACTS)</text>
+  <text x="78" y="368" class="sans" font-size="14" fill="#2F3F44">Source code · Git state &amp; history · Test outputs · Browser execution artifacts · Project configuration</text>
+
+  <!-- Footer -->
+  <text x="56" y="414" class="mono" font-size="11" font-weight="700" fill="#4F6970">RUNTIME ENFORCEMENT ≠ SEMANTIC CORRECTNESS</text>
+  <text x="1144" y="414" class="sans" font-size="12" fill="#6B787C" text-anchor="end">Every important claim should be traceable, reviewable, and backed by explicit evidence.</text>
+</svg>
