@@ -921,6 +921,24 @@ def run_doctor(
             "local_mode.flag / WORKFLOW_LOCAL_MODE, session binding, and hook installation (gate-skips.jsonl)"
         )
 
+    from exoma.core.audit.task_telemetry import load_hook_diagnostics
+
+    task_hook_health = load_hook_diagnostics(project_root, window_days=GATE_SKIP_WINDOW_DAYS)
+    checks["task_events_health"] = task_hook_health
+    if task_hook_health.get("total", 0) > 0:
+        reasons = ", ".join(
+            f"{k} x{v}" for k, v in sorted((task_hook_health.get("by_reason") or {}).items())
+        )
+        recommended_fixes.append(
+            f"task-events hook recorded {task_hook_health['total']} observation failure(s) in the last "
+            f"{GATE_SKIP_WINDOW_DAYS} days ({reasons}); inspect .workflow/data/task-hook/diagnostics.jsonl"
+        )
+    elif task_hook_health.get("status") == "unavailable":
+        recommended_fixes.append(
+            "task-events diagnostic log (.workflow/data/task-hook/diagnostics.jsonl) could not be read; "
+            "check file permissions"
+        )
+
     # Release integrity: the installed bundle must match the package's _bundle/manifest.json
     # exactly, the manifest must not be older than its sources, and required hooks must be
     # installed. A drifted/stale/incomplete bundle still "runs" but ships behaviour nobody

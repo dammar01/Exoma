@@ -26,6 +26,7 @@ before DEC-020 carry no derived verdict, and their tasks stay open.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -34,6 +35,13 @@ from exoma.core.evidence.runtime_io import write_task_event
 from exoma.core.workspace.workspace_paths import data_dir, now_iso
 
 RECENT = 10
+TASK_HOOK_DIAGNOSTICS_REL = Path("task-hook") / "diagnostics.jsonl"
+DIAGNOSTICS_WINDOW_DAYS = 7
+_DIAGNOSTIC_STAGES = frozenset({"git_rev_parse", "git_log", "append", "snapshot"})
+_DIAGNOSTIC_REASONS = frozenset({
+    "git_timeout", "git_deadline_exceeded", "git_spawn_error",
+    "git_nonzero", "io_error", "lock_contention",
+})
 
 
 def record_skill(project_root, session_id: str | None, skill: str, *, verdict: str | None = None,
@@ -83,7 +91,7 @@ def load_events(project_root, *, diagnostics: dict | None = None) -> list[dict]:
     for line in text.splitlines():
         try:
             event = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             diagnostics["invalid_rows"] += 1
             diagnostics["status"] = "partial"
             continue
@@ -169,6 +177,82 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
     return tasks, len(unclaimed_commits - claimed_commits)
 
 
+def load_hook_diagnostics(project_root, *, window_days: int = DIAGNOSTICS_WINDOW_DAYS) -> dict:
+    """Bounded privacy-safe summary of recent task-events hook failures."""
+    path = data_dir(Path(project_root)) / TASK_HOOK_DIAGNOSTICS_REL
+    base = {
+        "status": "none",
+        "total": 0,
+        "window_days": window_days,
+        "by_stage": {},
+        "by_reason": {},
+        "last_at": None,
+        "invalid_rows": 0,
+    }
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return base
+    except OSError:
+        return {**base, "status": "unavailable"}
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    by_stage: dict[str, int] = {}
+    by_reason: dict[str, int] = {}
+    total = 0
+    invalid = 0
+    last_at: str | None = None
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except (ValueError, RecursionError):
+            invalid += 1
+            continue
+        if not isinstance(row, dict):
+            invalid += 1
+            continue
+        stage = row.get("stage")
+        reason = row.get("reason")
+        if (
+            not isinstance(stage, str)
+            or not isinstance(reason, str)
+            or stage not in _DIAGNOSTIC_STAGES
+            or reason not in _DIAGNOSTIC_REASONS
+        ):
+            invalid += 1
+            continue
+        at = row.get("at")
+        if not isinstance(at, str):
+            invalid += 1
+            continue
+        try:
+            ts = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        except ValueError:
+            invalid += 1
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < cutoff:
+            continue
+        if last_at is None or at > last_at:
+            last_at = at
+        stage = row["stage"]
+        reason = row["reason"]
+        by_stage[stage] = by_stage.get(stage, 0) + 1
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        total += 1
+    return {
+        "status": "failures_recorded" if total else ("partial" if invalid else "none"),
+        "total": total,
+        "window_days": window_days,
+        "by_stage": dict(sorted(by_stage.items())),
+        "by_reason": dict(sorted(by_reason.items())),
+        "last_at": last_at,
+        "invalid_rows": invalid,
+    }
+
+
 def report(project_root) -> dict:
     diagnostics: dict = {}
     tasks, unclaimed = derive_tasks(load_events(project_root, diagnostics=diagnostics))
@@ -181,6 +265,7 @@ def report(project_root) -> dict:
     return {
         "tasks": len(tasks),
         "event_stream": diagnostics,
+        "hook_diagnostics": load_hook_diagnostics(project_root),
         "by_state": dict(sorted(by_state.items())),
         "skill_counts": dict(sorted(skill_counts.items())),
         "unclaimed_commits": unclaimed,

@@ -1562,12 +1562,25 @@ blocking finding), `derived` (verify only: the runtime's derived verdict, `pass`
   tool naming a local skill, and `edit` with a project-relative `path` (`.workflow/` and
   `.git/` excluded);
 - `commit` rows, from a HEAD snapshot per Claude session at
-  `.workflow/data/task-hook/<session_id>.head`. The session's first event writes it. Each
-  `Stop`, and each later `UserPromptSubmit`, compares HEAD with it and, when HEAD moved,
-  appends one row per commit in `git log --reverse --first-parent -m --name-only --relative
-  <snapshot>..HEAD` (`commit`, `paths`), then moves the snapshot. A commit is therefore
-  recorded at the end of the turn that made it, after any verify in that turn; one made
-  between turns is recorded on the next prompt.
+  `.workflow/data/task-hook/<session_id>.head`. The session's first event seeds it atomically
+  independently of any local skill append. Each `Stop`, and each later `UserPromptSubmit`,
+  acquires an OS-backed lock across snapshot read, commit append, and atomic cursor replacement,
+  and runs Git observation (`rev-parse` + `git log`) within one shared 2-second monotonic wait
+  budget (sampled before each wait, with bounded post-timeout process-tree cleanup). On lock
+  contention, independent `skill`/`edit` events still append while Git observation is deferred.
+  When HEAD moved, the hook appends one row per commit in
+  `git log --reverse --first-parent -m --name-only --relative <snapshot>..HEAD` (`commit`,
+  `paths`) to `tasks.jsonl` before atomically advancing the snapshot. If `rev-parse` or
+  `git log` fails or times out (while ordinary non-repositories and unborn repositories stay
+  quiet before a baseline exists), independent `skill`/`edit` events still append, the previous
+  snapshot stays unchanged for retry, and the hook makes a best-effort attempt under a bounded
+  100 ms OS lock (dropping the diagnostic row on contention rather than racing with compaction)
+  to append a privacy-safe failure record (`stage`, `reason`, no prompt/path/command/stderr
+  text) to `.workflow/data/task-hook/diagnostics.jsonl` (surfaced by `task_telemetry.report()`
+  and `/.doctor`). Both task-stream writers run a best-effort read probe decoupled from write-only
+  append to guard against a prior torn line missing a trailing newline. A commit is therefore
+  recorded at the end of the turn that made it, after any verify in that turn; one made between
+  turns is recorded on the next prompt.
 
 Version 1 events (before 3.8.0) came from every `Read` and `Bash` call: a skill was a `Read`
 of `~/.claude/skills/<name>.md`, and a commit was a `git commit` that moved HEAD between

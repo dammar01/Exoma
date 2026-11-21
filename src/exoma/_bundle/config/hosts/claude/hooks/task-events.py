@@ -19,7 +19,11 @@
 # the shell is not seen, a Read proves a look, not a verified claim, and an unreadable
 # transcript, or one with no runner call within TRANSCRIPT_SCAN_BYTES of its end, warns nothing.
 # `policies.enforcement: off` turns the warning off.
-import datetime, json, os, re, subprocess
+import datetime, json, os, re, shutil, signal, subprocess, tempfile, time
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 LOCAL_SKILLS = {
     "execute", "init", "upgrade", "doctor", "sweep", "commit",
@@ -27,6 +31,10 @@ LOCAL_SKILLS = {
 }
 SKILL_PROMPT = re.compile(r"^\s*/\.([\w-]+)")
 EVENT_VERSION = 2
+GIT_DEADLINE_SECONDS = 2.0
+DIAGNOSTICS_VERSION = 1
+DIAGNOSTICS_MAX_BYTES = 256 * 1024
+SNAPSHOT_LOCK_WAIT_SECONDS = 0.25
 
 
 def project_root(start):
@@ -76,13 +84,213 @@ def hidden_window():
     return info, 0x08000000  # CREATE_NO_WINDOW
 
 
-def git_out(root, *args):
+def atomic_write_text(path, text):
+    """Stage in the target directory and replace atomically; never leave a truncated target."""
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    tmp = "%s.%d.%d.tmp" % (path, os.getpid(), time.time_ns())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def acquire_lock(lock_path, wait_seconds=SNAPSHOT_LOCK_WAIT_SECONDS):
+    """OS-backed non-blocking file lock with bounded wait. Released by the kernel on crash."""
+    try:
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        fh = open(lock_path, "a+b")
+    except OSError:
+        return None
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            if os.name == "nt":
+                fh.seek(0)
+                if fh.seek(0, os.SEEK_END) == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fh
+        except OSError:
+            if time.monotonic() >= deadline:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+                return None
+            time.sleep(0.01)
+
+
+def release_lock(fh):
+    if fh is None:
+        return
+    try:
+        if os.name == "nt":
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        fh.close()
+    except OSError:
+        pass
+
+
+def needs_leading_newline(path):
+    """Best-effort tail probe decoupled from write-only append."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                return False
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) != b"\n"
+    except OSError:
+        return False
+
+
+def diagnostics_path(root):
+    return os.path.join(root, ".workflow", "data", "task-hook", "diagnostics.jsonl")
+
+
+def log_diagnostic(root, event, session_id, stage, reason):
+    """Append one privacy-safe failure row outside tasks.jsonl; trim above 256 KiB."""
+    if not root:
+        return
+    path = diagnostics_path(root)
+    row = {
+        "v": DIAGNOSTICS_VERSION,
+        "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "hook": "task-events",
+        "event": str(event or ""),
+        "session_id": session_id,
+        "stage": stage,
+        "reason": reason,
+    }
+    lock_fh = None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lock_fh = acquire_lock(path + ".lock", wait_seconds=0.1)
+        if lock_fh is None:
+            # Avoid appending without the lock while another hook may be compacting.
+            return
+        if os.path.isfile(path) and os.path.getsize(path) > DIAGNOSTICS_MAX_BYTES:
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+                half = raw[len(raw) // 2:]
+                cut = half.find(b"\n")
+                trimmed = half[cut + 1:] if cut >= 0 else b""
+                atomic_write_text(path, trimmed.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
+        prefix = b"\n" if needs_leading_newline(path) else b""
+        line = prefix + (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+        with open(path, "ab") as fh:
+            fh.write(line)
+            fh.flush()
+    except Exception:
+        pass
+    finally:
+        release_lock(lock_fh)
+
+
+def kill_process_tree(proc):
+    """Best-effort process-tree termination without blocking on grandchild pipes."""
+    try:
+        if os.name == "nt":
+            info, flags = hidden_window()
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=0.5, startupinfo=info, creationflags=flags,
+                )
+            except Exception:
+                pass
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+    finally:
+        try:
+            proc.wait(timeout=0.2)
+        except Exception:
+            pass
+
+
+def is_ordinary_no_head(rc, stderr_text):
+    """True for an unborn repo (rc=1, empty stderr) or canonical C-locale non-repo error."""
+    first = (stderr_text or "").lstrip().splitlines()[:1]
+    head_line = first[0].lower() if first else ""
+    if rc == 128 and head_line.startswith("fatal: not a git repository"):
+        return True
+    return rc == 1 and not head_line
+
+
+def git_out(root, *args, deadline=None, capture_err=False):
+    remaining = GIT_DEADLINE_SECONDS if deadline is None else deadline - time.monotonic()
+    if remaining <= 0:
+        return (None, "git_deadline_exceeded", None, "") if capture_err else (None, "git_deadline_exceeded")
+    git_bin = shutil.which("git") or "git"
     info, flags = hidden_window()
-    out = subprocess.run(
-        ["git", "-C", root, *args], capture_output=True, text=True, timeout=5,
-        startupinfo=info, creationflags=flags,
-    )
-    return out.stdout if out.returncode == 0 else None
+    git_env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
+    try:
+        with tempfile.TemporaryFile() as out_fh, tempfile.TemporaryFile() as err_fh:
+            proc = subprocess.Popen(
+                [git_bin, "-C", root, *args],
+                stdin=subprocess.DEVNULL,
+                stdout=out_fh,
+                stderr=err_fh if capture_err else subprocess.DEVNULL,
+                env=git_env,
+                startupinfo=info, creationflags=flags,
+                start_new_session=(os.name != "nt"),
+            )
+            try:
+                rc = proc.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(proc)
+                return (None, "git_timeout", None, "") if capture_err else (None, "git_timeout")
+            if rc != 0:
+                err_snippet = ""
+                if capture_err:
+                    err_fh.seek(0)
+                    err_snippet = err_fh.read(512).decode("utf-8", errors="replace")
+                return (None, "git_nonzero", rc, err_snippet) if capture_err else (None, "git_nonzero")
+            out_fh.seek(0)
+            stdout_text = out_fh.read().decode("utf-8", errors="replace")
+            return (stdout_text, None, 0, "") if capture_err else (stdout_text, None)
+    except OSError:
+        return (None, "git_spawn_error", None, "") if capture_err else (None, "git_spawn_error")
 
 
 def snapshot_path(root, payload):
@@ -91,30 +299,45 @@ def snapshot_path(root, payload):
 
 
 def write_snapshot(path, head):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(head)
+    atomic_write_text(path, head)
 
 
-def commits_since_snapshot(payload, root):
+def collect_commits(payload, root, deadline, session):
+    """Return (commit_events, pending_snapshot) without advancing .head on disk.
+
+    pending_snapshot is (path, expected_before_or_None, new_head). The caller appends the
+    commit batch first and advances the snapshot only after the append succeeds."""
     path = snapshot_path(root, payload)
     if not path:
-        return []
-    now = (git_out(root, "rev-parse", "--verify", "-q", "HEAD") or "").strip()
-    if not os.path.isfile(path):
-        if now:
-            write_snapshot(path, now)
-        return []
-    with open(path, encoding="utf-8") as fh:
-        before = fh.read().strip()
+        return [], None
+    hook_event = payload.get("hook_event_name")
+    exists = os.path.isfile(path)
+    raw_now, err, rc, err_snippet = git_out(
+        root, "rev-parse", "--verify", "-q", "HEAD", deadline=deadline, capture_err=True,
+    )
+    if err:
+        # Quiet only for ordinary non-repo or unborn repo before a baseline exists;
+        # operational errors (e.g. dubious ownership) are still recorded without stderr text.
+        if err != "git_nonzero" or exists or not is_ordinary_no_head(rc, err_snippet):
+            log_diagnostic(root, hook_event, session, "git_rev_parse", err)
+        return [], None
+    now = (raw_now or "").strip()
+    if not exists:
+        return ([], (path, None, now)) if now else ([], None)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            before = fh.read().strip()
+    except OSError:
+        log_diagnostic(root, hook_event, session, "snapshot", "io_error")
+        return [], None
     if not now or now == before:
-        return []
-    write_snapshot(path, now)
+        return [], None
     span = f"{before}..{now}" if before else now
-    out = git_out(root, "log", "--reverse", "--first-parent", "-m", "--format=commit:%H",
-                  "--name-only", "--relative", span)
-    if out is None:
-        return []
+    out, err = git_out(root, "log", "--reverse", "--first-parent", "-m", "--format=commit:%H",
+                       "--name-only", "--relative", span, deadline=deadline)
+    if err or out is None:
+        log_diagnostic(root, hook_event, session, "git_log", err or "git_nonzero")
+        return [], None
     commits, current = [], None
     for line in out.splitlines():
         text = line.strip()
@@ -128,7 +351,7 @@ def commits_since_snapshot(payload, root):
             current["paths"].append(text)
     if current:
         commits.append(current)
-    return commits
+    return commits, (path, before, now)
 
 
 # `path/to/file.ext:12` or `:12-40`, the shape every delegated citation takes.
@@ -190,9 +413,7 @@ def read_state(path):
 
 
 def write_state(path, state):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(state, fh)
+    atomic_write_text(path, json.dumps(state))
 
 
 def lines_from_end(path, budget):
@@ -296,16 +517,13 @@ def anchor_warning(payload, root):
     )
 
 
-def events_for(payload, root):
+def non_git_events_for(payload, root):
     hook = payload.get("hook_event_name")
     if hook == "UserPromptSubmit":
-        found = commits_since_snapshot(payload, root)
         match = SKILL_PROMPT.match(str(payload.get("prompt") or ""))
         if match and match.group(1) in LOCAL_SKILLS:
-            found.append({"kind": "skill", "skill": match.group(1)})
-        return found
-    if hook == "Stop":
-        return commits_since_snapshot(payload, root)
+            return [{"kind": "skill", "skill": match.group(1)}]
+        return []
     if hook != "PostToolUse":
         return []
     tool = str(payload.get("tool_name") or "")
@@ -319,28 +537,108 @@ def events_for(payload, root):
     return []
 
 
+def append_events(root, session, events):
+    if not events:
+        return
+    stream_path = os.path.join(root, ".workflow", "data", "tasks.jsonl")
+    os.makedirs(os.path.dirname(stream_path), exist_ok=True)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    lines = []
+    for event in events:
+        row = {
+            "v": EVENT_VERSION,
+            "at": now,
+            "source": "hook",
+            "session_id": session,
+            **event,
+        }
+        lines.append(json.dumps(row, ensure_ascii=False) + "\n")
+    prefix = b"\n" if needs_leading_newline(stream_path) else b""
+    buf = prefix + "".join(lines).encode("utf-8")
+    with open(stream_path, "ab") as fh:
+        fh.write(buf)
+        fh.flush()
+
+
+def commit_snapshot(pending):
+    """Advance .head atomically only if the on-disk cursor still matches expected_before."""
+    path, expected_before, new_head = pending
+    if expected_before is None:
+        if os.path.isfile(path):
+            return
+    else:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                current = fh.read().strip()
+        except OSError:
+            return
+        if current != expected_before:
+            return
+    write_snapshot(path, new_head)
+
+
 try:
     payload = json.loads(globals().get("HOOK_RAW") or os.environ.get("CLAUDE_HOOK_RAW", ""))
     root = project_root(payload.get("cwd"))
-    if root and payload.get("hook_event_name") == "Stop":
-        try:
-            message = anchor_warning(payload, root)
-        except Exception:
-            message = None
-        if message:
-            print(json.dumps({"systemMessage": message}))
-    events = events_for(payload, root) if root else []
-    if events:
+    if root:
+        hook_event = payload.get("hook_event_name")
         session = main_session(payload.get("session_id"))
-        with open(os.path.join(root, ".workflow", "data", "tasks.jsonl"), "a", encoding="utf-8") as fh:
-            for event in events:
-                row = {
-                    "v": EVENT_VERSION,
-                    "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "source": "hook",
-                    "session_id": session,
-                    **event,
-                }
-                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if hook_event == "Stop":
+            try:
+                message = anchor_warning(payload, root)
+            except Exception:
+                message = None
+            if message:
+                print(json.dumps({"systemMessage": message}))
+        other_events = non_git_events_for(payload, root)
+        if hook_event in ("UserPromptSubmit", "Stop"):
+            snap = snapshot_path(root, payload)
+            lock_fh = acquire_lock(snap + ".lock") if snap else None
+            if snap and lock_fh is None:
+                # Contention: preserve independent events and defer Git observation
+                # rather than risking concurrent cursor regression.
+                log_diagnostic(root, hook_event, session, "snapshot", "lock_contention")
+                if other_events:
+                    try:
+                        append_events(root, session, other_events)
+                    except OSError:
+                        log_diagnostic(root, hook_event, session, "append", "io_error")
+            else:
+                try:
+                    deadline = time.monotonic() + GIT_DEADLINE_SECONDS
+                    commit_events, pending_snapshot = collect_commits(payload, root, deadline, session)
+                    if pending_snapshot is not None and pending_snapshot[1] is None:
+                        # Initial baseline has no commit rows; seed it independently of
+                        # whether a local skill append succeeds.
+                        try:
+                            commit_snapshot(pending_snapshot)
+                        except OSError:
+                            log_diagnostic(root, hook_event, session, "snapshot", "io_error")
+                        if other_events:
+                            try:
+                                append_events(root, session, other_events)
+                            except OSError:
+                                log_diagnostic(root, hook_event, session, "append", "io_error")
+                    else:
+                        ordered_events = commit_events + other_events
+                        append_ok = True
+                        if ordered_events:
+                            try:
+                                append_events(root, session, ordered_events)
+                            except OSError:
+                                append_ok = False
+                                log_diagnostic(root, hook_event, session, "append", "io_error")
+                        if append_ok and pending_snapshot is not None:
+                            try:
+                                commit_snapshot(pending_snapshot)
+                            except OSError:
+                                log_diagnostic(root, hook_event, session, "snapshot", "io_error")
+                finally:
+                    release_lock(lock_fh)
+        elif other_events:
+            try:
+                append_events(root, session, other_events)
+            except OSError:
+                log_diagnostic(root, hook_event, session, "append", "io_error")
 except Exception:
     pass
