@@ -238,6 +238,9 @@ installation being replaced; afterward `exoma update --status` reports the termi
 `exoma update --check` queries installed/latest public version information
 without upgrading; package-manager constraints still decide eligibility.
 
+If a job blocks the update, run `exoma jobs clean-stale` to see whether its lock
+qualifies for recovery and why. [Job recovery guide](docs/reference.md#async-jobs--recovery)
+
 Ask in natural language; the primary agent routes it (shown in Claude Code):
 
 ```text

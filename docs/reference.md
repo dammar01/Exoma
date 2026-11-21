@@ -2263,20 +2263,30 @@ two projects cannot resume each other's provider sessions.
 
 ## Async jobs & recovery
 
-`exoma jobs clean-stale` lists each job and session claim in the current user's
-store, including other workspaces. Preview shows the status, proposed action and
-reason. It can inspect an empty store without creating it.
+```sh
+exoma jobs clean-stale          # Preview each job or session lock and the reason for its status
+exoma jobs clean-stale --apply  # Recheck and recover all eligible jobs in the user store
+```
 
-`exoma jobs clean-stale --apply` rechecks each eligible owner. On Windows, recovery
-requires the latest attempt and its session claim to identify the same machine
-and an earlier boot. A dead worker or an old heartbeat leaves the status of its
-descendants unknown. A missing record, a changed token, legacy evidence, or a
-platform without a supported boot probe produces a skip reason.
+Both commands inspect the current user's store across workspaces. Preview is
+read-only and exits 0 after listing findings. `eligible` means Windows verified
+a reboot on the same machine after the job's latest attempt. A dead worker or
+an old heartbeat alone leaves the lock in place because a descendant can still
+be running. If the job or its lock lacks boot evidence for the latest attempt,
+the job shows `skipped` with a reason. This includes records written before Exoma
+started storing boot identities.
 
-Recovery preserves the job ID and history. An abandoned running job becomes
-failed. An existing failed job keeps its error, output and completion time.
-Both record a verified reboot. Apply prints remaining update admission blockers
-and exits 1 for a blocker or a failed repair. Preview exits 0 after reporting findings.
+During apply, Exoma rereads the job and session lock under the same guards used
+for status changes. If the job ID, session or ownership token has changed, it
+skips the job. For a verified recovery, Exoma marks an abandoned `running` job
+as `failed` with a recovery reason. A job already marked `failed` keeps its
+original error, output and completion time. Exoma saves the reboot audit before
+releasing the matching lock. A repeat run preserves that history.
+
+The final `Update blocker` lines identify jobs, locks or an update reservation
+that still block an update. Apply exits 1 if a blocker remains or a repair
+fails. A skipped job can coexist with exit 0 when the update checks find no
+blockers and every attempted repair succeeds.
 
 Delegated commands automatically run through a separate worker. On Claude Code, the runner
 must be launched as a background tool task so the foreground tool call immediately
