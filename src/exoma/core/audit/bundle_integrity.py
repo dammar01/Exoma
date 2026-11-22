@@ -599,7 +599,9 @@ def _host_status(home: Path | None = None) -> dict:
             missing.append("~/.config/opencode/AGENTS.md (EXOMA-OPENCODE-HOST block)")
         for rel in ("plugins/exoma.js", "exoma/CONTRACT.md", "exoma/hooks/opencode-host.py",
                     "exoma/hooks/workflow_policy.py", "skills/exoma-doctor/SKILL.md",
-                    "commands/exoma-doctor.md"):
+                    "commands/exoma-doctor.md", "commands/exoma-verify-browser.md",
+                    "skills/exoma-verify-browser-interview/SKILL.md",
+                    "skills/exoma-verify-browser-interactive-and-tags/SKILL.md"):
             if not (opencode / rel).is_file():
                 missing.append("~/.config/opencode/" + rel)
         result["hosts"]["opencode"] = {"missing": missing, "plugin_load": "restart opencode after an install"}

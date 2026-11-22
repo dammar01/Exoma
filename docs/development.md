@@ -121,3 +121,40 @@ A failure found in staging is fixed in Exoma, never patched inside agent-workflo
 Research records stay in agent-workflow. This repository carries no `docs/research/`; local
 drafts may live in the git-ignored `docs/research-drafts/`, and tracked files never link
 there.
+
+## Reproducing the host checks
+
+Install baseline and candidate separately under fresh temporary homes. Match host version,
+model, project instructions, fixture origin, settings, and command arguments. On Claude, save
+`/context` at startup and after the ready browser path. On OpenCode, inspect the actual
+slash-command expansion and native skill tool results. Record which reference body was loaded,
+the verdict, assertion coverage, and any compaction. Keep character counts separate from host
+token measurements. Compare a ready run with setup and approval branches independently.
+
+For Claude timeout calibration, use a scratch project and separate synthetic sessions. Run one
+SessionStart command that exits immediately, one that sleeps beyond its one-second hook
+timeout, and one interrupted before its deadline. Inspect only those fixture transcripts.
+Record the host version, attachment type, boolean timeout flag and timestamp shape before
+extending the supported schema. Exercise the reader with
+`python tests/run.py --only claude-hook-timeouts --only session-retention`.
+
+A paired Windows capture on 2026-11-22 used Claude Code 2.1.330, the same Sonnet model ID,
+separate temporary installs, the same local two-step Chromium fixture, and deterministic
+local model responses. Claude's own `/context` reported the following rounded estimates.
+The configuration included the same 13.1k-token ancestor instruction file in both sessions.
+
+| Checkpoint | Baseline `913c625` | W1 candidate based on `aba6587` |
+| --- | ---: | ---: |
+| Fresh session | 40.3k | 36.2k |
+| After ready-path browser verification | 58.5k | 46.3k |
+
+Both sessions loaded the browser core and exercised both fixture steps. The candidate loaded
+zero continuation bodies. An OpenCode 1.19.3 run on the same candidate delivered the core
+through the armed slash command, wrote the request and dispatched the runner, also with two
+passing Chromium steps and zero continuation loads. These are host/fixture observations.
+The scripted model responses do not measure production model choices or billed usage.
+
+For conditional OpenCode browser branches, check the native skill result at the next model
+request. The plugin checks the selected managed directory and the SHA-256 of the installed
+reference. It rebuilds the response from that reference. A mismatch returns the incomplete
+branch message and drops native attachments, output links and metadata.

@@ -1681,3 +1681,18 @@ browser runner and never read back: `session.json` (session, command, status, ph
 for a browser run `e2e/events.jsonl` (scrubbed like the stored events), `e2e/last.png`, and
 the run's `report.json`, `verification.md`, `evidence.md`. A newer dispatch takes it over and
 an older session stops writing into it.
+
+## Host diagnostic observations
+
+`checks.claude_hook_timeouts` samples up to eight recent Claude bindings for the workspace, including launches in a
+subdirectory of the same repository. A nested repository or worktree has its own boundary. It reads up to 256 KiB of complete JSONL lines from the tail of each transcript
+under the installed Claude projects directory. The seven-day count deduplicates session/event
+IDs. Claude Code 2.1.330 supplies a timestamped attachment with type `hook_cancelled` and
+boolean `timedOut`. Cancellations without the timeout flag do not count. A complete zero requires recognizable records from the calibrated
+version. Malformed attachments alone leave the count unknown. Other versions, unavailable bindings, unreadable files,
+malformed lines and clipped tails are identified as unknown, unavailable or partial observations.
+This check exports counts and timestamps. Transcript contents remain local to the reader.
+
+`checks.graphify_instruction_conflict` reports file and line for affirmative post-edit
+instructions. It checks registration, launcher presence, the project graph, and availability of the graphify executable on PATH. Runtime hook
+execution and host trust remain unconfirmed. Partial results can still contain confirmed hits.

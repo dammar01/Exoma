@@ -33,3 +33,6 @@ actions: <a fix per MISSING/NOT SET item + disable/confirm a risky MCP> (empty �
 `checks.workspace_layout.layout_version` 1 → the workspace still has the 3.6 layout; relay the `{{CMD:upgrade}}` recommendation (migrates to `.workflow/data/`, backs up first). `stray_at_root` → name the unknown files at the `.workflow` root, do not delete them yourself.
 NOT_READY + workspace missing → "Run {{CMD:init}}". NEEDS_UPGRADE → run `{{CMD:upgrade}}`.
 exoma NOT INSTALLED → install it first (see {{CMD:init}} STEP 1).
+
+
+Report `checks.claude_hook_timeouts` with its sample status, window, count and latest time. A partial count covers only the observed rows. Unknown or unavailable observations cannot establish zero timeouts. For `checks.data_retention`, label partial byte totals as lower bounds. The optional `exoma session prune --work-dir <root>` preview groups sessions with their provider records and explains retention.

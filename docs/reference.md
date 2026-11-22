@@ -1354,8 +1354,8 @@ table differ, fix one of them in the same change.
 |---|---|---|---|
 | `init` | local | — | scaffold `.workflow/`; regenerate runner scripts |
 | `upgrade` | local | — | migrate the `.workflow/data/` layout, refresh the workspace, override-only config, preserve sessions |
-| `doctor` | local | — | readiness check, writes `reports/doctor.json`; recent pre-flight gate skips (the last 7 days of every session's `runtime/gate-skips.jsonl`, plus this project's rows in `~/.claude/gate-skips.jsonl`) are listed in `checks.gate_skips` with a recommended fix, never as an issue; a provider config it may not read (a sandboxed host denies the home directory) is an issue, `provider config unreadable: <path>`, listed in `checks.mcp_second_agent.unreadable`, never a crash |
-| `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays), old sessions |
+| `doctor` | local | — | readiness check, writes `reports/doctor.json`; recent pre-flight gate skips (a seven-day sample of up to 512 session entries in filesystem order, up to 64 local logs plus this project's rows in `~/.claude/gate-skips.jsonl`, and the last 256 KiB per log. Caps and read errors mark the sample partial. Malformed rows are skipped) are listed in `checks.gate_skips` with a recommended fix, never as an issue; a provider config it may not read (a sandboxed host denies the home directory) is an issue, `provider config unreadable: <path>`, listed in `checks.mcp_second_agent.unreadable`, never a crash |
+| `clean` | local | — | prune jobs, stale/duplicate facts, runtime-lock guards of sessions with no live lock (`sessions/<id>/runtime/lock.guard`; a guard currently held by another process stays). All session directories and provider session records are retained |
 | `inspect` | local | — | list jobs for the current session |
 | `provider` | local | — | read/change the second_agent provider and reasoning effort; picker with no arguments, direct with `<provider> <model> [effort] [routes]` |
 | `report` | local | — | summary of the workspace quality stream (`quality.jsonl`), including `e2e` (runs), `e2e.drafts` (drafts), and `graph_refresh` (Stop hook graph cost per outcome), and from `usage.jsonl`: `evidence_reuse` (explore/analyze/plan commands served by a stored artifact divided by commands eligible for reuse, continuations counted once; `by_outcome` breaks it down per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, and `unrecorded` for rows before contract v3), `facts` (fact lifecycle summed per exploration/reasoning command: `candidates`, `injected`, `rejected_stale`, `rejected_irrelevant`, `ingested`, `ingest_rejected`, `injection_rate`, `stale_rate`; commands recorded before agent-workflow 3.9.0 count as `unrecorded_commands`), `provider_cache` (cached-input share of the provider's measured input: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; rows whose adapter does not report `resumed` are not included in the two thread buckets), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, and `thread_changed` = a resume call answered in a different thread, a sign the session lost state; rows before contract v3 are not counted), `by_effort` (per `<command>/<effort>`: command count, median duration, median input/output tokens — each median only from commands whose value was measured, unmeasured output is not counted as zero; `default` = no effort flag; rows before contract v3 are not counted), and `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); and from `tasks.jsonl`: `tasks` (see [Task telemetry](#task-telemetry)); and `provenance` (metric registry version, version of each `runtime.*` metric, tool commit, stream content hash — definitions in [`docs/evaluation/metrics.md`](evaluation/metrics.md)) |
@@ -2198,6 +2198,27 @@ must be in the project `.env`. Call meta records `env_policy`, `project_dotenv`,
 All adapter content and metadata, including errors, timeouts, bootstrap, probe, and
 `call.meta.json`, go through recursive redaction. Raw process arguments are not stored;
 telemetry only carries the count, length, and hash of argv.
+
+### Inspect session retention
+
+Run `exoma session prune --work-dir /path/to/project` to preview retention as JSON.
+The command works on an uninitialized project and does not create a workspace or an Exoma home.
+Doctor includes the category summary under `checks.data_retention`. Each category reports file
+count, logical bytes and oldest/newest observed file modification times (Unix seconds).
+
+The preview groups a session directory with its same-ID provider record. The newest 20 groups
+and groups with observed activity in the last seven days are retained. Older groups still lack
+a positive retirement signal. Broad `clean` also retains all session directories and provider records. Consequently this policy currently selects zero deletion targets.
+The preview includes the exact relative paths of each observed group, its bytes and retention
+reason. Known current sessions, indexed evidence, session artifacts and observed runtime locks
+carry additional protection labels. Other live writers, pins and diagnostic dependencies are
+covered by the conservative retention of every group. `targets`, `target_count` and
+`target_bytes` describe only selected targets. There is no apply action on this command.
+
+The scan stops at 10,000 entries, depth eight or a cooperative half-second time budget.
+Redirects and special files are skipped. A partial scan reports lower bounds. On legacy
+workspaces only named data roots are inventoried. Broad cleanup reports how many session directories and provider records it kept.
+A capped or incomplete count is marked as a lower bound.
 
 Clean up stale entries and duplicates:
 

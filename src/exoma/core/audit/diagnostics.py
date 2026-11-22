@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -136,10 +137,14 @@ _GRAPHIFY_NEGATION = re.compile(
     r"absent|not\s+exists|tidak\s+ada|bootstrap|initial|first\s+time|offer|tawarkan|\.graphifyignore)\b",
     re.IGNORECASE,
 )
-_GRAPHIFY_POST_EDIT = re.compile(
-    r"\b(?:auto[-\s]?run|always|after|setelah|every\s+code\s+change|code\s+change|perubahan\s+kode|"
-    r"run\s+`?graphify\s+update|jalankan\s+`?graphify\s+update)\b",
-    re.IGNORECASE,
+_GRAPHIFY_DIRECTIVE = re.compile(
+    r"^(?:[-*+]\s+|\d+[.)]\s+)?(?:after\b[^.!?]{0,80}?,\s*|setelah\b[^.!?]{0,80}?,\s*)?"
+    r"(?:always\s+|must\s+|selalu\s+)?(?:auto[- ]run|run|jalankan)\s+`?graphify\s+update\b",
+    re.I,
+)
+_GRAPHIFY_AFTER_EDIT = re.compile(
+    r"\b(?:(?:after|setelah|each|every)\s+(?:(?:every|each|a|code|source|file|kode)\s+){0,3}"
+    r"(?:edits?|editing|changes?|modifications?|perubahan)|post[- ]edit|perubahan\s+kode)\b", re.I,
 )
 _HOOK_LAUNCHERS = frozenset({"bash", "bash.exe", "sh", "sh.exe", "python", "python3", "python.exe", "py", "py.exe"})
 _GRAPH_REFRESH_SCRIPTS = frozenset({"graph-refresh.sh", "graph-refresh.py", "graph-refresh.ps1"})
@@ -297,6 +302,8 @@ def _claude_graph_refresh_hook_state() -> str:
         data = json.loads(settings_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "unavailable"
+    if isinstance(data, dict) and data.get("disableAllHooks") is True:
+        return "inactive"
     hooks = data.get("hooks") if isinstance(data, dict) else None
     stop_entries = hooks.get("Stop") if isinstance(hooks, dict) else None
     if not isinstance(stop_entries, list):
@@ -307,8 +314,12 @@ def _claude_graph_refresh_hook_state() -> str:
             continue
         for hook in sub:
             cmd = str(hook.get("command") or "") if isinstance(hook, dict) else ""
-            if _is_installed_graph_refresh_command(cmd, hooks_dir):
-                return "active"
+            if isinstance(hook, dict) and hook.get("type") == "command" and _is_installed_graph_refresh_command(cmd, hooks_dir):
+                for token, quoted in _split_hook_argv(cmd):
+                    if _matches_installed_graph_refresh_path(token, quoted, hooks_dir):
+                        script = hooks_dir / token.replace("\\", "/").rsplit("/", 1)[-1]
+                        if script.is_file() and not script.is_symlink():
+                            return "active"
     return "inactive"
 
 
@@ -316,25 +327,37 @@ def _graphify_instruction_conflict(project_root: Path) -> dict:
     """Detect project-owned instructions telling the agent to run post-edit `graphify update`
     while Exoma's Claude Stop hook already owns graph refresh. Read-only; never edits files."""
     hook_state = _claude_graph_refresh_hook_state()
+    if hook_state == "active" and not (project_root / "graphify-out" / "graph.json").is_file():
+        hook_state = "no_graph"
+    if hook_state == "active" and not shutil.which("graphify"):
+        hook_state = "no_graphify"
     checked: list[str] = []
     unreadable: list[str] = []
+    truncated: list[str] = []
     conflicts: list[dict] = []
     if hook_state != "active":
         return {
             "status": "unavailable" if hook_state == "unavailable" else "inactive_hook",
             "stop_hook": hook_state,
+            "hook_execution": "unconfirmed",
             "checked_files": checked,
             "conflicts": conflicts,
         }
     for rel in _GRAPHIFY_INSTRUCTION_FILES:
         path = project_root / rel
-        if not path.is_file():
-            continue
         try:
+            if not stat.S_ISREG(path.lstat().st_mode) or path.parent.is_symlink():
+                unreadable.append(rel)
+                continue
             with path.open("rb") as fh:
-                raw = fh.read(_GRAPHIFY_SCAN_MAX_BYTES)
-            text = raw.decode("utf-8", errors="replace")
-        except OSError:
+                raw = fh.read(_GRAPHIFY_SCAN_MAX_BYTES + 1)
+            if len(raw) > _GRAPHIFY_SCAN_MAX_BYTES:
+                truncated.append(rel)
+                raw = raw[:_GRAPHIFY_SCAN_MAX_BYTES].rpartition(b"\n")[0]
+            text = raw.decode("utf-8")
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
             unreadable.append(rel)
             continue
         checked.append(rel)
@@ -347,19 +370,37 @@ def _graphify_instruction_conflict(project_root: Path) -> dict:
                 first_line = text[:start_idx].count("\n") + 1
                 span = managed.count("\n") + 1
                 managed_lines = set(range(first_line, first_line + span))
+        fence = ""
+        in_comment = False
         for lineno, line in enumerate(text.splitlines(), 1):
+            line = line.strip()
             if lineno in managed_lines:
+                continue
+            if fence:
+                if len(line) >= len(fence) and not line.strip(fence[0]):
+                    fence = ""
+                continue
+            marker = re.match(r"^(`{3,}|~{3,})", line)
+            if marker:
+                fence = marker[1]
+                continue
+            if in_comment or "<!--" in line:
+                in_comment = "-->" not in line
                 continue
             if "graphify update" not in line.lower():
                 continue
             if _GRAPHIFY_NEGATION.search(line):
                 continue
-            if _GRAPHIFY_POST_EDIT.search(line):
-                conflicts.append({"file": rel, "line": lineno, "excerpt": line.strip()[:160]})
+            if _GRAPHIFY_DIRECTIVE.search(line) and _GRAPHIFY_AFTER_EDIT.search(line):
+                conflicts.append({"file": rel, "line": lineno})
     status = "conflict" if conflicts else ("unavailable" if unreadable and not checked else "none")
+    if truncated or (unreadable and checked):
+        status = "partial"
     result = {
         "status": status,
         "stop_hook": hook_state,
+        "hook_execution": "unconfirmed",
+        "truncated_files": truncated,
         "checked_files": checked,
         "conflicts": conflicts,
     }
@@ -401,9 +442,9 @@ _GATE_BLOCK_RULES = frozenset({
 def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
     """Recent pre-flight gate skips for this project, or None when there are none.
 
-    Read from every session's runtime/gate-skips.jsonl and, for the delegations that could
-    not arm (no session binding, so no session dir), from ~/.claude/gate-skips.jsonl rows
-    whose root is this project. Unreadable rows are skipped; this never raises.
+    Sample up to 512 session entries in filesystem order, up to 64 local logs and the
+    project-filtered shared log. Each tail is limited to 256 KiB over seven days.
+    A cap or read error marks the sample partial. Malformed rows are skipped.
     """
     import json as _json
 
@@ -413,24 +454,48 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
     own_digest = hashlib.sha256(canonical_root.encode("utf-8")).hexdigest()
     files: list[tuple[Path, bool]] = []
     sessions = Path(data_dir) / "sessions"
+    partial = False
     try:
-        files += [(p, False) for p in sessions.glob(f"*/runtime/{GATE_SKIPS_FILE}")]
-    except OSError:
+        with os.scandir(sessions) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 512:
+                    partial = True
+                    break
+                if entry.is_dir(follow_symlinks=False):
+                    path = Path(entry.path) / "runtime" / GATE_SKIPS_FILE
+                    if path.is_file():
+                        if len(files) >= GATE_BLOCKS_MAX_FILES:
+                            partial = True
+                            break
+                        files.append((path, False))
+    except FileNotFoundError:
         pass
+    except OSError:
+        partial = True
     files.append((Path(os.path.expanduser("~")) / ".claude" / GATE_SKIPS_FILE, True))
     by_reason: dict[str, int] = {}
     by_hook: dict[str, dict[str, int]] = {}
     latest = None
     for path, shared in files:
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            with path.open("rb") as stream:
+                size = stream.seek(0, os.SEEK_END)
+                stream.seek(max(0, size - GATE_BLOCKS_MAX_BYTES_PER_FILE))
+                raw = stream.read(GATE_BLOCKS_MAX_BYTES_PER_FILE)
+            if size > GATE_BLOCKS_MAX_BYTES_PER_FILE:
+                partial = True
+                raw = raw.partition(b"\n")[2]
+            lines = raw.decode("utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            continue
         except OSError:
+            partial = True
             continue
         for line in lines:
             try:
                 row = _json.loads(line)
                 at = datetime.fromisoformat(str(row.get("at")))
-            except (ValueError, TypeError, AttributeError):
+            except (ValueError, TypeError, AttributeError, RecursionError):
                 continue
             if at.tzinfo is None:
                 at = at.replace(tzinfo=timezone.utc)
@@ -449,9 +514,10 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
             hook_reasons[reason] = hook_reasons.get(reason, 0) + 1
             if latest is None or at > latest:
                 latest = at
-    if not by_reason:
+    if not by_reason and not partial:
         return None
     return {
+        "status": "partial" if partial else "complete",
         "count": sum(by_reason.values()),
         "by_reason": by_reason,
         "by_hook": by_hook,
@@ -925,14 +991,19 @@ def run_doctor(
             "fix provider_command in .workflow/second_agent.json"
         )
 
+    from exoma.core.audit.claude_hook_timeouts import claude_hook_timeouts
+    from exoma.core.audit.retention import retention_report
+
+    checks["claude_hook_timeouts"] = claude_hook_timeouts(project_root)
+    checks["data_retention"] = retention_report(project_root)
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
     graphify_conflict = _graphify_instruction_conflict(project_root)
     checks["graphify_instruction_conflict"] = graphify_conflict
-    if graphify_conflict["status"] == "conflict":
+    if graphify_conflict["conflicts"]:
         locations = ", ".join(f"{c['file']}:{c['line']}" for c in graphify_conflict["conflicts"][:5])
         recommended_fixes.append(
             f"Project instruction conflict with Exoma's Stop hook `graph-refresh` at {locations}: "
-            "Exoma's Stop hook already runs post-edit `graphify update`; remove or narrow that "
+            "Exoma's configured Stop hook also requests post-edit `graphify update`; remove or narrow that "
             "project instruction by hand to avoid duplicate refreshes"
         )
 
@@ -1661,56 +1732,29 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
     }
 
 
-def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -> dict:
-    """Delete per-session dirs older than ttl_days, always keeping the newest keep_last.
-    Recent (active) sessions survive the TTL, so this never reaps a live session."""
+def retained_session_entries(project_root: Path) -> dict:
+    """Count retained session directories and provider records without opening their contents."""
     paths = workflow_paths(project_root)
-    sessions_dir = paths["sessions_dir"]
-    provider_dir = paths["provider_sessions_dir"]
-    if not sessions_dir.exists() and not provider_dir.exists():
-        return {"removed": 0, "kept": 0}
-    dirs = sorted(
-        (
-            (p for p in sessions_dir.iterdir() if p.is_dir())
-            if sessions_dir.exists()
-            else ()
-        ),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
-    removed = 0
-    for index, path in enumerate(dirs):
-        if index < keep_last:
-            continue
+    kept = 0
+    partial = False
+    for key in ("sessions_dir", "provider_sessions_dir"):
         try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-            if mtime < cutoff:
-                shutil.rmtree(path, ignore_errors=True)
-                removed += 1
+            directory = paths[key]
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                partial = True
+                continue
+            with os.scandir(directory) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= 10000:
+                        partial = True
+                        break
+                    if key == "sessions_dir":
+                        kept += entry.is_dir(follow_symlinks=False)
+                    elif entry.name.endswith(".json"):
+                        kept += entry.is_file(follow_symlinks=False)
+        except FileNotFoundError:
+            continue
         except OSError:
-            continue
-    provider_files = sorted(
-        (
-            (p for p in provider_dir.glob("*.json") if p.is_file())
-            if provider_dir.exists()
-            else ()
-        ),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    provider_removed = 0
-    for index, path in enumerate(provider_files):
-        if index < keep_last:
-            continue
-        try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-            if mtime < cutoff:
-                path.unlink()
-                provider_removed += 1
-        except OSError:
-            continue
-    return {
-        "removed": removed + provider_removed,
-        "kept": min(len(dirs), keep_last) + min(len(provider_files), keep_last),
-    }
+            partial = True
+    return {"removed": 0, "kept": kept, "kept_is_lower_bound": partial}

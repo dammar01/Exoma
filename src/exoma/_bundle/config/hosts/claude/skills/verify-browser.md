@@ -47,9 +47,12 @@ Handle result:
   - `blocked` (`playwright_missing` | `browser_missing` | `base_url_unreachable` | `spec_invalid` URL policy) → fix environment or run STEP 1 interview (`{{SKILL_REF:verify-browser/interview.md}}`).
   - `env_missing` or `read_only_approval_required` (`read_only_pending`) → read `{{SKILL_REF:verify-browser/interactive-and-tags.md}}` (STEP 4–5).
   - `invalid` → report `errors` + `meta.e2e.diagnosis` (`first_error`, `categories`, `repair`), fix task/context, and rerun `auto` (editing `draft.json` alone never affects `auto`).
-- `meta.e2e.knowledge.offered > 0` → note `"uses N knowledge entries from earlier runs"` (never claim used when `offered == 0`).
+- `meta.e2e.knowledge.offered > 0` → report how many entries were offered; actual use needs separate evidence.
 
 ## Conditional references (load ONLY on these branches)
+<!-- HOST:opencode:START -->
+Use the native skill tool with the exact reference name below only after dispatch. The Exoma plugin checks the selected directory and installed content before returning a managed reference. If the reference is missing, denied, or shadowed, report the branch as incomplete and stop. Read the ready-path instructions above directly.
+<!-- HOST:opencode:END -->
 - Unconfigured/unreachable target needing setup interview (STEP 1) → `{{SKILL_REF:verify-browser/interview.md}}`
 - `[BROWSER TEST PLAN]` format, `env_missing` / `read_only_pending` / `destructive_pending` approvals, `permissions.json`, STEP 5 resume, STEP 6 `data-e2e` tags, or browser knowledge/promotion → `{{SKILL_REF:verify-browser/interactive-and-tags.md}}`
 

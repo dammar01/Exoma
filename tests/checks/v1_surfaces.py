@@ -219,6 +219,49 @@ def _test_opencode_host_contract() -> None:
         assert_true("deny" in denied, "a prompt wrapped in quotes (opencode run on Windows) still arms the gate")
 
 
+def _check_continuation_results(home, oc, env):
+    # Exercise the installed JS callback with the native skill result shape.
+    module = home / "fixture.mjs"
+    shutil.copyfile(oc / "plugins/exoma.js", module)
+    script = """
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { ExomaHost } from './fixture.mjs'
+const after = (await ExomaHost({ directory: process.cwd() }))['tool.execute.after']
+for (const suffix of ['interview', 'interactive-and-tags']) {
+  const name = 'exoma-verify-browser-' + suffix
+  const dir = path.resolve('.config/opencode/skills', name)
+  const file = path.join(dir, 'SKILL.md')
+  const original = fs.readFileSync(file)
+  async function result(selected) {
+    const output = { metadata: { name, dir: selected, outputPath: 'sample.txt' },
+                     title: 'fixture', output: 'native placeholder', attachments: ['fixture'] }
+    await after({ tool: 'skill', args: { name } }, output)
+    assert.equal(output.attachments, undefined)
+    assert.equal(output.metadata.outputPath, undefined)
+    return output.output
+  }
+  assert.equal(await result(dir), original.toString().replaceAll('\\r\\n', '\\n'))
+  assert.match(await result(process.cwd()), /incomplete/)
+  try {
+    fs.appendFileSync(file, 'local edit')
+    assert.match(await result(dir), /incomplete/)
+    fs.unlinkSync(file)
+    assert.match(await result(dir), /incomplete/)
+  } finally {
+    fs.writeFileSync(file, original)
+  }
+}
+const other = { output: 'ordinary skill result' }
+await after({ tool: 'skill', args: { name: 'exoma-plan' } }, other)
+assert.deepEqual(other, { output: 'ordinary skill result' })
+"""
+    result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script], cwd=home,
+                            env=env, capture_output=True, text=True, timeout=30, **no_console())
+    assert_true(result.returncode == 0, result.stderr)
+
+
 def _test_opencode_host_install() -> None:
     with tempfile.TemporaryDirectory(prefix="exoma-opencode-install-") as tmp:
         home = Path(tmp)
@@ -245,6 +288,8 @@ def _test_opencode_host_install() -> None:
                     "OpenCode host and provider blocks share AGENTS.md")
         plugin = (oc / "plugins" / "exoma.js").read_text(encoding="utf-8")
         assert_true("{{" not in plugin and "opencode-host.py" in plugin, "the plugin is rendered with real paths")
+        if shutil.which("node"):
+            _check_continuation_results(home, oc, env)
         assert_true((home / ".claude" / "exoma" / "second-agent.md").is_file(),
                     "the claude second-agent contract is installed as its own file")
         claude_md = home / ".claude" / "CLAUDE.md"
@@ -260,6 +305,13 @@ def _test_opencode_host_install() -> None:
         status = _host_status(home)
         assert_true("opencode" in status["chosen"] and status["hosts"]["opencode"]["missing"] == [],
                     f"doctor recognizes a complete OpenCode host: {status}")
+        ref = oc / "skills" / "exoma-verify-browser-interview" / "SKILL.md"
+        reference = ref.read_bytes()
+        ref.unlink()
+        missing_ref = _host_status(home)["hosts"]["opencode"]["missing"]
+        assert_true("~/.config/opencode/skills/exoma-verify-browser-interview/SKILL.md" in missing_ref,
+                    "doctor identifies an unavailable conditional browser reference")
+        ref.write_bytes(reference)
         doctor_command = oc / "commands" / "exoma-doctor.md"
         saved_doctor = doctor_command.read_text(encoding="utf-8")
         doctor_command.unlink()

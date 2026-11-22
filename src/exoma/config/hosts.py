@@ -212,7 +212,7 @@ SKILL_REF_TOKEN = re.compile(r"\{\{SKILL_REF:([a-z][a-z0-9_-]*)/([a-z0-9_.-]+\.m
 
 
 def skill_ref_path(host: str, skill: str, filename: str) -> str:
-    """Installed path (or in-skill section for OpenCode) of a conditional skill reference `.md`."""
+    """Installed path (or native OpenCode skill name) of a conditional skill reference `.md`."""
     if skill not in COMMAND_IDS or "/" in filename or "\\" in filename or ".." in filename:
         raise ValueError(f"invalid skill reference: {skill}/{filename}")
     if host == "claude":
@@ -222,7 +222,7 @@ def skill_ref_path(host: str, skill: str, filename: str) -> str:
     if host == "codex":
         return f"~/.codex/skills/exoma-{skill}/references/{filename}"
     if host == "opencode":
-        return f'the bundled "{skill}/{filename}" section below'
+        return f"exoma-{skill}-{filename.removesuffix('.md')}"
     raise ValueError(f"unknown host: {host}")
 
 

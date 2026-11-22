@@ -894,11 +894,20 @@ def opencode_host_hook_path(home: Path | None = None) -> Path:
     return base / "exoma" / "hooks" / "opencode-host.py"
 
 
-def _opencode_text(text: str, key: str) -> str:
+def _opencode_text(text: str, key: str, project_root: Path | None, only_command: bool) -> str:
     """Shared Claude workflow text as an OpenCode contract or skill; the plugin shim with
     this machine's interpreter and hook path, as JSON string literals."""
     if key == OPENCODE_PLUGIN:
-        return (text.replace("{{PYTHON_JSON}}", json.dumps(Path(sys.executable).as_posix()))
+        continuations = {}
+        for source, skill, filename in _claude_skill_references():
+            if skill == "verify-browser" and filename in ("interview.md", "interactive-and-tags.md"):
+                name = host_profiles.skill_ref_path("opencode", skill, filename)
+                skill_key = f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"
+                rendered = _render_text(source, skill_key, project_root, only_command)
+                continuations[name] = {"dir": (opencode_home() / "skills" / name).as_posix(),
+                                       "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()}
+        return (text.replace("{{CONTINUATIONS_JSON}}", json.dumps(continuations))
+                .replace("{{PYTHON_JSON}}", json.dumps(Path(sys.executable).as_posix()))
                 .replace("{{HOOK_JSON}}", json.dumps(opencode_host_hook_path().as_posix())))
     if key == OPENCODE_CONTRACT:
         return _host_contract(text, "opencode")
@@ -906,21 +915,9 @@ def _opencode_text(text: str, key: str) -> str:
         text = _host_skill(text, "opencode")
         if _is_skill_entry(key):
             name = key[len(OPENCODE_SKILLS_PREFIX):].split("/", 1)[0]
-            skill_stem = name.removeprefix("exoma-")
-            # OpenCode's bundled project policy denies `external_directory`, so conditional
-            # references are inlined into the native skill loaded through the `skill` tool.
-            refs = [
-                (ref_path, ref_filename)
-                for ref_path, ref_skill, ref_filename in _claude_skill_references()
-                if ref_skill == skill_stem
-            ]
-            if refs:
-                chunks = [text.rstrip("\n")]
-                for ref_path, ref_filename in refs:
-                    ref_body = _host_skill(ref_path.read_text(encoding="utf-8"), "opencode").strip()
-                    chunks.append(f"\n\n---\n\n<!-- Bundled reference: {skill_stem}/{ref_filename} -->\n\n{ref_body}")
-                text = "".join(chunks) + "\n"
             text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
+            if name.removeprefix("exoma-") not in host_profiles.COMMAND_IDS:
+                return text  # Conditional reference, with no slash command of its own.
             text = text.replace("---\n\n", "---\n\nOpenCode host: the `" + name + "` skill is this workflow command. "
                                 "Follow the Exoma contract Exoma's plugin puts in your system prompt (read "
                                 "~/.config/opencode/exoma/CONTRACT.md only when it is not there) and use OpenCode "
@@ -936,17 +933,21 @@ def _opencode_command(text: str, name: str) -> str:
     The body opens with `$exoma-<name>` and the arguments: OpenCode sends the expanded
     template as the prompt, and the plugin's hook reads `$exoma-<name>` at its start as the
     command itself (arming a delegated gate, recording `-y`) exactly as if the user typed it.
-    The skill is loaded through the skill tool, not read from its path, which lies outside the
-    project and would ask for `external_directory` access."""
+    Browser verification carries its core directly so dispatch can proceed under the armed gate.
+    Other commands load their skills through the host tool."""
     description = ""
     for line in text.splitlines()[:6]:
         if line.startswith("description:"):
             description = line.partition(":")[2].strip().strip('"')
             break
+    if name == "exoma-verify-browser":
+        body = _host_skill(text, "opencode")
+    else:
+        body = f"Load the `{name}` skill with the skill tool and follow it exactly, with the arguments above."
     return (
         f"---\ndescription: {json.dumps(description or name, ensure_ascii=False)}\n---\n"
         f"${name} $ARGUMENTS\n\n"
-        f"Load the `{name}` skill with the skill tool and follow it exactly, with the arguments above.\n"
+        f"{body}\n"
     )
 
 
@@ -972,7 +973,7 @@ def _render_text(src: Path, key: str, project_root: Path | None, only_command: b
     if key.startswith(CODEX_HOST + "/"):
         text = _codex_text(text, key)
     if key.startswith(OPENCODE_HOST + "/"):
-        text = _opencode_text(text, key)
+        text = _opencode_text(text, key, project_root, only_command)
     return text
 
 
@@ -1787,12 +1788,17 @@ def _opencode_targets() -> list[tuple[Path, Path, str]]:
     for source in sorted((claude / "skills").glob("*.md")):
         name = "exoma-" + source.stem
         mapping.append((source, dest / "skills" / name / "SKILL.md", f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"))
+    for source, skill, filename in _claude_skill_references():
+        name = host_profiles.skill_ref_path("opencode", skill, filename)
+        mapping.append((source, dest / "skills" / name / "SKILL.md", f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"))
     skills = {source.stem for source in (claude / "skills").glob("*.md")}
     for source in sorted((claude / "commands").glob(".*.md")):
         stem = source.name[1:-len(".md")]
         if stem not in skills:
             continue  # a command with no skill behind it would run nothing
         name = "exoma-" + stem
+        if stem == "verify-browser":
+            source = claude / "skills" / f"{stem}.md"
         mapping.append((source, dest / "commands" / f"{name}.md", f"{OPENCODE_COMMANDS_PREFIX}{name}.md"))
     # Last: the plugin is what switches the gates on, so it lands after what it calls.
     mapping.append((opencode / "exoma.js", dest / "plugins" / "exoma.js", OPENCODE_PLUGIN))

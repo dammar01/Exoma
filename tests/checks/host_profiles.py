@@ -160,33 +160,30 @@ def _test_contract_renders_per_host():
         assert_true("{{SKILL_REF:" not in vb_text, f"{host}: unresolved SKILL_REF token in verify-browser")
         for invariant in ("CONFIG_ONLY_SETTINGS", "E2E_USER", "permissions.json", "allow_side_effects: true", "blocked_requests"):
             assert_true(invariant in vb_text, f"{host}: safety invariant {invariant!r} missing from verify-browser")
+        assert_true(len(vb_text) < 15000, f"{host}: verify-browser core exceeds 15k characters")
         if host == "opencode":
-            # OpenCode's bundled project policy denies external_directory, so conditional
-            # references are bundled inside exoma-verify-browser/SKILL.md instead of separate files.
-            assert_true("Bundled reference: verify-browser/interview.md" in vb_text
-                        and "Bundled reference: verify-browser/interactive-and-tags.md" in vb_text
-                        and "STEP 1 — Interview" in vb_text and "STEP 6 — Element tags" in vb_text,
-                        "opencode: verify-browser SKILL.md bundles conditional references inline")
-            assert_true("~/.config/opencode/skills/exoma-verify-browser/references/" not in vb_text,
-                        "opencode: verify-browser never requires external_directory reads")
-            assert_true(not any("/references/" in k for _s, _d, k in targets),
-                        "opencode: targets emit no separate external reference files")
-            leaks = [word for word in CLAUDE_ONLY if word in vb_text]
-            assert_true(not leaks, f"opencode: Claude-only text leaked into bundled verify-browser: {leaks}")
-        else:
-            assert_true(len(vb_text) < 15000, f"{host}: core verify-browser should stay compact (<15k), got {len(vb_text)}")
-            for ref_name in ("interview.md", "interactive-and-tags.md"):
-                ref_src = BUNDLE / "hosts" / "claude" / "skills" / "verify-browser" / ref_name
-                ref_entries = [(s, d, k) for s, d, k in targets if s == ref_src]
-                assert_true(len(ref_entries) == 1, f"{host}: target includes verify-browser/{ref_name}")
-                ref_text = base._render_text(ref_src, ref_entries[0][2], None)
-                assert_true("{{SKILL_REF:" not in ref_text and "{{CMD:" not in ref_text,
-                            f"{host}: reference {ref_name} renders cleanly without unresolved tokens")
-                assert_true(not ref_text.startswith("---\n"),
-                            f"{host}: reference {ref_name} must not have SKILL.md frontmatter")
-                if host != "claude":
-                    leaks = [word for word in CLAUDE_ONLY if word in ref_text]
-                    assert_true(not leaks, f"{host}: Claude-only text leaked into reference {ref_name}: {leaks}")
+            slash = next((s, k) for s, _, k in targets if k.endswith("/commands/exoma-verify-browser.md"))
+            command = base._render_text(slash[0], slash[1], None)
+            assert_true("CONFIG_ONLY_SETTINGS" in command and "Load the `exoma-verify-browser` skill" not in command,
+                        "armed browser command carries its own core")
+            assert_true("missing, denied, or shadowed" in command and "plugin checks the selected directory" in command,
+                        "host handles unavailable and duplicate native references explicitly")
+        for ref_name in ("interview.md", "interactive-and-tags.md"):
+            ref_src = vb_src.parent / "verify-browser" / ref_name
+            entries = [(s, d, k) for s, d, k in targets if s == ref_src]
+            assert_true(len(entries) == 1, f"{host}: one managed target for {ref_name}")
+            _, dest, key = entries[0]
+            ref_text = base._render_text(ref_src, key, None)
+            assert_true(ref_src.read_text(encoding="utf-8").splitlines()[0] not in vb_text,
+                        f"{host}: ready path excludes {ref_name} body")
+            assert_true("{{SKILL_REF:" not in ref_text and "{{CMD:" not in ref_text, f"{host}: unresolved ref")
+            assert_true(ref_text.startswith("---\n") == (host == "opencode"), f"{host}: reference frontmatter")
+            if host == "opencode":
+                name = hosts.skill_ref_path(host, "verify-browser", ref_name)
+                assert_true(dest.parent.name == name and f"name: {name}\n" in ref_text, "native ref name")
+            if host != "claude":
+                assert_true(not any(word in ref_text or word in vb_text for word in CLAUDE_ONLY),
+                            f"{host}: Claude-only text leaked")
         contract_text = _render(host, False)
         assert_true(len(contract_text) < 35000,
                     f"{host}: rendered contract should stay well below 35k chars, got {len(contract_text)}")

@@ -232,12 +232,16 @@ from tests.checks.workspace import (  # noqa: E402
     _test_project_session_isolation,
     _test_workspace_release_guards,
 )
+from tests.checks.claude_hook_timeouts import check_timeout_observation
+from tests.checks.session_retention import check_retention_preview
 from tests.scenario import run_tests  # noqa: E402
 
 # name -> (callable, one-line description). `scenario` runs the standalone checks itself
 # at the end of its own sequence, so a default run does not repeat them here.
 SUITES: dict[str, tuple] = {
     "scenario": (run_tests, "stateful sequence + every standalone check (the full run)"),
+    "claude-hook-timeouts": (check_timeout_observation, "bounded, project-bound host timeout observations"),
+    "session-retention": (check_retention_preview, "session preview remains read-only at the CLI"),
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
     "research-parser-regressions": (_test_research_parser_regressions, "P01-P12: preserve findings while accepting supported empty-section forms"),
     "research-gate-regressions": (_test_research_gate_regressions, "G01-G04: session authorization, literal command data, and directory scope"),

@@ -505,6 +505,7 @@ def _check_doctor_and_clean_read_the_lock() -> None:
         fake_home = root / "agent-home"
         (fake_home / ".claude").mkdir(parents=True)
         saved_agent_home = os.environ.get("AGENT_HOME")
+        saved_path = os.environ["PATH"]
         os.environ["AGENT_HOME"] = str(fake_home)
         try:
             proj_claude = workspace / "CLAUDE.md"
@@ -544,6 +545,9 @@ def _check_doctor_and_clean_read_the_lock() -> None:
             )
             os.environ["AGENT_HOME"] = str(spaced_home)
             from exoma.core.audit.diagnostics import _claude_graph_refresh_hook_state
+            assert_true(_claude_graph_refresh_hook_state() == "inactive", "missing launcher is inactive")
+            (spaced_home / ".claude/hooks").mkdir()
+            (spaced_home / ".claude/hooks/graph-refresh.sh").touch()
             assert_true(_claude_graph_refresh_hook_state() == "active",
                         f"quoted hook path with spaces recognized as active: {spaced_cmd}")
             os.environ["AGENT_HOME"] = str(fake_home)
@@ -553,6 +557,15 @@ def _check_doctor_and_clean_read_the_lock() -> None:
                 json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "bash ~/.claude/hooks/graph-refresh.sh"}]}]}}),
                 encoding="utf-8",
             )
+            (fake_home / ".claude/hooks").mkdir()
+            (fake_home / ".claude/hooks/graph-refresh.sh").touch()
+            from exoma.core.audit.diagnostics import _graphify_instruction_conflict
+            from unittest.mock import patch
+            with patch.dict(os.environ, {"PATH": str(fake_home)}):
+                unavailable = _graphify_instruction_conflict(workspace)
+                assert_true(unavailable["stop_hook"] == "no_graphify" and not unavailable["conflicts"],
+                            "a registered hook needs the graphify executable")
+            os.environ["PATH"] = str(_fake_bin(fake_home)) + os.pathsep + saved_path
             meta_clean = run_doctor(workspace, "does-not-exist", "graph-conflict")["meta"]
             c_clean = read_json_file(Path(meta_clean["doctor_report"]))["checks"]["graphify_instruction_conflict"]
             assert_true(c_clean["status"] == "none" and not c_clean["conflicts"],
@@ -579,9 +592,19 @@ def _check_doctor_and_clean_read_the_lock() -> None:
                 f"affirmative post-edit conflict reported read-only: {c_hit} fixes={meta_hit['recommended_fixes']}",
             )
 
+            examples = workspace / "CLAUDE.local.md"
+            examples.write_text("```sh\nRun graphify update after edits\n```\n"
+                                "Example: Run graphify update after edits.\n"
+                                "<!-- Run graphify update after edits -->\n", encoding="utf-8")
+            assert_true(len(_graphify_instruction_conflict(workspace)["conflicts"]) == 2, "ignore examples and comments")
+            with examples.open("a", encoding="utf-8") as stream:
+                stream.write(" " * (512 * 1024))
+            mixed = _graphify_instruction_conflict(workspace)
+            assert_true(mixed["status"] == "partial" and len(mixed["conflicts"]) == 2,
+                        "keep confirmed conflicts alongside truncated observations")
+            examples.unlink()
+
             # Unreadable project instruction file reports unavailable without appearing in checked_files.
-            from unittest.mock import patch
-            from exoma.core.audit.diagnostics import _graphify_instruction_conflict
             orig_open = Path.open
             def _deny_claude(self, *a, **kw):
                 if self == proj_claude:
@@ -596,6 +619,7 @@ def _check_doctor_and_clean_read_the_lock() -> None:
                 f"all-unreadable instruction files report unavailable: {c_unreadable}",
             )
         finally:
+            os.environ["PATH"] = saved_path
             if saved_agent_home is None:
                 os.environ.pop("AGENT_HOME", None)
             else:

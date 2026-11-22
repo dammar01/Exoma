@@ -323,11 +323,18 @@ def main(argv: list[str]) -> int:
     export.add_argument("--work-dir", default=None, help="project root (default: cwd)")
     export.add_argument("--out", default=None, help="zip path or directory (default: <data dir>/exports/)")
     export.add_argument("--no-transcript", action="store_true", help="leave the host transcript out")
+    prune = sub.add_parser("prune", help="preview session retention (read-only)")
+    prune.add_argument("--work-dir", default=None, help="project root (default: cwd)")
     args = parser.parse_args(argv)
 
     from exoma.core.workspace.workspace_paths import detect_project_root
 
     root = detect_project_root(args.work_dir or str(Path.cwd()))
+    if args.action == "prune":
+        from exoma.core.audit.retention import retention_report
+
+        print(json.dumps(retention_report(root, preview=True), indent=2))
+        return 0
     result = export_session(root, args.session_id, Path(args.out) if args.out else None,
                             include_transcript=not args.no_transcript)
     if not result["ok"]:

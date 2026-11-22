@@ -1,20 +1,35 @@
 // Exoma host plugin for OpenCode. Managed by Exoma (`exoma install opencode`); do not edit
 // by hand, an install replaces it.
 //
-// A thin shim: every decision is made by opencode-host.py, which imports the same
-// workflow_policy module as the Claude Code, Codex and Agy hosts, so a gate cannot behave
-// differently here. The shim only carries events across (JSON on stdin, JSON back).
-//
-//   chat.message                         -> UserPromptSubmit (binds the session, arms gates)
-//   experimental.chat.system.transform   -> System (session binding + intent hint)
-//   tool.execute.before                  -> PreToolUse (throws to refuse the call)
+// Python handles session binding and pre-tool policy. The native after-hook validates
+// conditional browser skills before their contents reach the conversation.
 //
 // A process started as Exoma's second agent (WORKFLOW_AGENT_ROLE=second_agent) gets no
 // hooks at all: the delegated call must not be gated as if it were the user's session.
 import { spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import { lstatSync, readFileSync, realpathSync } from "node:fs"
+import path from "node:path"
 
+const CONTINUATIONS = {{CONTINUATIONS_JSON}}
 const PYTHON = {{PYTHON_JSON}}
 const HOOK = {{HOOK_JSON}}
+
+function managedContinuation(name, metadata) {
+  const expected = CONTINUATIONS[name]
+  if (metadata?.name !== name || typeof metadata.dir !== "string" ||
+      !path.isAbsolute(metadata.dir) || path.relative(expected.dir, metadata.dir) !== "") return
+  const file = path.join(expected.dir, "SKILL.md")
+  try {
+    if (path.relative(expected.dir, realpathSync(metadata.dir)) !== "") return
+    const info = lstatSync(file)
+    if (!info.isFile() || info.size > 256 * 1024 || path.relative(file, realpathSync(file)) !== "") return
+    const source = readFileSync(file, "utf8").replace(/\r\n/g, "\n")
+    if (createHash("sha256").update(source).digest("hex") === expected.sha256) return source
+  } catch {
+    // Missing or unreadable managed file leaves this branch incomplete.
+  }
+}
 
 function call(event, payload) {
   try {
@@ -51,6 +66,17 @@ export const ExomaHost = async ({ directory }) => {
       if (!session || !output || !Array.isArray(output.system)) return
       const result = call("System", { session_id: session, cwd: directory })
       if (result.context) output.system.push(result.context)
+    },
+    "tool.execute.after": async (input, output) => {
+      if (input.tool !== "skill") return
+      const name = input.args?.name
+      if (!Object.hasOwn(CONTINUATIONS, name)) return
+      const source = managedContinuation(name, output.metadata)
+      // Retain only the managed response, including on mismatch or native output truncation.
+      for (const key of Object.keys(output)) delete output[key]
+      output.title = name
+      output.metadata = source ? { name, dir: CONTINUATIONS[name].dir } : {}
+      output.output = source ?? "Exoma browser continuation unavailable. Report this branch as incomplete and stop."
     },
     "tool.execute.before": async (input, output) => {
       const result = call("PreToolUse", {

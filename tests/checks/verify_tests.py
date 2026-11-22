@@ -56,6 +56,11 @@ def _verify(root: Path) -> tuple[dict, dict]:
 
 
 def _test_verify_runtime_tests() -> None:
+    from tests.checks.claude_hook_timeouts import check_timeout_observation
+    from tests.checks.session_retention import check_retention_preview
+
+    check_timeout_observation()
+    check_retention_preview()
     _check_verify_preparation()
     _check_prepare_unicode_git_path()
     _check_worker_selection()
@@ -349,6 +354,7 @@ _REVIEW_NO_CHECKS = _REVIEW.replace("- traced the change and its callers", "- no
 def _check_prepare_unicode_git_path() -> None:
     """The repository location must not change prepare's selection identity."""
     import subprocess
+
 
     with tempfile.TemporaryDirectory(prefix="verify-prepare-path-") as tmp:
         base = Path(tmp)
@@ -1774,7 +1780,7 @@ def _check_verify_reuse_identity() -> None:
         try:
             os.environ["SOME_OTHER_VAR"] = "changed"
             assert_true(verify(full), "a variable outside verify_reuse_env does not end the reuse")
-            os.environ["WORKFLOW_E2E_SMOKE"] = "1"
+            os.environ["WORKFLOW_E2E_SMOKE"] = "0" if saved["WORKFLOW_E2E_SMOKE"] == "1" else "1"
             assert_true(not verify(full), "a listed variable (WORKFLOW_*) that changes ends the reuse")
         finally:
             for key, value in saved.items():

@@ -17,6 +17,9 @@ if sys.version_info < (3, 11):
 # `_main().subprocess`, and tests/scenario.py patches `main.subprocess.Popen` to
 # intercept worker spawn. Deleting it breaks both, silently and at runtime only.
 # Inspect must bypass eager managers, including when invoked through the public CLI.
+if sys.argv[1:3] == ["session", "prune"]:
+    from exoma.core.audit.session_export import main as session_main
+    raise SystemExit(session_main(sys.argv[2:]))
 if sys.argv[1:2] == ["jobs"]:
     from exoma.core.jobs.clean_stale import main as jobs_main
     raise SystemExit(jobs_main(sys.argv[2:]))
@@ -35,7 +38,7 @@ from exoma.core.provider.executor import Executor
 from exoma.core.jobs.job_manager import JobManager
 from exoma.core.workspace.session_manager import SessionManager
 from exoma.utils.path_guard import safe_path_component
-from exoma.core.audit.diagnostics import prune_sessions, run_doctor, run_sweep
+from exoma.core.audit.diagnostics import retained_session_entries, run_doctor, run_sweep
 from exoma.core.workspace.runtime_lock import acquire_runtime_lock, release_runtime_lock
 from exoma.core.runtime.state import ensure_workflow_workspace
 from exoma.core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace, workspace_versions
@@ -580,9 +583,9 @@ def run(
         browser_knowledge = e2e_knowledge.prune(project_root)
         from exoma.core.workspace.runtime_lock import prune_runtime_guards
 
-        # Before the session sweep, so a guard is judged by its lock, not dropped with its dir.
+        # Transition guards have a separate liveness check from retained session data.
         guards = prune_runtime_guards(workflow_paths(project_root)["sessions_dir"])
-        sessions = prune_sessions(project_root)
+        sessions = retained_session_entries(project_root)
         from exoma.core.graph import graph_index
 
         # Only a lock no worker beats any more; a live refresh is never touched, and no
@@ -599,7 +602,7 @@ def run(
                 f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
                 f"browser knowledge kept {browser_knowledge['kept']}, dropped {browser_knowledge['removed']}; "
                 f"runtime guards removed {guards['removed']}, kept {guards['kept']}; "
-                f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
+                f"sessions removed {sessions['removed']}, kept {'at least ' if sessions['kept_is_lower_bound'] else ''}{sessions['kept']}"
             ),
             "meta": {**summary, "locks": locks, "graph_refresh_lock": graph_lock, "facts": facts, "e2e_knowledge": browser_knowledge, "runtime_guards": guards, "sessions": sessions},
         }

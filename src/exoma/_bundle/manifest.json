@@ -35,8 +35,8 @@
     },
     {
       "path": "hosts/claude/skills/doctor.md",
-      "sha256": "de64c9d776774f10ea1647a76d7f316418898d4982f1a771575fd37a186449ee",
-      "bytes": 2803,
+      "sha256": "c5e7d110a1136e4622bdd82dc57fe52a45e5a1d989006a232cb6cd7a373c8125",
+      "bytes": 3213,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -119,8 +119,8 @@
     },
     {
       "path": "hosts/claude/skills/verify-browser.md",
-      "sha256": "5cccdf3952f2cbe0a40bb7e9cf6c0d494935896a3a5540ff3b3fba9baf239240",
-      "bytes": 10072,
+      "sha256": "5452ad94e174cb8c2fa7a3b9b433589554aa3b39a3f44907e849811e680c74a5",
+      "bytes": 10441,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -546,8 +546,8 @@
     },
     {
       "path": "hosts/opencode/exoma.js",
-      "sha256": "559a48d7588defb6077f250409021273dcf9fcfecee924a07862f156345656d1",
-      "bytes": 2645,
+      "sha256": "6111b996302503f416aa3dc9f61d8c1c676d0532f5277977c2d5c34177938019",
+      "bytes": 3880,
       "merge": "replace",
       "component": "runtime"
     },
