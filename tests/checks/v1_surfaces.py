@@ -124,6 +124,12 @@ def _test_opencode_host_contract() -> None:
         assert_true(outside == {}, "a directory without .workflow/ is left alone")
 
         _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "/.explore where is X"})
+        oc_ref = home / ".config" / "opencode" / "skills" / "exoma-verify-browser" / "references" / "interview.md"
+        oc_ref.parent.mkdir(parents=True, exist_ok=True)
+        oc_ref.write_text("# interview ref\n", encoding="utf-8")
+        ref_allowed = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "read",
+                                                          "tool_input": {"filePath": str(oc_ref)}})
+        assert_true(ref_allowed == {}, f"OpenCode armed gate allows nested skill reference read: {ref_allowed}")
         denied = _opencode_hook(home, "PreToolUse", {"session_id": sid, "cwd": str(project), "tool_name": "grep",
                                                      "tool_input": {"pattern": "X"}})
         assert_true("[EXECUTION GATE]" in denied.get("deny", ""), "an armed delegation refuses gathering: %s" % denied)

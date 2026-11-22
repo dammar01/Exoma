@@ -1529,8 +1529,42 @@ def _check_doctor_verify_warnings() -> None:
                     not any("verify_test_commands" in i or "CLAUDE.md" in i for i in meta["issues"]),
                     f"both are warnings, never issues: {meta['issues']}",
                 )
+                report_checks = json.loads(Path(meta["doctor_report"]).read_text(encoding="utf-8"))["checks"]
+                size_check = report_checks.get("claude_md_size") or {}
+                assert_true(
+                    size_check.get("status") == "ok" and size_check.get("path") == str(claude_md)
+                    and size_check.get("managed_block_chars") == len(managed),
+                    f"doctor reports installed CLAUDE.md size breakdown: {size_check}",
+                )
             finally:
                 shutil.rmtree(root, ignore_errors=True)
+
+        # W4: exact historical header advertises --clean-legacy, and over-threshold CLAUDE.md warns cleanly.
+        root = _workspace([f'"{sys.executable}" -c'])
+        try:
+            rel = "hosts/claude/CLAUDE.md"
+            rendered = base._render_text(base.DIST_CONFIG / rel, rel, root)
+            managed = base._managed_block(rendered, *base.MARKERS[rel])
+            exact = "# Claude Code — Personal Global Config (v3.8.0)\n# Skills: ~/.claude/skills/   Memory: ~/.claude/memory/\n\n"
+            claude_md.write_text(exact + managed + "\n" + ("x" * 20000), encoding="utf-8")
+            meta = run_doctor(root, "does-not-exist", "doctor-size")["meta"]
+            fixes = meta["recommended_fixes"]
+            checks = json.loads(Path(meta["doctor_report"]).read_text(encoding="utf-8"))["checks"]
+            assert_true(any("--clean-legacy" in f and "by hand" in f for f in fixes),
+                        f"exact historical header offers --clean-legacy preview: {fixes}")
+            assert_true(checks["claude_md_size"]["status"] == "over_threshold"
+                        and checks["claude_md_size"]["user_chars"] >= 20000
+                        and any("advisory boundary" in f for f in fixes)
+                        and not any("advisory boundary" in i for i in meta["issues"]),
+                        f"over-threshold CLAUDE.md is a warning with breakdown, never an issue: {checks['claude_md_size']} {fixes}")
+            claude_md.unlink()
+            meta_absent = run_doctor(root, "does-not-exist", "doctor-absent")["meta"]
+            checks_absent = json.loads(Path(meta_absent["doctor_report"]).read_text(encoding="utf-8"))["checks"]
+            assert_true(checks_absent["claude_md_size"]["status"] == "absent"
+                        and not any("advisory boundary" in f for f in meta_absent["recommended_fixes"]),
+                        f"absent CLAUDE.md reports absent without noisy warning: {checks_absent['claude_md_size']}")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
     finally:
         base.HOME, base._ENV_CACHE = saved_installer
         for key, value in saved.items():

@@ -89,6 +89,14 @@ def _dist_files() -> list[str]:
             for p in sorted(skills.glob("*.md"))
             if p.is_file()
         ]
+        for subdir in sorted(p for p in skills.iterdir() if p.is_dir()):
+            if not (skills / f"{subdir.name}.md").is_file():
+                continue
+            paths += [
+                f"hosts/claude/skills/{subdir.name}/{p.name}"
+                for p in sorted(subdir.glob("*.md"))
+                if p.is_file()
+            ]
     commands = DIST_CONFIG / "hosts" / "claude" / "commands"
     if commands.is_dir():
         paths += [

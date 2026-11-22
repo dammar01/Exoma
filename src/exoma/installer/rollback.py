@@ -228,24 +228,31 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         print("  NOTE: that install was interrupted; undoing the steps it recorded.")
         print(f"  Any step it did not record still has its backup under {chosen}.")
     conflicts: list[str] = []
-    for item in entries:
+    pending_noop_indices: set[int] = set()
+    for idx, item in enumerate(entries):
         if not isinstance(item, dict) or not item.get("dest"):
             conflicts.append("receipt contains an invalid entry")
             continue
         dest = Path(item["dest"])
         backup = Path(item["backup"]) if item.get("backup") else None
         expected_post = item.get("post_sha256")
+        expected_pre = item.get("pre_sha256")
         actual_post = _file_sha256(dest)
         if item.get("action") == "remove":
             # A stale file the install deleted: undoing it means the path is still free.
             if actual_post is not None:
                 conflicts.append(f"{dest}: removed by that install, but a file is there again")
+        elif item.get("pending") is True and isinstance(expected_pre, str) and actual_post == expected_pre:
+            # A pending atomic replacement interrupted before rename never changed `dest`:
+            # already at the original hash, so skip restoring it while still flagging any
+            # unexpected third hash as a conflict.
+            pending_noop_indices.add(idx)
+            continue
         elif not isinstance(expected_post, str) or actual_post != expected_post:
             conflicts.append(
                 f"{dest}: destination changed "
                 f"(expected {expected_post or 'missing hash'}, found {actual_post or 'missing'})"
             )
-        expected_pre = item.get("pre_sha256")
         if backup is not None:
             backup_hash = _file_sha256(backup)
             if not isinstance(expected_pre, str) or backup_hash != expected_pre:
@@ -262,8 +269,9 @@ def _run_rollback(which: str | None, apply: bool) -> int:
             print(f"  !! {conflict}")
         return 2
 
-    restores = [i for i in entries if i.get("backup")]
-    deletes = [i for i in entries if not i.get("backup")]
+    active_entries = [item for idx, item in enumerate(entries) if idx not in pending_noop_indices]
+    restores = [i for i in active_entries if i.get("backup")]
+    deletes = [i for i in active_entries if not i.get("backup")]
     for item in restores:
         print(f"  restore  {item['dest']}")
     for item in deletes:

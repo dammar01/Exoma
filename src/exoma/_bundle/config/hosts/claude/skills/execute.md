@@ -57,48 +57,18 @@ normalized file keeps the identity) — a test that depends on them must be list
 A test run is evidence, not verification: `verification` stays `not_run` until {{CMD:verify}}.
 
 ## Post (runtime policy and next step)
-Close the execution first: bash '<work_dir>/.workflow/run.sh' execute-end{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'
-(When execute-begin returns `meta.selection_version=1`, add `--task-file '<selection-json-path>'`
-to this call. Write the JSON under this session's runtime directory. Example shape:
-`{"version":1,"execution_id":"<from execute-begin>","tier":"integration","reason":"Outcome crosses the host boundary","obligations":[{"id":"host-result","behavior":"Host receives the outcome","due":"verify","commands":["<exact integration command>"]}]}`.
-An empty obligation command list records a gap. With an older runtime, use the plain
-close call and list outstanding behaviors explicitly in the execution result.)
-(status `implemented`, verification `not_run`; a finished {{CMD:verify}} writes its verdict here).
-Its `meta.changed_files` lists what changed since execute-begin (Git tree snapshots, so edits the tree
-already carried are not counted) and `meta.outside_scope` those outside the plan's `files` — Bash
-writes included. Non-empty `outside_scope` → name each file in [EXECUTION RESULT] and say why it
-changed; never omit it. `null` = no Git snapshot: changed files unknown, say so.
-Use fresh `meta.policy` and `meta.next_step` from this response; do NOT read config.json
-again. Report `meta.config_warnings`. `next_step` is bound to the returned execution/session
-and has `automatic: false`: runtime has not started verification.
-[EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status
-true / `next_step.action=verify_prepare` → follow the verify skill; it owns the single
-local preparation step and the subsequent {{CMD:verify}} invocation. status: done|partial|blocked.
-Do NOT declare done before verify finishes.
-false (default) → do NOT auto-run {{CMD:verify}} (avoid heavy tests nobody asked for). REQUIRED:
-  verification: not_run
-  status: implemented | partial | blocked  ← "done" is FORBIDDEN
-  then offer "{{CMD:verify}} now?"
-"implemented" ≠ "done". Without verification you DO NOT KNOW it works — do not say you do.
+Close execution first: `bash '<work_dir>/.workflow/run.sh' execute-end{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'`
+- When `execute-begin` returned `meta.selection_version=1`, pass `--task-file '<selection-json-path>'` (under this session's runtime dir):
+  `{"version":1,"execution_id":"<from execute-begin>","tier":"integration","reason":"...","obligations":[{"id":"...","behavior":"...","due":"verify","commands":["<exact command>"]}]}` (empty obligation commands record a gap; on older runtimes omit `--task-file` and list outstanding behaviors explicitly).
+- `meta.changed_files` lists post-`execute-begin` Git changes; `meta.outside_scope` lists files changed outside plan `files` (including shell writes) — name each one and why it changed (`null` = no Git snapshot, say so).
+- Use fresh `meta.policy` and `meta.next_step` from THIS `execute-end` response (never cached or read from `config.json`; absent/invalid `auto_verify_after_execute` defaults to `false` with warning). Report `meta.config_warnings`. `next_step` has `automatic: false`: runtime has not started verification.
 
-### Use the policy returned for THIS execution
-`execute-end` reads `commands.auto_verify_after_execute` and `commands.verify_mode` fresh.
-An absent auto-verify key defaults to `false`; invalid types warn and also default to false.
-Use the returned policy/next_step, never a value from another execution or memory.
-`true` → the chain to {{CMD:verify}} is part of {{CMD:execute}}, not an optional step after it.
-Stopping before verify finishes = an unfinished {{CMD:execute}}, whatever the diff contains.
+Output `[EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status`:
+- `next_step.action=verify_prepare` (`auto_verify_after_execute=true`) → follow the verify skill; it owns the single local preparation step and the subsequent {{CMD:verify}} invocation. This chain is PART OF {{CMD:execute}} — stopping before verify finishes leaves {{CMD:execute}} unfinished. Status once verified: `done|partial|blocked`.
+- `next_step.action=offer_verify` (`false`, default) → do NOT auto-run {{CMD:verify}}. REQUIRED: `verification: not_run`, `status: implemented | partial | blocked`, then offer `"{{CMD:verify}} now?"`.
 
-### Words FORBIDDEN while verification: not_run
-"done" | "finished" | "working" | "succeeded" | "fixed" | "works now" | "safe now"
-| "tests pass" (when you did not run them) | ✅ as a completion marker — in any language.
-ALLOWED: "implemented, not yet verified". The difference is not style — the user
-decides the next step from that word.
+### Words FORBIDDEN while `verification: not_run`
+`"done"` | `"finished"` | `"working"` | `"succeeded"` | `"fixed"` | `"works now"` | `"safe now"` | `"tests pass"` (when not run) | ✅ as completion marker — in any language. Use `"implemented, not yet verified"`.
 
-### What the runtime enforces, and what it does not
-Runtime (`core/runtime/execution.py`): a proceed plan + the user's `-y` to open an
-execution; scope and root for Edit/Write (`execution-gate` hook, blocks); `git commit` only
-in a turn where the user asked to commit. The host completion guard (where supported) WARNS when the
-`[EXECUTION RESULT]` fields of your reply claim more than not_run — a `status` outside
-implemented|partial|blocked, or a `verification` other than not_run. The guard does NOT read
-prose, so the forbidden words above are entirely your responsibility.
-`policies.enforcement` = hybrid (default) | warn | off.
+### Enforcement (`policies.enforcement` = hybrid|warn|off)
+Runtime checks proceed plan + user `-y` token (`execute-begin`), host write gate blocks out-of-scope/out-of-root Edit/Write, `git commit` requires explicit commit request, and host completion guard warns on `[EXECUTION RESULT]` fields claiming more than `not_run` (prose wording stays your responsibility).

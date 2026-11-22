@@ -316,6 +316,297 @@ def _check_upgrade_points_at_the_running_build() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_nested_reference_stale_dir_cleanup() -> None:
+    """Pruning a retired nested skill reference removes its empty references/ and skill dirs."""
+    import exoma.installer.stale as stale
+
+    with _sandbox() as (home, backups):
+        claude_ref = home / "skills" / "verify-browser" / "old-ref.md"
+        claude_ref.parent.mkdir(parents=True)
+        claude_ref.write_text("# old claude ref\n", encoding="utf-8")
+        codex_ref = home.parent / ".codex" / "skills" / "exoma-verify-browser" / "references" / "old-ref.md"
+        codex_ref.parent.mkdir(parents=True)
+        codex_ref.write_text("# old codex ref\n", encoding="utf-8")
+        _receipt(backups, "install_20250101_000001", [
+            {"action": "create", "key": "hosts/claude/skills/verify-browser/old-ref.md",
+             "dest": str(claude_ref), "post_sha256": _sha(claude_ref)},
+            {"action": "create", "key": "hosts/codex/skills/exoma-verify-browser/references/old-ref.md",
+             "dest": str(codex_ref), "post_sha256": _sha(codex_ref)},
+        ])
+        plan = Plan()
+        stale.prune(set(), plan, True, backups / "install_29990101_000001")
+        assert_true(not claude_ref.exists() and not claude_ref.parent.exists(),
+                    "removing retired nested Claude reference removes empty skill subdir")
+        assert_true(not codex_ref.exists() and not codex_ref.parent.exists() and not codex_ref.parent.parent.exists(),
+                    "removing retired nested Codex reference removes empty references/ and skill dirs")
+
+
+def _check_clean_legacy_exact_match() -> None:
+    """`--clean-legacy` previews by default, removes ONLY exact historical headers with --apply,
+    preserves user bytes verbatim, is idempotent, and restores cleanly via --rollback."""
+    import exoma.installer.base as base
+    import exoma.installer.rollback as rollback
+
+    with _sandbox() as (home, backups):
+        saved_base_home = base.HOME
+        base.HOME = home.parent
+        claude_md = home / "CLAUDE.md"
+        user_prefix = b"User note before\r\nwith CRLF and utf8: caf\xc3\xa9\r\n\r\n"
+        exact_header = (
+            b"# Claude Code \xe2\x80\x94 Personal Global Config (v3.8.0)\r\n"
+            b"# Skills: ~/.claude/skills/   Memory: ~/.claude/memory/\r\n\r\n"
+        )
+        managed = (
+            b"<!-- WORKFLOW-MAIN-AGENT:START \xe2\x80\x94 v1.2.1, do not edit manually -->\r\n"
+            b"body\r\n"
+            b"<!-- WORKFLOW-MAIN-AGENT:END -->\r\n"
+        )
+        user_suffix = b"\r\nUser note after\r\n"
+        original = user_prefix + exact_header + managed + user_suffix
+        claude_md.write_bytes(original)
+        try:
+            # Preview does not modify the file.
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = base.run_clean_legacy(apply=False)
+            assert_true(code == 0 and claude_md.read_bytes() == original and "Preview only" in out.getvalue(),
+                        f"clean-legacy preview leaves file untouched: code={code} out={out.getvalue()}")
+
+            # Apply removes ONLY exact header bytes and records a finalized rollbackable receipt.
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = base.run_clean_legacy(apply=True)
+            expected_after = user_prefix + managed + user_suffix
+            assert_true(code == 0 and claude_md.read_bytes() == expected_after,
+                        f"clean-legacy --apply preserves user bytes verbatim: code={code}")
+            receipt_dirs = [p for p in backups.iterdir() if p.is_dir()]
+            assert_true(len(receipt_dirs) == 1, f"clean-legacy writes one backup receipt dir: {receipt_dirs}")
+            receipt_data = json.loads((receipt_dirs[0] / "install_receipt.json").read_text(encoding="utf-8"))
+            assert_true(receipt_data.get("complete") is True,
+                        f"successful clean-legacy finalizes receipt complete=True: {receipt_data}")
+
+            # Rerun is idempotent.
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = base.run_clean_legacy(apply=True)
+            assert_true(code == 0 and "clean" in out.getvalue() and claude_md.read_bytes() == expected_after,
+                        f"clean-legacy rerun is clean: {out.getvalue()}")
+
+            # Rollback restores original bytes verbatim.
+            with contextlib.redirect_stdout(io.StringIO()):
+                rb_code = rollback._run_rollback(receipt_dirs[0].name, True)
+            assert_true(rb_code == 0 and claude_md.read_bytes() == original,
+                        f"rollback restores original CLAUDE.md bytes verbatim: code={rb_code}")
+
+            # Negative matcher probes: post-marker fenced example, bogus marker, extra blank lines.
+            post_example = managed + b"\n```md\n" + exact_header + b"```\n"
+            cleaned_post, matched_post = base.strip_exact_legacy_claude_header_bytes(post_example)
+            assert_true(matched_post is None and cleaned_post == post_example,
+                        "post-marker fenced example must never match legacy cleanup")
+
+            bogus_marker = (
+                exact_header
+                + b"<!-- WORKFLOW-MAIN-AGENT:START_BOGUS -->\nbody\n<!-- WORKFLOW-MAIN-AGENT:END -->\n"
+            )
+            cleaned_bogus, matched_bogus = base.strip_exact_legacy_claude_header_bytes(bogus_marker)
+            assert_true(matched_bogus is None and cleaned_bogus == bogus_marker,
+                        "malformed START_BOGUS marker must never match legacy cleanup")
+
+            fenced_pre = b"```md\n" + exact_header + b"```\n\n" + managed
+            cleaned_fenced, matched_fenced = base.strip_exact_legacy_claude_header_bytes(fenced_pre)
+            assert_true(matched_fenced is None and cleaned_fenced == fenced_pre,
+                        "fenced pre-marker example must never match legacy cleanup")
+
+            fenced_markers_only = exact_header + b"```md\n" + managed + b"```\n"
+            cleaned_fm, matched_fm = base.strip_exact_legacy_claude_header_bytes(fenced_markers_only)
+            assert_true(matched_fm is None and cleaned_fm == fenced_markers_only,
+                        "header above fenced-only marker pair must never match legacy cleanup")
+
+            mixed_fence = b"```md\n~~~\n" + exact_header + managed + b"```\n"
+            cleaned_mf, matched_mf = base.strip_exact_legacy_claude_header_bytes(mixed_fence)
+            assert_true(matched_mf is None and cleaned_mf == mixed_fence,
+                        "backtick fence containing literal ~~~ line must stay fenced and never match")
+
+            multiline_start = exact_header + b"<!--\nWORKFLOW-MAIN-AGENT:START -->\nbody\n<!-- WORKFLOW-MAIN-AGENT:END -->\n"
+            cleaned_ml, matched_ml = base.strip_exact_legacy_claude_header_bytes(multiline_start)
+            assert_true(matched_ml is None and cleaned_ml == multiline_start,
+                        "multiline START marker must never match legacy cleanup")
+
+            trailing_prose_start = (
+                exact_header
+                + b"<!-- WORKFLOW-MAIN-AGENT:START --> user prose -->\nbody\n<!-- WORKFLOW-MAIN-AGENT:END -->\n"
+            )
+            cleaned_tp, matched_tp = base.strip_exact_legacy_claude_header_bytes(trailing_prose_start)
+            assert_true(matched_tp is None and cleaned_tp == trailing_prose_start,
+                        "START marker with trailing prose and second --> must never match legacy cleanup")
+
+            commented_excerpt = b"<!--\n" + exact_header + managed + b"-->\n"
+            cleaned_ce, matched_ce = base.strip_exact_legacy_claude_header_bytes(commented_excerpt)
+            assert_true(matched_ce is None and cleaned_ce == commented_excerpt,
+                        "header and markers inside an enclosing HTML comment must never match legacy cleanup")
+
+            extra_blanks = exact_header + b"\r\n\r\n" + managed
+            cleaned_blanks, matched_blanks = base.strip_exact_legacy_claude_header_bytes(extra_blanks)
+            assert_true(matched_blanks is not None and cleaned_blanks == b"\r\n\r\n" + managed,
+                        f"extra user blank lines beyond exact 1-line separator stay intact: {cleaned_blanks!r}")
+
+            # Edited / non-exact legacy header is refused without touching the file.
+            edited = b"# Claude Code \xe2\x80\x94 Personal Global Config (v3.8.0)\n# Custom user line\n\n" + managed
+            claude_md.write_bytes(edited)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = base.run_clean_legacy(apply=True)
+            assert_true(code == 1 and "refused" in out.getvalue() and claude_md.read_bytes() == edited,
+                        f"non-exact legacy header is refused without edits: code={code} out={out.getvalue()}")
+
+            # Concurrent modification DURING _flush_receipt aborts without clobbering user save
+            # AND cleans up its no-op backup dir so default rollback still targets prior install.
+            from unittest.mock import patch
+            claude_md.write_bytes(original)
+            concurrent_save = original + b"concurrent edit during flush\n"
+            before_race_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            orig_flush_race = base._flush_receipt
+            def _save_during_flush(complete: bool = False, allow_empty: bool = False):
+                orig_flush_race(complete=complete, allow_empty=allow_empty)
+                if not complete:
+                    claude_md.write_bytes(concurrent_save)
+            out = io.StringIO()
+            with patch.object(base, "_flush_receipt", _save_during_flush), contextlib.redirect_stdout(out):
+                race_code = base.run_clean_legacy(apply=True)
+            after_race_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            assert_true(
+                race_code == 1
+                and "concurrently" in out.getvalue()
+                and claude_md.read_bytes() == concurrent_save
+                and after_race_dirs == before_race_dirs,
+                f"concurrent edit during flush aborts safely and discards no-op backup: code={race_code} dirs={after_race_dirs - before_race_dirs}",
+            )
+
+            # Destination deleted after pending receipt flush (zero rename attempts) discards
+            # the no-op backup directory unconditionally so default rollback stays unaffected.
+            claude_md.write_bytes(original)
+            before_del_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            def _delete_during_flush(complete: bool = False, allow_empty: bool = False):
+                orig_flush_race(complete=complete, allow_empty=allow_empty)
+                if not complete:
+                    claude_md.unlink()
+            deleted_raised = False
+            with patch.object(base, "_flush_receipt", _delete_during_flush), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    base.run_clean_legacy(apply=True)
+                except FileNotFoundError:
+                    deleted_raised = True
+            after_del_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            assert_true(
+                deleted_raised and after_del_dirs == before_del_dirs,
+                f"deleted destination after flush discards no-op backup unconditionally: dirs={after_del_dirs - before_del_dirs}",
+            )
+
+            # Replacement failure (sharing violation on target rename AFTER pending receipt flush)
+            # leaves original intact and discards the no-op backup dir.
+            claude_md.write_bytes(original)
+            before_fail_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            import os as _os
+            orig_replace = _os.replace
+            def _deny_target_replace(src, dst):
+                if Path(dst) == claude_md:
+                    raise PermissionError("simulated sharing violation")
+                return orig_replace(src, dst)
+            replace_failed = False
+            with patch.object(_os, "replace", _deny_target_replace), \
+                    patch("exoma.core.workspace.workspace_paths.REPLACE_RETRY_DELAYS", ()), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    base.run_clean_legacy(apply=True)
+                except PermissionError:
+                    replace_failed = True
+            after_fail_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            assert_true(
+                replace_failed and claude_md.read_bytes() == original and after_fail_dirs == before_fail_dirs,
+                f"pre-replace failure leaves original intact and discards no-op backup: dirs={after_fail_dirs - before_fail_dirs}",
+            )
+
+            # Hard crash after pending receipt flush BEFORE rename: rollback reconciles pending
+            # entry whose destination still matches pre_sha256 as a safe no-op, while an unexpected
+            # third hash still aborts as a conflict.
+            pending_dir = backups / "install_29990101_000099"
+            pending_dir.mkdir()
+            pending_backup = pending_dir / "hosts" / "claude" / "CLAUDE.md"
+            pending_backup.parent.mkdir(parents=True)
+            pending_backup.write_bytes(original)
+            (pending_dir / "install_receipt.json").write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "complete": False,
+                    "entries": [{
+                        "action": "merge",
+                        "key": "hosts/claude/CLAUDE.md",
+                        "dest": str(claude_md),
+                        "backup": str(pending_backup),
+                        "pre_sha256": hashlib.sha256(original).hexdigest(),
+                        "post_sha256": hashlib.sha256(expected_after).hexdigest(),
+                        "pending": True,
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            claude_md.write_bytes(original)
+            with contextlib.redirect_stdout(io.StringIO()):
+                rb_noop = rollback._run_rollback(pending_dir.name, True)
+            assert_true(rb_noop == 0 and claude_md.read_bytes() == original,
+                        f"pending receipt interrupted before rename rolls back as safe no-op: code={rb_noop}")
+            claude_md.write_bytes(b"unrelated third state\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                rb_conflict = rollback._run_rollback(pending_dir.name, True)
+            assert_true(rb_conflict == 2 and claude_md.read_bytes() == b"unrelated third state\n",
+                        f"pending receipt with unexpected hash still aborts as conflict: code={rb_conflict}")
+            shutil.rmtree(pending_dir)
+
+            # Interrupted apply right after atomic replace stays recoverable through --rollback.
+            claude_md.write_bytes(original)
+            orig_flush = base._flush_receipt
+            def _interrupt_finalize(complete: bool = False, allow_empty: bool = False):
+                if complete:
+                    raise RuntimeError("simulated crash after replace")
+                return orig_flush(complete=complete, allow_empty=allow_empty)
+            before_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            crashed = False
+            with patch.object(base, "_flush_receipt", _interrupt_finalize), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    base.run_clean_legacy(apply=True)
+                except RuntimeError:
+                    crashed = True
+            after_dirs = sorted(p for p in backups.iterdir() if p.is_dir() and p.name not in before_dirs)
+            assert_true(crashed and len(after_dirs) == 1 and claude_md.read_bytes() == expected_after,
+                        "simulated crash after replace leaves atomic cleaned file and pre-flushed receipt")
+            with contextlib.redirect_stdout(io.StringIO()):
+                rb_int = rollback._run_rollback(after_dirs[0].name, True)
+            assert_true(rb_int == 0 and claude_md.read_bytes() == original,
+                        f"interrupted clean-legacy receipt rolls back cleanly: code={rb_int}")
+
+            # Symlinked destination is refused without modifying linked target.
+            linked_target = home.parent / "shared-claude.md"
+            linked_target.write_bytes(original)
+            claude_md.unlink()
+            try:
+                claude_md.symlink_to(linked_target)
+            except OSError:
+                # Windows without Developer Mode / symlink privilege: test helper via patch.
+                claude_md.write_bytes(original)
+                with patch.object(base, "_has_symlink_component", return_value=True), contextlib.redirect_stdout(io.StringIO()):
+                    sym_code = base.run_clean_legacy(apply=True)
+                assert_true(sym_code == 1 and claude_md.read_bytes() == original,
+                            f"symlinked CLAUDE.md refused cleanly (patched): code={sym_code}")
+            else:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    sym_code = base.run_clean_legacy(apply=True)
+                assert_true(sym_code == 1 and "symlink" in out.getvalue() and linked_target.read_bytes() == original,
+                            f"symlinked CLAUDE.md refused without editing target: code={sym_code} out={out.getvalue()}")
+        finally:
+            base.HOME = saved_base_home
+
+
 def _test_installer_leaves_no_stale_files() -> None:
     _check_only_our_unedited_leftovers_go()
     _check_ledger_is_evidence_too()
@@ -323,3 +614,5 @@ def _test_installer_leaves_no_stale_files() -> None:
     _check_settings_drop_retired_hooks_and_refresh_statusline()
     _check_unstamped_dist_is_refused()
     _check_upgrade_points_at_the_running_build()
+    _check_nested_reference_stale_dir_cleanup()
+    _check_clean_legacy_exact_match()

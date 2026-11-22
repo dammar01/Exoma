@@ -146,6 +146,12 @@ def _test_codex_host_contract():
                            "tool_input": {"command": f'{runner_prefix()} "{(root / ".workflow" / "run.sh").as_posix()}" verify-prepare --session \'{main}\''}})
         assert_true(dq_unarmed == {}, f"unarmed double-quoted runner path keeps baseline allow behavior: {dq_unarmed}")
         _hook(home, "UserPromptSubmit", {**prompt, "prompt": "$exoma-plan add a feature"})
+        codex_ref = home / ".codex" / "skills" / "exoma-verify-browser" / "references" / "interview.md"
+        codex_ref.parent.mkdir(parents=True, exist_ok=True)
+        codex_ref.write_text("# interview ref\n", encoding="utf-8")
+        ref_read = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "exec_command",
+                                              "tool_input": {"cmd": f"cat '{codex_ref.as_posix()}'"}})
+        assert_true(ref_read == {}, f"Codex armed gate allows nested skill reference read: {ref_read}")
         dq_armed = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
                          "tool_input": {"command": f'{runner_prefix()} "{(root / ".workflow" / "run.sh").as_posix()}" verify-prepare --session \'{main}\''}})
         assert_true(dq_armed.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"

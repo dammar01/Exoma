@@ -138,13 +138,16 @@ def _test_agy_host_contract() -> None:
         else:
             assert_true(out == {"decision": "allow"}, f"a bare bash passes off Windows: {out}")
         skill = home / ".gemini" / "antigravity-cli" / "skills" / ".analyze" / "SKILL.md"
+        skill_ref = home / ".gemini" / "antigravity-cli" / "skills" / ".verify-browser" / "references" / "interview.md"
         contract = home / ".gemini" / "antigravity-cli" / "exoma" / "CONTRACT.md"
         claude_skill = home / ".claude" / "skills" / "analyze.md"
-        for path in (skill, contract, claude_skill):
+        for path in (skill, skill_ref, contract, claude_skill):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("x\n", encoding="utf-8")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(skill)))
         assert_true(out == {"decision": "allow"}, f"an Agy skill definition read passes: {out}")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(skill_ref)))
+        assert_true(out == {"decision": "allow"}, f"an Agy nested skill reference read passes: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(contract)))
         assert_true(out == {"decision": "allow"}, f"the contract read passes: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(claude_skill)))

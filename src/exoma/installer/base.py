@@ -407,6 +407,328 @@ def _merge_managed(
     return existing + separator + block + "\n", "appended managed block"
 
 
+_LEGACY_CLAUDE_VERSIONS: frozenset[str] = frozenset({
+    "3.3.1",
+    "3.4.0", "3.4.1", "3.4.2", "3.4.3", "3.4.4", "3.4.5",
+    "3.5.0", "3.5.1", "3.5.2", "3.5.3",
+    "3.6.0",
+    "3.7.0", "3.7.1", "3.7.2", "3.7.3",
+    "3.8.0", "3.8.1", "3.8.2", "3.8.3", "3.8.4",
+    "3.9.0",
+    "0.1.0", "0.2.0", "0.3.0",
+    "1.0.0b1", "1.0.0", "1.0.1", "1.0.2",
+    "1.1.0", "1.1.1", "1.1.2",
+    "1.2.0", "1.2.1",
+})
+
+_LEGACY_CLAUDE_HEADER_BYTES = re.compile(
+    rb"(?P<block>"
+    rb"# Claude Code \xe2\x80\x94 Personal Global Config \(v(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?)\)\r?\n"
+    rb"# Skills: ~/.claude/skills/   Memory: ~/.claude/memory/\r?\n"
+    rb"(?:\r?\n)?)"
+)
+_MANAGED_START_LINE_BYTES = re.compile(
+    rb"(?m)^<!--[ \t]*WORKFLOW-MAIN-AGENT:START(?:[ \t](?:(?!-->)[^\r\n])*)?-->[ \t]*(?:\r?\n|\Z)"
+)
+_MANAGED_END_LINE_BYTES = re.compile(
+    rb"(?m)^<!--[ \t]*WORKFLOW-MAIN-AGENT:END[ \t]*-->[ \t]*(?:\r?\n|\Z)"
+)
+_ANY_MANAGED_MARKER_BYTES = re.compile(rb"<!--\s*WORKFLOW-MAIN-AGENT:(?:START|END)")
+_FENCE_OPEN_BYTES = re.compile(rb"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _non_fenced_line_starts(body: bytes) -> set[int]:
+    """Byte offsets of every line start in `body` that sits outside Markdown fenced code blocks.
+
+    Tracks the active fence delimiter character and opening length (CommonMark rules) so a
+    literal `~~~` inside backticks (or vice versa) never prematurely closes an open fence.
+    """
+    outside: set[int] = set()
+    active: tuple[bytes, int] | None = None
+    offset = 0
+    for raw_line in body.splitlines(keepends=True):
+        line = raw_line.rstrip(b"\r\n")
+        if active is None:
+            match = _FENCE_OPEN_BYTES.match(line)
+            if match:
+                run, info = match.group(1), match.group(2)
+                char = run[:1]
+                # CommonMark: info string for a backtick fence cannot contain backticks.
+                if char == b"`" and b"`" in info:
+                    outside.add(offset)
+                else:
+                    active = (char, len(run))
+            else:
+                outside.add(offset)
+        else:
+            fence_char, fence_len = active
+            stripped = line.lstrip(b" ")
+            indent = len(line) - len(stripped)
+            if indent <= 3 and stripped.startswith(fence_char * fence_len):
+                rest = stripped.lstrip(fence_char)
+                if not rest.strip(b" \t"):
+                    active = None
+        offset += len(raw_line)
+    return outside
+
+
+def _inside_enclosing_html_comment(body: bytes, target_offset: int, outside_fence: set[int]) -> bool:
+    """True when `target_offset` sits inside an open `<!-- ... -->` comment outside fences."""
+    in_comment = False
+    offset = 0
+    for raw_line in body.splitlines(keepends=True):
+        line_end = offset + len(raw_line)
+        if offset >= target_offset:
+            break
+        if offset in outside_fence:
+            chunk = raw_line[: max(0, min(len(raw_line), target_offset - offset))]
+            pos = 0
+            while pos < len(chunk):
+                if not in_comment:
+                    idx = chunk.find(b"<!--", pos)
+                    if idx < 0:
+                        break
+                    in_comment = True
+                    pos = idx + 4
+                else:
+                    idx = chunk.find(b"-->", pos)
+                    if idx < 0:
+                        break
+                    in_comment = False
+                    pos = idx + 3
+        offset = line_end
+    return in_comment
+
+
+def strip_exact_legacy_claude_header_bytes(raw: bytes) -> tuple[bytes, str | None]:
+    """Remove an exact historical pre-marker Exoma header outside WORKFLOW-MAIN-AGENT markers.
+
+    Operates on raw bytes so every unrelated byte (including line endings and user prose)
+    stays byte-for-byte intact. Requires exactly one valid single-line marker pair outside
+    Markdown fences and enclosing HTML comments, matches ONLY before the managed block at an
+    allowed pre-marker boundary, and removes only the exact two-line header plus at most one
+    historical blank separator line.
+    """
+    bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+    body = raw[len(bom):]
+    outside_fence = _non_fenced_line_starts(body)
+    starts = list(_MANAGED_START_LINE_BYTES.finditer(body))
+    ends = list(_MANAGED_END_LINE_BYTES.finditer(body))
+    all_markers = list(_ANY_MANAGED_MARKER_BYTES.finditer(body))
+    if (
+        len(starts) != 1
+        or len(ends) != 1
+        or len(all_markers) != 2
+        or ends[0].start() < starts[0].end()
+        or starts[0].start() not in outside_fence
+        or ends[0].start() not in outside_fence
+        or _inside_enclosing_html_comment(body, starts[0].start(), outside_fence)
+        or _inside_enclosing_html_comment(body, ends[0].start(), outside_fence)
+    ):
+        return raw, None
+    managed_start = starts[0].start()
+    before = body[:managed_start]
+
+    for match in _LEGACY_CLAUDE_HEADER_BYTES.finditer(before):
+        if match.start() not in outside_fence:
+            continue
+        if _inside_enclosing_html_comment(body, match.start(), outside_fence):
+            continue
+        # Ensure the second line of the header is also outside any fence.
+        second_line_nl = before.find(b"\n", match.start())
+        if second_line_nl < 0 or (second_line_nl + 1) not in outside_fence:
+            continue
+        version = match.group("version").decode("ascii", errors="ignore")
+        if version not in _LEGACY_CLAUDE_VERSIONS:
+            continue
+        if match.start() != 0 and match.end() != len(before):
+            continue
+        cleaned_before = before[:match.start()] + before[match.end():]
+        return bom + cleaned_before + body[managed_start:], match.group("block").decode("utf-8")
+    return raw, None
+
+
+def _has_symlink_component(path: Path, stop_at: Path) -> bool:
+    """True if `path` or any parent up to (and including) `stop_at` is a symlink."""
+    cur = path
+    stop = os.path.normcase(os.path.abspath(str(stop_at)))
+    while True:
+        if cur.is_symlink():
+            return True
+        if os.path.normcase(os.path.abspath(str(cur))) == stop:
+            return False
+        parent = cur.parent
+        if parent == cur:
+            return False
+        cur = parent
+
+
+def _cleanup_noop_backup(backup_root: Path) -> None:
+    """Remove a backup directory and receipt for an apply confirmed never to have mutated disk."""
+    _reset_receipt()
+    shutil.rmtree(backup_root, ignore_errors=True)
+
+
+def run_clean_legacy(apply: bool) -> int:
+    """Preview or remove an exact historical Exoma header outside markers in ~/.claude/CLAUDE.md.
+
+    Preview-first (requires `--apply` to write), refuses symlinked destinations, snapshots
+    bytes once for backup/digest/recheck, flushes a pending receipt before revalidating each
+    atomic replacement attempt, discards confirmed no-op backups on abort/failure, and
+    finalizes the receipt on success so `exoma install --rollback --apply` restores cleanly.
+    """
+    from datetime import datetime, timezone
+    import stat
+    import time
+
+    from exoma.core.workspace.workspace_paths import REPLACE_RETRY_DELAYS, _staging_path
+
+    claude_md = HOME / ".claude" / "CLAUDE.md"
+    if _has_symlink_component(claude_md, HOME):
+        print(
+            f"[CLEAN-LEGACY] refused — {claude_md} (or its parent directory) is a symlink. "
+            "Clean it by hand so linked targets and rollback stay intact."
+        )
+        return 1
+    if not claude_md.is_file():
+        print(f"[CLEAN-LEGACY] nothing to do — {claude_md} does not exist")
+        return 0
+    try:
+        raw = claude_md.read_bytes()
+    except OSError as exc:
+        print(f"[CLEAN-LEGACY] cannot read {claude_md}: {exc}")
+        return 1
+
+    cleaned, matched = strip_exact_legacy_claude_header_bytes(raw)
+    if matched is None:
+        text = _read_text_lenient(claude_md)
+        stripped = text
+        while (blk := _managed_block(stripped, *MARKERS[CLAUDE_INSTRUCTIONS])):
+            stripped = stripped.replace(blk, "")
+        if any(line.startswith("# Claude Code — Personal Global Config (v") for line in stripped.splitlines()):
+            print(
+                f"[CLEAN-LEGACY] refused — {claude_md} has a legacy header that does not match a known "
+                "exact Exoma template (or lacks a single valid WORKFLOW-MAIN-AGENT marker block). "
+                "Remove it by hand so user prose is not disturbed."
+            )
+            return 1
+        print(f"[CLEAN-LEGACY] clean — no exact legacy header found in {claude_md}")
+        return 0
+
+    mode = "APPLY" if apply else "PREVIEW"
+    print(f"[CLEAN-LEGACY] ({mode}) {claude_md}")
+    print("  exact block to remove:")
+    for line in matched.splitlines():
+        print(f"    - {line}")
+    print(f"  bytes: {len(raw)} -> {len(cleaned)} (-{len(raw) - len(cleaned)} bytes); unrelated content preserved byte-for-byte")
+    if not apply:
+        print("\nPreview only — nothing was written. Run `exoma install --clean-legacy --apply` to apply.")
+        return 0
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    backup_root = HOME / ".claude" / "backups" / f"install_{stamp}"
+    pre_sha256 = hashlib.sha256(raw).hexdigest()
+    post_sha256 = hashlib.sha256(cleaned).hexdigest()
+    backup_path = backup_root / CLAUDE_INSTRUCTIONS
+
+    _reset_receipt()
+    temp = _staging_path(claude_md)
+    try:
+        orig_mode = stat.S_IMODE(claude_md.stat().st_mode)
+    except OSError:
+        orig_mode = None
+    replaced = False
+    replace_attempted = False
+    try:
+        _begin_receipt(
+            backup_root / "install_receipt.json",
+            {
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "action": "clean_legacy",
+                "hosts": ["claude"],
+            },
+        )
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_bytes(raw)
+        try:
+            shutil.copystat(claude_md, backup_path)
+        except OSError:
+            pass
+        with temp.open("wb") as fh:
+            fh.write(cleaned)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if orig_mode is not None:
+            try:
+                os.chmod(temp, orig_mode)
+            except OSError:
+                pass
+        # Flush the pending receipt BEFORE final recheck & atomic replace so any hard crash
+        # across the replace boundary stays reconcilable by rollback.
+        entry = {
+            "action": "merge",
+            "key": CLAUDE_INSTRUCTIONS,
+            "dest": str(claude_md),
+            "backup": str(backup_path),
+            "pre_sha256": pre_sha256,
+            "post_sha256": post_sha256,
+            "pending": True,
+        }
+        _RECEIPT.append(entry)
+        _flush_receipt(complete=False)
+
+        last_perm_error: PermissionError | None = None
+        for delay in (*REPLACE_RETRY_DELAYS, None):
+            if _has_symlink_component(claude_md, HOME):
+                _cleanup_noop_backup(backup_root)
+                print(f"[CLEAN-LEGACY] aborted — {claude_md} became a symlink during cleanup; nothing written.")
+                return 1
+            if claude_md.read_bytes() != raw:
+                _cleanup_noop_backup(backup_root)
+                print(f"[CLEAN-LEGACY] aborted — {claude_md} changed concurrently since snapshot; nothing written.")
+                return 1
+            try:
+                replace_attempted = True
+                os.replace(temp, claude_md)
+                replaced = True
+                break
+            except PermissionError as exc:
+                last_perm_error = exc
+                if delay is None:
+                    break
+                time.sleep(delay)
+        if not replaced:
+            _cleanup_noop_backup(backup_root)
+            if last_perm_error is not None:
+                raise last_perm_error
+            return 1
+
+        entry.pop("pending", None)
+        _flush_receipt(complete=True)
+    except Exception:
+        if not replace_attempted:
+            # Zero rename attempts occurred — discard the no-op backup/receipt unconditionally
+            # even if the destination was deleted or became unreadable after the flush.
+            _cleanup_noop_backup(backup_root)
+        elif not replaced:
+            try:
+                still_original = (not _has_symlink_component(claude_md, HOME)) and claude_md.read_bytes() == raw
+            except OSError:
+                still_original = False
+            if still_original:
+                _cleanup_noop_backup(backup_root)
+        raise
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+    print(f"  backup: {backup_root}")
+    print("  status: removed exact legacy header (use `exoma install --rollback --apply` to restore)")
+    return 0
+
+
 def _backup(
     path: Path, backup_root: Path, plan: Plan, apply: bool, key: str | None = None
 ) -> Path | None:
@@ -510,6 +832,25 @@ def _skill_md(text: str, name: str) -> str:
     return f"---\nname: .{name}\ndescription: {json.dumps(description or name, ensure_ascii=False)}\n---\n\n{text}"
 
 
+def _is_skill_entry(key: str) -> bool:
+    """True for a host skill entry file (`.../SKILL.md`), False for nested reference docs."""
+    return key.endswith("/SKILL.md")
+
+
+def _claude_skill_references() -> list[tuple[Path, str, str]]:
+    """Nested conditional reference `.md` files shipped under Claude skills (`skills/<skill>/*.md`)."""
+    skills_dir = DIST_CONFIG / CLAUDE_HOST / "skills"
+    if not skills_dir.is_dir():
+        return []
+    found: list[tuple[Path, str, str]] = []
+    for subdir in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
+        if not (skills_dir / f"{subdir.name}.md").is_file():
+            continue
+        for ref in sorted(p for p in subdir.glob("*.md") if p.is_file()):
+            found.append((ref, subdir.name, ref.name))
+    return found
+
+
 def _agy_text(text: str, key: str) -> str:
     """Claude-host text made fit for Agy: the runner call through runner_prefix(), the
     contract as its managed block alone, a skill with Agy's frontmatter."""
@@ -525,7 +866,7 @@ def _agy_text(text: str, key: str) -> str:
         # runner's permission and sandbox), so the Claude /.doctor never carries it.
         fragment = (DIST_CONFIG / AGY_DOCTOR_FRAGMENT).read_text(encoding="utf-8")
         text = text.rstrip("\n") + "\n" + fragment.replace("{{RUNNER}}", prefix)
-    if key.startswith(AGY_SKILLS_PREFIX) and not text.startswith("---"):
+    if key.startswith(AGY_SKILLS_PREFIX) and _is_skill_entry(key) and not text.startswith("---"):
         text = _skill_md(text, key[len(AGY_SKILLS_PREFIX):].split("/", 1)[0])
     return text
 
@@ -536,10 +877,11 @@ def _codex_text(text: str, key: str) -> str:
         return _host_contract(text, "codex")
     if key.startswith(CODEX_SKILLS_PREFIX):
         text = _host_skill(text, "codex")
-        name = key[len(CODEX_SKILLS_PREFIX):].split("/", 1)[0]
-        text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
-        text = text.replace("---\n\n", "---\n\nCodex host: `$exoma-<command>` invokes this workflow. "
-                            "Read ~/.codex/exoma/CONTRACT.md and use Codex tool names.\n\n", 1)
+        if _is_skill_entry(key):
+            name = key[len(CODEX_SKILLS_PREFIX):].split("/", 1)[0]
+            text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
+            text = text.replace("---\n\n", "---\n\nCodex host: `$exoma-<command>` invokes this workflow. "
+                                "Read ~/.codex/exoma/CONTRACT.md and use Codex tool names.\n\n", 1)
     return text
 
 
@@ -562,12 +904,27 @@ def _opencode_text(text: str, key: str) -> str:
         return _host_contract(text, "opencode")
     if key.startswith(OPENCODE_SKILLS_PREFIX):
         text = _host_skill(text, "opencode")
-        name = key[len(OPENCODE_SKILLS_PREFIX):].split("/", 1)[0]
-        text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
-        text = text.replace("---\n\n", "---\n\nOpenCode host: the `" + name + "` skill is this workflow command. "
-                            "Follow the Exoma contract Exoma's plugin puts in your system prompt (read "
-                            "~/.config/opencode/exoma/CONTRACT.md only when it is not there) and use OpenCode "
-                            "tool names.\n\n", 1)
+        if _is_skill_entry(key):
+            name = key[len(OPENCODE_SKILLS_PREFIX):].split("/", 1)[0]
+            skill_stem = name.removeprefix("exoma-")
+            # OpenCode's bundled project policy denies `external_directory`, so conditional
+            # references are inlined into the native skill loaded through the `skill` tool.
+            refs = [
+                (ref_path, ref_filename)
+                for ref_path, ref_skill, ref_filename in _claude_skill_references()
+                if ref_skill == skill_stem
+            ]
+            if refs:
+                chunks = [text.rstrip("\n")]
+                for ref_path, ref_filename in refs:
+                    ref_body = _host_skill(ref_path.read_text(encoding="utf-8"), "opencode").strip()
+                    chunks.append(f"\n\n---\n\n<!-- Bundled reference: {skill_stem}/{ref_filename} -->\n\n{ref_body}")
+                text = "".join(chunks) + "\n"
+            text = _skill_md(text, name).replace("name: ." + name + "\n", "name: " + name + "\n", 1)
+            text = text.replace("---\n\n", "---\n\nOpenCode host: the `" + name + "` skill is this workflow command. "
+                                "Follow the Exoma contract Exoma's plugin puts in your system prompt (read "
+                                "~/.config/opencode/exoma/CONTRACT.md only when it is not there) and use OpenCode "
+                                "tool names.\n\n", 1)
     if key.startswith(OPENCODE_COMMANDS_PREFIX):
         text = _opencode_command(text, key[len(OPENCODE_COMMANDS_PREFIX):].removesuffix(".md"))
     return text
@@ -1374,6 +1731,14 @@ def _agy_targets() -> list[tuple[Path, Path, str]]:
         mapping.append(
             (path, agy_cli_dir() / "skills" / f".{name}" / "SKILL.md", f"{AGY_SKILLS_PREFIX}{name}/SKILL.md")
         )
+    for path, skill, filename in _claude_skill_references():
+        mapping.append(
+            (
+                path,
+                agy_cli_dir() / "skills" / f".{skill}" / "references" / filename,
+                f"{AGY_SKILLS_PREFIX}{skill}/references/{filename}",
+            )
+        )
     return mapping
 
 
@@ -1393,6 +1758,15 @@ def _codex_targets() -> list[tuple[Path, Path, str]]:
     for source in sorted((claude / "skills").glob("*.md")):
         name = "exoma-" + source.stem
         mapping.append((source, dest / "skills" / name / "SKILL.md", f"{CODEX_SKILLS_PREFIX}{name}/SKILL.md"))
+    for path, skill, filename in _claude_skill_references():
+        name = "exoma-" + skill
+        mapping.append(
+            (
+                path,
+                dest / "skills" / name / "references" / filename,
+                f"{CODEX_SKILLS_PREFIX}{name}/references/{filename}",
+            )
+        )
     return mapping
 
 
@@ -1448,6 +1822,14 @@ def _targets(hosts=HOSTS) -> list[tuple[Path, Path, str]]:
             (CLAUDE_HOST, "commands", HOME / ".claude" / "commands"),
             (CLAUDE_HOST, "hooks", HOME / ".claude" / "hooks"),
         ]
+        for path, skill, filename in _claude_skill_references():
+            mapping.append(
+                (
+                    path,
+                    HOME / ".claude" / "skills" / skill / filename,
+                    f"{CLAUDE_HOST}/skills/{skill}/{filename}",
+                )
+            )
     # Per-provider bundles come from config/providers.py rather than being spelled out
     # here, so a new provider is a dist/ folder plus one declaration.
     for name, bundle in PROVIDER_BUNDLES.items():

@@ -133,14 +133,65 @@ def _test_contract_renders_per_host():
             leaks = [word for word in ("AskUserQuestion", "run_in_background", "~/.claude/skills",
                                       "Claude only", "task ID", "{{CMD:", "{{CMD_PREFIX}}") if word in text]
             assert_true(not leaks, f"{key}: unresolved host mechanics or command tokens: {leaks}")
-            assert_true(not re.search(r"\{\{(?:CMD|HOST_CONFIG|MAIN_HOST_OPTION|QUESTION_TOOL|MULTI_CHOICE|ASK_USER|DELEGATED_RUN|SHELL_TOOL|RUNNER|SKILL_PATH)", text),
+            assert_true(not re.search(r"\{\{(?:CMD|HOST_CONFIG|MAIN_HOST_OPTION|QUESTION_TOOL|MULTI_CHOICE|ASK_USER|DELEGATED_RUN|SHELL_TOOL|RUNNER|SKILL_PATH|SKILL_REF)", text),
                         f"{key}: host template placeholder left unresolved")
             legacy = r"/\.(?:" + "|".join(re.escape(name) for name in hosts.COMMAND_IDS) + r")\b"
             assert_true(not re.search(legacy, text), f"{key}: actionable legacy invocation leaked")
-            assert_true("$exoma-" in text, f"{key}: native invocation missing from skill body")
+            if base._is_skill_entry(key):
+                assert_true("$exoma-" in text, f"{key}: native invocation missing from skill body")
+            else:
+                assert_true(not text.startswith("---\n"), f"{key}: reference doc must not carry entry frontmatter")
+                assert_true("Codex host: `$exoma-<command>`" not in text,
+                            f"{key}: reference doc must not carry Codex entry banner")
             if source.stem == "help" and only_command:
                 assert_true("auto-detected and runs directly" not in text,
                             "command-only help does not advertise auto routing")
+
+    # W1 invariants: 4-host verify-browser reference rendering + core safety preservation.
+    vb_src = BUNDLE / "hosts" / "claude" / "skills" / "verify-browser.md"
+    for host in hosts.HOSTS:
+        targets = base._targets((host,))
+        vb_key = next(k for src, _d, k in targets if src == vb_src)
+        vb_text = base._render_text(vb_src, vb_key, None)
+        expected_interview = hosts.skill_ref_path(host, "verify-browser", "interview.md")
+        expected_tags = hosts.skill_ref_path(host, "verify-browser", "interactive-and-tags.md")
+        assert_true(expected_interview in vb_text and expected_tags in vb_text,
+                    f"{host}: verify-browser core names its host-specific reference target")
+        assert_true("{{SKILL_REF:" not in vb_text, f"{host}: unresolved SKILL_REF token in verify-browser")
+        for invariant in ("CONFIG_ONLY_SETTINGS", "E2E_USER", "permissions.json", "allow_side_effects: true", "blocked_requests"):
+            assert_true(invariant in vb_text, f"{host}: safety invariant {invariant!r} missing from verify-browser")
+        if host == "opencode":
+            # OpenCode's bundled project policy denies external_directory, so conditional
+            # references are bundled inside exoma-verify-browser/SKILL.md instead of separate files.
+            assert_true("Bundled reference: verify-browser/interview.md" in vb_text
+                        and "Bundled reference: verify-browser/interactive-and-tags.md" in vb_text
+                        and "STEP 1 — Interview" in vb_text and "STEP 6 — Element tags" in vb_text,
+                        "opencode: verify-browser SKILL.md bundles conditional references inline")
+            assert_true("~/.config/opencode/skills/exoma-verify-browser/references/" not in vb_text,
+                        "opencode: verify-browser never requires external_directory reads")
+            assert_true(not any("/references/" in k for _s, _d, k in targets),
+                        "opencode: targets emit no separate external reference files")
+            leaks = [word for word in CLAUDE_ONLY if word in vb_text]
+            assert_true(not leaks, f"opencode: Claude-only text leaked into bundled verify-browser: {leaks}")
+        else:
+            assert_true(len(vb_text) < 15000, f"{host}: core verify-browser should stay compact (<15k), got {len(vb_text)}")
+            for ref_name in ("interview.md", "interactive-and-tags.md"):
+                ref_src = BUNDLE / "hosts" / "claude" / "skills" / "verify-browser" / ref_name
+                ref_entries = [(s, d, k) for s, d, k in targets if s == ref_src]
+                assert_true(len(ref_entries) == 1, f"{host}: target includes verify-browser/{ref_name}")
+                ref_text = base._render_text(ref_src, ref_entries[0][2], None)
+                assert_true("{{SKILL_REF:" not in ref_text and "{{CMD:" not in ref_text,
+                            f"{host}: reference {ref_name} renders cleanly without unresolved tokens")
+                assert_true(not ref_text.startswith("---\n"),
+                            f"{host}: reference {ref_name} must not have SKILL.md frontmatter")
+                if host != "claude":
+                    leaks = [word for word in CLAUDE_ONLY if word in ref_text]
+                    assert_true(not leaks, f"{host}: Claude-only text leaked into reference {ref_name}: {leaks}")
+        contract_text = _render(host, False)
+        assert_true(len(contract_text) < 35000,
+                    f"{host}: rendered contract should stay well below 35k chars, got {len(contract_text)}")
+        assert_true("Existing read exemptions remain" not in contract_text,
+                    f"{host}: contract must not advertise legacy direct config/tests reads")
 
 
 def _test_host_sections_whitespace():

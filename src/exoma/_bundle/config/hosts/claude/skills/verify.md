@@ -2,65 +2,28 @@
 description: 3-step verification — logic, falsification, reality. Depth from commands.verify_mode.
 
 ## Trigger
-{{CMD:verify}} (automatic after {{CMD:execute}} -y when `commands.auto_verify_after_execute=true`)
+{{CMD:verify}} (invoked after {{CMD:execute}} -y when `execute-end` returns `meta.next_step.action=verify_prepare`)
 
-## Mode (the runtime reads .workflow/config.json → commands.verify_mode)
-delegated (default) → full second_agent verification, Protocol below.
-syntax → QUICK: the runtime parse-checks the changed files locally (git diff HEAD + untracked). ZERO tests, ZERO second_agent.
-  The [QUICK VERIFY] output is final. pass = the file parses, NOT that the feature works — state this limit.
-  Relay not_checked/skipped as they are; do NOT count them as pass.
-  A DONE verdict for a runtime/behavior problem is FORBIDDEN; at most "syntax OK, behavior not yet verified" + suggest setting verify_mode=delegated.
+## Mode (from `verify-prepare` → `meta.policy.verify_mode`)
+- `delegated` (default) → full second_agent verification (Protocol below).
+- `syntax` → `[QUICK VERIFY]` local parse check only (zero tests, zero second_agent). Final output: relay `not_checked`/`skipped` honestly; NEVER emit DONE for runtime/behavior changes — at most `"syntax OK, behavior not yet verified"` + suggest `verify_mode=delegated`.
 
 ## Prepare FIRST (local runtime, before selecting tests)
 Call `bash '<work_dir>/.workflow/run.sh' verify-prepare{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'`.
-Run this as ONE plain standalone command — no pipe (`|`), redirect (`>`), chaining (`;`, `&&`),
-`python`, `head`, or double quotes. Its stdout is already a compact single-line JSON object small
-enough to inspect directly; piping or filtering it is refused by the pre-flight gate.
-This protocol command needs no task and is not a skill. Read `meta.policy`, `meta.request`,
-`meta.config_warnings`, and `meta.next_step`; do NOT read config.json or tests.json directly
-to reconstruct them. It does not call a provider, run tests, consume a request, clear the
-delegated marker, or publish a verdict. Invoke verify afterwards; the runtime selects
-syntax or delegated mode from the current policy.
-`policy.verify_mode=syntax` → invoke verify directly; do not request tests.
-For delegated mode, a missing request needs test selection; an invalid one needs correction.
-A valid pending request may be used if it still covers the change. Preparation is a snapshot;
-the runtime rechecks policy when verification actually runs.
+Run this as ONE plain standalone command — no pipe (`|`), redirect (`>`), chaining (`;`, `&&`), `python`, `head`, or double quotes. Its stdout is already a compact single-line JSON object small enough to inspect directly; piping or filtering it is refused by the pre-flight gate.
+Read `meta.policy`, `meta.request`, `meta.config_warnings`, and `meta.next_step`; do NOT read `config.json` or `tests.json` directly. Preparation runs no provider or tests, consumes no request, and leaves the delegated marker armed. Invoke verify afterwards; the runtime rechecks current policy on dispatch.
+- `policy.verify_mode=syntax` → invoke verify directly; do not request tests.
+- `delegated` → missing request needs test selection; invalid needs correction; valid pending request may be kept if it still covers the change.
 
 ## Pick the tests (verify_mode=delegated — REQUIRED before the run)
-The second agent only reads and traces; the runtime runs the tests. You choose them:
-1. From the diff + dependents (who calls what changed), pick the tests that cover the change.
-   Use targeted tests for a bounded change, integration tests across component contracts,
-   or the full suite when the impact cannot be bounded or project policy requires it.
-   A change without a relevant behavior test (e.g. docs) → STILL write tests.json with
-   `commands: []` + a reason (e.g. "project without a test suite"). That is an explicit request
-   for "zero tests", NOT a gap: the runtime only records `runtime: no test requested` and the
-   verdict rests on the review. Skipping tests.json = a runtime gap, exit nonzero.
-2. Write the path returned in `meta.request.path` (normally `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`):
+The second agent only reads/traces; the runtime runs tests. You select them:
+1. From diff + dependents, choose targeted, integration, or full tests covering the change. No relevant behavior test (e.g. docs) → STILL write `tests.json` with `commands: []` + a reason (explicit zero-test request, not a gap; omitting `tests.json` → `incomplete`, exit nonzero).
+2. Write `meta.request.path` (normally `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`):
    `{"commands": ["<cmd>", ...], "reason": "<why these tests cover the change>"}` (max 5).
-3. Use the argv prefixes in `meta.policy.test_command_prefixes` from prepare; commands must
-   start with one of them. Runtime executes without a shell (`&&`/pipe/redirect refused). Outside the allowlist →
-   `not_verified`. Empty allowlist → tell the user and suggest the prefixes to add;
-   a project without a test suite → there is no prefix to suggest, write `commands: []` (step 1).
-While the verify marker is active, select tests from existing evidence and
-`git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
-(may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect).
-Use the plain standalone `verify-prepare` runner call (never piped, redirected, or wrapped in `python`/`head`) and Write this session's tests.json.
-The gate also permits other valid runner calls, host-readable contract/skill files,
-legacy native config/request reads, and precision reads within the marker's quota.
-Those exemptions describe hook behavior, not an instruction to gather broadly:
-use preparation for policy/request diagnostics and delegate source inspection.
-No tests.json → verify becomes `incomplete` (gap `tests:`, exit nonzero). An explicit `commands: []` ≠ no tests.json. A failing test → blocking.
-Already ran them with `run.sh test` after the last edit? STILL list them in tests.json, with the EXACT
-same command text: the runtime reuses each recorded pass while its reuse identity is unchanged (Git-visible
-tree content, `.workflow/config.json`, `verify_reuse_env` vars, `verify_reuse_files`), writing
-"... on this same tree (nothing edited since) — reused, not rerun" in `checks_run`, and runs everything
-else. A filtered command (`--only`, `-k`, a test path) is a different string: it never stands in for the
-full suite, nor the reverse. A failed latest run, a changed input, or an unreadable record → it runs again;
-so does every command listed after one that actually ran in this verify (it may have written the tree).
-Relay the reused line as is, and say it was reused, not run now.
-`meta.changed_since_execute` non-empty → files changed after `execute-end`: name them; this verdict covers them
-only as far as the listed tests and the review did.
-tests.json belongs to ONE verify job (the runtime claims it when the job is created). A rerun after a failed verify = a new job → write tests.json again; the old choice is not reused.
+3. Commands must start with an argv prefix from `meta.policy.test_command_prefixes` (no shell/`&&`/pipe/redirect; outside allowlist → `not_verified`). Empty allowlist → notify user and suggest prefixes (or `commands: []` if project has no test suite).
+While the verify marker is armed, select tests from existing evidence, `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]` (optional `cd <dir inside root> && `; no pipe/`&&`/redirect), the plain standalone `verify-prepare` runner call, and Write of `tests.json`; delegate source inspection.
+Already ran them via `run.sh test` after the last edit? STILL list the EXACT same command string in `tests.json`: unchanged reuse identity (Git tree, `config.json`, `verify_reuse_env`, `verify_reuse_files`) reuses the recorded pass (`... reused, not rerun` in `checks_run`; filtered commands never stand in for full suites, and any command running invalidates reuse for later commands). Relay reused lines as reused.
+`meta.changed_since_execute` non-empty → name post-execute files and scope limits. Each `tests.json` belongs to ONE verify job; write it again on rerun.
 
 With `meta.selection_version=1`, add `selection_input` from preparation and a `selection`
 object to the request. Start with `meta.execution_selection`; for standalone verify use

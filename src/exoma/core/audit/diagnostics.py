@@ -1,7 +1,9 @@
 """Readiness checks: doctor, sweep, bundle integrity, MCP scan, prune."""
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -124,11 +126,103 @@ def _free_tier_models(config: dict) -> list[tuple[str, str]]:
 
 
 _OLD_GLOBAL_HEADER = "# Claude Code — Personal Global Config (v"
+CLAUDE_MD_WARNING_THRESHOLD_CHARS = 40_000
+CLAUDE_MD_NEAR_THRESHOLD_CHARS = 36_000
+_GRAPHIFY_SCAN_MAX_BYTES = 512 * 1024
+_GRAPHIFY_INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md")
+_GRAPHIFY_NEGATION = re.compile(
+    r"\b(?:never|do\s+not|don't|not\s+yours|jangan|belongs\s+to\s+(?:the\s+)?stop\s+hook|"
+    r"owned\s+by\s+(?:the\s+)?stop\s+hook|"
+    r"absent|not\s+exists|tidak\s+ada|bootstrap|initial|first\s+time|offer|tawarkan|\.graphifyignore)\b",
+    re.IGNORECASE,
+)
+_GRAPHIFY_POST_EDIT = re.compile(
+    r"\b(?:auto[-\s]?run|always|after|setelah|every\s+code\s+change|code\s+change|perubahan\s+kode|"
+    r"run\s+`?graphify\s+update|jalankan\s+`?graphify\s+update)\b",
+    re.IGNORECASE,
+)
+_HOOK_LAUNCHERS = frozenset({"bash", "bash.exe", "sh", "sh.exe", "python", "python3", "python.exe", "py", "py.exe"})
+_GRAPH_REFRESH_SCRIPTS = frozenset({"graph-refresh.sh", "graph-refresh.py", "graph-refresh.ps1"})
+
+
+def _split_hook_argv(cmd: str) -> list[tuple[str, bool]]:
+    """Split a hook command into `(token, was_quoted)` pairs preserving quoted paths with spaces."""
+    tokens: list[tuple[str, bool]] = []
+    buf: list[str] = []
+    quote: str | None = None
+    quoted = False
+    for ch in cmd:
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            else:
+                buf.append(ch)
+        elif ch in ('"', "'"):
+            quote = ch
+            quoted = True
+        elif ch in (" ", "\t"):
+            if buf or quoted:
+                tokens.append(("".join(buf), quoted))
+                buf = []
+                quoted = False
+        else:
+            buf.append(ch)
+    if quote is not None:
+        return []
+    if buf or quoted:
+        tokens.append(("".join(buf), quoted))
+    return tokens
+
+
+def _matches_installed_graph_refresh_path(token: str, was_quoted: bool, hooks_dir: Path) -> bool:
+    """True when `token` names `graph-refresh.{sh,py,ps1}` directly inside `hooks_dir`."""
+    norm = token.replace("\\", "/")
+    name = norm.rsplit("/", 1)[-1].lower()
+    if name not in _GRAPH_REFRESH_SCRIPTS:
+        return False
+    parent = norm.rsplit("/", 1)[0] if "/" in norm else ""
+    if not parent:
+        return False
+    lower_parent = parent.lower()
+    if lower_parent == "~/.claude/hooks":
+        # Bash does not expand `~` inside quotes; only unquoted `~/...` reaches the hook.
+        return not was_quoted
+    if lower_parent in ("$home/.claude/hooks", "${home}/.claude/hooks", "%userprofile%/.claude/hooks"):
+        return True
+    try:
+        resolved_dir = os.path.normcase(os.path.abspath(str(Path(parent))))
+        expected_dir = os.path.normcase(os.path.abspath(str(hooks_dir)))
+        return resolved_dir == expected_dir
+    except OSError:
+        return False
+
+
+def _is_installed_graph_refresh_command(cmd: str, hooks_dir: Path) -> bool:
+    """True only when `cmd` directly invokes Exoma's installed graph-refresh hook script."""
+    if not isinstance(cmd, str) or not cmd.strip():
+        return False
+    argv = _split_hook_argv(cmd.strip())
+    if not argv:
+        return False
+    if _matches_installed_graph_refresh_path(argv[0][0], argv[0][1], hooks_dir):
+        return True
+    launcher = argv[0][0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if launcher not in _HOOK_LAUNCHERS:
+        return False
+    idx = 1
+    if launcher in ("py", "py.exe") and idx < len(argv) and argv[idx][0].startswith("-"):
+        idx += 1
+    return idx < len(argv) and _matches_installed_graph_refresh_path(argv[idx][0], argv[idx][1], hooks_dir)
+
+
+def _installed_claude_md_path() -> Path:
+    """Installed ~/.claude/CLAUDE.md honoring AGENT_HOME (same root as installer)."""
+    return osutil.agent_home() / ".claude" / "CLAUDE.md"
 
 
 def _claude_md_leftover() -> str | None:
     """~/.claude/CLAUDE.md when it holds the old global header outside the managed block."""
-    path = Path(_expand_home("{{HOME}}")) / ".claude" / "CLAUDE.md"
+    path = _installed_claude_md_path()
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -137,6 +231,141 @@ def _claude_md_leftover() -> str | None:
         text = text.replace(block, "")
     found = any(line.startswith(_OLD_GLOBAL_HEADER) for line in text.splitlines())
     return str(path) if found else None
+
+
+def _claude_md_leftover_exact_cleanable() -> bool:
+    """True when the leftover header in ~/.claude/CLAUDE.md matches an exact removable template."""
+    from exoma.installer.base import _has_symlink_component, strip_exact_legacy_claude_header_bytes
+
+    home = osutil.agent_home()
+    path = home / ".claude" / "CLAUDE.md"
+    if _has_symlink_component(path, home):
+        return False
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False
+    _, matched = strip_exact_legacy_claude_header_bytes(raw)
+    return matched is not None
+
+
+def _claude_md_size() -> dict:
+    """Measure installed ~/.claude/CLAUDE.md against the documented context warning boundary."""
+    path = _installed_claude_md_path()
+    base = {
+        "path": str(path),
+        "warning_threshold_chars": CLAUDE_MD_WARNING_THRESHOLD_CHARS,
+        "near_threshold_chars": CLAUDE_MD_NEAR_THRESHOLD_CHARS,
+        "threshold_source": "claude_code_prompt_budget_advisory",
+    }
+    if not path.exists():
+        return {**base, "status": "absent"}
+    try:
+        raw = path.read_bytes()
+        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {**base, "status": "unavailable", "error": type(exc).__name__}
+    managed = _marker_block(text, "WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END")
+    total_chars = len(text)
+    managed_chars = len(managed) if managed else 0
+    user_chars = max(0, total_chars - managed_chars)
+    if total_chars >= CLAUDE_MD_WARNING_THRESHOLD_CHARS:
+        status = "over_threshold"
+    elif total_chars >= CLAUDE_MD_NEAR_THRESHOLD_CHARS:
+        status = "near_threshold"
+    else:
+        status = "ok"
+    return {
+        **base,
+        "status": status,
+        "total_chars": total_chars,
+        "total_bytes": len(raw),
+        "managed_block_chars": managed_chars,
+        "user_chars": user_chars,
+        "remaining_chars": CLAUDE_MD_WARNING_THRESHOLD_CHARS - total_chars,
+    }
+
+
+def _claude_graph_refresh_hook_state() -> str:
+    """Check whether Claude settings.json registers Exoma's Stop graph-refresh hook."""
+    home = osutil.agent_home()
+    settings_path = home / ".claude" / "settings.json"
+    hooks_dir = home / ".claude" / "hooks"
+    if not settings_path.exists():
+        return "inactive"
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unavailable"
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    stop_entries = hooks.get("Stop") if isinstance(hooks, dict) else None
+    if not isinstance(stop_entries, list):
+        return "inactive"
+    for entry in stop_entries:
+        sub = entry.get("hooks") if isinstance(entry, dict) else None
+        if not isinstance(sub, list):
+            continue
+        for hook in sub:
+            cmd = str(hook.get("command") or "") if isinstance(hook, dict) else ""
+            if _is_installed_graph_refresh_command(cmd, hooks_dir):
+                return "active"
+    return "inactive"
+
+
+def _graphify_instruction_conflict(project_root: Path) -> dict:
+    """Detect project-owned instructions telling the agent to run post-edit `graphify update`
+    while Exoma's Claude Stop hook already owns graph refresh. Read-only; never edits files."""
+    hook_state = _claude_graph_refresh_hook_state()
+    checked: list[str] = []
+    unreadable: list[str] = []
+    conflicts: list[dict] = []
+    if hook_state != "active":
+        return {
+            "status": "unavailable" if hook_state == "unavailable" else "inactive_hook",
+            "stop_hook": hook_state,
+            "checked_files": checked,
+            "conflicts": conflicts,
+        }
+    for rel in _GRAPHIFY_INSTRUCTION_FILES:
+        path = project_root / rel
+        if not path.is_file():
+            continue
+        try:
+            with path.open("rb") as fh:
+                raw = fh.read(_GRAPHIFY_SCAN_MAX_BYTES)
+            text = raw.decode("utf-8", errors="replace")
+        except OSError:
+            unreadable.append(rel)
+            continue
+        checked.append(rel)
+        # Ignore Exoma's own managed block if present; inspect only project-owned lines.
+        managed = _marker_block(text, "WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END")
+        managed_lines: set[int] = set()
+        if managed:
+            start_idx = text.find(managed)
+            if start_idx >= 0:
+                first_line = text[:start_idx].count("\n") + 1
+                span = managed.count("\n") + 1
+                managed_lines = set(range(first_line, first_line + span))
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if lineno in managed_lines:
+                continue
+            if "graphify update" not in line.lower():
+                continue
+            if _GRAPHIFY_NEGATION.search(line):
+                continue
+            if _GRAPHIFY_POST_EDIT.search(line):
+                conflicts.append({"file": rel, "line": lineno, "excerpt": line.strip()[:160]})
+    status = "conflict" if conflicts else ("unavailable" if unreadable and not checked else "none")
+    result = {
+        "status": status,
+        "stop_hook": hook_state,
+        "checked_files": checked,
+        "conflicts": conflicts,
+    }
+    if unreadable:
+        result["unreadable_files"] = unreadable
+    return result
 
 
 # What a v3.5.x layout legitimately keeps at the .workflow root, so doctor does not call a
@@ -697,6 +926,15 @@ def run_doctor(
         )
 
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
+    graphify_conflict = _graphify_instruction_conflict(project_root)
+    checks["graphify_instruction_conflict"] = graphify_conflict
+    if graphify_conflict["status"] == "conflict":
+        locations = ", ".join(f"{c['file']}:{c['line']}" for c in graphify_conflict["conflicts"][:5])
+        recommended_fixes.append(
+            f"Project instruction conflict with Exoma's Stop hook `graph-refresh` at {locations}: "
+            "Exoma's Stop hook already runs post-edit `graphify update`; remove or narrow that "
+            "project instruction by hand to avoid duplicate refreshes"
+        )
 
     # Config knob sanity: unknown keys / wrong types silently do nothing. Surfaced as a
     # recommended fix, not an issue — the runtime readers fall back safely, so a typo must
@@ -735,10 +973,27 @@ def run_doctor(
     leftover = _claude_md_leftover()
     checks["claude_md_leftover_header"] = leftover or "none"
     if leftover:
+        if _claude_md_leftover_exact_cleanable():
+            recommended_fixes.append(
+                f"WARNING: {leftover} has an exact historical '# Claude Code — Personal Global Config (v...' "
+                "header outside the WORKFLOW-MAIN-AGENT markers — preview removal with "
+                "`exoma install --clean-legacy` (apply with `--apply`), or delete that section by hand"
+            )
+        else:
+            recommended_fixes.append(
+                f"WARNING: {leftover} has a '# Claude Code — Personal Global Config (v...' header "
+                "outside the WORKFLOW-MAIN-AGENT markers — leftover from an old install. It is "
+                "your text now (install never touches it); delete that section by hand"
+            )
+
+    claude_size = _claude_md_size()
+    checks["claude_md_size"] = claude_size
+    if claude_size["status"] in ("over_threshold", "near_threshold"):
+        label = "exceeds" if claude_size["status"] == "over_threshold" else "is approaching"
         recommended_fixes.append(
-            f"WARNING: {leftover} has a '# Claude Code — Personal Global Config (v...' header "
-            "outside the WORKFLOW-MAIN-AGENT markers — leftover from an old install. It is "
-            "your text now (install never touches it); delete that section by hand"
+            f"WARNING: {claude_size['path']} is {claude_size['total_chars']:,} chars "
+            f"(Exoma block {claude_size['managed_block_chars']:,} + user text {claude_size['user_chars']:,}), "
+            f"which {label} the {claude_size['warning_threshold_chars']:,}-char advisory boundary"
         )
 
     # /.verify-browser readiness, metadata only and never an issue: the browser and the

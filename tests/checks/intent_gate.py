@@ -336,15 +336,21 @@ def _check_skill_read_lane() -> None:
         try:
             skills = gate.home / ".claude" / "skills"
             (skills / "pkg").mkdir(parents=True)
+            (skills / "verify-browser").mkdir(parents=True)
             (skills / "analyze.md").write_text("# Skill: analyze\n", encoding="utf-8")
             (skills / "pkg" / "SKILL.md").write_text("# nested\n", encoding="utf-8")
+            (skills / "verify-browser" / "interview.md").write_text("# interview ref\n", encoding="utf-8")
             (skills / "notes.txt").write_text("x\n", encoding="utf-8")
             (gate.home / ".claude" / "settings.md").write_text("x\n", encoding="utf-8")
             (gate.project / "secret.md").write_text("x\n", encoding="utf-8")
-            for intent in ("plan", "analyze", "verify"):
+            for intent in ("plan", "analyze", "verify", "verify-browser"):
                 gate.arm(intent)
                 gate.expect("Read", {"file_path": str(skills / "analyze.md")}, 0, f"a pending {intent} lets a skill be read")
                 gate.expect("Read", {"file_path": str(skills / "pkg" / "SKILL.md")}, 0, "a skill in a subfolder")
+                gate.expect("Read", {"file_path": str(skills / "verify-browser" / "interview.md")}, 0,
+                            f"a pending {intent} lets a nested skill reference be read")
+                gate.expect("Bash", {"command": f"cat '{(skills / 'verify-browser' / 'interview.md').as_posix()}'"}, 0,
+                            f"a pending {intent} lets a single-file shell read of a nested skill reference")
             gate.arm("plan")
             blocked = [
                 (str(skills / "notes.txt"), "a file that is not .md"),

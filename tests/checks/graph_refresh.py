@@ -500,6 +500,106 @@ def _check_doctor_and_clean_read_the_lock() -> None:
             any("--command clean" in fix and "no live worker" in fix for fix in meta["recommended_fixes"]),
             f"doctor points a stale refresh lock at clean: {meta['recommended_fixes']}",
         )
+
+        # W4: Graphify instruction conflict detection (read-only, active Stop hook only, no false positives).
+        fake_home = root / "agent-home"
+        (fake_home / ".claude").mkdir(parents=True)
+        saved_agent_home = os.environ.get("AGENT_HOME")
+        os.environ["AGENT_HOME"] = str(fake_home)
+        try:
+            proj_claude = workspace / "CLAUDE.md"
+            proj_claude.write_text(
+                "# Project rules\n"
+                "- Never run graphify update manually (belongs to Stop hook).\n"
+                "- If graphify-out/ is absent, offer `.graphifyignore` + `graphify update`.\n",
+                encoding="utf-8",
+            )
+            # Without graph-refresh Stop hook registered -> inactive_hook.
+            meta_inactive = run_doctor(workspace, "does-not-exist", "graph-conflict")["meta"]
+            c_inactive = read_json_file(Path(meta_inactive["doctor_report"]))["checks"]["graphify_instruction_conflict"]
+            assert_true(c_inactive["status"] == "inactive_hook", f"inactive hook reported cleanly: {c_inactive}")
+
+            # Non-Exoma commands (and quoted literal tilde) must NOT count as active Exoma hook.
+            for fake_cmd in (
+                "echo graph-refresh",
+                "echo ~/.claude/hooks/graph-refresh.sh",
+                'bash "~/.claude/hooks/graph-refresh.sh"',
+            ):
+                (fake_home / ".claude" / "settings.json").write_text(
+                    json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": fake_cmd}]}]}}),
+                    encoding="utf-8",
+                )
+                meta_foreign = run_doctor(workspace, "does-not-exist", "graph-conflict")["meta"]
+                c_foreign = read_json_file(Path(meta_foreign["doctor_report"]))["checks"]["graphify_instruction_conflict"]
+                assert_true(c_foreign["status"] == "inactive_hook",
+                            f"foreign command {fake_cmd!r} must not count as Exoma hook: {c_foreign}")
+
+            # Quoted absolute path with spaces in home directory IS recognized as active Exoma hook.
+            spaced_home = root / "home with spaces"
+            (spaced_home / ".claude").mkdir(parents=True)
+            spaced_cmd = f'"E:/Program Files/Git/bin/bash.exe" "{(spaced_home / ".claude" / "hooks" / "graph-refresh.sh").as_posix()}"'
+            (spaced_home / ".claude" / "settings.json").write_text(
+                json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": spaced_cmd}]}]}}),
+                encoding="utf-8",
+            )
+            os.environ["AGENT_HOME"] = str(spaced_home)
+            from exoma.core.audit.diagnostics import _claude_graph_refresh_hook_state
+            assert_true(_claude_graph_refresh_hook_state() == "active",
+                        f"quoted hook path with spaces recognized as active: {spaced_cmd}")
+            os.environ["AGENT_HOME"] = str(fake_home)
+
+            # Register Exoma Stop graph-refresh hook -> safe lines produce zero conflicts.
+            (fake_home / ".claude" / "settings.json").write_text(
+                json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "bash ~/.claude/hooks/graph-refresh.sh"}]}]}}),
+                encoding="utf-8",
+            )
+            meta_clean = run_doctor(workspace, "does-not-exist", "graph-conflict")["meta"]
+            c_clean = read_json_file(Path(meta_clean["doctor_report"]))["checks"]["graphify_instruction_conflict"]
+            assert_true(c_clean["status"] == "none" and not c_clean["conflicts"],
+                        f"negated/bootstrap lines do not false-positive: {c_clean}")
+
+            # Add affirmative post-edit directive (including one mentioning Stop hook) -> reported read-only.
+            conflict_text = (
+                proj_claude.read_text(encoding="utf-8")
+                + "- Auto-run `graphify update` after every code change.\n"
+                + "- Always run `graphify update` after edits even if a Stop hook exists.\n"
+            )
+            proj_claude.write_text(conflict_text, encoding="utf-8")
+            meta_hit = run_doctor(workspace, "does-not-exist", "graph-conflict")["meta"]
+            c_hit = read_json_file(Path(meta_hit["doctor_report"]))["checks"]["graphify_instruction_conflict"]
+            assert_true(
+                c_hit["status"] == "conflict"
+                and len(c_hit["conflicts"]) == 2
+                and c_hit["conflicts"][0]["file"] == "CLAUDE.md"
+                and c_hit["conflicts"][0]["line"] == 4
+                and c_hit["conflicts"][1]["line"] == 5
+                and any("CLAUDE.md:4" in fix for fix in meta_hit["recommended_fixes"])
+                and not any("graph-refresh" in issue for issue in meta_hit["issues"])
+                and proj_claude.read_text(encoding="utf-8") == conflict_text,
+                f"affirmative post-edit conflict reported read-only: {c_hit} fixes={meta_hit['recommended_fixes']}",
+            )
+
+            # Unreadable project instruction file reports unavailable without appearing in checked_files.
+            from unittest.mock import patch
+            from exoma.core.audit.diagnostics import _graphify_instruction_conflict
+            orig_open = Path.open
+            def _deny_claude(self, *a, **kw):
+                if self == proj_claude:
+                    raise OSError("unreadable")
+                return orig_open(self, *a, **kw)
+            with patch.object(Path, "open", _deny_claude):
+                c_unreadable = _graphify_instruction_conflict(workspace)
+            assert_true(
+                c_unreadable["status"] == "unavailable"
+                and "CLAUDE.md" not in c_unreadable["checked_files"]
+                and c_unreadable.get("unreadable_files") == ["CLAUDE.md"],
+                f"all-unreadable instruction files report unavailable: {c_unreadable}",
+            )
+        finally:
+            if saved_agent_home is None:
+                os.environ.pop("AGENT_HOME", None)
+            else:
+                os.environ["AGENT_HOME"] = saved_agent_home
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

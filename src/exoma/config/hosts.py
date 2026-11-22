@@ -208,6 +208,22 @@ PLACEHOLDERS = ("{{RUNNER}}", "{{SHELL_TOOL}}", "{{DELEGATED_RUN}}", "{{ASK_USER
 COMMAND_IDS = frozenset(("analyze", "caveman", "commit", "doctor", "execute", "explore", "help", "init",
                          "local", "memory", "plan", "promote", "provider", "sweep", "upgrade", "verify", "verify-browser"))
 COMMAND_TOKEN = re.compile(r"\{\{CMD:([a-z][a-z0-9_-]*)\}\}")
+SKILL_REF_TOKEN = re.compile(r"\{\{SKILL_REF:([a-z][a-z0-9_-]*)/([a-z0-9_.-]+\.md)\}\}")
+
+
+def skill_ref_path(host: str, skill: str, filename: str) -> str:
+    """Installed path (or in-skill section for OpenCode) of a conditional skill reference `.md`."""
+    if skill not in COMMAND_IDS or "/" in filename or "\\" in filename or ".." in filename:
+        raise ValueError(f"invalid skill reference: {skill}/{filename}")
+    if host == "claude":
+        return f"~/.claude/skills/{skill}/{filename}"
+    if host == "agy":
+        return f"~/.gemini/antigravity-cli/skills/.{skill}/references/{filename}"
+    if host == "codex":
+        return f"~/.codex/skills/exoma-{skill}/references/{filename}"
+    if host == "opencode":
+        return f'the bundled "{skill}/{filename}" section below'
+    raise ValueError(f"unknown host: {host}")
 
 
 def command_invocation(host: str, command_id: str) -> str:
@@ -302,5 +318,6 @@ def render_contract(text: str, host: str) -> str:
     }
     for name, value in values.items():
         text = text.replace(name, value)
+    text = SKILL_REF_TOKEN.sub(lambda m: skill_ref_path(host, m.group(1), m.group(2)), text)
     text = render_commands(text, host)
     return RULE_MARKER.sub(lambda m: f"<!-- rule:{m.group('id')} | {host}: {level_of(m.group('id'), host)} -->", text)

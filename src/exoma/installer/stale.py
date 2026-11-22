@@ -108,13 +108,29 @@ def previously_installed() -> dict[str, dict]:
 
 
 def remove_empty_skill_dir(path: Path, key: str) -> None:
-    """Remove an empty Agy, Codex or OpenCode skill directory after its managed file goes."""
+    """Remove empty managed skill/reference directories after their file goes."""
     managed_key = key.split("/", 1)[-1] if key.startswith(("stale/", "uninstall/")) else key
-    if managed_key.startswith((AGY_SKILLS_PREFIX, CODEX_SKILLS_PREFIX, OPENCODE_SKILLS_PREFIX)) and path.name == "SKILL.md":
-        try:
-            path.parent.rmdir()
-        except OSError:
-            pass
+    claude_skills_prefix = f"{CLAUDE_HOST}/skills/"
+    if managed_key.startswith(claude_skills_prefix):
+        sub = managed_key[len(claude_skills_prefix):]
+        if "/" in sub:
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+        return
+    if managed_key.startswith((AGY_SKILLS_PREFIX, CODEX_SKILLS_PREFIX, OPENCODE_SKILLS_PREFIX)):
+        if path.name == "SKILL.md":
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+        elif path.parent.name == "references":
+            for directory in (path.parent, path.parent.parent):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    break
 
 
 def stale_files(current_dests: set[str]) -> tuple[list[tuple[Path, dict]], list[Path]]:

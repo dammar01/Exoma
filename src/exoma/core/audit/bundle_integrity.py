@@ -340,8 +340,12 @@ def _bundle_integrity(
             continue
         installed = _installed_path_for(rel, targets, project_root)
         # An Agy skill directory is installed dotted, so it answers to `/.<name>`.
-        if installed is not None and rel.startswith(f"{host_dir('agy')}/skills/"):
-            installed = installed.parent.parent / f".{installed.parent.name}" / installed.name
+        agy_skills_prefix = f"{host_dir('agy')}/skills/"
+        if installed is not None and rel.startswith(agy_skills_prefix):
+            sub = rel[len(agy_skills_prefix):]
+            skill_name, sep, rest = sub.partition("/")
+            agy_base = Path(_expand_home(str(targets[f"{host_dir('agy')}/skills"]), project_root))
+            installed = (agy_base / f".{skill_name}" / rest) if sep else (agy_base / f".{skill_name}")
         if (
             _is_agent_roster_path(rel)
             and (installed is None or not installed.is_file())

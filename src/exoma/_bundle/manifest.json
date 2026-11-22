@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "c75864679d5cc3da0aa7902e518a94aba071d4538b7b66543e1e0d7054de512f",
-      "bytes": 41450,
+      "sha256": "b447af24736491fb9c094c664c6b75cf3f3f6170a687437b8c87c8228eb15d1f",
+      "bytes": 28436,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -42,8 +42,8 @@
     },
     {
       "path": "hosts/claude/skills/execute.md",
-      "sha256": "0e62690c46983d83edd7a177dcf26edc1a64b09a0279dffb174a594d9de62514",
-      "bytes": 7683,
+      "sha256": "f6c25cd14fa104e501117e0b25bd799279b5027317ae3dc14244ef13cbec3ea2",
+      "bytes": 6473,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -119,15 +119,29 @@
     },
     {
       "path": "hosts/claude/skills/verify-browser.md",
-      "sha256": "9caee96733ba65aefe33e233b14aa63277bbc6247ad2d1e5ceebae7f2c7e7b22",
-      "bytes": 33651,
+      "sha256": "5cccdf3952f2cbe0a40bb7e9cf6c0d494935896a3a5540ff3b3fba9baf239240",
+      "bytes": 10072,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "hosts/claude/skills/verify.md",
-      "sha256": "09be4626751e0c2c7802cd564afe910d1d01da9bd8eccdfdf30447db04c9e0d5",
-      "bytes": 9685,
+      "sha256": "ace2aea6a3eb334f1d9219636c066d95b793910d143cda05461e50a0e86dcee3",
+      "bytes": 7678,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "hosts/claude/skills/verify-browser/interactive-and-tags.md",
+      "sha256": "0a20ae6eead08add5cd1120823f69e8dbbbcb7cd9dbcee08b8696a0faa2123cd",
+      "bytes": 5745,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "hosts/claude/skills/verify-browser/interview.md",
+      "sha256": "70487f5bd11c6734357c04c539dd9641de8c549f51187f0b28e46b985c00ad75",
+      "bytes": 5345,
       "merge": "replace",
       "component": "prompt_bundle"
     },

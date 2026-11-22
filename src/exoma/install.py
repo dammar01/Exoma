@@ -656,6 +656,13 @@ def main() -> int:
         "unless --apply is also given",
     )
     parser.add_argument(
+        "--clean-legacy",
+        action="store_true",
+        help="preview or remove an exact historical pre-marker Exoma header left outside the "
+        "WORKFLOW-MAIN-AGENT block in ~/.claude/CLAUDE.md. Preserves unrelated user text "
+        "byte-for-byte and writes a single receipted backup. Dry run unless --apply is also given",
+    )
+    parser.add_argument(
         "--with-e2e",
         action="store_true",
         help="also install the optional browser-verification extra: pip install -r "
@@ -733,6 +740,10 @@ def main() -> int:
         from exoma.installer.uninstall import run_uninstall
 
         return run_uninstall(args.apply and not args.dry_run)
+    if args.clean_legacy:
+        from exoma.installer.base import run_clean_legacy
+
+        return run_clean_legacy(args.apply and not args.dry_run)
 
     if args.host and args.host_flag and args.host != args.host_flag:
         print(f"[INSTALL] host named twice ({args.host} and --host {args.host_flag}); name it once")
