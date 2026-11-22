@@ -153,9 +153,20 @@ _LEGACY_ROOT_ITEMS = frozenset(
 
 
 GATE_SKIPS_FILE = "gate-skips.jsonl"
-# How far back /.doctor reports gate skips. A week covers the sessions a user still
+GATE_BLOCKS_FILE = "gate-blocks.jsonl"
+# How far back /.doctor reports gate skips and refusals. A week covers the sessions a user still
 # remembers; older rows describe a setup that has likely changed since. Not measured.
 GATE_SKIP_WINDOW_DAYS = 7
+GATE_BLOCKS_MAX_FILES = 64
+GATE_BLOCKS_MAX_BYTES_PER_FILE = 256 * 1024
+GATE_BLOCKS_MAX_LINES = 5000
+_GATE_BLOCK_HOOKS = frozenset({
+    "intent-gate-check", "execution-gate", "agy-host", "codex-host", "opencode-host",
+})
+_GATE_BLOCK_RULES = frozenset({
+    "preflight", "preflight_quota", "runner_malformed", "session_binding",
+    "runner_write", "escape_write", "commit_unapproved", "outside_root", "outside_scope",
+})
 
 
 def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
@@ -216,6 +227,171 @@ def _gate_skips(project_root: Path, data_dir: Path) -> dict | None:
         "by_reason": by_reason,
         "by_hook": by_hook,
         "latest": latest.isoformat() if latest else None,
+    }
+
+
+def _gate_blocks(
+    project_root: Path,
+    data_dir: Path,
+    *,
+    window_days: int = GATE_SKIP_WINDOW_DAYS,
+    max_files: int = GATE_BLOCKS_MAX_FILES,
+    max_bytes_per_file: int = GATE_BLOCKS_MAX_BYTES_PER_FILE,
+    max_lines: int = GATE_BLOCKS_MAX_LINES,
+    max_scan_entries: int = 512,
+) -> dict:
+    """Bounded, privacy-safe summary of recent gate refusals across project sessions."""
+    import json as _json
+    import stat as _stat
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    sessions = Path(data_dir) / "sessions"
+    candidates: list[tuple[float, Path]] = []
+    unreadable_files = 0
+    truncated = False
+    if sessions.exists():
+        try:
+            entries_iter = os.scandir(sessions)
+        except OSError:
+            entries_iter = None
+            unreadable_files += 1
+        if entries_iter is not None:
+            scanned_entries = 0
+            with entries_iter:
+                for entry in entries_iter:
+                    if scanned_entries >= max_scan_entries:
+                        truncated = True
+                        break
+                    scanned_entries += 1
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        unreadable_files += 1
+                        continue
+                    path = Path(entry.path) / "runtime" / GATE_BLOCKS_FILE
+                    try:
+                        st = path.stat()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        unreadable_files += 1
+                        continue
+                    if not _stat.S_ISREG(st.st_mode):
+                        unreadable_files += 1
+                        continue
+                    candidates.append((st.st_mtime, path))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    if len(candidates) > max_files:
+        candidates = candidates[:max_files]
+        truncated = True
+
+    by_rule: dict[str, int] = {}
+    by_hook: dict[str, int] = {}
+    total = 0
+    blocked = 0
+    warned = 0
+    invalid_rows = 0
+    lines_scanned = 0
+    latest: datetime | None = None
+
+    for _mtime, path in candidates:
+        if lines_scanned >= max_lines:
+            truncated = True
+            break
+        try:
+            st = path.stat()
+            if not _stat.S_ISREG(st.st_mode):
+                unreadable_files += 1
+                continue
+            with path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                dropped_prefix = False
+                if size > max_bytes_per_file:
+                    fh.seek(size - max_bytes_per_file)
+                    dropped_prefix = True
+                    truncated = True
+                else:
+                    fh.seek(0)
+                raw = fh.read(max_bytes_per_file + 1)
+                if len(raw) > max_bytes_per_file:
+                    raw = raw[:max_bytes_per_file]
+                    truncated = True
+        except OSError:
+            unreadable_files += 1
+            continue
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        if dropped_prefix and lines:
+            lines = lines[1:]
+        for line in lines:
+            if not line.strip():
+                continue
+            if lines_scanned >= max_lines:
+                truncated = True
+                break
+            lines_scanned += 1
+            try:
+                row = _json.loads(line)
+            except (ValueError, RecursionError):
+                invalid_rows += 1
+                continue
+            if not isinstance(row, dict):
+                invalid_rows += 1
+                continue
+            try:
+                at = datetime.fromisoformat(str(row.get("at")))
+            except (ValueError, TypeError, AttributeError):
+                invalid_rows += 1
+                continue
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            if at < cutoff:
+                continue
+            raw_rule = row.get("rule")
+            raw_hook = row.get("hook")
+            if not isinstance(raw_rule, str) or not raw_rule.strip() or not isinstance(raw_hook, str) or not raw_hook.strip():
+                invalid_rows += 1
+                continue
+            rule = raw_rule if raw_rule in _GATE_BLOCK_RULES else "other"
+            hook = raw_hook if raw_hook in _GATE_BLOCK_HOOKS else "other"
+            exit_code = row.get("exit")
+            mode = str(row.get("mode") or "")
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                is_blocked = exit_code != 0
+            else:
+                is_blocked = mode != "warn"
+            total += 1
+            if is_blocked:
+                blocked += 1
+            else:
+                warned += 1
+            by_rule[rule] = by_rule.get(rule, 0) + 1
+            by_hook[hook] = by_hook.get(hook, 0) + 1
+            if latest is None or at > latest:
+                latest = at
+
+    if unreadable_files > 0 and total == 0 and invalid_rows == 0 and not truncated:
+        status = "unavailable"
+    elif unreadable_files > 0 or invalid_rows > 0 or truncated:
+        status = "partial"
+    elif total == 0:
+        status = "none"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "total": total,
+        "blocked": blocked,
+        "warned": warned,
+        "window_days": window_days,
+        "by_rule": dict(sorted(by_rule.items())),
+        "by_hook": dict(sorted(by_hook.items())),
+        "latest": latest.isoformat() if latest else None,
+        "invalid_rows": invalid_rows,
+        "unreadable_files": unreadable_files,
+        "truncated": truncated,
     }
 
 
@@ -919,6 +1095,36 @@ def run_doctor(
             f"Workflow gates reported {sum(actionable_skips.values())} skipped check(s) in the last "
             f"{GATE_SKIP_WINDOW_DAYS} days ({reasons}); if you did not set the escape, check "
             "local_mode.flag / WORKFLOW_LOCAL_MODE, session binding, and hook installation (gate-skips.jsonl)"
+        )
+
+    gate_blocks = _gate_blocks(project_root, paths["data_dir"])
+    checks["gate_blocks"] = gate_blocks
+    runner_refusals = {
+        rule: count
+        for rule, count in (gate_blocks.get("by_rule") or {}).items()
+        if rule in ("runner_malformed", "session_binding") and count > 0
+    }
+    if runner_refusals:
+        parts = ", ".join(f"{k} x{v}" for k, v in sorted(runner_refusals.items()))
+        recommended_fixes.append(
+            f"Workflow gates refused {sum(runner_refusals.values())} runner invocation(s) in the last "
+            f"{GATE_SKIP_WINDOW_DAYS} days ({parts}); call .workflow/run.sh as one plain standalone command "
+            "without pipes/redirects/double quotes and with --session '<MAIN_SESSION_ID>' (gate-blocks.jsonl)"
+        )
+    if gate_blocks.get("status") == "unavailable":
+        recommended_fixes.append(
+            "Gate refusal logs (runtime/gate-blocks.jsonl) could not be read; check file permissions"
+        )
+    elif gate_blocks.get("status") == "partial":
+        details = []
+        if gate_blocks.get("truncated"):
+            details.append("scan bounds reached")
+        if gate_blocks.get("invalid_rows"):
+            details.append(f"{gate_blocks['invalid_rows']} invalid row(s)")
+        if gate_blocks.get("unreadable_files"):
+            details.append(f"{gate_blocks['unreadable_files']} unreadable file(s)")
+        recommended_fixes.append(
+            "Gate refusal summary (checks.gate_blocks) is partial (" + ", ".join(details) + ")"
         )
 
     from exoma.core.audit.task_telemetry import load_hook_diagnostics

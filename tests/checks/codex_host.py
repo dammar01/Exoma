@@ -73,6 +73,16 @@ def _test_codex_host_contract():
                               "tool_name": "exec_command", "tool_input": {"cmd": prepare.replace(main, "other")}})
         assert_true(wrong_prepare.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
                     "prepare remains bound to the authoritative Codex session")
+        piped_prepare = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
+                              "tool_name": "exec_command", "tool_input": {"cmd": prepare + " | head -c 500"}})
+        piped_reason = piped_prepare.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        assert_true(piped_prepare.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+                    and "pipes" in piped_reason and "verify-prepare" in piped_reason,
+                    f"piped verify-prepare reports malformed runner syntax instead of session binding: {piped_prepare}")
+        blocks_path = root / ".workflow" / "data" / "sessions" / main / "runtime" / "gate-blocks.jsonl"
+        block_rules = [json.loads(line)["rule"] for line in blocks_path.read_text(encoding="utf-8").splitlines()]
+        assert_true("session_binding" in block_rules and "runner_malformed" in block_rules,
+                    f"Codex logs distinct session_binding and runner_malformed rules: {block_rules}")
         for suffix in ("--session 'wrong' --task 'task'", "--session 'default'", "--task 'task'",
                        f"--session '{main}' --session '{main}'", f"--session '{main}' --task '--session'",
                        f"--session '{main}' --task 'x' extra",
@@ -132,7 +142,15 @@ def _test_codex_host_contract():
                          "tool_input": {"command": runner + "; Write-Output extra"}})
         assert_true(compound.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
                     "malformed recognized runner calls do not evade binding validation without a marker")
+        dq_unarmed = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
+                           "tool_input": {"command": f'{runner_prefix()} "{(root / ".workflow" / "run.sh").as_posix()}" verify-prepare --session \'{main}\''}})
+        assert_true(dq_unarmed == {}, f"unarmed double-quoted runner path keeps baseline allow behavior: {dq_unarmed}")
         _hook(home, "UserPromptSubmit", {**prompt, "prompt": "$exoma-plan add a feature"})
+        dq_armed = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
+                         "tool_input": {"command": f'{runner_prefix()} "{(root / ".workflow" / "run.sh").as_posix()}" verify-prepare --session \'{main}\''}})
+        assert_true(dq_armed.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+                    and "pipes" in dq_armed.get("hookSpecificOutput", {}).get("permissionDecisionReason", ""),
+                    f"armed double-quoted runner path is refused as runner_malformed: {dq_armed}")
         upgrade_command = "exoma upgrade --work-dir '%s'" % root.as_posix()
         upgrade_payload = {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
                            "tool_input": {"command": upgrade_command}}

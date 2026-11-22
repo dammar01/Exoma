@@ -432,6 +432,19 @@ def _case_execution_gate(ws: _Workspace, run) -> None:
     assert_true(gate_status["configuration_status"] == "disabled"
                 and "session_or_workspace_unavailable" in gate_status["recent_fail_open"],
                 f"doctor distinguishes off configuration and recorded failures: {gate_status}")
+    gate_blocks = checks["gate_blocks"]
+    assert_true(
+        gate_blocks["status"] == "ok" and gate_blocks["total"] == len(rows)
+        and gate_blocks["warned"] == 1 and gate_blocks["blocked"] == len(rows) - 1
+        and gate_blocks["by_rule"]["commit_unapproved"] == 5
+        and gate_blocks["by_rule"]["outside_scope"] == 1
+        and gate_blocks["by_hook"]["execution-gate"] == len(rows),
+        f"doctor summarizes gate-blocks.jsonl accurately: {gate_blocks}",
+    )
+    assert_true(
+        not any("gate-blocks" in issue for issue in report.get("meta", {}).get("issues", [])),
+        f"ordinary refusals are not readiness issues: {report.get('meta', {}).get('issues')}",
+    )
 
 
 def _case_status_guard(ws: _Workspace, run) -> None:

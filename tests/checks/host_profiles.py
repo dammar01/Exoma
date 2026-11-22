@@ -232,6 +232,27 @@ def _test_runner_call_single_source():
             for invalid_call in (prepare_call.replace("'main_x'", "'other'"), prepare_call.split(" --session")[0]):
                 assert_true(wp.preflight_refusal("shell", "", invalid_call, {"command": "verify"}, context)
                             == "session_binding", f"{host}: shared preflight validates the authoritative session")
+            for malformed_call in (
+                prepare_call + " | python -c 'import json'",
+                prepare_call + " | head -c 500",
+                prepare_call + " > out.json",
+            ):
+                assert_true(wp.preflight_refusal("shell", "", malformed_call, {"command": "verify"}, context)
+                            == "runner_malformed", f"{host}: malformed runner classifies as runner_malformed: {malformed_call}")
+                assert_true(wp.runner_session_refusal(malformed_call, context) == "runner_malformed",
+                            f"{host}: runner_session_refusal classifies malformed syntax as runner_malformed: {malformed_call}")
+            dq_prepare = f'"{root}/.workflow/run.sh" verify-prepare --session "main_x"'
+            assert_true(wp.preflight_refusal("shell", "", dq_prepare, {"command": "verify"}, context)
+                        == "runner_malformed", f"{host}: armed preflight refuses double-quoted runner as runner_malformed")
+            assert_true(wp.runner_session_refusal(dq_prepare, context) is None,
+                        f"{host}: unarmed early check preserves baseline acceptance for double-quoted runner path")
+            assert_true(wp.preflight_refusal("shell", "", "cat README.md | head", {"command": "verify"}, context)
+                        == "preflight", f"{host}: ordinary shell pipe stays generic preflight")
+            verify_src = BUNDLE / "hosts" / "claude" / "skills" / "verify.md"
+            verify_key = f"hosts/{host}/skills/verify.md"
+            rendered_verify = base._render_text(verify_src, verify_key, None)
+            assert_true("no pipe" in rendered_verify and "single-line JSON" in rendered_verify,
+                        f"{host}: rendered verify skill states standalone no-pipe guidance")
             profile = wp.load_host_profile(str(hook_dir))
             assert_true(profile.get("host") == host and profile.get("runner_prefix") == hosts.runner_prefix(host),
                         f"{host}: host-profile.json is the profile: {profile}")

@@ -672,6 +672,52 @@ SESSION_COMMANDS = frozenset(("explore", "plan", "analyze", "verify", "verify-br
                               "plan-record", "execute-begin", "execute-end", "test", "verify-prepare"))
 
 
+def _leading_tokens(line, max_tokens=3, allow_double_quotes=False):
+    """Extract up to `max_tokens` leading words for refusal-only classification.
+
+    Never used for allow decisions: `plain_words` remains the sole acceptance parser.
+    Double-quoted tokens are enabled only inside armed preflight (`malformed_runner_attempt`)
+    so unarmed `runner_session_refusal` preserves baseline recognition.
+    """
+    words, pos, n = [], 0, len(line)
+    quote_chars = ("'", '"') if allow_double_quotes else ("'",)
+    for _ in range(max_tokens):
+        while pos < n and line[pos] in " \t":
+            pos += 1
+        if pos >= n:
+            break
+        c = line[pos]
+        if c in quote_chars:
+            end = line.find(c, pos + 1)
+            if end < 0:
+                break
+            words.append(line[pos + 1:end])
+            pos = end + 1
+        else:
+            token = _BARE_WORD.match(line, pos)
+            if not token:
+                break
+            words.append(token.group(0))
+            pos = token.end()
+        if pos < n and line[pos] not in " \t\r\n;|&<>":
+            break
+    return words
+
+
+def malformed_runner_attempt(command, root, home, is_bash):
+    """True when a command that failed strict `plain_words` still targets a local runner script.
+
+    Refusal-only helper: never relaxes acceptance. Covers run.sh, check.sh, and inspect.sh
+    anchored to this project's `.workflow` directory.
+    """
+    line = (command or "").strip()
+    cd = _CD_THEN.fullmatch(line)
+    if cd and inside_root(cd.group(1) if cd.group(1) is not None else cd.group(2), root, home):
+        line = cd.group(3).strip()
+    words = _leading_tokens(line, max_tokens=3, allow_double_quotes=True)
+    return bool(words) and runner_call(words, root, home, is_bash)
+
+
 def runner_invocation(command, root, home, is_bash):
     """Parse one recognized run.sh call. Task contents remain opaque data."""
     line = (command or "").strip()
@@ -686,33 +732,17 @@ def runner_invocation(command, root, home, is_bash):
         # Identify only the executable, runner and subcommand before refusing malformed
         # arguments. Otherwise a trailing operator would turn a recognized runner into
         # an unchecked shell call when no delegated marker is armed.
-        words, pos = [], 0
-        for _ in range(3):
-            while pos < len(line) and line[pos] in " \t":
-                pos += 1
-            if pos >= len(line):
-                break
-            if line[pos] == "'":
-                end = line.find("'", pos + 1)
-                if end < 0:
-                    break
-                words.append(line[pos + 1:end])
-                pos = end + 1
-            else:
-                token = _BARE_WORD.match(line, pos)
-                if not token:
-                    break
-                words.append(token.group(0))
-                pos = token.end()
+        words = _leading_tokens(line, max_tokens=3)
     if not words or not runner_call(words, root, home, is_bash):
         return None
     index = 1 if is_bash(words[0]) else 0
     if not same_path(local_path(words[index], home), os.path.join(root, ".workflow", "run.sh"), root):
         return None
     args = words[index + 1:]
-    result = {"command": args[0] if args else None, "session": None, "invalid": False}
+    result = {"command": args[0] if args else None, "session": None, "invalid": False, "malformed": False}
     if malformed:
         result["invalid"] = True
+        result["malformed"] = True
         return result
     args = args[1:]
     if args and args[0].startswith("--"):
@@ -741,6 +771,8 @@ def runner_session_refusal(command, ctx):
         return None
     parsed = runner_invocation(command, ctx["root"], ctx["home"], ctx["is_bash"])
     if parsed and (parsed["command"] in SESSION_COMMANDS or parsed["command"] is None):
+        if parsed.get("malformed"):
+            return "runner_malformed"
         if parsed["invalid"] or parsed["session"] != expected:
             return "session_binding"
     return None
@@ -845,6 +877,8 @@ def preflight_refusal(kind, target, command, marker, ctx):
                 return runner_session_refusal(command, ctx)
             if cmd == "verify" and diff_words(words, root, home):
                 return None
+        elif malformed_runner_attempt(command, root, home, ctx["is_bash"]):
+            return "runner_malformed"
         one = shell_read_one(command)
         if one is not None and ctx["host_read"](one):
             return None
@@ -870,10 +904,15 @@ def preflight_refusal(kind, target, command, marker, ctx):
     return "preflight"
 
 
+GATE_BLOCKS_FILE = "gate-blocks.jsonl"
+GATE_BLOCKS_MAX_BYTES = 256 * 1024
+
+
 def log_refusal(rt_dir, hook, rule, tool, mode, blocked, plan_id):
     """One line per refusal in runtime/gate-blocks.jsonl; never the path or command."""
     if not rt_dir:
         return
+    path = os.path.join(rt_dir, GATE_BLOCKS_FILE)
     row = {
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "hook": hook,
@@ -885,7 +924,13 @@ def log_refusal(rt_dir, hook, rule, tool, mode, blocked, plan_id):
     }
     try:
         os.makedirs(rt_dir, exist_ok=True)
-        with open(os.path.join(rt_dir, "gate-blocks.jsonl"), "a", encoding="utf-8") as f:
+        if os.path.isfile(path) and os.path.getsize(path) > GATE_BLOCKS_MAX_BYTES:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+            keep = lines[len(lines) // 2:]
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("".join(l + "\n" for l in keep))
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
     except Exception:
         pass  # measuring the gate must never change what it decides

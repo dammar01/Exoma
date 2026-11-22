@@ -462,10 +462,20 @@ directly ([reference, "Hosts"](reference.md#hosts)). The full prompt-layer list,
 What *is* checkable is the second agent's output, because it comes back through the
 runtime: see `core.evidence.contract.contract_warnings`. Those are reported, never fatal.
 
-The `execution-gate` hook records its own refusals: one line per block or warning in the
-bound session's `runtime/gate-blocks.jsonl` (rule, tool, mode, exit code, plan id; never the
-path or command), fail-open. The runtime does not read it; it counts how often
-the gate fires, and whether a block was legitimate is still judged from the transcript.
+The `execution-gate` hook and the pre-flight gate hooks (`intent-gate-check`, `agy-host`,
+`codex-host`, `opencode-host`) record their refusals: one line per block or warning in the
+bound session's `runtime/gate-blocks.jsonl` (`at`, `hook`, `rule`, `tool`, `mode`, `exit`,
+`plan_id`; never the path, command, or prompt), fail-open, with best-effort compaction above
+256 KiB. Recognised malformed calls to `.workflow/{run,check,inspect}.sh` (pipes, redirects,
+chaining, double quotes, or shell expansion outside single quotes) are classified as
+`runner_malformed` rather than generic `preflight` or `session_binding`, while well-formed
+session-scoped calls with a missing, duplicate, or mismatched `--session` report
+`session_binding` across all four hosts' armed pre-flight paths. `--command doctor` aggregates
+recent `gate-blocks.jsonl` rows under `checks.gate_blocks` using bounded per-file and total
+scan limits, a seven-day window, allowlisted hook/rule labels (unknown values bucketed as
+`other`), and explicit `none` / `ok` / `partial` / `unavailable` status without marking normal
+refusals as readiness issues. Whether a recorded block was legitimate is still judged from the
+transcript.
 
 Claude's execution gate also records checks it could not perform: missing helper, payload,
 session/workspace, or an exception. These remain fail-open and emit an unavailable warning.

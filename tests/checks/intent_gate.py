@@ -442,7 +442,7 @@ class _ArmedGate:
     def disarm(self) -> None:
         (self.runtime / "delegated.marker").unlink(missing_ok=True)
 
-    def exit_code(self, tool: str, tool_input: dict) -> int:
+    def run_raw(self, tool: str, tool_input: dict) -> tuple[int, str, str]:
         payload = json.dumps({
             "session_id": "c1", "cwd": str(self.project), "hook_event_name": "PreToolUse",
             "tool_name": tool, "tool_input": tool_input,
@@ -452,7 +452,10 @@ class _ArmedGate:
             env={**self.env, "CLAUDE_HOOK_RAW": payload}, capture_output=True, timeout=60,
             **no_console(),
         )
-        return done.returncode
+        return done.returncode, done.stdout, done.stderr
+
+    def exit_code(self, tool: str, tool_input: dict) -> int:
+        return self.run_raw(tool, tool_input)[0]
 
     def expect(self, tool: str, tool_input: dict, code: int, why: str) -> None:
         got = self.exit_code(tool, tool_input)
@@ -491,8 +494,8 @@ def _test_intent_gate_runner_parsed() -> None:
                 "bash .workflow/run.sh plan 'rancang X; lalu cek $(y) | z > w' 'm1'",
                 "bash .workflow/check.sh job_1 --wait",
                 "bash .workflow/inspect.sh",
-                ".workflow/sub/../run.sh plan",
-                "bash .workflow/run.sh plan HEAD~1",
+                ".workflow/sub/../run.sh plan --session 'm1'",
+                "bash .workflow/run.sh plan 'HEAD~1' 'm1'",
             ]
             refused = [
                 # a gather, plain
@@ -540,6 +543,88 @@ def _test_intent_gate_runner_parsed() -> None:
                     gate.expect(tool, {"command": line}, 0, "a plain runner call must pass")
                 for line in refused:
                     gate.expect(tool, {"command": line}, 2, "a line that is not one plain anchored runner call must block")
+
+            # W3: verify-prepare piped/redirected and session_binding report accurate causes
+            # and log privacy-safe structured rows to runtime/gate-blocks.jsonl.
+            blocks_file = gate.runtime / "gate-blocks.jsonl"
+            blocks_file.unlink(missing_ok=True)
+            gate.arm("verify")
+            gate.expect("Bash", {"command": "bash .workflow/run.sh verify-prepare --session 'm1'"}, 0,
+                        "plain verify-prepare passes the armed verify gate")
+            for bad_prepare in (
+                "bash .workflow/run.sh verify-prepare --session 'm1' | python -c 'import json; print(1)'",
+                "bash .workflow/run.sh verify-prepare --session 'm1' | head -c 500",
+                "bash .workflow/run.sh verify-prepare --session 'm1' > out.json",
+                'bash ".workflow/run.sh" verify-prepare --session "m1"',
+            ):
+                code, _out, err = gate.run_raw("Bash", {"command": bad_prepare})
+                assert_true(
+                    code == 2 and "disallowed shell form" in err and "a shell read" not in err
+                    and "has NOT run this turn" not in err,
+                    f"[{label}] malformed verify-prepare must explain shell-form violation: rc={code} err={err!r}",
+                )
+            for bad_session in (
+                "bash .workflow/run.sh verify-prepare --session 'wrong'",
+                "bash .workflow/run.sh verify-prepare",
+            ):
+                code, _out, err = gate.run_raw("Bash", {"command": bad_session})
+                assert_true(
+                    code == 2 and "--session 'm1'" in err and "a shell read" not in err,
+                    f"[{label}] wrong/missing session must name authoritative session: rc={code} err={err!r}",
+                )
+            code, _out, err = gate.run_raw("Write", {"file_path": str(gate.project / ".workflow" / "run.sh"), "content": "x"})
+            assert_true(code == 2, f"[{label}] runner_write must exit 2")
+            code, _out, err = gate.run_raw("Write", {"file_path": str(gate.runtime / "local_mode.flag"), "content": "x"})
+            assert_true(code == 2, f"[{label}] escape_write must exit 2")
+
+            raw_blocks = blocks_file.read_text(encoding="utf-8")
+            rows = [json.loads(line) for line in raw_blocks.splitlines()]
+            rules = [r["rule"] for r in rows]
+            assert_true(
+                rules.count("runner_malformed") == 4 and rules.count("session_binding") == 2
+                and "runner_write" in rules and "escape_write" in rules
+                and all(r["hook"] == "intent-gate-check" and r["exit"] == 2 and r["mode"] == "hybrid" for r in rows),
+                f"[{label}] Claude preflight must log structured refusal rows: {rows}",
+            )
+            assert_true(
+                "import json" not in raw_blocks and "head -c" not in raw_blocks
+                and "out.json" not in raw_blocks and "local_mode.flag" not in raw_blocks,
+                f"[{label}] gate-blocks.jsonl must never store raw commands or paths",
+            )
+
+            # Doctor bounded reader: aggregates recent refusals, handles invalid/truncated bounds,
+            # never marks ordinary refusals as workspace readiness issues.
+            from exoma.core.audit import diagnostics
+            summary = diagnostics._gate_blocks(gate.project, gate.project / ".workflow" / "data")
+            assert_true(
+                summary["status"] == "ok" and summary["total"] == len(rows)
+                and summary["blocked"] == len(rows) and summary["warned"] == 0
+                and summary["by_rule"]["runner_malformed"] == 4
+                and summary["by_rule"]["session_binding"] == 2
+                and summary["by_hook"]["intent-gate-check"] == len(rows)
+                and summary["latest"] is not None,
+                f"[{label}] doctor _gate_blocks must summarize recorded refusals: {summary}",
+            )
+            bounded = diagnostics._gate_blocks(gate.project, gate.project / ".workflow" / "data", max_lines=3)
+            assert_true(
+                bounded["status"] == "partial" and bounded["truncated"] is True and bounded["total"] == 3,
+                f"[{label}] doctor _gate_blocks must report partial when scan bounds hit: {bounded}",
+            )
+            with blocks_file.open("a", encoding="utf-8") as fh:
+                fh.write("{corrupt-json\n")
+                fh.write(json.dumps({
+                    "at": rows[-1]["at"], "hook": "unknown-custom-hook", "rule": "custom_secret_rule",
+                    "tool": "Bash", "mode": "warn", "exit": 0, "plan_id": None,
+                }) + "\n")
+            partial = diagnostics._gate_blocks(gate.project, gate.project / ".workflow" / "data")
+            assert_true(
+                partial["status"] == "partial" and partial["invalid_rows"] == 1
+                and partial["warned"] == 1 and partial["by_rule"].get("other") == 1
+                and partial["by_hook"].get("other") == 1
+                and "custom_secret_rule" not in json.dumps(partial)
+                and "unknown-custom-hook" not in json.dumps(partial),
+                f"[{label}] doctor _gate_blocks must bucket unknown labels and flag invalid rows: {partial}",
+            )
         finally:
             gate.close()
 

@@ -181,7 +181,12 @@ def pre_tool_use(payload):
     if kind == "shell":
         session_error = wp.runner_session_refusal(command, {
             "root": root, "home": str(Path.home()), "is_bash": _is_bash, "expected_session": main_id})
-        if session_error:
+        if session_error == "runner_malformed":
+            refusal = (session_error,
+                       "Call %s plainly as one standalone command without pipes, redirects, chaining, or double quotes; "
+                       "use single quotes for arguments and inspect verify-prepare's compact JSON directly."
+                       % wp.runner_command(root, _profile()))
+        elif session_error:
             refusal = (session_error, "Use exactly --session '%s' from the authoritative binding; "
                        "missing, default, duplicate or different session arguments are refused." % main_id)
     for target in paths:
@@ -213,7 +218,15 @@ def pre_tool_use(payload):
             read_target = os.path.join(str(payload.get("cwd") or root), read_target)
         refusal_key = wp.preflight_refusal(kind, read_target if kind == "read" else paths[0] if paths else "",
                                            line, marker, ctx)
-        if refusal_key:
+        if refusal_key == "runner_malformed":
+            refusal = (refusal_key,
+                       "Call %s plainly as one standalone command without pipes, redirects, chaining, or double quotes; "
+                       "use single quotes for arguments and inspect verify-prepare's compact JSON directly."
+                       % wp.runner_command(root, _profile()))
+        elif refusal_key == "session_binding":
+            refusal = (refusal_key, "Use exactly --session '%s' from the authoritative binding; "
+                       "missing, default, duplicate or different session arguments are refused." % main_id)
+        elif refusal_key:
             refusal = (refusal_key, "Delegate %s first: %s %s --main-host codex --session '%s' --task '<task>'"
                        % (wp.format_command(marker.get("command"), _profile()), wp.runner_command(root, _profile()),
                           marker.get("command"), main_id))

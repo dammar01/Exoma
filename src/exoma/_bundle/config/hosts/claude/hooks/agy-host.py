@@ -290,9 +290,24 @@ def pre_tool_use(payload, cid):
             # Agy's line range under its own argument names (host-profile.json); unknown
             # names leave it None and the whole file is measured, as before.
             "limit": wp.read_limit(args, profile),
+            "expected_session": main_id,
         }
         rule = wp.preflight_refusal(kind, target, shell_command(command), marker, ctx)
-        if rule:
+        if rule == "runner_malformed":
+            refusal = (rule, (
+                ".workflow/run.sh was called in a disallowed shell form "
+                "(pipe, redirect, chaining, double quotes, or shell expansion outside single quotes).\n"
+                "Run it plainly as ONE standalone command without |, >, ;, &&, python, head, or double quotes:\n"
+                "  %s %s --session '%s' --task '<task>'  (sandbox bypassed: on Windows the sandbox stops Git Bash)\n"
+                "For verify-prepare, omit --task and inspect its compact single-line JSON directly."
+            ) % (runner, cmd, main_id))
+        elif rule == "session_binding":
+            refusal = (rule, (
+                "Use exactly --session '%s' from [SESSION BINDING]; "
+                "missing, default, duplicate, or different session arguments are refused.\n"
+                "Run: %s %s --session '%s' --task '<task>'  (sandbox bypassed: on Windows the sandbox stops Git Bash)"
+            ) % (main_id, runner, cmd, main_id))
+        elif rule:
             refusal = (rule, (
                 "/.%s is a delegated command: the next step is the runner, not %s.\n"
                 "%s"

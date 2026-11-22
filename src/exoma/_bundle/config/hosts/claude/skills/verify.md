@@ -13,6 +13,9 @@ syntax → QUICK: the runtime parse-checks the changed files locally (git diff H
 
 ## Prepare FIRST (local runtime, before selecting tests)
 Call `bash '<work_dir>/.workflow/run.sh' verify-prepare{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>'`.
+Run this as ONE plain standalone command — no pipe (`|`), redirect (`>`), chaining (`;`, `&&`),
+`python`, `head`, or double quotes. Its stdout is already a compact single-line JSON object small
+enough to inspect directly; piping or filtering it is refused by the pre-flight gate.
 This protocol command needs no task and is not a skill. Read `meta.policy`, `meta.request`,
 `meta.config_warnings`, and `meta.next_step`; do NOT read config.json or tests.json directly
 to reconstruct them. It does not call a provider, run tests, consume a request, clear the
@@ -41,7 +44,7 @@ The second agent only reads and traces; the runtime runs the tests. You choose t
 While the verify marker is active, select tests from existing evidence and
 `git [-C <root>] diff --name-only|--name-status|--stat [ref] [-- path]`
 (may open with `cd <dir inside the root> && `; otherwise no pipe/`&&`/redirect).
-Use the plain `verify-prepare` runner call and Write this session's tests.json.
+Use the plain standalone `verify-prepare` runner call (never piped, redirected, or wrapped in `python`/`head`) and Write this session's tests.json.
 The gate also permits other valid runner calls, host-readable contract/skill files,
 legacy native config/request reads, and precision reads within the marker's quota.
 Those exemptions describe hook behavior, not an instruction to gather broadly:

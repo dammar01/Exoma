@@ -1739,7 +1739,10 @@ States: `completed` (verify `derived: pass` with no edit afterwards, committed o
 
 ### Runtime preparation
 
-Before selecting tests, call `run.sh verify-prepare --session '<MAIN_SESSION_ID>'`.
+Before selecting tests, call `run.sh verify-prepare --session '<MAIN_SESSION_ID>'` as one plain
+standalone command (no pipes, redirects, chaining, `python`, `head`, or double quotes — its
+stdout is already compact single-line JSON, and piped/redirected forms are refused as
+`runner_malformed` by the pre-flight gate).
 This local protocol command returns `{ok, content, meta}` without a provider call, job,
 test run, request claim/consumption, verdict, or delegated-marker removal. An explicit
 session is required. It is a runner command, not a user-facing skill.

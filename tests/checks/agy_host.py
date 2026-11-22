@@ -110,12 +110,27 @@ def _test_agy_host_contract() -> None:
                     f"a gather tool is denied with the runner named: {out}")
         from exoma.installer.base import runner_prefix
 
-        script = "'%s/.workflow/run.sh' analyze 'why; slow | x' 'main_x'" % root.as_posix()
+        script = "'%s/.workflow/run.sh' analyze 'why; slow | x' '%s'" % (root.as_posix(), main_id)
         runner = "%s %s" % (runner_prefix(), script)
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=runner))
         assert_true(out == {"decision": "allow"}, f"the runner call through the host's bash passes the armed gate: {out}")
+        wrong_session = runner.replace(f"'{main_id}'", "'main_x'")
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=wrong_session))
+        assert_true(out.get("decision") == "deny" and main_id in out.get("reason", ""),
+                    f"a mismatched session in armed preflight is denied naming the bound session: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=runner + " ; cat .env"))
-        assert_true(out.get("decision") == "deny", f"a runner call with a chained command does not: {out}")
+        assert_true(out.get("decision") == "deny" and "disallowed shell form" in out.get("reason", ""),
+                    f"a runner call with a chained command reports disallowed shell form: {out}")
+        piped_prepare = f"{runner_prefix()} '{root.as_posix()}/.workflow/run.sh' verify-prepare --session '{main_id}' | python -c 'import sys'"
+        out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine=piped_prepare))
+        assert_true(out.get("decision") == "deny" and "disallowed shell form" in out.get("reason", ""),
+                    f"a piped verify-prepare reports disallowed shell form: {out}")
+        block_rows = [json.loads(line) for line in (rt / "gate-blocks.jsonl").read_text(encoding="utf-8").splitlines()]
+        block_rules = [r["rule"] for r in block_rows]
+        assert_true("session_binding" in block_rules and "runner_malformed" in block_rules,
+                    f"Agy refusal log records session_binding and runner_malformed: {block_rules}")
+        assert_true("import sys" not in (rt / "gate-blocks.jsonl").read_text(encoding="utf-8"),
+                    "Agy refusal log never records command text")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine="bash " + script))
         if os.name == "nt":
             assert_true(out.get("decision") == "deny" and runner_prefix() in out.get("reason", ""),

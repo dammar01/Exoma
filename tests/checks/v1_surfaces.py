@@ -157,6 +157,12 @@ def _test_opencode_host_contract() -> None:
         _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "hello"})
         assert_true(not marker.exists(), "normal prompts leave delegation unarmed")
         check_runner_sessions(False)
+        dq_cmd = f'"{project.resolve().as_posix()}/.workflow/run.sh" verify-prepare --session \'{main_id}\''
+        dq_unarmed = _opencode_hook(home, "PreToolUse", {
+            "session_id": sid, "cwd": str(project), "tool_name": "bash",
+            "tool_input": {"command": dq_cmd},
+        })
+        assert_true(dq_unarmed == {}, f"OpenCode preserves baseline allow for unarmed double-quoted runner path: {dq_unarmed}")
         ordinary = _opencode_hook(home, "PreToolUse", {
             "session_id": sid, "cwd": str(project), "tool_name": "bash", "tool_input": {"command": "python --version"},
         })
@@ -164,6 +170,21 @@ def _test_opencode_host_contract() -> None:
         _opencode_hook(home, "UserPromptSubmit", {"session_id": sid, "cwd": str(project), "prompt": "/.verify"})
         assert_true(marker.is_file(), "verify arms the delegated marker")
         check_runner_sessions(True)
+        dq_armed = _opencode_hook(home, "PreToolUse", {
+            "session_id": sid, "cwd": str(project), "tool_name": "bash",
+            "tool_input": {"command": dq_cmd},
+        })
+        assert_true("deny" in dq_armed and "pipes" in dq_armed["deny"],
+                    f"OpenCode armed preflight refuses double-quoted runner as runner_malformed: {dq_armed}")
+        piped_prepare = _opencode_hook(home, "PreToolUse", {
+            "session_id": sid, "cwd": str(project), "tool_name": "bash",
+            "tool_input": {"command": f"'{project.resolve().as_posix()}/.workflow/run.sh' verify-prepare --session '{main_id}' | head -c 500"},
+        })
+        assert_true("deny" in piped_prepare and "pipes" in piped_prepare["deny"],
+                    f"OpenCode reports malformed runner syntax for piped verify-prepare: {piped_prepare}")
+        oc_blocks = [json.loads(line)["rule"] for line in (marker.parent / "gate-blocks.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert_true("runner_malformed" in oc_blocks and "session_binding" in oc_blocks,
+                    f"OpenCode logs runner_malformed and session_binding separately: {oc_blocks}")
         local_flag = project / ".workflow" / "local_mode.flag"
         local_flag.touch()
         try:

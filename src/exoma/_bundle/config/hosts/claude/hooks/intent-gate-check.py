@@ -182,14 +182,20 @@ try:
         except Exception:
             return ""
 
+    def _log_block(rule_name):
+        plan_id = (wp.read_json(os.path.join(runtime_dir, "execution.json")) or {}).get("plan_id")
+        wp.log_refusal(runtime_dir, "intent-gate-check", rule_name, tool_name, "hybrid", True, plan_id)
+
     # The runner scripts are never written by hand, marker or not: a runner rewritten outside
     # a delegation would pass the gate on the next one as an arbitrary command. The escape
     # files likewise: an agent that writes local_mode.flag turns its own gate off. Neither
     # escape lifts these two refusals, on this host as on agy, codex and opencode.
     if kind == "write" and wp.runner_file(target, root):
+        _log_block("runner_write")
         sys.stderr.write(runner_write_message("<command>", tool_name, target, main_id, local_flag, marker))
         sys.exit(2)
     if kind == "write" and wp.escape_file(target, root):
+        _log_block("escape_write")
         sys.stderr.write("[PRE-FLIGHT GATE] " + wp.escape_write_message(tool_name, target) + "\n")
         sys.exit(2)
 
@@ -224,32 +230,53 @@ try:
         "host_read": lambda path: (wp.skill_read(path, home, [os.path.join(home, ".claude", "skills")])
                                    or task_output(path, home)),
         "limit": ti.get("limit"),
+        "expected_session": main_id,
     }
     rule = wp.preflight_refusal(kind, target, str(ti.get("command") or ""), marker_obj, ctx)
     if rule is None:
         sys.exit(0)
 
-    what = (
-        "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job"
-        if kind == "shell"
-        else "a bulk-gather tool"
-    )
-    reason = (
-        "[PRE-FLIGHT GATE] intent=DELEGATED (%s) but .workflow/run has NOT run this turn.\n"
-        "Tool '%s' is %s -- FORBIDDEN before delegation (Division of Labor: gather = second_agent).\n"
-        "%s"
-        "Do this instead: bash .workflow/run.sh %s --session '%s' --task '<task>'\n"
-        "Single quotes, so $ ; | & < > and brackets in the task are text; no apostrophe inside.\n"
-        "That routes evidence to second_agent AND clears this gate.\n"
-        "%s"
-    ) % (
-        cmd, tool_name, what,
-        ("The %d precision reads this delegation allows are used.\n" % wp.PRECISION_READS_PER_MARKER)
-        if rule == "preflight_quota"
-        else ("A precision read passes: a project file, at most %d lines (`limit`, or a file that short), %d per delegation.\n"
-              % (wp.PRECISION_READ_LINES, wp.PRECISION_READS_PER_MARKER)) if kind == "read" else "",
-        cmd, main_id, user_escapes(local_flag, marker),
-    )
+    _log_block(rule)
+    if rule == "runner_malformed":
+        reason = (
+            "[PRE-FLIGHT GATE] .workflow/run.sh was called in a disallowed shell form "
+            "(pipe, redirect, chaining, double quotes, or shell expansion outside single quotes).\n"
+            "Call the runner plainly as ONE standalone command — no |, >, ;, &&, python, head, or double quotes:\n"
+            "  bash .workflow/run.sh %s --session '%s' --task '<task>'\n"
+            "(For verify-prepare: bash .workflow/run.sh verify-prepare --session '%s' — "
+            "its stdout is already compact single-line JSON; inspect it directly.)\n"
+            "Single quotes keep $ ; | & < > and brackets inside the task as literal text; no apostrophe inside.\n"
+            "%s"
+        ) % (cmd, main_id, main_id, user_escapes(local_flag, marker))
+    elif rule == "session_binding":
+        reason = (
+            "[PRE-FLIGHT GATE] .workflow/run.sh requires the authoritative bound session.\n"
+            "Use exactly --session '%s' from [SESSION BINDING]; missing, default, duplicate, or different session arguments are refused.\n"
+            "Do this instead: bash .workflow/run.sh %s --session '%s' --task '<task>'\n"
+            "%s"
+        ) % (main_id, cmd, main_id, user_escapes(local_flag, marker))
+    else:
+        what = (
+            "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job"
+            if kind == "shell"
+            else "a bulk-gather tool"
+        )
+        reason = (
+            "[PRE-FLIGHT GATE] intent=DELEGATED (%s) but .workflow/run has NOT run this turn.\n"
+            "Tool '%s' is %s -- FORBIDDEN before delegation (Division of Labor: gather = second_agent).\n"
+            "%s"
+            "Do this instead: bash .workflow/run.sh %s --session '%s' --task '<task>'\n"
+            "Single quotes, so $ ; | & < > and brackets in the task are text; no apostrophe inside.\n"
+            "That routes evidence to second_agent AND clears this gate.\n"
+            "%s"
+        ) % (
+            cmd, tool_name, what,
+            ("The %d precision reads this delegation allows are used.\n" % wp.PRECISION_READS_PER_MARKER)
+            if rule == "preflight_quota"
+            else ("A precision read passes: a project file, at most %d lines (`limit`, or a file that short), %d per delegation.\n"
+                  % (wp.PRECISION_READ_LINES, wp.PRECISION_READS_PER_MARKER)) if kind == "read" else "",
+            cmd, main_id, user_escapes(local_flag, marker),
+        )
     sys.stderr.write(reason + "\n")
     sys.exit(2)
 except SystemExit:
