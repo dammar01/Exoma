@@ -1213,3 +1213,82 @@ def unlock_file(handle) -> None:
         import fcntl
 
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class ReplacementInterrupted(OSError):
+    """The destination changed; keep the captured bytes for recovery."""
+
+    def __init__(self, recovery_path: Path, cause: OSError):
+        super().__init__(f"{cause}; displaced contents retained at {recovery_path}")
+        self.recovery_path = recovery_path
+
+
+def replace_preserving_displaced(src: Path, dst: Path, displaced: Path) -> bool:
+    """Atomically replace `dst` with `src`, capturing the actual displaced file at `displaced`.
+
+    Returns True when `displaced` holds the replaced file (Windows ReplaceFileW, Linux
+    renameat2 RENAME_EXCHANGE, macOS renamex_np RENAME_SWAP). Refuse before replacing
+    if capture is unsupported. A partial replacement identifies the surviving copy.
+    """
+    src, dst, displaced = Path(src), Path(dst), Path(displaced)
+    if IS_WINDOWS:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        replace_file = kernel32.ReplaceFileW
+        replace_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.LPVOID,
+        ]
+        replace_file.restype = wintypes.BOOL
+        if not replace_file(str(dst), str(src), str(displaced), 0, None, None):
+            err = ctypes.get_last_error()
+            exc = ctypes.WinError(err)
+            exc.filename = str(dst)
+            if displaced.exists():
+                raise ReplacementInterrupted(displaced, exc) from exc
+            raise exc
+        return True
+
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        import ctypes
+        import errno
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        if sys.platform.startswith("linux"):
+            fn = getattr(libc, "renameat2", None)
+            if fn is not None:
+                fn.argtypes = [
+                    ctypes.c_int, ctypes.c_char_p,
+                    ctypes.c_int, ctypes.c_char_p,
+                    ctypes.c_uint,
+                ]
+                fn.restype = ctypes.c_int
+                res = fn(-100, os.fsencode(src), -100, os.fsencode(dst), 2)  # AT_FDCWD, RENAME_EXCHANGE
+            else:
+                res = None
+        else:
+            fn = getattr(libc, "renamex_np", None)
+            if fn is not None:
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+                fn.restype = ctypes.c_int
+                res = fn(os.fsencode(src), os.fsencode(dst), 0x00000002)  # RENAME_SWAP
+            else:
+                res = None
+        if res == 0:
+            try:
+                os.replace(src, displaced)
+            except OSError as exc:
+                raise ReplacementInterrupted(src, exc) from exc
+            return True
+        if res is not None:
+            err = ctypes.get_errno()
+            if err not in (errno.ENOSYS, errno.EINVAL, errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)):
+                raise OSError(err, os.strerror(err), str(dst))
+
+    raise OSError(f"atomic replacement with recovery is unsupported for {dst}")

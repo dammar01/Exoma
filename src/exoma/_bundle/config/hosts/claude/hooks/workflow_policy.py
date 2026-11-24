@@ -100,7 +100,7 @@ def workflow_data_dir(root):
     data = os.path.join(wf, "data")
     if os.path.isdir(data):
         return data
-    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
+    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "tasks.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
         if os.path.exists(os.path.join(wf, name)):
             return wf
     return data
@@ -727,6 +727,16 @@ def runner_invocation(command, root, home, is_bash):
     if line.startswith("& "):
         line = line[2:].lstrip()
     words = plain_words(line)
+    if words is None:
+        # Bash concatenates an empty quoted suffix to a bare runner path. Strip
+        # only that suffix, then require the entire command to parse normally.
+        prefix = _leading_tokens(line)
+        if prefix and runner_call(prefix, root, home, is_bash):
+            runner = prefix[1] if is_bash(prefix[0]) else prefix[0]
+            launcher = r"(?:'[^'\r\n]*'|[^ \t']+)[ \t]+" if is_bash(prefix[0]) else ""
+            match = re.match(launcher + re.escape(runner) + r"''(?=[ \t]|$)", line)
+            if match:
+                words = plain_words(line[:match.end() - 2] + line[match.end():])
     malformed = words is None
     if malformed:
         # Identify only the executable, runner and subcommand before refusing malformed

@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -452,11 +453,116 @@ def _run_quiet(which, apply) -> tuple[int, str]:
     return code, out.getvalue()
 
 
+def _check_rollback_recovery(root):
+    # Kill a separate interpreter after an actual filesystem mutation. Exception
+    # injection would run finally blocks and conceal the interrupted state.
+    script = """
+import os, sys
+from pathlib import Path
+from exoma.installer import rollback as rb
+rb.HOME = Path(sys.argv[1])
+if sys.argv[2] == 'restore':
+    swap = rb.osutil.replace_preserving_displaced
+    def interrupt(*args):
+        swap(*args)
+        os._exit(29)
+    rb.osutil.replace_preserving_displaced = interrupt
+elif sys.argv[2] == 'copy':
+    def interrupt(source, target):
+        target.write(source.read(3))
+        target.flush()
+        os._exit(29)
+    rb.shutil.copyfileobj = interrupt
+else:
+    rename = Path.rename
+    def interrupt(src, dst):
+        result = rename(src, dst)
+        if str(dst).endswith('.rollback-delete'):
+            os._exit(29)
+        return result
+    Path.rename = interrupt
+rb._run_rollback(None, True)
+"""
+    for step in ("restore", "delete", "copy"):
+        home, restored, created = _rollback_fixture(root / step)
+        rollback_mod.HOME = home
+        result = subprocess.run([sys.executable, "-c", script, str(home), step],
+                                capture_output=True, timeout=30, **no_console())
+        assert result.returncode == 29, result.stderr
+        receipt, = (home / ".claude/backups").glob("*/install_receipt.json")
+        recorded = receipt.read_bytes()
+        ops = json.loads(recorded)["rollback"]["operations"]
+        capture = Path(ops[0 if step == "restore" else 1]["capture"])
+        if step == "copy":
+            capture = Path(ops[0]["staging"]).with_suffix(".rollback.partial")
+            assert capture.read_bytes() == b"ori"
+        assert capture.is_file()
+        assert _run_quiet(None, False)[0] == 0
+        assert receipt.read_bytes() == recorded and capture.is_file()
+        assert _run_quiet(None, True)[0] == 0
+        assert restored.read_text() == "original content" and not created.exists()
+        assert not capture.exists() and "rollback" not in json.loads(receipt.read_bytes())
+
+    home, restored, created = _rollback_fixture(root / "cleanup")
+    rollback_mod.HOME = home
+    real_unlink = Path.unlink
+    def locked_stage(path, *args, **kwargs):
+        if path.name.endswith(".rollback"):
+            raise PermissionError("locked staging path")
+        return real_unlink(path, *args, **kwargs)
+    with patch.object(Path, "unlink", locked_stage):
+        code, output = _run_quiet(None, True)
+    assert code == 2 and "PARTIAL" in output and ".rollback" in output
+    assert restored.read_text() == "original content" and not created.exists()
+    created.write_text("created by install", encoding="utf-8")
+    code, output = _run_quiet(None, True)
+    assert code == 2 and "changed after its rollback completed" in output and created.is_file()
+    created.unlink()
+    assert _run_quiet(None, True)[0] == 0
+
+    for user_deleted in (False, True):
+        home, restored, _ = _rollback_fixture(root / f"remove-receipt-{user_deleted}")
+        rollback_mod.HOME = home
+        receipt, = (home / ".claude/backups").glob("*/install_receipt.json")
+        payload = json.loads(receipt.read_bytes())
+        entry = payload["entries"][0]
+        entry.update(action="remove", post_sha256=None)
+        payload["entries"] = [entry]
+        receipt.write_text(json.dumps(payload), encoding="utf-8")
+        restored.unlink()
+        persist = rollback_mod.atomic_write_text
+        def fail_completion(path, contents, **kwargs):
+            if json.loads(contents).get("rollback", {}).get("completed"):
+                raise OSError("completion receipt unavailable")
+            return persist(path, contents, **kwargs)
+        with patch.object(rollback_mod, "atomic_write_text", fail_completion):
+            assert _run_quiet(None, True)[0] == 2
+        capture = Path(json.loads(receipt.read_bytes())["rollback"]["operations"][0]["capture"])
+        assert capture.samefile(restored)
+        if user_deleted:
+            restored.unlink()
+            assert _run_quiet(None, False)[0] == _run_quiet(None, True)[0] == 2
+            assert not restored.exists() and capture.read_text() == "original content"
+        else:
+            assert _run_quiet(None, True)[0] == 0
+            assert restored.read_text() == "original content" and not capture.exists()
+
+    home, restored, created = _rollback_fixture(root / "changed-backup")
+    rollback_mod.HOME = home
+    def mutate_backup(source, target):
+        target.write(b"contents that differ from the receipt")
+    with patch.object(shutil, "copyfileobj", mutate_backup):
+        code, output = _run_quiet(None, True)
+    assert code == 2 and "staged copy differs" in output
+    assert restored.read_text() == "installed content" and created.exists()
+
+
 def _test_installer_rollback_receipt() -> None:
     original_home = rollback_mod.HOME
     original_mode_file = rollback_mod._MODE_FILE
     root = Path(tempfile.mkdtemp(prefix="aw-inst-rb-"))
     try:
+        _check_rollback_recovery(root)
         # Dry run: report everything, write nothing.
         home, restored, created = _rollback_fixture(root / "dry")
         rollback_mod.HOME = home

@@ -176,7 +176,10 @@ def _check_update_admission() -> None:
              patch.object(self_update, "_package_command", return_value=("pip", [sys.executable, "-m", "pip"])), \
              patch.object(self_update, "_handoff", return_value=3) as handoff:
             for windows in (False, True):
-                with patch.object(self_update, "IS_WINDOWS", windows):
+                # This case models running outside a workspace, even when the host
+                # keeps its temporary directory under a real workspace.
+                with patch.object(self_update, "IS_WINDOWS", windows), \
+                     patch.object(self_update, "_workspace_root", return_value=None):
                     assert_true(self_update.main(["--manager", "pip"]) == 3,
                                 "every platform delegates to the same accepted-not-complete handoff")
             assert_true(handoff.call_count == 2, "no synchronous production fork remains")
@@ -186,8 +189,9 @@ def _check_update_admission() -> None:
                 if invalid is not None:
                     config.write_text(invalid, encoding="utf-8")
                 handoff.reset_mock()
-                assert_true(self_update.main(["--manager", "pip"]) == 1,
-                            "invalid workspace refuses before any handoff")
+                with patch.object(self_update, "_workspace_root", return_value=project):
+                    assert_true(self_update.main(["--manager", "pip"]) == 1,
+                                "invalid workspace refuses before any handoff")
                 handoff.assert_not_called()
         uv_dir = root / "uv-tools"
         with patch.object(self_update.shutil, "which", return_value="uv"), \

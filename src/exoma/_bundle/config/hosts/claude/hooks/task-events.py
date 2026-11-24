@@ -20,6 +20,9 @@
 # transcript, or one with no runner call within TRANSCRIPT_SCAN_BYTES of its end, warns nothing.
 # `policies.enforcement: off` turns the warning off.
 import datetime, json, os, re, shutil, signal, subprocess, tempfile, time
+from pathlib import Path
+from task_stream import append_task_rows
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -668,11 +671,7 @@ def append_events(root, session, events):
             **event,
         }
         lines.append(json.dumps(row, ensure_ascii=False) + "\n")
-    prefix = b"\n" if needs_leading_newline(stream_path) else b""
-    buf = prefix + "".join(lines).encode("utf-8")
-    with open(stream_path, "ab") as fh:
-        fh.write(buf)
-        fh.flush()
+    append_task_rows(Path(stream_path), "".join(lines).encode("utf-8"))
 
 
 def commit_snapshot(pending):

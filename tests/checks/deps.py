@@ -58,6 +58,7 @@ _VERSIONED_STDLIB = {
 # Shipped modules imported by their bare name from the directory they are installed into.
 # The Codex and OpenCode hosts install the Claude source beside their hook at its destination.
 _HOOK_SIBLINGS = {
+    "task_stream": ("src/exoma/_bundle/config/hosts/claude/hooks/",),
     "workflow_policy": (
         "src/exoma/_bundle/config/hosts/claude/hooks/",
         "src/exoma/_bundle/config/hosts/codex/",

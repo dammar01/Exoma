@@ -150,13 +150,13 @@ _HOOK_LAUNCHERS = frozenset({"bash", "bash.exe", "sh", "sh.exe", "python", "pyth
 _GRAPH_REFRESH_SCRIPTS = frozenset({"graph-refresh.sh", "graph-refresh.py", "graph-refresh.ps1"})
 
 
-def _split_hook_argv(cmd: str) -> list[tuple[str, bool]]:
-    """Split a hook command into `(token, was_quoted)` pairs preserving quoted paths with spaces."""
-    tokens: list[tuple[str, bool]] = []
-    buf: list[str] = []
-    quote: str | None = None
-    quoted = False
-    for ch in cmd:
+def _split_hook_argv(cmd: str) -> list[tuple[str, str]]:
+    """Keep the original spelling alongside each decoded argument for shell expansion."""
+    tokens = []
+    buf = []
+    quote = None
+    start = 0
+    for index, ch in enumerate(cmd):
         if quote is not None:
             if ch == quote:
                 quote = None
@@ -164,23 +164,22 @@ def _split_hook_argv(cmd: str) -> list[tuple[str, bool]]:
                 buf.append(ch)
         elif ch in ('"', "'"):
             quote = ch
-            quoted = True
         elif ch in (" ", "\t"):
-            if buf or quoted:
-                tokens.append(("".join(buf), quoted))
-                buf = []
-                quoted = False
+            if index > start:
+                tokens.append(("".join(buf), cmd[start:index]))
+                buf.clear()
+            start = index + 1
         else:
             buf.append(ch)
     if quote is not None:
         return []
-    if buf or quoted:
-        tokens.append(("".join(buf), quoted))
+    if start < len(cmd):
+        tokens.append(("".join(buf), cmd[start:]))
     return tokens
 
 
-def _matches_installed_graph_refresh_path(token: str, was_quoted: bool, hooks_dir: Path) -> bool:
-    """True when `token` names `graph-refresh.{sh,py,ps1}` directly inside `hooks_dir`."""
+def _matches_installed_graph_refresh_path(token: str, spelling: str, hooks_dir: Path) -> bool:
+    """Match installed paths with the expansion permitted by their original quoting."""
     norm = token.replace("\\", "/")
     name = norm.rsplit("/", 1)[-1].lower()
     if name not in _GRAPH_REFRESH_SCRIPTS:
@@ -191,8 +190,10 @@ def _matches_installed_graph_refresh_path(token: str, was_quoted: bool, hooks_di
     lower_parent = parent.lower()
     if lower_parent == "~/.claude/hooks":
         # Bash does not expand `~` inside quotes; only unquoted `~/...` reaches the hook.
-        return not was_quoted
-    if lower_parent in ("$home/.claude/hooks", "${home}/.claude/hooks", "%userprofile%/.claude/hooks"):
+        return spelling.startswith("~/")
+    if lower_parent in ("$home/.claude/hooks", "${home}/.claude/hooks"):
+        return spelling.startswith(("$HOME/", "${HOME}/", '"$HOME/', '"${HOME}/', '"$HOME"/', '"${HOME}"/'))
+    if lower_parent == "%userprofile%/.claude/hooks":
         return True
     try:
         resolved_dir = os.path.normcase(os.path.abspath(str(Path(parent))))
@@ -544,38 +545,36 @@ def _gate_blocks(
     candidates: list[tuple[float, Path]] = []
     unreadable_files = 0
     truncated = False
-    if sessions.exists():
-        try:
-            entries_iter = os.scandir(sessions)
-        except OSError:
-            entries_iter = None
-            unreadable_files += 1
-        if entries_iter is not None:
-            scanned_entries = 0
-            with entries_iter:
-                for entry in entries_iter:
-                    if scanned_entries >= max_scan_entries:
-                        truncated = True
-                        break
-                    scanned_entries += 1
-                    try:
-                        if not entry.is_dir(follow_symlinks=False):
-                            continue
-                    except OSError:
-                        unreadable_files += 1
+    try:
+        scanned_entries = 0
+        with os.scandir(sessions) as entries_iter:
+            for entry in entries_iter:
+                if scanned_entries >= max_scan_entries:
+                    truncated = True
+                    break
+                scanned_entries += 1
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
                         continue
-                    path = Path(entry.path) / "runtime" / GATE_BLOCKS_FILE
-                    try:
-                        st = path.stat()
-                    except FileNotFoundError:
-                        continue
-                    except OSError:
-                        unreadable_files += 1
-                        continue
-                    if not _stat.S_ISREG(st.st_mode):
-                        unreadable_files += 1
-                        continue
-                    candidates.append((st.st_mtime, path))
+                except OSError:
+                    unreadable_files += 1
+                    continue
+                path = Path(entry.path) / "runtime" / GATE_BLOCKS_FILE
+                try:
+                    st = path.stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    unreadable_files += 1
+                    continue
+                if not _stat.S_ISREG(st.st_mode):
+                    unreadable_files += 1
+                    continue
+                candidates.append((st.st_mtime, path))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        unreadable_files += 1
     candidates.sort(key=lambda item: item[0], reverse=True)
     if len(candidates) > max_files:
         candidates = candidates[:max_files]
@@ -583,6 +582,8 @@ def _gate_blocks(
 
     by_rule: dict[str, int] = {}
     by_hook: dict[str, int] = {}
+    readable_files = 0
+    blocked_by_rule: dict[str, int] = {}
     total = 0
     blocked = 0
     warned = 0
@@ -616,6 +617,7 @@ def _gate_blocks(
         except OSError:
             unreadable_files += 1
             continue
+        readable_files += 1
         lines = raw.decode("utf-8", errors="replace").splitlines()
         if dropped_prefix and lines:
             lines = lines[1:]
@@ -659,6 +661,7 @@ def _gate_blocks(
             total += 1
             if is_blocked:
                 blocked += 1
+                blocked_by_rule[rule] = blocked_by_rule.get(rule, 0) + 1
             else:
                 warned += 1
             by_rule[rule] = by_rule.get(rule, 0) + 1
@@ -666,7 +669,7 @@ def _gate_blocks(
             if latest is None or at > latest:
                 latest = at
 
-    if unreadable_files > 0 and total == 0 and invalid_rows == 0 and not truncated:
+    if unreadable_files > 0 and readable_files == 0 and not truncated:
         status = "unavailable"
     elif unreadable_files > 0 or invalid_rows > 0 or truncated:
         status = "partial"
@@ -679,6 +682,7 @@ def _gate_blocks(
         "status": status,
         "total": total,
         "blocked": blocked,
+        "blocked_by_rule": dict(sorted(blocked_by_rule.items())),
         "warned": warned,
         "window_days": window_days,
         "by_rule": dict(sorted(by_rule.items())),
@@ -701,7 +705,15 @@ def run_doctor(
     def invoke(name):
         return command_invocation(main_host or "claude", name)
 
-    paths = workflow_paths(project_root, session_id)
+    try:
+        paths = workflow_paths(project_root, session_id)
+    except OSError as exc:
+        return {
+            "ok": False, "content": f"NOT_READY: {exc}",
+            "meta": {"status": "NOT_READY", "issues": [str(exc)], "doctor_report": None,
+                     "recommended_fixes": ["Inspect the workspace layout and reconcile its task stream."],
+                     "project_root": str(project_root)},
+        }
     issues: list[str] = []
     recommended_fixes: list[str] = []
     checks: dict[str, object] = {}
@@ -1427,7 +1439,7 @@ def run_doctor(
     checks["gate_blocks"] = gate_blocks
     runner_refusals = {
         rule: count
-        for rule, count in (gate_blocks.get("by_rule") or {}).items()
+        for rule, count in (gate_blocks.get("blocked_by_rule") or {}).items()
         if rule in ("runner_malformed", "session_binding") and count > 0
     }
     if runner_refusals:

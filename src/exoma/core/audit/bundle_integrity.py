@@ -428,6 +428,32 @@ def _bundle_integrity(
             result["mismatched"].append(rel)
             result["drift"].append({"path": rel, "reason": "content_differs"})
 
+    # Shared browser references have a Claude source and distinct rendered copies
+    # on other hosts. Verify each chosen installation using the installer's mapping.
+    from exoma.installer.base import _agy_targets, _codex_targets, _render_text
+
+    manifest_paths = {entry["path"] for entry in files}
+    for host, mapping in (("agy", _agy_targets), ("codex", _codex_targets)):
+        if host not in hosts:
+            continue
+        for source, installed, key in mapping():
+            if "/references/" not in key or not source.is_relative_to(dist_config_dir):
+                continue
+            if source.relative_to(dist_config_dir).as_posix() not in manifest_paths:
+                continue
+            try:
+                actual = installed.read_text(encoding="utf-8")
+                expected = _render_text(source, key, Path(project_root) if project_root else None, only_command)
+            except (OSError, UnicodeError) as exc:
+                result["missing"].append(key)
+                reason = "not_installed" if isinstance(exc, FileNotFoundError) else "unreadable"
+                result["drift"].append({"path": key, "reason": reason})
+                continue
+            result["checked"] += 1
+            if actual != expected:
+                result["mismatched"].append(key)
+                result["drift"].append({"path": key, "reason": "content_differs"})
+
     # Fresh = every source the manifest lists still hashes to what it records, the same way
     # gen_manifest hashes it. By content, not mtime: an installed package's mtimes are
     # whatever order the wheel was unpacked in, and read as stale on a clean install.

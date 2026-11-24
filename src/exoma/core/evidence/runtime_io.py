@@ -7,6 +7,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from exoma._bundle.config.hosts.claude.hooks.task_stream import append_task_rows
 from exoma.core.evidence.contracts import (
     AUDIT_STREAM_NAME,
     QUALITY_STREAM_NAME,
@@ -258,19 +259,6 @@ def write_redaction_audit(
         handle.write(line + "\n")
 
 
-def _needs_leading_newline(path: Path) -> bool:
-    """Best-effort tail probe decoupled from write-only append."""
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, 2)
-            if handle.tell() == 0:
-                return False
-            handle.seek(-1, 2)
-            return handle.read(1) != b"\n"
-    except OSError:
-        return False
-
-
 def _append_stream(project_root: Path, name: str, record: dict, *, guard_newline: bool = False) -> None:
     """Append one JSON row to a project-local stream. Never raises.
 
@@ -282,10 +270,12 @@ def _append_stream(project_root: Path, name: str, record: dict, *, guard_newline
         paths = workflow_paths(project_root, None)
         path = Path(paths["data_dir"]) / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        prefix = "\n" if guard_newline and _needs_leading_newline(path) else ""
-        line = json.dumps(record, ensure_ascii=False)
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        if guard_newline:
+            append_task_rows(path, line.encode("utf-8"))
+            return
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(prefix + line + "\n")
+            handle.write(line)
             handle.flush()
     except (OSError, TypeError, ValueError):
         pass

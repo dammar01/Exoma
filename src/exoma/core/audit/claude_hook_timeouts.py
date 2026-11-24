@@ -101,6 +101,7 @@ def claude_hook_timeouts(project_root: Path) -> dict:
     matches = []
     for sid, binding in bindings.items():
         if not isinstance(binding, dict) or not isinstance(binding.get("cwd"), str):
+            report["unavailable_files"] += 1
             continue
         scope = project_cwd(binding["cwd"])
         if scope is None:

@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from exoma._bundle.config.hosts.claude.hooks.task_stream import task_stream_identity
 from exoma.config.settings import TOOL_VERSION
 from exoma.utils import osutil
 from exoma.utils.path_guard import safe_path_component
@@ -195,6 +196,7 @@ _LEGACY_MARKERS = (
     "audit.jsonl",
     "usage.jsonl",
     "quality.jsonl",
+    "tasks.jsonl",
     "facts.jsonl",
     "evidence.jsonl",
     "redactions.jsonl",
@@ -218,6 +220,7 @@ def data_dir(project_root: Path) -> Path:
     data = workflow_dir / DATA_DIRNAME
     if data.is_dir():
         return data
+    task_stream_identity(workflow_dir / "tasks.jsonl")
     if any((workflow_dir / name).exists() for name in _LEGACY_MARKERS):
         return workflow_dir
     return data

@@ -300,6 +300,21 @@ def _test_doctor_agrees_with_install_check() -> None:
                         assert_true({"path": rel, "reason": expected} in result["drift"],
                                     f"{rel}: a raw template is not an installed rendered contract: {result}")
 
+        ref = "hosts/claude/skills/verify-browser/interview.md"
+        manifest.write_text(json.dumps({"targets": {}, "files": [shipped_entries[ref]]}), encoding="utf-8")
+        from exoma.installer import base
+        for host, targets_func in (("agy", base._agy_targets), ("codex", base._codex_targets)):
+            with patch.object(base, "HOME", root), patch(
+                "exoma.core.audit.bundle_integrity._installed_hosts", return_value={host}
+            ):
+                source, dest, key = next(item for item in targets_func() if item[0] == dist / ref)
+                assert key in _bundle_integrity(dist, manifest, project)["missing"]
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(_render_text(source, key, project), encoding="utf-8")
+                assert not _bundle_integrity(dist, manifest, project)["drift"]
+                dest.write_text("local edit", encoding="utf-8")
+                assert key in _bundle_integrity(dist, manifest, project)["mismatched"]
+
         merged_config = root / "merged-config.json"
         merged_config.write_text('{"user_setting": true}\n', encoding="utf-8")
         manifest.write_text(json.dumps({

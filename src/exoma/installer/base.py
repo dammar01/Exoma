@@ -18,6 +18,7 @@ from exoma.config.bundle_keys import host_dir, provider_dir
 from exoma.config.providers import PROVIDER_BUNDLES
 from exoma.config.settings import BUNDLE_CONFIG_DIR, BUNDLE_DIR, BUNDLE_MANIFEST
 from exoma.config.verification_policy import render_verification_guidance
+from exoma.utils import osutil
 from exoma.utils.osutil import agent_home
 
 DIST = BUNDLE_DIR
@@ -189,6 +190,7 @@ def _flush_receipt(complete: bool = False, allow_empty: bool = False) -> None:
             indent=2,
         )
         + "\n",
+        fsync=True,
     )
 
 
@@ -569,6 +571,24 @@ def _cleanup_noop_backup(backup_root: Path) -> None:
     shutil.rmtree(backup_root, ignore_errors=True)
 
 
+def _save_displaced_conflict(displaced: Path, conflict_path: Path) -> tuple[bytes, str]:
+    """Persist a concurrently displaced file with fsync before removing the sibling staging path."""
+    data = displaced.read_bytes()
+    conflict_path.parent.mkdir(parents=True, exist_ok=True)
+    with conflict_path.open("xb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        shutil.copystat(displaced, conflict_path)
+    except OSError:
+        pass
+    digest = hashlib.sha256(data).hexdigest()
+    if _file_sha256(conflict_path) != digest:
+        raise OSError(f"conflict backup verification failed at {conflict_path}")
+    return data, digest
+
+
 def run_clean_legacy(apply: bool) -> int:
     """Preview or remove an exact historical Exoma header outside markers in ~/.claude/CLAUDE.md.
 
@@ -580,6 +600,7 @@ def run_clean_legacy(apply: bool) -> int:
     from datetime import datetime, timezone
     import stat
     import time
+    import uuid
 
     from exoma.core.workspace.workspace_paths import REPLACE_RETRY_DELAYS, _staging_path
 
@@ -630,15 +651,18 @@ def run_clean_legacy(apply: bool) -> int:
     pre_sha256 = hashlib.sha256(raw).hexdigest()
     post_sha256 = hashlib.sha256(cleaned).hexdigest()
     backup_path = backup_root / CLAUDE_INSTRUCTIONS
+    conflict_path = backup_root / f"{CLAUDE_INSTRUCTIONS}.displaced"
 
     _reset_receipt()
     temp = _staging_path(claude_md)
+    displaced = claude_md.with_name(f"{claude_md.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.displaced")
     try:
         orig_mode = stat.S_IMODE(claude_md.stat().st_mode)
     except OSError:
         orig_mode = None
     replaced = False
-    replace_attempted = False
+    recovery_required = False
+    captured = False
     try:
         _begin_receipt(
             backup_root / "install_receipt.json",
@@ -672,6 +696,8 @@ def run_clean_legacy(apply: bool) -> int:
             "backup": str(backup_path),
             "pre_sha256": pre_sha256,
             "post_sha256": post_sha256,
+            "capture_path": str(displaced),
+            "staging_path": str(temp),
             "pending": True,
         }
         _RECEIPT.append(entry)
@@ -687,42 +713,67 @@ def run_clean_legacy(apply: bool) -> int:
                 _cleanup_noop_backup(backup_root)
                 print(f"[CLEAN-LEGACY] aborted — {claude_md} changed concurrently since snapshot; nothing written.")
                 return 1
+            # An interrupt can arrive between the native swap and its return to Python.
+            recovery_required = True
             try:
-                replace_attempted = True
-                os.replace(temp, claude_md)
+                captured = osutil.replace_preserving_displaced(temp, claude_md, displaced)
                 replaced = True
                 break
+            except osutil.ReplacementInterrupted:
+                raise
             except PermissionError as exc:
+                recovery_required = False
                 last_perm_error = exc
                 if delay is None:
                     break
                 time.sleep(delay)
+            except OSError:
+                recovery_required = False  # native helper failed before changing the destination
+                raise
         if not replaced:
             _cleanup_noop_backup(backup_root)
             if last_perm_error is not None:
                 raise last_perm_error
             return 1
 
+        if captured and displaced.is_file():
+            displaced_bytes, displaced_sha256 = _save_displaced_conflict(displaced, conflict_path)
+            if displaced_sha256 == pre_sha256:
+                conflict_path.unlink(missing_ok=True)
+            else:
+                entry["initial_backup"] = entry["backup"]
+                entry["initial_sha256"] = entry["pre_sha256"]
+                entry["backup"] = str(conflict_path)
+                entry["pre_sha256"] = displaced_sha256
+                entry["conflict"] = "concurrent_edit_displaced"
+                entry.pop("pending", None)
+                _flush_receipt(complete=True)
+                recovery_required = False
+                print(
+                    f"[CLEAN-LEGACY] conflict — {claude_md} changed concurrently right before replacement "
+                    f"({len(displaced_bytes)} bytes displaced); preserved at {conflict_path}. "
+                    "Run `exoma install --rollback --apply` to restore the displaced edit."
+                )
+                return 1
+
         entry.pop("pending", None)
         _flush_receipt(complete=True)
+        recovery_required = False
+    except osutil.ReplacementInterrupted as exc:
+        recovery_required = True
+        print(f"[CLEAN-LEGACY] {exc}")
+        raise
     except Exception:
-        if not replace_attempted:
-            # Zero rename attempts occurred — discard the no-op backup/receipt unconditionally
-            # even if the destination was deleted or became unreadable after the flush.
+        if recovery_required or displaced.exists():
+            recovery_required = True
+            print(f"[CLEAN-LEGACY] recovery required: retain {displaced} and receipt in {backup_root}")
+        else:
             _cleanup_noop_backup(backup_root)
-        elif not replaced:
-            try:
-                still_original = (not _has_symlink_component(claude_md, HOME)) and claude_md.read_bytes() == raw
-            except OSError:
-                still_original = False
-            if still_original:
-                _cleanup_noop_backup(backup_root)
         raise
     finally:
-        try:
-            temp.unlink()
-        except FileNotFoundError:
-            pass
+        if not recovery_required:
+            temp.unlink(missing_ok=True)
+            displaced.unlink(missing_ok=True)
 
     print(f"  backup: {backup_root}")
     print("  status: removed exact legacy header (use `exoma install --rollback --apply` to restore)")
@@ -904,7 +955,7 @@ def _opencode_text(text: str, key: str, project_root: Path | None, only_command:
                 name = host_profiles.skill_ref_path("opencode", skill, filename)
                 skill_key = f"{OPENCODE_SKILLS_PREFIX}{name}/SKILL.md"
                 rendered = _render_text(source, skill_key, project_root, only_command)
-                continuations[name] = {"dir": (opencode_home() / "skills" / name).as_posix(),
+                continuations[name] = {"dir": (HOME.resolve() / ".config" / "opencode" / "skills" / name).as_posix(),
                                        "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()}
         return (text.replace("{{CONTINUATIONS_JSON}}", json.dumps(continuations))
                 .replace("{{PYTHON_JSON}}", json.dumps(Path(sys.executable).as_posix()))

@@ -520,6 +520,11 @@ def _check_doctor_and_clean_read_the_lock() -> None:
             c_inactive = read_json_file(Path(meta_inactive["doctor_report"]))["checks"]["graphify_instruction_conflict"]
             assert_true(c_inactive["status"] == "inactive_hook", f"inactive hook reported cleanly: {c_inactive}")
 
+            from exoma.core.audit.diagnostics import _is_installed_graph_refresh_command
+            hooks_dir = fake_home / ".claude/hooks"
+            assert _is_installed_graph_refresh_command('bash ~/".claude/hooks/graph-refresh.sh"', hooks_dir)
+            assert not _is_installed_graph_refresh_command("bash '$HOME/.claude/hooks/graph-refresh.sh'", hooks_dir)
+
             # Non-Exoma commands (and quoted literal tilde) must NOT count as active Exoma hook.
             for fake_cmd in (
                 "echo graph-refresh",

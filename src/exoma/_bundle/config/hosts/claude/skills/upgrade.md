@@ -15,7 +15,7 @@ Every OS ({{SHELL_TOOL}}): exoma upgrade --work-dir "<work_dir>" --pretty
 <python> = the first of `python3`, `python`, `py -3` that RUNS and is ≥ 3.11. Upgrade also removes
 the old `run.ps1`/`inspect.ps1`/`check.ps1`: the runners are `.sh` only now, on every OS.
 
-Upgrade refuses while delegated jobs are active. On a workspace still on the v3.5.x layout it
+Upgrade refuses while delegated jobs are active. On a workspace still on the agent-workflow 3.5.x layout it
 first MIGRATES: backup to `.workflow/data/backups/<stamp>/`, internal files moved into
 `.workflow/data/`, old leftovers removed, `config.json` stripped to overrides (values equal to
 a default and retired keys removed), a pre-list `e2e/secrets.json` converted. Entries are

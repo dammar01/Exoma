@@ -243,6 +243,14 @@ for (const suffix of ['interview', 'interactive-and-tags']) {
     return output.output
   }
   assert.equal(await result(dir), original.toString().replaceAll('\\r\\n', '\\n'))
+  const alias = path.resolve('fixture-home-alias')
+  fs.symlinkSync(process.cwd(), alias, process.platform === 'win32' ? 'junction' : 'dir')
+  try {
+    const aliasedDir = path.join(alias, path.relative(process.cwd(), dir))
+    assert.equal(await result(aliasedDir), await result(dir))
+  } finally {
+    fs.unlinkSync(alias)
+  }
   assert.match(await result(process.cwd()), /incomplete/)
   try {
     fs.appendFileSync(file, 'local edit')

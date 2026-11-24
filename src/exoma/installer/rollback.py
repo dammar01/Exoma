@@ -7,8 +7,11 @@ destination edited since the install is refused rather than silently overwritten
 import json
 import os
 import shutil
+import uuid
 from pathlib import Path
 
+from exoma.core.workspace.workspace_paths import atomic_write_text
+from exoma.utils import osutil
 from exoma.installer.base import (
     AGY_HOST_HOOK_NAME,
     CLAUDE_HOST,
@@ -24,6 +27,7 @@ from exoma.installer.base import (
     _backup,
     _file_sha256,
     _record,
+    _save_displaced_conflict,
 )
 
 _MODE_FILE = HOME / ".claude" / ".workflow-install-mode.json"
@@ -178,6 +182,24 @@ def _backup_dirs() -> list[Path]:
     )
 
 
+def _rollback_paths(item, transaction, index):
+    dest = Path(item["dest"])
+    sibling = f"{dest.name}.{transaction}.{index}"
+    return {
+        "dest": str(dest), "action": item.get("action"),
+        "pre_sha256": item.get("pre_sha256"), "post_sha256": item.get("post_sha256"),
+        "staging": str(dest.with_name(sibling + ".rollback")),
+        "capture": str(dest.with_name(sibling + (".displaced" if item.get("backup") else ".rollback-delete"))),
+    }
+
+
+def _remove_staging(path, failures):
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        failures.append(f"cleanup of {path} failed: {exc}")
+
+
 def _run_rollback(which: str | None, apply: bool) -> int:
     """Undo one install from its receipt. Dry run unless `--apply` (install itself writes by default)."""
     dirs = _backup_dirs()
@@ -207,6 +229,18 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         return 1
 
     try:
+        if not apply:
+            return _replay_receipt(chosen, receipt_path, False)
+        with osutil.open_lock_file(chosen / ".rollback.lock") as lock:
+            osutil.lock_file(lock)
+            return _replay_receipt(chosen, receipt_path, True)
+    except OSError as exc:
+        print(f"[ROLLBACK] unable to complete rollback of {chosen}: {exc}")
+        return 2
+
+
+def _replay_receipt(chosen: Path, receipt_path: Path, apply: bool) -> int:
+    try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[ROLLBACK] invalid receipt: {exc}")
@@ -229,6 +263,20 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         print(f"  Any step it did not record still has its backup under {chosen}.")
     conflicts: list[str] = []
     pending_noop_indices: set[int] = set()
+    journal = receipt.get("rollback")
+    try:
+        transaction = uuid.UUID(journal["transaction"]).hex if journal is not None else uuid.uuid4().hex
+        operations = [_rollback_paths(item, transaction, idx) for idx, item in enumerate(entries)]
+        if journal is not None and journal["operations"] != operations:
+            raise ValueError("operation list differs from the install receipt")
+    except (KeyError, ValueError, AttributeError, TypeError) as exc:
+        print(f"  ABORTED: invalid rollback receipt: {exc}")
+        return 2
+    completed = journal.get("completed", []) if journal is not None else []
+    if not isinstance(completed, list) or any(type(i) is not int or not 0 <= i < len(entries) for i in completed):
+        print("  ABORTED: invalid completed entries in rollback receipt.")
+        return 2
+    completed_files = []
     for idx, item in enumerate(entries):
         if not isinstance(item, dict) or not item.get("dest"):
             conflicts.append("receipt contains an invalid entry")
@@ -238,6 +286,42 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         expected_post = item.get("post_sha256")
         expected_pre = item.get("pre_sha256")
         actual_post = _file_sha256(dest)
+        if journal is not None:
+            operation = operations[idx]
+            staging = Path(operation["staging"])
+            capture = Path(operation["capture"])
+            at_goal = (isinstance(expected_pre, str) and actual_post == expected_pre
+                       if backup else not os.path.lexists(dest))
+            if idx in completed and not at_goal:
+                conflicts.append(f"{dest}: changed after its rollback completed; retained at destination")
+                continue
+            if at_goal:
+                # The mutation landed. Never remove an unrecognized concurrent edit.
+                capture_hash = expected_pre if item.get("action") == "remove" else expected_post
+                for leftover, allowed in ((capture, (capture_hash,)), (staging, (expected_pre, expected_post))):
+                    if os.path.lexists(leftover):
+                        digest = _file_sha256(leftover)
+                        if not digest or digest not in allowed or leftover.is_symlink():
+                            conflicts.append(f"{dest}: interrupted rollback; inspect retained edit at {leftover}")
+                        else:
+                            completed_files.append((leftover, digest))
+                pending_noop_indices.add(idx)
+                print(f"  already restored  {dest}")
+                continue
+            if os.path.lexists(staging) and (staging.is_symlink() or _file_sha256(staging) != expected_pre):
+                conflicts.append(f"{dest}: unrecognized staging contents retained at {staging}")
+                continue
+            if os.path.lexists(staging.with_suffix(".rollback.partial")):
+                print(f"  interrupted copy will be retained and rebuilt for {dest}")
+            if os.path.lexists(capture):
+                conflicts.append(f"{dest}: interrupted rollback; inspect retained file at {capture}")
+                continue
+        if item.get("pending") and actual_post == expected_post:
+            recovery = [item.get(field) for field in ("capture_path", "staging_path")]
+            retained = [path for path in recovery if isinstance(path, str) and Path(path).exists()]
+            if any(_file_sha256(Path(path)) != expected_pre for path in retained):
+                conflicts.append(f"{dest}: interrupted replacement; inspect retained bytes at {retained}")
+                continue
         if item.get("action") == "remove":
             # A stale file the install deleted: undoing it means the path is still free.
             if actual_post is not None:
@@ -288,16 +372,53 @@ def _run_rollback(which: str | None, apply: bool) -> int:
     # longer matched their post-install hash. So copy everything to a sibling temp FIRST.
     # A staging failure changes nothing; only same-directory renames run after that, which
     # is the cheapest step that can fail.
-    staged: list[tuple[Path, Path]] = []
+    failures: list[str] = []
+    if journal is None:
+        receipt["rollback"] = {"transaction": transaction, "operations": operations}
+        atomic_write_text(receipt_path, json.dumps(receipt, indent=2) + "\n", fsync=True)
+    indices = {id(item): i for i, item in enumerate(entries)}
+
+    def mark_completed(index):
+        if index not in completed:
+            completed.append(index)
+            receipt["rollback"]["completed"] = completed
+            atomic_write_text(receipt_path, json.dumps(receipt, indent=2) + "\n", fsync=True)
+
+    # A retry can observe the native mutation before the preceding process recorded it.
+    for index in sorted(pending_noop_indices):
+        mark_completed(index)
+    staged: list[tuple[Path, Path, dict]] = []
     try:
         for item in restores:
             dest = Path(item["dest"])
             dest.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dest.with_name(f"{dest.name}.{os.getpid()}.rollback")
-            shutil.copy2(Path(item["backup"]), tmp)
-            staged.append((tmp, dest))
+            tmp = Path(operations[indices[id(item)]]["staging"])
+            if journal is None or not os.path.lexists(tmp):
+                partial = tmp.with_suffix(".rollback.partial")
+                if journal is not None and os.path.lexists(partial):
+                    # A terminated copy never became publishable. Preserve its bytes and
+                    # restart from the validated backup, using the reserved staging name.
+                    retained = partial.with_name(f"{partial.name}.{uuid.uuid4().hex}.retained")
+                    partial.rename(retained)
+                    print(f"  retained interrupted copy at {retained}")
+                with partial.open("xb") as target:
+                    with Path(item["backup"]).open("rb") as source:
+                        shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                if _file_sha256(partial) != item["pre_sha256"]:
+                    raise OSError(f"staged copy differs from receipt for {dest}; retained at {partial}")
+                shutil.copystat(item["backup"], partial)
+                os.replace(partial, tmp)
+                staged.append((tmp, dest, item))
+            elif tmp.is_symlink() or _file_sha256(tmp) != item["pre_sha256"]:
+                raise OSError(f"unrecognized staging contents retained at {tmp}")
+            else:
+                staged.append((tmp, dest, item))
+            if _file_sha256(tmp) != item["pre_sha256"]:
+                raise OSError(f"staged copy differs from receipt for {dest}")
     except OSError as exc:
-        for tmp, _ in staged:
+        for tmp, _, _ in staged:
             try:
                 tmp.unlink()
             except OSError:
@@ -306,25 +427,83 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         print("  nothing was changed.")
         return 2
 
+    for path, digest in completed_files:
+        if _file_sha256(path) == digest:
+            _remove_staging(path, failures)
+        else:
+            failures.append(f"retained changed recovery file at {path}")
     restored = deleted = 0
-    failures: list[str] = []
-    for tmp, dest in staged:
+    for tmp, dest, item in staged:
+        displaced = Path(operations[indices[id(item)]]["capture"])
+        keep_staging = False
         try:
-            os.replace(tmp, dest)
+            if tmp.is_symlink() or _file_sha256(tmp) != item["pre_sha256"]:
+                keep_staging = True
+                raise OSError(f"staged copy changed before restore; retained at {tmp}")
+            if item.get("action") == "remove":
+                # Claim the journaled capture name before linking. If the receipt
+                # write fails, retry can see the attempted restore even when the
+                # user subsequently removes the destination.
+                tmp.rename(displaced)
+                try:
+                    os.link(displaced, dest)
+                except (FileExistsError, PermissionError):
+                    # The filesystem refused creation. Release this attempt so a
+                    # later retry can proceed after the conflict or sharing lock clears.
+                    displaced.unlink()
+                    raise
+                mark_completed(indices[id(item)])
+                displaced.unlink()
+            else:
+                keep_staging = True
+                try:
+                    osutil.replace_preserving_displaced(tmp, dest, displaced)
+                except osutil.ReplacementInterrupted:
+                    raise
+                except OSError:
+                    keep_staging = False
+                    raise
+                keep_staging = False
+                if _file_sha256(displaced) != item.get("post_sha256"):
+                    rel_key = item.get("key") or dest.name
+                    conflict_path = chosen / f"{rel_key}.rollback-displaced"
+                    if conflict_path.exists():
+                        conflict_path = conflict_path.with_name(f"{conflict_path.name}.{uuid.uuid4().hex}")
+                    _save_displaced_conflict(displaced, conflict_path)
+                    failures.append(f"{dest}: concurrent edit preserved at {conflict_path}")
+                mark_completed(indices[id(item)])
+                displaced.unlink()
             restored += 1
+        except osutil.ReplacementInterrupted as exc:
+            keep_staging = exc.recovery_path == tmp
+            failures.append(f"{dest}: {exc}")
         except OSError as exc:
             failures.append(f"{dest}: {exc}")
-            try:
-                tmp.unlink()  # the staged copy is litter once its rename failed
-            except OSError:
-                pass
+            if displaced.exists():
+                failures.append(f"{dest}: retained displaced file at {displaced}")
+        finally:
+            if not keep_staging:
+                _remove_staging(tmp, failures)
     for item in deletes:
         dest = Path(item["dest"])
+        captured = Path(operations[indices[id(item)]]["capture"])
         try:
-            dest.unlink(missing_ok=True)
-            deleted += 1
+            dest.rename(captured)
+            if _file_sha256(captured) == item["post_sha256"]:
+                mark_completed(indices[id(item)])
+                captured.unlink()
+                deleted += 1
+            else:
+                # Restore the concurrent edit only if nobody re-created the path.
+                try:
+                    os.link(captured, dest, follow_symlinks=False)
+                except OSError:
+                    failures.append(f"{dest}: concurrent edit during delete, retained at {captured}")
+                else:
+                    captured.unlink()
+                    failures.append(f"{dest}: concurrent edit during delete, preserved at destination")
         except OSError as exc:
-            failures.append(f"{dest}: {exc}")
+            failures.append(f"{dest}: {exc}; inspect {captured} if present")
 
     print(f"\n  restore {restored}/{len(staged)}, delete {deleted}/{len(deletes)}")
     if failures:
@@ -335,4 +514,6 @@ def _run_rollback(which: str | None, apply: bool) -> int:
             print(f"  !! {failure}")
         print(f"  backups remain at {chosen}")
         return 2
+    receipt.pop("rollback")
+    atomic_write_text(receipt_path, json.dumps(receipt, indent=2) + "\n", fsync=True)
     return 0

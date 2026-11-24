@@ -42,7 +42,7 @@ guarantees more than it does.
   when other editors/processes act in the same interval. Host hooks hold supported file-write
   tools to scope and root, but cannot inspect every shell/script write. The main agent's
   output contract (`[OPTIONS]`, confidence, attribution) is not validated.
-- **Edits through Bash are not held back or recorded.** Since 3.9.0 the `execution-gate` hook
+- **Edits through Bash are not held back or recorded.** Since agent-workflow 3.9.0 the `execution-gate` hook
   blocks Edit/Write outside the session's project root (except the temp dir, `~/.claude` and
   `policies.write_allowed_outside_root`) and outside an active execution's scope. Edits made
   through Bash or a patch script do not go through that hook or the Edit/Write `task-events`

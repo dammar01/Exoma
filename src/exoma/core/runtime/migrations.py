@@ -50,6 +50,7 @@ from exoma.core.workspace.workspace_paths import (
     atomic_write_text,
     is_legacy_layout,
     read_json_file,
+    task_stream_identity,
 )
 
 LAYOUT_VERSION = 2
@@ -62,6 +63,7 @@ _INTERNAL = (
     "audit.jsonl",
     "usage.jsonl",
     "quality.jsonl",
+    "tasks.jsonl",
     "redactions.jsonl",
     "evidence.jsonl",
     "facts.jsonl",
@@ -126,7 +128,16 @@ def _backup(workflow_dir: Path, target: Path) -> None:
         if entry.name in (DATA_DIRNAME, f"{DATA_DIRNAME}.migrating"):
             continue
         destination = target / entry.name
-        if entry.is_dir():
+        if entry.name == "tasks.jsonl":
+            identity = task_stream_identity(entry)
+            with entry.open("rb") as source, destination.open("xb") as output:
+                opened = os.fstat(source.fileno())
+                current = task_stream_identity(entry)
+                if (identity is None or current is None or opened.st_nlink != 1
+                        or not os.path.samestat(identity, opened) or not os.path.samestat(current, opened)):
+                    raise MigrationConflict(f"{entry} changed before backup")
+                shutil.copyfileobj(source, output)
+        elif entry.is_dir():
             shutil.copytree(entry, destination)
         else:
             shutil.copy2(entry, destination)
@@ -222,6 +233,9 @@ def migrate_to_data_layout(project_root: Path) -> dict:
             f"{staging} is a link to another directory, not a staging directory this migration "
             "made. Nothing was read, moved or removed. Remove the link, then rerun upgrade."
         )
+    if not data.is_dir() or staging.is_dir():
+        task_stream_identity(workflow_dir / "tasks.jsonl")
+        task_stream_identity(staging / "tasks.jsonl")
     redirected = _is_redirect(data)
     if staging.is_dir() and redirected:
         # A data/ that points elsewhere is the user's choice of where history lives. Nothing
@@ -292,6 +306,7 @@ def migrate_to_data_layout(project_root: Path) -> dict:
             # Written into staging, so it arrives in data/ by the same rename: there is no
             # moment where data/ exists and the unfinished steps are not recorded.
             atomic_write_json(staging / PENDING_FILENAME, {"stamp": stamp, "pending": list(_POST_STEPS)})
+            task_stream_identity(staging / "tasks.jsonl")
             os.replace(staging, workflow_dir / DATA_DIRNAME)
     except Exception as exc:
         # Every rollback step is attempted and every failure kept. One unguarded move used

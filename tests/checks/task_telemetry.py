@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+from unittest.mock import patch
 import tempfile
 import time
 from pathlib import Path
@@ -327,7 +328,8 @@ def _load_hook_module(name: str = "task_events_unit"):
     mod = importlib.util.module_from_spec(spec)
     old_raw = os.environ.pop("CLAUDE_HOOK_RAW", None)
     try:
-        spec.loader.exec_module(mod)
+        with patch.object(sys, "path", [str(HOOKS), *sys.path]):
+            spec.loader.exec_module(mod)
     finally:
         if old_raw is not None:
             os.environ["CLAUDE_HOOK_RAW"] = old_raw
@@ -754,65 +756,30 @@ def _check_diagnostics_permissions_and_write_only_streams() -> None:
             Path.read_text = orig_read_text  # type: ignore[method-assign]
 
         # Non-task streams must NOT invoke the read tail probe.
-        orig_probe = runtime_io._needs_leading_newline
-        probe_calls: list[str] = []
-        def _spy_probe(p: Path) -> bool:
-            probe_calls.append(p.name)
-            return False
-        runtime_io._needs_leading_newline = _spy_probe
-        try:
+        with patch.object(runtime_io, "append_task_rows", wraps=runtime_io.append_task_rows) as append:
             runtime_io.write_audit_record(project, {"kind": "audit"})
             runtime_io.write_usage_record(project, {"kind": "usage"})
             runtime_io.write_quality_record(project, {"kind": "quality"})
-            assert_true(probe_calls == [], f"non-task streams must stay pure write-only: {probe_calls}")
+            assert not append.called
             runtime_io.write_task_event(project, {"v": 2, "kind": "skill", "skill": "plan", "session_id": "s1", "at": "t"})
-            assert_true(probe_calls == ["tasks.jsonl"], f"only tasks.jsonl should probe tail: {probe_calls}")
-        finally:
-            runtime_io._needs_leading_newline = orig_probe
+            assert append.call_count == 1
 
-        # Write-only fallback: real PermissionError on the read probe of BOTH writers
-        # (hook open(..., "rb") and runtime_io Path.open("rb")) must still append cleanly.
-        import builtins
-
+        # Both callers fall back to a validated, append-only handle if reading is denied.
         stream = project / ".workflow" / "data" / "tasks.jsonl"
-        stream.write_text(
-            json.dumps({"v": 2, "kind": "skill", "skill": "plan", "session_id": "s0", "at": "t"}) + "\n",
-            encoding="utf-8",
-        )
         mod = _load_hook_module("task_events_wo_unit")
-        orig_builtin_open = builtins.open
-        hook_probe_denied = [0]
-
-        def _deny_hook_rb(file, mode="r", *args, **kwargs):
-            if str(file) == str(stream) and mode == "rb":
-                hook_probe_denied[0] += 1
+        real_open = os.open
+        denied = []
+        def deny_reads(path, flags, *args):
+            if Path(path) == stream and flags & os.O_RDWR:
+                denied.append(path)
                 raise PermissionError("read probe denied")
-            return orig_builtin_open(file, mode, *args, **kwargs)
-
-        builtins.open = _deny_hook_rb
-        try:
+            return real_open(path, flags, *args)
+        with patch.object(os, "open", deny_reads):
             mod.append_events(str(project), "s1", [{"kind": "edit", "path": "src/wo.py"}])
-        finally:
-            builtins.open = orig_builtin_open
-        assert_true(hook_probe_denied[0] == 1, f"hook probe must hit real PermissionError: {hook_probe_denied}")
-
-        orig_path_open = Path.open
-        rt_probe_denied = [0]
-
-        def _deny_rt_rb(self, mode="r", *args, **kwargs):
-            if self == stream and mode == "rb":
-                rt_probe_denied[0] += 1
-                raise PermissionError("runtime read probe denied")
-            return orig_path_open(self, mode, *args, **kwargs)
-
-        Path.open = _deny_rt_rb  # type: ignore[method-assign]
-        try:
             runtime_io.write_task_event(
                 project, {"v": 2, "kind": "skill", "skill": "verify", "session_id": "s1", "at": "t"},
             )
-        finally:
-            Path.open = orig_path_open  # type: ignore[method-assign]
-        assert_true(rt_probe_denied[0] == 1, f"runtime probe must hit real PermissionError: {rt_probe_denied}")
+        assert len(denied) == 2
         events = task_telemetry.load_events(project)
         assert_true(
             any(e.get("kind") == "edit" and e.get("path") == "src/wo.py" for e in events)

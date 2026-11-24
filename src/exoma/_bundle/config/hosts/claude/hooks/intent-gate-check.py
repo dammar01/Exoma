@@ -43,7 +43,7 @@ def workflow_data_dir(root):
     data = os.path.join(wf, "data")
     if os.path.isdir(data):
         return data
-    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
+    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "tasks.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
         if os.path.exists(os.path.join(wf, name)):
             return wf
     return data

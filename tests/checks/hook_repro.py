@@ -43,6 +43,7 @@ class _Repro:
         (self.project / ".workflow" / "data").mkdir(parents=True)
         (self.project / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
         self.outside.mkdir()
+        (self.outside / ".git").mkdir()
         self.hooks = HOOKS
 
     def close(self) -> None:

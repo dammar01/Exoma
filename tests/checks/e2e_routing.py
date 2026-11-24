@@ -1282,8 +1282,9 @@ def _check_withheld_repeat_routes(workspace) -> None:
             with patch.object(e2e_runner, "run_player", side_effect=redirected) as player:
                 result = _run(root, adapter, scenario, fake="app_fail", env={"E2E_USER": "a"})
             meta = result["meta"]["e2e"]
-            assert_true(player.call_count == 1 and meta.get("browser_verdict") == "fail",
-                        "a different failed route must reach the player")
+            if player.call_count != 1 or meta.get("browser_verdict") != "fail":
+                detail = _failure_context(root, result, {"E2E_USER": "a"})
+                raise AssertionError(f"failed route {route} expected one playback, got {player.call_count}: {detail}")
             record = e2e_repeat_state(root, _SESSION_ID)
             assert_true(record["streak"] == streak, f"expected streak {streak} after {route}, got {record['streak']}")
             prefix = "v1:" if route.startswith("items/") else "private-v1:"

@@ -69,7 +69,7 @@ def _test_every_shipped_hook_is_a_launcher_and_its_module() -> None:
     # Not Claude Code hooks: workflow_policy.py is the library the hooks import, and
     # agy-host.py is Agy's entry point, registered in ~/.gemini/config/hooks.json and run
     # without a launcher (tests/checks/agy_host.py).
-    modules = {p.stem for p in hooks.glob("*.py")} - {"workflow_hooks", "workflow_policy", "agy-host"}
+    modules = {p.stem for p in hooks.glob("*.py")} - {"workflow_hooks", "workflow_policy", "task_stream", "agy-host"}
     assert_true(bool(launchers), f"no hook launchers found under {hooks}")
     assert_true(
         launchers == modules,

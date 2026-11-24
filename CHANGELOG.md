@@ -11,6 +11,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 1.2.2 (candidate) | [docs/releases/v1.2.2.md](docs/releases/v1.2.2.md) | Preserve concurrent edits during installer recovery and improve gate diagnostics, browser references and session retention reporting |
 | 1.2.1 | [docs/releases/v1.2.1.md](docs/releases/v1.2.1.md) | `exoma jobs clean-stale` previews stale jobs and can release matching locks after a verified Windows reboot while preserving job history |
 | 1.2.0 | [docs/releases/v1.2.0.md](docs/releases/v1.2.0.md) | Risk-based test selection across workers and browser retry evidence that preserves missing assertions through the CLI exit status |
 | 1.1.2 (candidate) | [docs/releases/v1.1.2.md](docs/releases/v1.1.2.md) | Darwin cleanup inventory retains terminal process identity and birth lineage without executable lookup; conservative ownership checks and native release gates retained |

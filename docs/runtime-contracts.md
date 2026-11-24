@@ -388,7 +388,7 @@ nothing in Python. The list is kept explicit so that "configured" is never mista
 `commands.auto_verify_after_execute` sits between the two: the runtime reads it and returns
 it in `meta.policy`, including a structured next step from `execute-end`; the agent still
 invokes verification (see the table below). The execute path
-itself (plan record, `-y` approval, scope, verification status) is runtime state since 3.9.0 —
+itself (plan record, `-y` approval, scope, verification status) is runtime state since agent-workflow 3.9.0 —
 see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state).
 
 `/.verify-browser` reads one section of config.json, `e2e`, as the project's default
@@ -407,10 +407,10 @@ the bytes it would have to check.
 
 | Contract | Why it is unreachable from Python |
 | --- | --- |
-| `[OPTIONS]` block and the confidence triple in `/.plan` | Appear in main_agent's **output**. Since 3.9.0 their mechanical half is checked when main_agent records the plan (`plan-record`: one to three options, each with a `minus`, exactly one recommended; all three confidence levels; a `proceed` with open questions or `solution_path` below `high` is refused). What the prose says is still unreachable. |
+| `[OPTIONS]` block and the confidence triple in `/.plan` | Appear in main_agent's **output**. Since agent-workflow 3.9.0 their mechanical half is checked when main_agent records the plan (`plan-record`: one to three options, each with a `minus`, exactly one recommended; all three confidence levels; a `proceed` with open questions or `solution_path` below `high` is refused). What the prose says is still unreachable. |
 | Per-claim attribution tags | Output-side, never routed back through the runtime. |
 | Intent detection without the `/.` prefix | Matches on the **user's** message. No Python path receives one. |
-| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose, which no hook reads. The `status-guard` Stop hook reads only the reply's `[EXECUTION RESULT]` fields (`status`, `verification`) and warns when they claim more than not_run; it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
+| The words main_agent uses before verify ("done" while `verification: not_run`) | Prose, which no hook reads. The `status-guard` Stop hook reads only the reply's `[EXECUTION RESULT]` fields (`status`, `verification`) and warns when they claim more than not_run; it cannot block a message that has already been written. Opening an execution (plan `proceed` + the user's `-y` token), its file scope, project-root writes and `git commit` approval ARE enforced since agent-workflow 3.9.0 — see [reference.md, "Plan and execution state"](reference.md#plan-and-execution-state). |
 | `commands.auto_verify_after_execute` | Whether main_agent chains `/.verify` after an execution is still its own behavior; the runtime records the verdict once a verify runs. |
 | `/.verify-browser` interview | The questions happen in main_agent's thread, and only after a draft reports the target unconfigured or unreachable. The runtime only sees the request file written afterwards. |
 | Proxy-failure hard gate | Stopping, printing `[PROXY FAILED]`, and waiting for a yes/no before any local fallback is main_agent behavior after it reads `ok:false`. The runtime returns the failure; it cannot stop main_agent from gathering on its own. |
@@ -724,7 +724,7 @@ next: wait or raise a limit; fix the environment; fix the application. An app fa
 outcome that could never accumulate, which is the outcome most worth braking on. The latest
 reason still travels in the record as the detail the refusal quotes back.
 
-Since 3.7.3 the `app` bucket is narrowed by a failure signature
+Since agent-workflow 3.7.3 the `app` bucket is narrowed by a failure signature
 (`classify.failure_signature`, versioned `v1:<digest>`). An `app` streak continues
 only when the new failure has the same signature: the same page (`url_after` through
 `sanitize_endpoint`, query and fragment dropped, identifier segments folded to `:id`), the
@@ -1607,7 +1607,7 @@ blocking finding), `derived` (verify only: the runtime's derived verdict, `pass`
   counting torn JSON and invalid rows. A commit is therefore recorded at the end of the turn that
   made it, after any verify in that turn; one made between turns is recorded on the next prompt.
 
-Version 1 events (before 3.8.0) came from every `Read` and `Bash` call: a skill was a `Read`
+Version 1 events (before agent-workflow 3.8.0) came from every `Read` and `Bash` call: a skill was a `Read`
 of `~/.claude/skills/<name>.md`, and a commit was a `git commit` that moved HEAD between
 `PreToolUse` and `PostToolUse`. The reader treats both versions alike. The hook resolves
 MAIN_SESSION_ID through `~/.claude/session_registry.json`, writes only when
@@ -1646,7 +1646,7 @@ the evidence, fact and browser-knowledge stores, caches, backups — lives in
 spelled.
 
 `data_dir()` decides the layout from the disk: `data/` once it exists; the `.workflow` root
-while a v3.5.x-layout workspace still keeps its data there (any of `_LEGACY_MARKERS` present); `data/`
+while a workspace using the agent-workflow 3.5.x layout still keeps its data there (any of `_LEGACY_MARKERS` present); `data/`
 otherwise. The hooks (`intent-gate-set`, `intent-gate-check`, `workflow-statusline`) and the
 generated run scripts apply the same rule when they run, so every reader agrees at any
 moment. `upgrade` (and init's auto-upgrade) runs `core/runtime/migrations.py`: backup to

@@ -1,4 +1,4 @@
-# Exoma v1.2.1
+# Exoma v1.2.2
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.2.1)
+## Install (v1.2.2)
 
 ### New team member — full sequence from scratch
 
@@ -538,7 +538,7 @@ When the installer is run from inside a project that already has `.workflow/`, i
 The installer installs `~/.claude/hooks/workflow-statusline.sh` (along with its `.py`) and registers it
 as `statusLine` in `settings.json`.
 
-`settings.json` is **additive**: only keys that do not exist yet are written, and since 3.8.0 the template
+`settings.json` is **additive**: only keys that do not exist yet are written, and since agent-workflow 3.8.0 the template
 carries only `hooks` and `statusLine` — `model`, `enabledPlugins`,
 `extraKnownMarketplaces`, `effortLevel`, and `permissions.defaultMode` are no longer planted
 (those are preferences, not workflow requirements; ones already planted by old releases are left alone). Already have
@@ -616,7 +616,7 @@ measures **prompt** length, not how much was read. Fallback rows turn on `~`.
 
 Hooks are recognized by their script name. On install, the workflow's hooks are refreshed per event,
 user hooks are left alone, and workflow script commands that this release no longer registers on
-an event are removed from that event (for example `task-events` on `PreToolUse` from the 3.8.0 draft).
+an event are removed from that event (for example `task-events` on `PreToolUse` from the agent-workflow 3.8.0 draft).
 The command in the template is the same for all OSes, `{{HOOK_BASH}} "{{HOME}}/.claude/hooks/<hook>.sh"`;
 the installer fills `{{HOOK_BASH}}` with `bash` on POSIX and the absolute Git Bash path (quoted) on
 Windows, because a plain `bash` there can fall through to WSL bash in `System32`. On Windows the
@@ -720,7 +720,7 @@ during `/.execute`. A real marker still binds subagents: their gather calls go t
 `intent-gate-check` like the main agent's. The marker records `source`, `has_agent_id` and
 `prompt_id` beside `prompt_excerpt`, so a false arming names its origin.
 
-Up to 3.8.0, `intent-gate-set` read the prompt from the `user_prompt` field, which Claude Code never
+Before agent-workflow 3.8.0, `intent-gate-set` read the prompt from the `user_prompt` field, which Claude Code never
 sends (the field is `prompt`). As a result the runtime gate was never active and only the
 prompt layer worked. Since that fix, in auto-intent mode `intent-gate-check`
 actually blocks gather tools after a prompt that names a delegated command until
@@ -1233,7 +1233,7 @@ exoma upgrade --work-dir /path/to/target-app --pretty
 - refuses before migration when cleanup is unconfirmed or the job/lock store cannot establish admission; invalid JSON, non-object records and unreadable records are not an empty job list;
 - regenerates the runner scripts and repoints `runtime.python`/`runtime.package_root` at the running build;
 - takes over a workspace agent-workflow wrote: `runtime.agent_workflow_path`, `main_py_path`, `check_py_path` and `tool_dir` are removed, and the scripts call `-m exoma` instead of a checkout's `main.py`;
-- migrates the v3.4.2 keys (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) once, moving their values;
+- migrates the agent-workflow 3.4.2 keys (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) once, moving their values;
 - **layout migration** (once): the internal contents of `.workflow/` are moved to `.workflow/data/` after a backup to `data/backups/<stamp>/` (the last 3 are kept), archived evidence paths are rewritten, old leftovers (`state.json`, `runtime/`, `logs/`, locks) are deleted, an object-format `secrets.json` is converted to a list. Contents are first moved to the staging `.workflow/data.migrating/` and then renamed to `data/` in a single step. Staging left over from an interrupted attempt is restored first; if it contains a name that also exists in the `.workflow` root, the upgrade stops with `MigrationConflict` and **moves nothing** — keep one copy of each entry (compare them first), delete the other, then rerun `upgrade`. After that check, a failure has three distinct outcomes:
   - **failure before the rename, clean rollback** → everything is returned to `.workflow/`, the backup is kept as `.workflow/migration-backup-*`, message `workspace migration failed and was rolled back`;
   - **failure before the rename, INCOMPLETE rollback** (`MigrationRollbackIncomplete`) → every reverse step is still attempted and every failure is recorded; entries that cannot be returned stay in `.workflow/data.migrating/` (staging is kept, not deleted), message `workspace migration failed and the rollback is INCOMPLETE: ...`. Move those entries to `.workflow/` manually, or rerun `upgrade` — it restores leftover staging first. A pre-migration copy may exist in `.workflow/migration-backup-*`;
@@ -1480,7 +1480,7 @@ The retired key `commands.autoverify` is migrated on upgrade. A typo in any othe
 
 ### `.workflow/second_agent.json`
 
-This project-local adapter file may be changed per project. Its name follows the ROLE, not the vendor — since v3.4.3 the second_agent provider is chosen through config, so this file no longer assumes OpenCode. A v3.4.2 workspace that still uses `.workflow/opencode.json` is migrated once on `upgrade` (values moved, old keys deleted). Do not confuse it with `<project_root>/opencode.json` and `~/.config/opencode/opencode.json`, which genuinely belong to OpenCode itself and keep those names.
+This project-local adapter file may be changed per project. The agent-workflow 3.4.3 development build introduced provider selection through config, documented in the 3.4.4 release notes. A workspace from agent-workflow 3.4.2 that still uses `.workflow/opencode.json` is migrated once on `upgrade` (values moved, old keys deleted). Do not confuse it with `<project_root>/opencode.json` and `~/.config/opencode/opencode.json`, which genuinely belong to OpenCode itself and keep those names.
 
 At `init`, its source is, first that exists, the seed of the host that ran it (`second_agent.seed.<host>.json`, from `exoma init --host <host>`), the shared 0.x `second_agent.seed.json`, or the shipped `exoma/config/second_agent.example.json`. This file MUST exist per project: without it (or if it does not parse) delegated commands are rejected, with no fallback to machine-level config. The loader fills in keys not yet stored with the source defaults in memory; `upgrade` writes them to the file additively. Its effective shape:
 
@@ -1544,7 +1544,7 @@ The write side is reported separately. `doctor` writes `checks.second_agent_writ
 
 **Codex on Windows — its own OS sandbox.** Codex's Windows sandbox (`elevated` backend) can
 refuse to start a session: ``windows sandbox failed: elevated Windows sandbox requires effective
-`:root` read access``. In 3.8.0 this was observed on **resumed** threads while new threads
+`:root` read access``. During testing of agent-workflow 3.8.0 this was observed on **resumed** threads while new threads
 worked (upstream regression openai/codex#46312, and #46114 when every thread
 fails). The runtime classifies it from stderr only (similar text in the agent's output, e.g. a file it read, does not trigger it) as `error_type: sandbox_unavailable` — not `unknown` —
 with an ordered `next_action`: start a new main session (`/clear` gives a new `MAIN_SESSION_ID` and a new
@@ -1569,7 +1569,7 @@ This means a codex second_agent can read every file in the project you point it 
 
 Use `codex` when the project holds no secrets, or when you accept the risk. For a project whose secrets must stay unreadable to second_agent, use `opencode`.
 
-Since v3.7.1 this position is explicit: `codex` and `agy` are treated as **trusted providers**. Besides having no read boundary, both adapters pass the full process environment to the provider CLI (credentials in env become visible). That is accepted as a risk, not fixed with an allowlist — an allowlist could break the provider CLI's auth, and a provider that can already read `.env` is protected by nothing through a trimmed env. Instead, the risk is always visible: `/.doctor` writes a `second_agent_read_boundary` check and one `WARNING` in `recommended_fixes` whenever the active provider is `codex`/`agy` (not an issue — readiness stays READY), and `/.provider` mentions it when selecting. The check carries `secret_files: {count, sample, truncated}` from `core/policy/secret_patterns.find_secret_files`: project files whose path matches the canonical secret patterns, ignored files included, skipping dependency and build directories (`node_modules`, `vendor`, `.venv`, `dist`, `build`, …) and `.git`/`.workflow`, at most 50,000 entries per scan (`truncated: true` past that). The warning names up to five of them. Files are matched by name only; contents are never opened. The threat model behind these choices: [security.md](security.md).
+Since agent-workflow 3.7.1 this position is explicit: `codex` and `agy` are treated as **trusted providers**. Besides having no read boundary, both adapters pass the full process environment to the provider CLI (credentials in env become visible). That is accepted as a risk, not fixed with an allowlist — an allowlist could break the provider CLI's auth, and a provider that can already read `.env` is protected by nothing through a trimmed env. Instead, the risk is always visible: `/.doctor` writes a `second_agent_read_boundary` check and one `WARNING` in `recommended_fixes` whenever the active provider is `codex`/`agy` (not an issue — readiness stays READY), and `/.provider` mentions it when selecting. The check carries `secret_files: {count, sample, truncated}` from `core/policy/secret_patterns.find_secret_files`: project files whose path matches the canonical secret patterns, ignored files included, skipping dependency and build directories (`node_modules`, `vendor`, `.venv`, `dist`, `build`, …) and `.git`/`.workflow`, at most 50,000 entries per scan (`truncated: true` past that). The warning names up to five of them. Files are matched by name only; contents are never opened. The threat model behind these choices: [security.md](security.md).
 
 #### `/.provider` model catalog
 
@@ -1605,7 +1605,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.2.1):
+Reliability keys (v1.2.2):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1625,7 +1625,7 @@ Per route is also possible: `"plan": { "model": "...", "timeout_seconds": 3600 }
 `agent_workflow_path` used to be written to this file and were never read by anyone. All three
 are no longer written; their values come from `EXOMA_JOB_MAX_RUNTIME_SECONDS`, the CLI
 `--poll-timeout`, and `.workflow/config.json → runtime.python`/`runtime.package_root`.
-The upgrade to the `data/` layout (v3.6.0) drops retired keys from `config.json`; before that, `doctor` flags them
+The upgrade to the `data/` layout (introduced in agent-workflow 3.6.0) drops retired keys from `config.json`; before that, `doctor` flags them
 `retired — never read` and they are safe to delete manually.
 
 ### Sub-agent fan-out (default ON)
@@ -1726,7 +1726,7 @@ source file (same extensions and skip directories as above). A content change, a
 `--command report` → `tasks` reads `.workflow/data/tasks.jsonl`. One task = a series of events within one MAIN_SESSION_ID, from its first event until a verify whose runtime-**derived** verdict is `pass` after that task edited files. A commit is the recommended next step, not the closer. Events are written by two parties, with no additional instructions in the prompt:
 
 - runtime: one event per delegated command (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). A verify event carries `verdict` (the one **declared** by the reply; `DONE` with a blocking finding counts as `NEEDS FIX`) and `derived` (the runtime-derived verdict: `pass`, `incomplete`, or `fail`). Only `derived: pass` closes a task; a `DONE` that the runtime considers `incomplete`, including because of `not_verified`, leaves the task `open`;
-- the `task-events` hook (`.sh` launcher + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): local skills invoked from the prompt (`/.<name>`) or via the `Skill` tool, files inside the project that were edited (not `.workflow/`/`.git/`), and commits as HEAD **moving between turns**. The session's first event stores a HEAD snapshot in `.workflow/data/task-hook/<claude_session_id>.head`; each `Stop` (or the next prompt, for commits made in a terminal between turns) runs Git observation under one shared 2-second monotonic wait budget (with bounded post-timeout cleanup), appends the commits since the snapshot — first-parent, oldest first, each with `paths` — to `tasks.jsonl`, and only then atomically advances the snapshot. A Git timeout, spawn error, operational `rev-parse` failure (while ordinary non-repositories and unborn repositories stay quiet before a baseline exists), or transient history failure leaves the previous snapshot intact for a later retry (recording the known failed `HEAD` OID in `<claude_session_id>.head.retry` under the snapshot lock so only commits up to that bound carry `delayed: true` on recovery) without dropping independent `skill`/`edit` events — except when `.head` itself holds invalid UTF-8, a malformed OID, or a confirmed-missing commit object while `git cat-file -t <HEAD>` verifies the target `HEAD` object is readable, in which case the hook logs `snapshot`/`invalid_snapshot` and atomically rebaselines `.head` to `HEAD`. Failure diagnostics make a best-effort attempt under a bounded 100 ms OS lock (dropping the row on lock contention rather than racing with compaction) to append a privacy-safe diagnostic row to `.workflow/data/task-hook/diagnostics.jsonl` (surfaced in `--command report` and `/.doctor`). Events are v2 (`v: 2`). Before 3.8.0 this hook ran on every `Read` and `Bash` (twice for `Bash`); one PowerShell spawn is ~450 ms on Windows, while skills and commits only need to be read once per turn. Consequence: a skill loaded via `Read` without a prefix (natural-language auto-intent) is not recorded, and a commit is recorded at the end of the turn that made it, after the verify in that turn. The anchor check keeps it that way: at a `Stop` whose reply carries its own `[PLAN]` or `[ANALYSIS RESULT]` block after a plan/analyze run, the hook reads `transcript_path` backward from its end, only as far as the newest `.workflow/run.sh plan|analyze` call (at most 32 MiB), and counts an assistant `Read` tool call made after it whose range overlaps an anchor that run cites; with none, it prints an `[ANCHOR CHECK]` systemMessage, once per run (`runtime/anchor-reads.json`). No other `Stop` reads the transcript, and lines without a `tool_use` are never parsed. A read through the shell is not seen, and an unreadable transcript, or one with no runner call within that limit, warns nothing. `policies.enforcement: off` turns it off.
+- the `task-events` hook (`.sh` launcher + `task-events.py`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): local skills invoked from the prompt (`/.<name>`) or via the `Skill` tool, files inside the project that were edited (not `.workflow/`/`.git/`), and commits as HEAD **moving between turns**. The session's first event stores a HEAD snapshot in `.workflow/data/task-hook/<claude_session_id>.head`; each `Stop` (or the next prompt, for commits made in a terminal between turns) runs Git observation under one shared 2-second monotonic wait budget (with bounded post-timeout cleanup), appends the commits since the snapshot — first-parent, oldest first, each with `paths` — to `tasks.jsonl`, and only then atomically advances the snapshot. A Git timeout, spawn error, operational `rev-parse` failure (while ordinary non-repositories and unborn repositories stay quiet before a baseline exists), or transient history failure leaves the previous snapshot intact for a later retry (recording the known failed `HEAD` OID in `<claude_session_id>.head.retry` under the snapshot lock so only commits up to that bound carry `delayed: true` on recovery) without dropping independent `skill`/`edit` events — except when `.head` itself holds invalid UTF-8, a malformed OID, or a confirmed-missing commit object while `git cat-file -t <HEAD>` verifies the target `HEAD` object is readable, in which case the hook logs `snapshot`/`invalid_snapshot` and atomically rebaselines `.head` to `HEAD`. Failure diagnostics make a best-effort attempt under a bounded 100 ms OS lock (dropping the row on lock contention rather than racing with compaction) to append a privacy-safe diagnostic row to `.workflow/data/task-hook/diagnostics.jsonl` (surfaced in `--command report` and `/.doctor`). Events are v2 (`v: 2`). Before agent-workflow 3.8.0 this hook ran on every `Read` and `Bash` (twice for `Bash`); one PowerShell spawn is ~450 ms on Windows, while skills and commits only need to be read once per turn. Consequence: a skill loaded via `Read` without a prefix (natural-language auto-intent) is not recorded, and a commit is recorded at the end of the turn that made it, after the verify in that turn. The anchor check keeps it that way: at a `Stop` whose reply carries its own `[PLAN]` or `[ANALYSIS RESULT]` block after a plan/analyze run, the hook reads `transcript_path` backward from its end, only as far as the newest `.workflow/run.sh plan|analyze` call (at most 32 MiB), and counts an assistant `Read` tool call made after it whose range overlaps an anchor that run cites; with none, it prints an `[ANCHOR CHECK]` systemMessage, once per run (`runtime/anchor-reads.json`). No other `Stop` reads the transcript, and lines without a `tool_use` are never parsed. A read through the shell is not seen, and an unreadable transcript, or one with no runner call within that limit, warns nothing. `policies.enforcement: off` turns it off.
 
 States: `completed` (verify `derived: pass` with no edit afterwards, committed or not), `open` (has edits, not yet `pass` — committed or not), `read_only` (no edits), `unknown` (events without a session identity). An edit after `pass` opens a new task. A commit containing files of a task that just became `completed` goes into that task's `sequence`; a commit in an `open` task goes into its `sequence` without changing its state. Older events do not carry `derived`, so their task stays `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (distinct commits none of whose copies is claimed by a task; a commit is marked as used only when claimed, so a copy recorded earlier by another session does not hide it from the session that made it), and `recent` (the last 10 tasks with `sequence`). This stream is separate from `usage.jsonl`: local skills and edits are not delegated calls and must not enter budget governance.
 
@@ -2206,6 +2206,8 @@ The command works on an uninitialized project and does not create a workspace or
 Doctor includes the category summary under `checks.data_retention`. Each category reports file
 count, logical bytes and oldest/newest observed file modification times (Unix seconds).
 
+An older workspace containing only `.workflow/tasks.jsonl` still reports its telemetry at the legacy location. Upgrade moves that stream into `.workflow/data/` with its original bytes.
+
 The preview groups a session directory with its same-ID provider record. The newest 20 groups
 and groups with observed activity in the last seven days are retained. Older groups still lack
 a positive retirement signal. Broad `clean` also retains all session directories and provider records. Consequently this policy currently selects zero deletion targets.
@@ -2276,7 +2278,7 @@ checkout recorded in its own `storage/` stay there: they belong to that runtime.
 
 Mutable state (`state`/`scope`/`cache`/`runtime`/`logs`) lives under `data/sessions/<id>/`, so two main_agents on the same project never overwrite each other. The `.workflow/` root holds only human-edited files plus scripts.
 
-The v3.5.x workspace layout (layout 1) stored the contents of `data/` directly in the `.workflow/` root; the runtime still reads it until `upgrade` moves it. Post-move steps (rewrite evidence paths, delete old leftovers, strip config, convert `secrets.json`, prune backups) are recorded in `data/.migration-pending.json`; if any of them fails, the next `upgrade` resumes from that step and `doctor` reports it as `migration incomplete`. A leftover `data.migrating/` whose names collide with the root is refused without moving anything.
+The agent-workflow 3.5.x workspace layout (layout 1) stored the contents of `data/` directly in the `.workflow/` root; the runtime still reads it until `upgrade` moves it. Post-move steps (rewrite evidence paths, delete old leftovers, strip config, convert `secrets.json`, prune backups) are recorded in `data/.migration-pending.json`; if any of them fails, the next `upgrade` resumes from that step and `doctor` reports it as `migration incomplete`. A leftover `data.migrating/` whose names collide with the root is refused without moving anything.
 
 Async jobs are stored per user under `<data dir>/storage/jobs/`. The default session ID cache is
 in `<data dir>/storage/main-sessions/` and is separated by a hash of the project root; the mapping to OpenCode
@@ -2349,7 +2351,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.2.1)
+### Liveness worker (v1.2.2)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

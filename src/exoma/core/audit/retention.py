@@ -48,15 +48,27 @@ def _observe_references(paths, sessions):
             if clipped:
                 raw = raw[:256 * 1024].rpartition(b"\n")[0]
             observations[kind] = "partial" if clipped else "complete"
-            for line in ([raw] if kind == "current" else raw.splitlines()):
-                row = json.loads(line)
+            if kind == "current":
+                row = json.loads(raw)
+                if not isinstance(row, dict):
+                    observations[kind] = "unavailable"
+                else:
+                    sid = row.get("session_id")
+                    if isinstance(sid, str) and sid in sessions:
+                        sessions[sid]["protected_by"].add("current_session")
+                continue
+            for line in raw.splitlines():
+                try:
+                    row = json.loads(line)
+                except (ValueError, RecursionError):
+                    observations[kind] = "partial"
+                    continue
                 if not isinstance(row, dict):
                     observations[kind] = "partial"
                     continue
-                field = "session_id" if kind == "current" else "session"
-                sid = row.get(field)
+                sid = row.get("session")
                 if isinstance(sid, str) and sid in sessions:
-                    sessions[sid]["protected_by"].add("current_session" if kind == "current" else "indexed_evidence")
+                    sessions[sid]["protected_by"].add("indexed_evidence")
         except FileNotFoundError:
             observations[kind] = "absent"
         except (OSError, ValueError, RecursionError):
@@ -65,7 +77,14 @@ def _observe_references(paths, sessions):
 
 
 def retention_report(project_root: Path, *, preview=False, max_entries=10000, budget_seconds=0.5) -> dict:
-    paths = workflow_paths(project_root)
+    try:
+        paths = workflow_paths(project_root)
+    except OSError as exc:
+        result = {"status": "unavailable", "layout": "unknown", "categories": {}, "entries_seen": 0,
+                  "skipped": 1, "totals_are_lower_bounds": True, "reason": str(exc)}
+        if preview:
+            result.update(sessions=[], targets=[], target_count=0, target_bytes=0)
+        return result
     data = paths["data_dir"]
     legacy = data == paths["workflow_dir"]
     report = {"status": "complete", "layout": "legacy" if legacy else "data", "categories": {},
@@ -78,13 +97,17 @@ def retention_report(project_root: Path, *, preview=False, max_entries=10000, bu
     try:
         for parent in (paths["workflow_dir"], data):
             info = parent.lstat()
-            if _redirect(info) or not stat.S_ISDIR(info.st_mode) or parent.is_mount():
+            if _redirect(info) or not stat.S_ISDIR(info.st_mode) or os.path.ismount(parent):
                 raise OSError("redirected storage")
     except FileNotFoundError:
         report["status"] = "absent"
         return report
     except OSError:
         return {**report, "status": "unavailable", "totals_are_lower_bounds": True}
+
+    if not legacy and os.path.lexists(paths["workflow_dir"] / TASK_STREAM_NAME):
+        report["legacy_task_stream"] = "A separate tasks.jsonl remains at the workspace root; compare it with data/tasks.jsonl before moving it."
+        report["totals_are_lower_bounds"] = True
 
     legacy_names = {p.name for p in paths.values() if p.parent == data
                     and p not in (paths["config"], paths["provider_config"], paths["gitignore"], paths["current_dir"])}

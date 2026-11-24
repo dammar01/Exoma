@@ -488,7 +488,9 @@ def _check_clean_legacy_exact_match() -> None:
             before_del_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
             def _delete_during_flush(complete: bool = False, allow_empty: bool = False):
                 orig_flush_race(complete=complete, allow_empty=allow_empty)
-                if not complete:
+                if not complete and not allow_empty:
+                    receipt = json.loads(base._RECEIPT_TARGET["path"].read_text(encoding="utf-8"))
+                    assert receipt["entries"][-1]["pending"] is True
                     claude_md.unlink()
             deleted_raised = False
             with patch.object(base, "_flush_receipt", _delete_during_flush), contextlib.redirect_stdout(io.StringIO()):
@@ -506,14 +508,13 @@ def _check_clean_legacy_exact_match() -> None:
             # leaves original intact and discards the no-op backup dir.
             claude_md.write_bytes(original)
             before_fail_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
-            import os as _os
-            orig_replace = _os.replace
-            def _deny_target_replace(src, dst):
+            from exoma.utils import osutil as _osutil
+            def _deny_target_replace(src, dst, displaced):
                 if Path(dst) == claude_md:
                     raise PermissionError("simulated sharing violation")
-                return orig_replace(src, dst)
+                return _osutil.replace_preserving_displaced(src, dst, displaced)
             replace_failed = False
-            with patch.object(_os, "replace", _deny_target_replace), \
+            with patch.object(_osutil, "replace_preserving_displaced", _deny_target_replace), \
                     patch("exoma.core.workspace.workspace_paths.REPLACE_RETRY_DELAYS", ()), \
                     contextlib.redirect_stdout(io.StringIO()):
                 try:
@@ -525,6 +526,133 @@ def _check_clean_legacy_exact_match() -> None:
                 replace_failed and claude_md.read_bytes() == original and after_fail_dirs == before_fail_dirs,
                 f"pre-replace failure leaves original intact and discards no-op backup: dirs={after_fail_dirs - before_fail_dirs}",
             )
+
+            # A sharing violation made no mutation even if the target disappears before retry.
+            def delete_on_retry(_delay):
+                claude_md.unlink()
+            with patch.object(_osutil, "replace_preserving_displaced", _deny_target_replace), \
+                    patch("time.sleep", delete_on_retry), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    base.run_clean_legacy(apply=True)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise AssertionError("cleanup retried after destination was deleted")
+            assert {p.name for p in backups.iterdir() if p.is_dir()} == before_fail_dirs
+
+            # Concurrent modification AFTER final read_bytes() check and BEFORE replacement
+            # preserves the actual displaced bytes as a conflict and lets --rollback restore them.
+            claude_md.write_bytes(original)
+            post_check_save = original + b"concurrent edit after final read\n"
+            before_post_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            orig_replace_preserving = _osutil.replace_preserving_displaced
+            def _save_before_replace(src, dst, displaced):
+                if Path(dst) == claude_md:
+                    claude_md.write_bytes(post_check_save)
+                return orig_replace_preserving(src, dst, displaced)
+            out = io.StringIO()
+            with patch.object(_osutil, "replace_preserving_displaced", _save_before_replace), \
+                    contextlib.redirect_stdout(out):
+                post_race_code = base.run_clean_legacy(apply=True)
+            new_post_dirs = sorted(p for p in backups.iterdir() if p.is_dir() and p.name not in before_post_dirs)
+            assert_true(
+                post_race_code == 1
+                and "conflict" in out.getvalue()
+                and len(new_post_dirs) == 1,
+                f"concurrent edit right before replace reports conflict and preserves backup: code={post_race_code} out={out.getvalue()}",
+            )
+            conflict_file = new_post_dirs[0] / "hosts" / "claude" / "CLAUDE.md.displaced"
+            assert_true(
+                conflict_file.is_file() and conflict_file.read_bytes() == post_check_save,
+                f"displaced concurrent edit bytes are durably preserved: {conflict_file}",
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                rb_post_race = rollback._run_rollback(new_post_dirs[0].name, True)
+            assert_true(
+                rb_post_race == 0 and claude_md.read_bytes() == post_check_save,
+                f"rollback after concurrent-edit conflict restores the displaced concurrent save: code={rb_post_race}",
+            )
+            shutil.rmtree(new_post_dirs[0])
+
+            # Concurrent modification during rollback replacement also preserves the displaced save.
+            claude_md.write_bytes(original)
+            before_rb_dirs = {p.name for p in backups.iterdir() if p.is_dir()}
+            with contextlib.redirect_stdout(io.StringIO()):
+                assert_true(base.run_clean_legacy(apply=True) == 0, "setup clean-legacy apply for rollback race")
+            rb_dir = next(p for p in backups.iterdir() if p.is_dir() and p.name not in before_rb_dirs)
+            rb_concurrent_save = expected_after + b"edit right before rollback replace\n"
+            def _save_before_rollback_replace(src, dst, displaced):
+                if Path(dst) == claude_md:
+                    claude_md.write_bytes(rb_concurrent_save)
+                return orig_replace_preserving(src, dst, displaced)
+            with patch.object(_osutil, "replace_preserving_displaced", _save_before_rollback_replace), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                rb_race_code = rollback._run_rollback(rb_dir.name, True)
+            rb_displaced = rb_dir / "hosts" / "claude" / "CLAUDE.md.rollback-displaced"
+            assert_true(
+                rb_race_code == 2 and rb_displaced.is_file() and rb_displaced.read_bytes() == rb_concurrent_save,
+                f"concurrent edit right before rollback replace is preserved as conflict: code={rb_race_code}",
+            )
+            shutil.rmtree(rb_dir)
+
+            # Recovery copies must survive a conflict-backup write failure on both commands.
+            for rollback_failure in (False, True):
+                claude_md.write_bytes(original)
+                before_dirs = set(backups.iterdir())
+                if rollback_failure:
+                    assert base.run_clean_legacy(apply=True) == 0
+                def interrupted_save(src, dst, displaced):
+                    claude_md.write_bytes(post_check_save)
+                    return orig_replace_preserving(src, dst, displaced)
+                module = rollback if rollback_failure else base
+                with patch.object(_osutil, "replace_preserving_displaced", interrupted_save), \
+                        patch.object(module, "_save_displaced_conflict", side_effect=OSError("backup unavailable")):
+                    if rollback_failure:
+                        assert rollback._run_rollback(None, True) == 2
+                    else:
+                        try:
+                            base.run_clean_legacy(apply=True)
+                        except OSError:
+                            pass
+                        else:
+                            raise AssertionError("expected conflict backup failure")
+                capture, = claude_md.parent.glob("CLAUDE.md.*.displaced")
+                assert capture.read_bytes() == post_check_save
+                if not rollback_failure:
+                    assert rollback._run_rollback(None, True) == 2
+                    assert capture.read_bytes() == post_check_save
+                capture.unlink()
+                for backup in set(backups.iterdir()) - before_dirs:
+                    shutil.rmtree(backup)
+
+            # Model the POSIX exchange succeeding before the second rename fails.
+            for rollback_failure in (False, True):
+                claude_md.write_bytes(original)
+                before_dirs = set(backups.iterdir())
+                if rollback_failure:
+                    assert base.run_clean_legacy(apply=True) == 0
+                captures = []
+                def partial_exchange(src, dst, displaced):
+                    staged_bytes = src.read_bytes()
+                    src.write_bytes(post_check_save)
+                    dst.write_bytes(staged_bytes)
+                    captures.append(src)
+                    raise _osutil.ReplacementInterrupted(src, PermissionError("capture rename failed"))
+                with patch.object(_osutil, "replace_preserving_displaced", partial_exchange):
+                    if rollback_failure:
+                        assert rollback._run_rollback(None, True) == 2
+                    else:
+                        try:
+                            base.run_clean_legacy(apply=True)
+                        except _osutil.ReplacementInterrupted:
+                            pass
+                        else:
+                            raise AssertionError("partial exchange must interrupt cleanup")
+                capture, = captures
+                assert capture.read_bytes() == post_check_save
+                capture.unlink()
+                for backup in set(backups.iterdir()) - before_dirs:
+                    shutil.rmtree(backup)
 
             # Hard crash after pending receipt flush BEFORE rename: rollback reconciles pending
             # entry whose destination still matches pre_sha256 as a safe no-op, while an unexpected

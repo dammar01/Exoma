@@ -62,6 +62,11 @@ def check_timeout_observation():
         bindings.write_text(json.dumps({"session": bound, "missing": {"cwd": str(project / "missing")}}))
         assert claude_hook_timeouts(project)["status"] == "partial"
         bindings.write_text(json.dumps({"session": bound}))
+        for invalid in ({}, {"cwd": 42}):
+            bindings.write_text(json.dumps({"session": bound, "unclassified": invalid}))
+            result = claude_hook_timeouts(project)
+            assert result["status"] == "partial" and result["unavailable_files"] == 1
+        bindings.write_text(json.dumps({"session": bound}))
         nested = launch.parent / ".git"
         nested.write_text("gitdir: fixture")
         assert claude_hook_timeouts(project)["files_scanned"] == 0

@@ -57,6 +57,11 @@ def _test_codex_host_contract():
         compacted = _hook(home, "SessionStart", {"session_id": sid, "cwd": str(root), "source": "compact"})
         assert_true(compacted["hookSpecificOutput"]["additionalContext"].split("MAIN_SESSION_ID=")[1].splitlines()[0]
                     == binding.split("MAIN_SESSION_ID=")[1].splitlines()[0], "compaction keeps the main session")
+        for session_arg, suffix, denied in ((main, "", False), ("wrong", "", True), (main, " | cat", True)):
+            cmd = f"./.workflow/run.sh'' verify-prepare --session '{session_arg}'{suffix}"
+            response = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root), "tool_name": "Bash",
+                                                  "tool_input": {"command": cmd}})
+            assert (response.get("hookSpecificOutput", {}).get("permissionDecision") == "deny") == denied, (cmd, response)
         prompt = {"session_id": sid, "cwd": str(root), "turn_id": "turn-1", "prompt": "$exoma-plan add a feature"}
         _hook(home, "UserPromptSubmit", prompt)
         from exoma.installer.base import runner_prefix

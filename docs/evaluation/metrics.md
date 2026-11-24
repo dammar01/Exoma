@@ -108,7 +108,9 @@ distinct.
 
 ## Running the tools
 
-All three read only; each prints one JSON object. Run them from the clone.
+Run the tools from the clone. Each reads the inputs and prints one JSON object.
+The examples select historical agent-workflow 3.8.0 sessions by their transcript banner.
+For Exoma sessions, supply the version recorded in their banner.
 
 ```bash
 # Real use of one version over every project under a folder (real_use.*)
@@ -145,6 +147,9 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | `sum` | a sum over the unit |
 
 ## Metrics
+
+The 3.8.0 event-history references and the 3.8.4 one-token replay baseline in the tables below
+refer to agent-workflow releases. Metric suffixes such as `@1` identify calculation versions.
 
 ### Runtime report (`--command report`)
 

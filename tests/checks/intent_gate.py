@@ -631,6 +631,29 @@ def _test_intent_gate_runner_parsed() -> None:
                 and "unknown-custom-hook" not in json.dumps(partial),
                 f"[{label}] doctor _gate_blocks must bucket unknown labels and flag invalid rows: {partial}",
             )
+            from unittest.mock import patch
+            from contextlib import contextmanager
+            data = gate.project / ".workflow" / "data"
+            blocked = {**rows[0], "rule": "runner_malformed", "exit": 2}
+            warning = {**blocked, "mode": "warn", "exit": 0}
+            blocks_file.write_text("\n".join(map(json.dumps, (blocked, warning))), encoding="utf-8")
+            counts = diagnostics._gate_blocks(gate.project, data)
+            assert counts["by_rule"]["runner_malformed"] == 2
+            assert counts["blocked_by_rule"]["runner_malformed"] == 1
+            blocks_file.write_text(json.dumps({**blocked, "at": "2000-01-01T00:00:00+00:00"}))
+            real_scandir = os.scandir
+
+            @contextmanager
+            def interrupted_scandir(path):
+                def entries():
+                    with real_scandir(path) as scan:
+                        yield from scan
+                    raise OSError("directory enumeration interrupted")
+                yield entries()
+
+            with patch.object(diagnostics.os, "scandir", interrupted_scandir):
+                counts = diagnostics._gate_blocks(gate.project, data)
+            assert counts["status"] == "partial" and counts["total"] == 0 and counts["unreadable_files"]
         finally:
             gate.close()
 
