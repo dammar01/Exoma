@@ -73,7 +73,8 @@ def _test_codex_host_contract():
         for tool in ("Bash", "exec_command", "functions.exec_command"):
             accepted_prepare = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                     "tool_name": tool, "tool_input": {"cmd": prepare}})
-            assert_true(accepted_prepare == {}, f"{tool}: local prepare passes the armed gate")
+            assert_true(accepted_prepare.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                        f"{tool}: plan cannot prepare an unrelated verification")
         wrong_prepare = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                               "tool_name": "exec_command", "tool_input": {"cmd": prepare.replace(main, "other")}})
         assert_true(wrong_prepare.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
@@ -126,7 +127,8 @@ def _test_codex_host_contract():
             precision = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                                        "tool_name": "exec_command",
                                                        "tool_input": {"cmd": read_command}})
-            assert_true(precision == {}, f"precision shell read {number} passes: {precision}")
+            assert_true(precision.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                        f"project read {number} waits for collection: {precision}")
         quota = _hook(home, "PreToolUse", {"session_id": sid, "cwd": str(root),
                                               "tool_name": "exec_command",
                                               "tool_input": {"cmd": f"Get-Content '{small.as_posix()}'"}})
@@ -183,6 +185,7 @@ def _test_codex_host_contract():
         assert_true(no_hint == {}, "command-only mode disables natural-language hints")
         _hook(home, "UserPromptSubmit", {**prompt, "prompt": "[$exoma-plan](skill://exoma-plan) add a feature"})
         rt = root / ".workflow/data/sessions" / main / "runtime"
+        assert_true((rt / "delegation-host.v1").is_file(), "Codex registers bound first dispatch")
         assert_true((rt / "delegated.marker").exists(), "command-only mode still supports explicit linked invocation")
         profile_path.unlink()
         patch_text = "*** Begin Patch\n*** Update File: .workflow/run.sh\n@@\n-x\n+y\n*** End Patch"
@@ -216,6 +219,15 @@ def _test_codex_host_contract():
                                           "last_assistant_message": "[EXECUTION RESULT]\nstatus: done\nverification: not_run"})
         assert_true("systemMessage" in warning and "decision" not in warning,
                     "an unverified completion claim warns without forcing another turn")
+        record = runtime / "delegation.json"
+        record.write_text(json.dumps({"generation": "g", "phase": "returned", "command": "plan"}), encoding="utf-8")
+        for transport in ("functions.wait", "write_stdin"):
+            assert_true(_hook(home, "PreToolUse", {"session_id": sid, "tool_name": transport,
+                        "tool_input": {"chars": ""}}) == {}, "collecting the existing native handle remains available")
+        held = _hook(home, "PreToolUse", {"session_id": sid, "tool_name": "Read",
+                     "tool_input": {"file_path": str(small)}})
+        assert_true(held.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    "a nested terminal return leaves main-turn gathering gated")
         fresh = _hook(home, "SessionStart", {"session_id": sid, "cwd": str(root), "source": "clear"})
         assert_true(fresh["hookSpecificOutput"]["additionalContext"].split("MAIN_SESSION_ID=")[1].splitlines()[0]
                     != main, "clear starts a new Exoma main session")

@@ -28,6 +28,8 @@ from tests.checks.support import (
 
 def _test_submit_admission() -> None:
     """Initial dispatch and global capacity must admit exactly one worker."""
+    _check_delegation_collection()
+    _check_first_dispatch_recovery()
     _check_mutation_admission()
     _check_reboot_cleanup()
     _check_replaced_cleanup_owner()
@@ -1456,3 +1458,232 @@ def _check_worker_cleanup_uncertainty(root):
             pass
         else:
             raise AssertionError("uncertain normal cleanup admitted an update")
+
+
+def _check_delegation_collection():
+    import subprocess
+    from unittest.mock import patch
+    from exoma.core.runtime.scripts import _generate_run_scripts
+    from exoma.utils.osutil import find_bash
+    from exoma.core.jobs import job_lifecycle as jobs
+    from exoma._bundle.config.hosts.claude.hooks import workflow_policy as policy
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        isolated_home = root / "runtime-home"
+        manager = JobManager(isolated_home / "storage" / "jobs")
+        session = "main_a"
+        rt = policy.runtime_dir(root, session)
+
+        def control(action, argument):
+            return jobs.delegation_control("delegate-" + action, argument, session, str(root))
+
+        with patch.object(main, "JOB_MANAGER", manager), patch.object(main, "_spawn_worker",
+                return_value={"ok": True, "meta": {"pid": os.getpid()}}) as launch:
+            generation = control("select", "analyze")["meta"]["generation"]
+            admitted = jobs._submit_selected("analyze", "task", session, str(root), None, True, generation)
+            job_id = admitted["job_id"]
+            assert_true(not control("abort", generation)["ok"], "cannot abort an admitted selection")
+            assert_true(not control("ack", generation)["ok"], "selection is not a result receipt")
+            manager.complete_job(job_id, {"ok": True, "content": "evidence", "meta": {}})
+            assert_true(policy.delegation_marker(rt)["phase"] == "running", "terminal publication preserves gate")
+            ordinary = jobs.await_job("analyze", "task", session, str(root), generation=generation)
+            receipt = ordinary["meta"]["delegation"]["receipt"]
+            for command, task, model in (("analyze", "revised", None), ("plan", "task", None),
+                                         ("analyze", "task", "different-model")):
+                rejected = jobs.await_job(command, task, session, str(root), model, generation=generation)
+                assert_true(not rejected["ok"] and "delegation" not in rejected["meta"]
+                            and rejected["content"] != ordinary["content"] and launch.call_count == 1,
+                            "a rejected dispatch cannot inherit earlier evidence or its receipt")
+            _generate_run_scripts(root)
+            cli = [find_bash() or "bash", str(root / ".workflow/run.sh"), "analyze", "--session", session,
+                   "--request", generation, "--task", "task", "--main-host", "codex"]
+            env = {**os.environ, "EXOMA_HOME": str(isolated_home)}
+            process = subprocess.run(cli, cwd=root, env=env, capture_output=True, text=True,
+                                     encoding="utf-8", timeout=30, **no_console())
+            assert_true(process.returncode == 0 and json.loads(process.stdout)["meta"]["delegation"]["receipt"] == receipt,
+                        f"generated runner forwards the generation and returns the original receipt: {process.stderr}")
+            recovered = control("result", generation)
+            assert_true(recovered["content"] == ordinary["content"] and
+                        recovered["meta"]["delegation"]["receipt"] == receipt and launch.call_count == 1,
+                        "recovery returns the same evidence and receipt without spawning")
+            assert_true(not jobs.delegation_control("delegate-ack", receipt, "main_b", str(root))["ok"],
+                        "a fork cannot acknowledge another session")
+            assert_true(policy.delegation_marker(rt)["phase"] == "returned", "wait for main acknowledgement")
+            assert_true(control("ack", receipt)["ok"] and control("ack", receipt)["ok"] and
+                        not policy.delegation_marker(rt), "acknowledgement releases exactly once")
+            next_gen = control("select", "verify-browser")["meta"]["generation"]
+            assert_true(next_gen != generation and not control("ack", receipt)["ok"],
+                        "late acknowledgement cannot clear a new generation")
+            assert_true(control("abort", next_gen)["ok"], "a prelaunch failure can be reported")
+            failed_gen = control("select", "analyze")["meta"]["generation"]
+            failed_job = jobs._submit_selected("analyze", "retry", session, str(root), None, True, failed_gen)["job_id"]
+            manager.fail_job(failed_job, "fixture provider unavailable")
+            failure = control("result", failed_gen)
+            assert_true(not failure["ok"] and failure["meta"]["job_id"] == failed_job and
+                        policy.delegation_marker(rt)["phase"] == "returned",
+                        "terminal failure is returned under its own receipt and remains gated")
+            assert_true(control("ack", failure["meta"]["delegation"]["receipt"])["ok"] and
+                        not (root / ".workflow/local_mode.flag").exists(), "collecting failure grants no local mode")
+
+            failed_launch = control("select", "analyze")["meta"]["generation"]
+            with patch.object(main, "_spawn_worker", return_value={"ok": False, "content": "launch interrupted"}):
+                terminal = jobs.await_job("analyze", "same request", session, str(root), generation=failed_launch)
+            assert_true(not terminal["ok"] and terminal["content"] == "launch interrupted"
+                        and control("ack", terminal["meta"]["delegation"]["receipt"])["ok"],
+                        "an admitted same-request launch failure retains its terminal receipt")
+
+            # Fail the session-state write after the job reservation has been created,
+            # while a prior job's unused claim and this job's request both exist.
+            verify_gen = control("select", "verify")["meta"]["generation"]
+            request = jobs.verify_tests.request_path(root, session)
+            claimed = jobs.verify_tests.claimed_path(root, session)
+            request.parent.mkdir(parents=True, exist_ok=True)
+            request.write_text("current test selection", encoding="utf-8")
+            claimed.write_text("previous test selection", encoding="utf-8")
+            calls = launch.call_count
+            with patch.object(jobs, "atomic_write_json", side_effect=OSError("binding write failed")):
+                refused = jobs.await_job("verify", "review", session, str(root), generation=verify_gen)
+            assert_true(not refused["ok"] and launch.call_count == calls and not manager.active_job_for_session(session)
+                        and request.is_file(), "failed admission releases its reservation and preserves the new request")
+            retried = jobs._submit_selected("verify", "review", session, str(root), None, True, verify_gen)
+            assert_true(retried["ok"] and launch.call_count == calls + 1 and not request.exists()
+                        and claimed.read_text(encoding="utf-8") == "current test selection",
+                        "same-generation retry launches with its own test claim")
+            manager.fail_job(retried["job_id"], "end of verify fixture")
+            assert_true(control("ack", control("result", verify_gen)["meta"]["delegation"]["receipt"])["ok"],
+                        "verify fixture collected")
+
+            # Drive an ordinary bound dispatch through the generated runner in a separate
+            # process. Attach to a live fixture job so no provider is needed.
+            policy.set_delegated_marker(None, rt, {"host": "codex"})
+            pending = jobs.submit("analyze", "dispatch first", session, str(root))
+            runner = [find_bash() or "bash", str(root / ".workflow/run.sh"), "analyze", "--session",
+                      session, "--task", "dispatch first"]
+            with subprocess.Popen(runner, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, encoding="utf-8", **no_console()) as child:
+                try:
+                    deadline = time.monotonic() + 12
+                    while policy.delegation_marker(rt).get("job_id") != pending["job_id"]:
+                        if child.poll() is not None or time.monotonic() >= deadline:
+                            raise AssertionError("runner did not bind its first dispatch while waiting")
+                        time.sleep(0.05)
+                    assert_true(policy.delegation_marker(rt)["phase"] == "running",
+                                "the bound job is gated before evidence exists")
+                finally:
+                    manager.complete_job(pending["job_id"], {"ok": True, "content": "CLI evidence", "meta": {}})
+                stdout, stderr = child.communicate(timeout=30)
+            assert_true(child.returncode == 0 and json.loads(stdout)["content"] == "CLI evidence",
+                        f"bound runner returns its own evidence: {stderr}")
+            # Recover using only information known before dispatch, as if the
+            # caller had received none of the runner's stdout.
+            selection = control("select", "analyze")["meta"]
+            assert_true(selection["phase"] == "returned", "reselect returns the active terminal generation")
+            recovered = control("result", selection["generation"])
+            cli_receipt = recovered["meta"]["delegation"]["receipt"]
+            assert_true(recovered["meta"]["job_id"] == pending["job_id"]
+                        and cli_receipt == json.loads(stdout)["meta"]["delegation"]["receipt"],
+                        "lost output is recovered from the original job")
+            assert_true(policy.delegation_marker(rt)["phase"] == "returned" and control("ack", cli_receipt)["ok"],
+                        "runner return requires a subsequent main-host acknowledgement")
+
+            def finish(job_id, work_dir):
+                manager.complete_job(job_id, {"ok": True, "content": "fresh evidence", "meta": {}})
+                return {"ok": True, "meta": {"pid": os.getpid()}}
+
+            launch.side_effect = finish
+            for bound_session in ("main_host", "legacy_session"):
+                runtime = policy.runtime_dir(root, bound_session)
+                if bound_session == "main_host":
+                    policy.set_delegated_marker(None, runtime, {"host": "codex"})
+                assert_true(not policy.delegation_marker(runtime), "a natural-language prompt alone is advisory")
+                result = jobs.await_job("analyze", "first dispatch", bound_session, str(root))
+                assert_true(result["ok"], "dispatch without an explicit selection returns evidence")
+                if bound_session == "main_host":
+                    proof = result["meta"]["delegation"]
+                    assert_true(policy.delegation_marker(runtime)["phase"] == "returned"
+                                and jobs.delegation_control("delegate-ack", proof["receipt"], bound_session, str(root))["ok"],
+                                "a bound dispatch creates a collection obligation through acknowledgement")
+                else:
+                    assert_true("delegation" not in result["meta"] and not policy.delegation_marker(runtime),
+                                "unbound legacy dispatch preserves its original result format")
+
+
+def _check_first_dispatch_recovery():
+    from unittest.mock import patch
+    from exoma._bundle.config.hosts.claude.hooks import workflow_policy as policy
+    from exoma.core.jobs import job_lifecycle as jobs
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = str(Path(tmp).resolve())
+        manager = JobManager(Path(root) / "jobs")
+        session = "interrupted"
+        rt = policy.runtime_dir(root, session)
+        policy.set_delegated_marker(None, rt, {"host": "codex"})
+
+        def control(action, value):
+            return jobs.delegation_control("delegate-" + action, value, session, root)
+
+        write = jobs.atomic_write_json
+
+        def fail_binding(path, state):
+            if state.get("phase") == "running":
+                raise OSError("fixture: cannot persist admitted job")
+            return write(path, state)
+
+        with patch.object(main, "JOB_MANAGER", manager), patch.object(main, "_spawn_worker",
+                return_value={"ok": True, "meta": {"pid": os.getpid()}}) as launch:
+            with patch.object(jobs, "atomic_write_json", side_effect=fail_binding):
+                refused = jobs.await_job("analyze", "unchanged", session, root)
+            generation = refused["meta"]["generation"]
+            assert_true(not refused["ok"] and launch.call_count == 0 and
+                        control("select", "analyze")["meta"]["generation"] == generation,
+                        "first dispatch returns its selected generation after a binding refusal")
+            assert_true(control("abort", generation)["ok"], "pre-admission request can be disposed")
+
+            policy.set_delegated_marker("analyze", rt, {"host": "codex"})
+            unlink = Path.unlink
+            def busy_marker(path, *args, **kwargs):
+                if path.name == "delegated.marker":
+                    raise PermissionError("fixture: marker still open")
+                return unlink(path, *args, **kwargs)
+
+            with patch.object(Path, "unlink", busy_marker), patch.object(jobs, "REPLACE_RETRY_DELAYS", (0,)):
+                busy = jobs.await_job("analyze", "unchanged", session, root)
+            selected = control("select", "analyze")["meta"]
+            assert_true(not busy["ok"] and selected["phase"] == "selected"
+                        and busy["meta"]["generation"] == selected["generation"] and launch.call_count == 0,
+                        "a busy armed marker preserves the selected generation without admitting a worker")
+            assert_true(control("abort", selected["generation"])["ok"] and not policy.delegation_marker(rt),
+                        "recovered selection leaves no stale armed marker after disposal")
+
+            for interrupted_by in ("timeout", "worker_died"):
+                if interrupted_by == "worker_died":
+                    with patch.object(jobs, "get_result", return_value={"status": "recovering",
+                            "meta": {"error_type": "worker_died", "recoverable": True}}):
+                        response = jobs.await_job("analyze", "unchanged", session, root)
+                else:
+                    response = jobs.await_job("analyze", "unchanged", session, root,
+                                              poll_interval=0.01, poll_timeout=0.1)
+                selection = control("select", "analyze")["meta"]
+                assert_true(not response["ok"] and "receipt" not in response["meta"]
+                            and response["meta"]["generation"] == selection["generation"]
+                            and selection["phase"] == "running", "recover the generation after " + interrupted_by)
+                manager.complete_job(response["meta"]["job_id"], {"ok": True, "content": "original", "meta": {}})
+                original = jobs.await_job("analyze", "unchanged", session, root, generation=selection["generation"])
+                assert_true(original["content"] == "original" and original["meta"]["generation"] == selection["generation"]
+                            and control("ack", original["meta"]["delegation"]["receipt"])["ok"],
+                            "same-session retry collects the original job after " + interrupted_by)
+
+            actual_result = jobs.get_result
+            def finish_before_reattach(job_id):
+                manager.complete_job(job_id, {"ok": True, "content": "finished during reattach", "meta": {}})
+                delayed_snapshot.side_effect = actual_result
+                return {"status": "pending", "meta": {}}
+
+            with patch.object(manager, "set_launcher_pid"), patch.object(jobs, "get_result",
+                    side_effect=finish_before_reattach) as delayed_snapshot:
+                result = jobs.await_job("analyze", "race", session, root)
+            assert_true(result["ok"] and result["content"] == "finished during reattach"
+                        and control("ack", result["meta"]["delegation"]["receipt"])["ok"] and launch.call_count == 3,
+                        "a terminal job racing pending recovery is collected without another launch")

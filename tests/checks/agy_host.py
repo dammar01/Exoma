@@ -160,12 +160,8 @@ def _test_agy_host_contract() -> None:
         small = root / "src" / "small.py"
         small.parent.mkdir(parents=True, exist_ok=True)
         small.write_text("x = 1\n", encoding="utf-8")
-        for n in (1, 2):
-            out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(small)))
-            assert_true(out == {"decision": "allow"}, f"precision read {n} passes: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(small)))
-        assert_true(out.get("decision") == "deny" and "precision reads" in out.get("reason", ""),
-                    f"the third precision read is refused and says why: {out}")
+        assert_true(out.get("decision") == "deny", f"project reads wait for collection: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "write_to_file", TargetFile=str(root / ".workflow" / "run.sh")))
         assert_true(out.get("decision") == "deny" and "runner script" in out.get("reason", ""),
                     f"a write of the runner is refused: {out}")
@@ -188,9 +184,16 @@ def _test_agy_host_contract() -> None:
         assert_true(out == {"decision": "allow"}, f"verify: a file-name diff passes: {out}")
         out = _run(home, "PreToolUse", _tool(root, cid, "x", "run_command", CommandLine="git diff"))
         assert_true(out.get("decision") == "deny", f"verify: a patch diff does not: {out}")
+        record = rt / "delegation.json"
+        record.write_text(json.dumps({"generation": "g", "phase": "running", "command": "verify"}), encoding="utf-8")
+        _run(home, "PreInvocation", _payload(root, cid, "status", invocationNum=0))
+        pending = _run(home, "PreToolUse", _tool(root, cid, "x", "read_file", Path=str(small)))
+        assert_true(pending.get("decision") == "deny", "Agy keeps the job gated across prompt steering")
+        record.unlink()
         # A turn without a command clears the marker.
         _run(home, "PreInvocation", _payload(root, cid, "terima kasih", invocationNum=0))
         assert_true(not (rt / "delegated.marker").exists(), "a plain turn clears the marker")
+        assert_true((rt / "delegation-host.v1").is_file(), "Agy registers bound first dispatch")
         _run(home, "PreInvocation", _payload(root, cid, "/.analyze lagi", invocationNum=0))
         assert_true((rt / "delegated.marker").exists(), "a new delegated turn arms the marker")
         partial_hooks = Path(tmp) / "agy-hooks-no-intent-map"

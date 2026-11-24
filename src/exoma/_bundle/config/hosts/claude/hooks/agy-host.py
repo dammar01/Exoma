@@ -273,7 +273,7 @@ def pre_tool_use(payload, cid):
     # The escape files are the user's switch: an agent writing one turns its own gate off.
     if refusal is None and is_write and wp.escape_file(target, root):
         refusal = ("escape_write", wp.escape_write_message(tool, target))
-    marker = wp.read_json(marker_path)
+    marker = wp.delegation_marker(rt)
     env_local = os.environ.get("WORKFLOW_LOCAL_MODE") == "1"
     flag_local = os.path.isfile(os.path.join(root, ".workflow", "local_mode.flag"))
     if marker and (env_local or flag_local):
@@ -307,6 +307,8 @@ def pre_tool_use(payload, cid):
                 "missing, default, duplicate, or different session arguments are refused.\n"
                 "Run: %s %s --session '%s' --task '<task>'  (sandbox bypassed: on Windows the sandbox stops Git Bash)"
             ) % (main_id, runner, cmd, main_id))
+        elif rule and marker.get("generation"):
+            refusal = (rule, wp.collection_guidance(marker, runner, main_id))
         elif rule:
             refusal = (rule, (
                 "/.%s is a delegated command: the next step is the runner, not %s.\n"

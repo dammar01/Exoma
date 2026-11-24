@@ -2,11 +2,13 @@
 description: Codebase evidence via second_agent (1-call). Fallback: {{CMD:local}}.
 argument-hint: <hint>
 
+For delegated work, select `explore` using the session-bound `delegate-select` call before preparation. Wait for the original runner, return its result to the main turn, then use `delegate-ack` with its receipt before reading project evidence or synthesizing.
+
 ## Trigger
 {{CMD:explore}} <hint>
 
 ## Run (1-call)
-Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' explore{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<hint>'
+Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' explore{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --request '<generation>' --task '<hint>'
 - <MAIN_SESSION_ID> = the value from the [SESSION BINDING] block. REQUIRED (`--session`) — concurrent sessions on the same project need per-session isolation. Absent → the run script's fallback (fine for a single agent).
 - Blocks until done. Returns JSON {ok, content, meta, digest}.
 - Do not invent commands, do not use check.sh, do not call `exoma` directly.

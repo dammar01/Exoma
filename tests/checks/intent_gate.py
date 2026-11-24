@@ -34,11 +34,53 @@ def _runners() -> list[tuple[str, list[str]]]:
 
 
 def _test_intent_gate_reads_the_prompt_field() -> None:
+    _check_collection_boundary()
     _check_prompt_field()
     _check_subagent_stays_gated()
     _check_verify_lane()
     _check_skill_read_lane()
     _check_precision_read_lane()
+
+
+def _check_collection_boundary() -> None:
+    from unittest.mock import patch
+    from exoma._bundle.config.hosts.claude.hooks import workflow_policy as policy
+    from exoma.core.runtime.scripts import _build_run_scripts
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # The first replacement can conflict with a reader holding the old
+        # marker open. The second call must replace it with the new command.
+        policy.set_delegated_marker("plan", tmp, {})
+        replace = policy.os.replace
+        attempts = []
+
+        def busy_once(source, target):
+            attempts.append(target)
+            if len(attempts) == 1:
+                raise PermissionError("fixture reader still holds marker")
+            return replace(source, target)
+
+        with patch.object(policy.os, "replace", side_effect=busy_once):
+            policy.set_delegated_marker("analyze", tmp, {})
+        assert_true(len(attempts) == 2 and policy.delegation_marker(tmp)["command"] == "analyze",
+                    "temporary replacement conflict preserves the new prompt selection")
+        generated = dict(_build_run_scripts(root))[root / ".workflow/run.sh"]
+        assert_true('rm -f "$MK"' not in generated, "launch preserves the collection gate")
+        gate = _ArmedGate("collection", [sys.executable, str(HOOKS / "intent-gate-check.py")])
+        try:
+            target = gate.project / "one-line.py"
+            target.write_text("x = 1\n", encoding="utf-8")
+            for phase in ("armed", "selected", "running", "returned"):
+                marker = {"command": "analyze", "set_at": "now", "generation": "request-a", "phase": phase}
+                record = gate.runtime / ("delegated.marker" if phase == "armed" else "delegation.json")
+                record.write_text(json.dumps(marker), encoding="utf-8")
+                gate.expect("Read", {"file_path": str(target)}, 2, f"no project read in {phase}")
+                if phase != "armed":
+                    policy.set_delegated_marker(None, str(gate.runtime), {})
+                    assert_true(policy.delegation_marker(gate.runtime) == marker, "steering preserves selected job")
+        finally:
+            gate.close()
 
 
 def _check_prompt_field() -> None:
@@ -123,6 +165,7 @@ def _check_prompt_field() -> None:
             done = subprocess.run(command, input=sentence, text=True, env={**env, "CLAUDE_HOOK_RAW": sentence},
                                   capture_output=True, timeout=60, **no_console())
             assert_true(not marker.exists(), f"[{label}] an NL sentence does not arm the gate and clears the last marker")
+            assert_true((marker.parent / "delegation-host.v1").is_file(), f"[{label}] Claude registers bound first dispatch")
             assert_true("[INTENT HINT]" in done.stdout and "/.analyze" in done.stdout,
                         f"[{label}] an NL sentence gets an intent hint: {done.stdout[:200]!r}")
             notify("/.analyze kenapa <task-notification> muncul di log")

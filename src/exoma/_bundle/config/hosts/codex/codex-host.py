@@ -175,7 +175,10 @@ def pre_tool_use(payload):
     # Code mode's outer exec delegates to nested tools, whose hooks inspect the real call.
     if tool in {"functions.exec", "exec"}:
         return {}
-    marker = wp.read_json(os.path.join(rt, "delegated.marker"))
+    # Polling an existing transport yields its output; only delegate-ack releases the request.
+    if tool in {"wait", "functions.wait", "write_stdin", "functions.write_stdin"} and not args.get("chars"):
+        return {}
+    marker = wp.delegation_marker(rt)
     local = os.environ.get("WORKFLOW_LOCAL_MODE") == "1" or os.path.isfile(os.path.join(root, ".workflow", "local_mode.flag"))
     refusal = None
     if kind == "shell":
@@ -226,6 +229,8 @@ def pre_tool_use(payload):
         elif refusal_key == "session_binding":
             refusal = (refusal_key, "Use exactly --session '%s' from the authoritative binding; "
                        "missing, default, duplicate or different session arguments are refused." % main_id)
+        elif refusal_key and marker.get("generation"):
+            refusal = (refusal_key, wp.collection_guidance(marker, wp.runner_command(root, _profile()), main_id))
         elif refusal_key:
             refusal = (refusal_key, "Delegate %s first: %s %s --main-host codex --session '%s' --task '<task>'"
                        % (wp.format_command(marker.get("command"), _profile()), wp.runner_command(root, _profile()),

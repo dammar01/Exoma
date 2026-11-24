@@ -76,6 +76,7 @@ from exoma.core.jobs.job_lifecycle import (  # noqa: E402,F401
     _probe_recheck_seconds,
     _spawn_worker,
     await_job,
+    delegation_control,
     check_stalled_job,
     get_result,
     get_status,
@@ -462,6 +463,7 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
 # child (WORKFLOW_AGENT_ROLE=second_agent). It stops inherited recursion; it is not a
 # security boundary — a child that can run commands can also unset it (docs/security.md).
 RECURSION_REFUSED_COMMANDS = frozenset({
+    "delegate-select", "delegate-result", "delegate-ack", "delegate-cancel", "delegate-abort",
     "explore", "plan", "analyze", "verify", "verify-browser",
     "submit", "await", "worker", "cancel",
     "plan-record", "execute-begin", "execute-end", "test",
@@ -794,6 +796,7 @@ def _browser_exit_commands(command: str, result: dict, job_command: str) -> tupl
 _INIT_HOST: str | None = None
 
 COMMANDS = (
+    "delegate-select", "delegate-result", "delegate-ack", "delegate-cancel", "delegate-abort",
     "init",
     "upgrade",
     "doctor",
@@ -949,6 +952,7 @@ def main(argv: list[str] | None = None) -> None:
         help="max seconds to wait in await mode; 0 means wait forever",
     )
     parser.add_argument("--pretty", action="store_true", help="pretty print output")
+    parser.add_argument("--delegation-request", help="bind an await to a selected delegation generation")
     parser.add_argument("--main-host", choices=("claude", "agy", "codex", "opencode"), default=None,
                         help="presentation host for first-party guidance only; does not select a provider or grant permission")
     parser.add_argument(
@@ -959,6 +963,8 @@ def main(argv: list[str] | None = None) -> None:
         "seed (second_agent.seed.<host>.json) for the new project",
     )
     args = parser.parse_args(argv)
+    if args.delegation_request and args.command != "await":
+        parser.error("--delegation-request applies to await only")
     # Before the prompt checks and any session or job side effect, so the refusal is the
     # structured result on stdout rather than an argument error.
     refusal = _recursion_refusal(args.command, args.job_command)
@@ -1011,7 +1017,10 @@ def main(argv: list[str] | None = None) -> None:
         args.session, fresh=args.fresh_session, project_root=work_dir
     )
     allow_reuse = not args.fresh_session
-    if args.command == "submit":
+    from exoma._bundle.config.hosts.claude.hooks import workflow_policy as gate
+    if args.command in gate.DELEGATION_CONTROLS:
+        result = delegation_control(args.command, prompt, effective_session, work_dir)
+    elif args.command == "submit":
         result = submit(
             args.job_command,
             prompt,
@@ -1021,16 +1030,8 @@ def main(argv: list[str] | None = None) -> None:
             allow_reuse,
         )
     elif args.command == "await":
-        result = await_job(
-            args.job_command,
-            prompt,
-            effective_session,
-            work_dir,
-            args.model,
-            args.poll_interval,
-            args.poll_timeout,
-            allow_reuse,
-        )
+        result = await_job(args.job_command, prompt, effective_session, work_dir, args.model,
+                           args.poll_interval, args.poll_timeout, allow_reuse, generation=args.delegation_request)
     elif args.command == "report":
         from exoma.core.audit import telemetry
         from exoma.core.evidence.contract import make_ok
@@ -1098,7 +1099,11 @@ def main(argv: list[str] | None = None) -> None:
     from exoma.config.hosts import present_result
     result = present_result(result, args.main_host, args.command)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
-    exit_command, exit_job_command = _browser_exit_commands(args.command, result, exit_job_command)
+    exit_command = args.command
+    if args.command == "delegate-result" and (result.get("meta") or {}).get("delegation"):
+        exit_command = "await"
+        exit_job_command = result["meta"]["delegation"]["command"]
+    exit_command, exit_job_command = _browser_exit_commands(exit_command, result, exit_job_command)
     raise SystemExit(_verify_exit_code(exit_command, result, exit_job_command))
 
 

@@ -1,6 +1,8 @@
 # Skill: verify
 description: 3-step verification — logic, falsification, reality. Depth from commands.verify_mode.
 
+For delegated work, select `verify` using the session-bound `delegate-select` call before preparation. Wait for the original runner, return its result to the main turn, then use `delegate-ack` with its receipt before reading project evidence or synthesizing.
+
 ## Trigger
 {{CMD:verify}} (invoked after {{CMD:execute}} -y when `execute-end` returns `meta.next_step.action=verify_prepare`)
 

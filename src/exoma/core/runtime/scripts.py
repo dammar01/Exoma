@@ -1,6 +1,6 @@
 """Generation and drift-detection for the .workflow/ run scripts."""
 
-from exoma.core.workspace.workspace_paths import _LEGACY_MARKERS, WORKFLOW_DIRNAME
+from exoma.core.workspace.workspace_paths import WORKFLOW_DIRNAME
 from exoma.core.workspace.workspace_paths import atomic_write_text
 import os
 from exoma.utils import osutil
@@ -13,6 +13,7 @@ from pathlib import Path
 # with no session at all).
 SESSION_REQUIRED = (
     "explore", "plan", "analyze", "verify", "verify-browser",
+    "delegate-select", "delegate-ack", "delegate-result", "delegate-cancel", "delegate-abort",
     "sweep", "plan-record", "execute-begin", "execute-end", "test", "verify-prepare",
 )
 
@@ -43,17 +44,16 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
     # passes the other spelling sees drift that is not there (CASE-029).
     root = project_root.resolve().as_posix()
     workflow_dir = project_root / WORKFLOW_DIRNAME
-    sh_markers = " ".join(_LEGACY_MARKERS)
 
     session_required = " ".join(SESSION_REQUIRED)
-    usage = "usage: run.sh <command> --session <id> [--main-host <host>] [--task <text> | --task-file <path>]"
+    usage = "usage: run.sh <command> --session <id> [--main-host <host>] [--request <generation>] [--task <text> | --task-file <path>]"
     # Background (job) commands go through await+job-command; the rest run directly.
     run_sh = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'COMMAND="${1:?command required}"\n'
         "shift\n"
-        'TASK=""; TASK_FILE=""; MAIN_HOST=""; SESSION="${MAIN_SESSION_ID:-}"\n'
+        'TASK=""; TASK_FILE=""; REQUEST=""; MAIN_HOST=""; SESSION="${MAIN_SESSION_ID:-}"\n'
         # Named options. Positions shift when a shell drops an empty argument — Windows
         # PowerShell 5.1 passes '' to a native program as nothing at all, so the session id
         # of `run.sh execute-begin '' '<id>'` arrived as the task and the call ran on
@@ -62,12 +62,12 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
         "  --*)\n"
         "    while [ $# -gt 0 ]; do\n"
         '      case "$1" in\n'
-        "        --session|--task|--task-file|--main-host)\n"
+        "        --session|--task|--task-file|--main-host|--request)\n"
         # A value that is itself an option name is the shape a dropped empty value leaves
         # (`--task '' --session x` arriving as `--task --session x`): refused, not taken.
-        f'          case "${{2-}}" in --session|--task|--task-file|--main-host) set -- "$1" ;; esac\n'
+        f'          case "${{2-}}" in --session|--task|--task-file|--main-host|--request) set -- "$1" ;; esac\n'
         f'          if [ $# -lt 2 ]; then echo "[workflow] ERROR: $1 needs a value; {usage}" >&2; exit 2; fi\n'
-        '          case "$1" in --session) SESSION="$2" ;; --task) TASK="$2" ;; --task-file) TASK_FILE="$2" ;; --main-host) MAIN_HOST="$2" ;; esac\n'
+        '          case "$1" in --session) SESSION="$2" ;; --task) TASK="$2" ;; --task-file) TASK_FILE="$2" ;; --request) REQUEST="$2" ;; --main-host) MAIN_HOST="$2" ;; esac\n'
         "          shift 2 ;;\n"
         f'        *) echo "[workflow] ERROR: unknown option \'$1\'; {usage}" >&2; exit 2 ;;\n'
         "      esac\n"
@@ -97,14 +97,6 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
         "fi\n"
         'case " explore plan analyze verify verify-browser " in\n'
         '  *" $COMMAND "*)\n'
-        # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
-        # so the PreToolUse hook stops blocking gather tools for the rest of this turn. The
-        # data directory is decided when the script RUNS, by the rule workspace_paths.data_dir
-        # uses, so a workspace migrated after generation clears the marker where hooks write.
-        f'    WF="{root}/.workflow"; DD="$WF/data"\n'
-        f'    if [ ! -d "$DD" ]; then for n in {sh_markers}; do if [ -e "$WF/$n" ]; then DD="$WF"; break; fi; done; fi\n'
-        '    MK="$DD/sessions/$SESSION/runtime/delegated.marker"\n'
-        '    [ -f "$MK" ] && rm -f "$MK"\n'
         '    ARGS=(-m exoma --command await --job-command "$COMMAND") ;;\n'
         "  *)\n"
         '    ARGS=(-m exoma --command "$COMMAND") ;;\n'
@@ -118,6 +110,7 @@ def _build_run_scripts(project_root: Path) -> list[tuple[Path, str]]:
         'if [ -n "$TASK_FILE" ]; then ARGS+=("--prompt-file=$TASK_FILE"); fi\n'
         'if [ -n "$MAIN_HOST" ]; then ARGS+=("--main-host=$MAIN_HOST"); fi\n'
         f'ARGS+=(--session "$SESSION" --work-dir "{root}" --pretty)\n'
+        'if [ -n "$REQUEST" ]; then ARGS+=(--delegation-request "$REQUEST"); fi\n'
         + python_path
         + f'exec "{sh_py}" "${{ARGS[@]}}"\n'
     )

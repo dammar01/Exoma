@@ -417,40 +417,41 @@ the bytes it would have to check.
 | Output contracts (RELAY vs SYNTHESIS, mandatory fields) | Output-side, like `[OPTIONS]`. |
 | Main agent leaves `graphify update` to the Stop hook, and reads the graph as stale while `graphify-out/.refresh.lock` is held | Main agent runs graphify and reads graph.json through its own tools. The runtime honours the lock only for its own reads (`core.graph.graph_index.load_graph`). |
 
-One prompt contract is enforced **partly outside Python**: the pre-flight gate for
-delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode, once the user
-names a delegated command explicitly (`/.analyze ...` or the slash-command payload; a prompt
-that only resembles one under the NL map gets an `[INTENT HINT]` instead), the
-`intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools (including
-the `PowerShell` tool, and writes to the runner scripts) until `.workflow/run` dispatches;
-a Bash or PowerShell call passes only when one shared tokeniser reads it as one plain call to
-`[bash] <root>/.workflow/{run,check,inspect}.sh` whose every word is bare or single-quoted —
-literal in both shells, so `$`, `;`, `|`, `&`, redirects and newlines pass only inside single
-quotes, and double quotes, `bash -c` and the retired `run.ps1` do not; a leading
-`cd <dir inside the root> && ` is allowed — and a Read (or a one-file `cat`) passes when it
-names an existing `.md` whose real path lies inside `~/.claude/skills` (the skill that says
-how to dispatch; `~` and `/c/...` spellings resolved first), a background task's
-`<temp>/claude.../tasks/<id>.output`, or is a precision read: a project file outside `.workflow/`, at
-most 200 lines (`limit` ≤ 200, or a file that short), two per marker, counted in
-`runtime/delegated.reads` keyed to the marker's `set_at`. Writes pass (the execution gate
-judges them), except a write of the runner scripts or of an escape file (`local_mode.flag`,
-`delegated.marker`, `delegated.reads` anywhere under `.workflow/`), which is refused marker or
-not, and under either escape on every host: `WORKFLOW_LOCAL_MODE=1` and `local_mode.flag` lift
-the pre-flight block, never these two refusals. The escapes are the user's switch, and an agent
-that wrote `local_mode.flag` used to turn its own gate off for the rest of the session. A
-session the hooks cannot resolve (no registry entry) gets no gate at all, these refusals
-included. An escape in use while a marker is armed, and a
-delegated command the user named that could not arm (no session binding, logged to
-`~/.claude/gate-skips.jsonl` for projects with a `.workflow/`), append one line to
-`gate-skips.jsonl` (pre-flight rows: `at`, `hook`, `reason`, `root`, `key` = the marker's `set_at`; never the
-path or command), once per marker; `doctor` reports them as `checks.gate_skips`. A shell
-write of an escape file while the gate is not armed is not refused — no hook parses shell
-writes — and shows up only through that log once a later delegation is skipped. What the gate
-does and does not guarantee is stated once, in [security.md, "Residual risks"](security.md#residual-risks-limitations). The decision
-is one function, `workflow_policy.preflight_refusal`; under Agy the wrapper `agy-host.py` calls the
-same function with Agy's tools mapped onto its kinds and Agy's skill directories as what it may
-always read ([reference, "Hosts"](reference.md#hosts)). That enforcement lives in the agent host, not in this runtime,
-and it fails open. The Claude Code hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
+### Delegation selection and collection (v1.2.2)
+
+An explicit delegated command arms preflight on a bound host. A natural-language hint is advisory.
+After a main-host prompt hook records the session binding, dispatching a delegated command with
+the bound session selects the request and admits the job in one session transaction. This includes
+a dispatch chosen from natural language. If preparation is needed, call `delegate-select` first
+and dispatch with the returned generation in `--request`. The session transaction binds it to one admitted
+job and task. Ordinary prompts preserve that selection. A new fork has its own binding.
+Legacy callers that start an unselected job keep their original output contract.
+
+| Runtime phase | Main host action |
+| --- | --- |
+| Armed or selected | Read instructions, prepare verify or browser input where applicable, dispatch the selected request. |
+| Running | Wait on the original transport, inspect the bound session, or request authorized cancellation. |
+| Terminal job on disk | Collect the original output. If transport was lost, `delegate-result` with the generation retrieves the same owned job. For a direct dispatch whose generation was never delivered, `delegate-select` for the same pending command returns its generation. |
+| Returned | Pass the result to the main turn. Send `delegate-ack` with the receipt from `meta.delegation` in a subsequent call. |
+| Collected | Assess the evidence. Report an error result and obtain user authorization before local fallback. |
+
+Dispatch replies carry the selected request ID in `meta.generation`, including admission
+errors, timeouts and recoverable worker exits. If the entire response is lost, call
+`delegate-select` with the original session and command. Use its generation to poll the
+admitted job or retry the identical dispatch with `--request` when admission or worker
+recovery is required. Polling, cancellation pending cleanup, and terminal publication leave project reads restricted.
+An acknowledged receipt can be retried. A later generation rejects the old receipt. For a host
+denial before admission, `delegate-abort` takes the selected generation. Browser preparation
+and subsequent invocations each have separate generations. The second-agent role cannot run
+the collection controls. They grant no execution, commit, or browser permission.
+
+Hook enforcement applies to intercepted calls with the host binding and applicable enforcement mode.
+The private routing decision before selection, returning a nested result to the main turn, and
+assessing its meaning also require the shared prompt protocol. Legacy hooks and launchers need
+upgrading together. If selection or request flags are unsupported, report the mixed installation.
+Doctor records observed refusals and skips. A quiet log alone does not show enforcement.
+
+The Claude Code hooks are the same on every OS: `<hook>.sh` is a bash launcher (Git Bash
 on Windows, named by absolute path in `settings.json`, which also sets
 `env.CLAUDE_CODE_GIT_BASH_PATH`) that runs the Python pinned in `~/.claude/hooks/python.path`
 (else resolves a Python 3.11+ by running it) and execs `workflow_hooks.py <hook>`, which reads

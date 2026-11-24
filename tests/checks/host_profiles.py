@@ -69,6 +69,9 @@ def _test_contract_renders_per_host():
                         f"{host}: preparation uses the configured runner prefix in the shared contract")
             assert_true("HAS the same access" not in text and "load no MCP servers" in text,
                         f"{host}: host choice never promises provider MCP capability")
+            assert_true("meta.generation" in text and "same-session, same-command `delegate-select`" in text
+                        and "Only a terminal receipt can be acknowledged" in text,
+                        f"{host}: rendered contract explains how to recover a lost first dispatch")
             source = BUNDLE / "hosts" / "claude" / "skills" / "execute.md"
             key = next(key for src, _dest, key in base._targets((host,))
                        if src == source)
@@ -307,7 +310,7 @@ def _test_runner_call_single_source():
             call = wp.runner_command(root, profile)
             assert_true(call == hosts.runner_call(host, root), f"{host}: hook runner call {call!r}")
             hint = wp.intent_hint("plan", root, "main_x", call if host != "claude" else None)
-            assert_true(f"{hosts.runner_call(host, root)} plan --session 'main_x'" in hint,
+            assert_true(f"{hosts.runner_call(host, root)} delegate-select --session 'main_x' --task 'plan'" in hint,
                         f"{host}: the hint names the contract's runner call: {hint}")
             prefix = hosts.runner_prefix(host)
             quoted = re.fullmatch(r"(?:&\s*)?'([^']+)'", prefix)

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import tempfile
 import threading
 import time
@@ -407,7 +408,8 @@ def runner_file(candidate, root):
 # and the precision-read counter. They are the user's switch. An agent that writes one turns
 # its own gate off: a Write of local_mode.flag used to pass while the gate was armed (writes
 # pass the pre-flight gate), and every later call then skipped the gate for the session.
-ESCAPE_FILES = ("local_mode.flag", "delegated.marker", "delegated.reads")
+_DELEGATION_HOST = "delegation-host.v1"
+ESCAPE_FILES = ("local_mode.flag", "delegated.marker", "delegated.reads", "delegation.json", _DELEGATION_HOST)
 
 
 def escape_file(candidate, root):
@@ -668,7 +670,8 @@ def runner_call(words, root, home, is_bash):
 
 
 # Standalone counterpart of runtime.scripts.SESSION_REQUIRED; tested for parity.
-SESSION_COMMANDS = frozenset(("explore", "plan", "analyze", "verify", "verify-browser", "sweep",
+DELEGATION_CONTROLS = frozenset(("delegate-select", "delegate-result", "delegate-ack", "delegate-cancel", "delegate-abort"))
+SESSION_COMMANDS = DELEGATION_CONTROLS | frozenset(("explore", "plan", "analyze", "verify", "verify-browser", "sweep",
                               "plan-record", "execute-begin", "execute-end", "test", "verify-prepare"))
 
 
@@ -757,7 +760,7 @@ def runner_invocation(command, root, home, is_bash):
     args = args[1:]
     if args and args[0].startswith("--"):
         options = {}
-        allowed = {"--session", "--task", "--task-file", "--main-host"}
+        allowed = {"--session", "--task", "--task-file", "--main-host", "--request"}
         if len(args) % 2:
             result["invalid"] = True
         else:
@@ -768,10 +771,11 @@ def runner_invocation(command, root, home, is_bash):
             result["invalid"] |= ("--task" in options and "--task-file" in options)
             result["invalid"] |= ("--main-host" in options and options["--main-host"] not in
                                   {"claude", "codex", "agy", "opencode"})
-        result["session"] = options.get("--session")
+        result.update(session=options.get("--session"), request=options.get("--request"), task=options.get("--task"))
     else:
         result["invalid"] = len(args) > 2
         result["session"] = args[1] if len(args) > 1 else None
+        result["task"] = args[0] if args else None
     return result
 
 
@@ -824,7 +828,7 @@ def evidence_runner_call(command, ctx):
             return False
         options = {}
         for key, value in zip(args[::2], args[1::2]):
-            if key not in {"--session", "--task", "--task-file", "--main-host"} or key in options or not value.strip():
+            if key not in {"--session", "--task", "--task-file", "--main-host", "--request"} or key in options or not value.strip():
                 return False
             options[key] = value
         return ("--session" in options and (("--task" in options) != ("--task-file" in options))
@@ -884,8 +888,30 @@ def preflight_refusal(kind, target, command, marker, ctx):
         words = plain_words(command)
         if words is not None:
             if runner_call(words, root, home, ctx["is_bash"]):
-                return runner_session_refusal(command, ctx)
-            if cmd == "verify" and diff_words(words, root, home):
+                refusal = runner_session_refusal(command, ctx)
+                if refusal or not marker.get("generation"):
+                    return refusal
+                invocation = runner_invocation(command, root, home, ctx["is_bash"])
+                if invocation:
+                    action = invocation["command"]
+                    if action == "delegate-select" and invocation.get("task") == cmd:
+                        return None
+                    if action in DELEGATION_CONTROLS - {"delegate-select"}:
+                        return None  # runtime checks generation, ownership and disposition
+                    if action == "verify-prepare" and cmd == "verify" and marker.get("phase") in {"armed", "selected"}:
+                        return None
+                    if action == cmd and (invocation.get("request") == marker["generation"] or
+                                          (marker.get("phase") == "armed" and not invocation.get("request"))):
+                        return None
+                    return "preflight"
+                index = 1 if ctx["is_bash"](words[0]) else 0
+                if same_path(local_path(words[index], home), os.path.join(root, ".workflow", "inspect.sh"), root):
+                    args = words[index + 1:]
+                    expected = ["--session", ctx["expected_session"]]
+                    if args == expected or (marker.get("job_id") and args == expected + ["--job-id", marker["job_id"]]):
+                        return None
+                return "preflight"
+            if cmd == "verify" and marker.get("phase") in {None, "armed", "selected"} and diff_words(words, root, home):
                 return None
         elif malformed_runner_attempt(command, root, home, ctx["is_bash"]):
             return "runner_malformed"
@@ -897,14 +923,14 @@ def preflight_refusal(kind, target, command, marker, ctx):
         target = target or ""
         if ctx["host_read"](target):
             return None
-        if cmd == "verify":
+        if cmd == "verify" and marker.get("phase") in {None, "armed", "selected"}:
             tests_json = os.path.join(os.path.dirname(rt_dir), "verify", "tests.json")
             if same_path(target, tests_json, root):
                 return None
             if same_path(target, os.path.join(root, ".workflow", "config.json"), root):
                 return None
         marker_key = (marker or {}).get("set_at")
-        if marker_key:
+        if marker_key and not marker.get("generation"):
             allowed, quota_used = precision_read(target, ctx.get("limit"), root, rt_dir, str(marker_key))
             if allowed:
                 return None
@@ -1252,18 +1278,82 @@ def _record_approvals_locked(text, rt_dir, anchored, provenance):
                 pass
 
 
-def set_delegated_marker(resolved, rt_dir, provenance):
-    """Arm the pre-flight gate for the command the user named, or clear a stale marker."""
-    marker = os.path.join(rt_dir, "delegated.marker")
-    if resolved:
-        os.makedirs(rt_dir, exist_ok=True)
-        with open(marker, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"command": resolved, "set_at": _now(), **provenance}))
-    elif os.path.isfile(marker):
+def collection_state(rt_dir):
+    path = os.path.join(rt_dir, "delegation.json")
+    try:
+        with open(path, encoding="utf-8") as stream:
+            value = json.load(stream)
+        if isinstance(value, dict) and value.get("generation") and value.get("phase") in {
+                "selected", "running", "returned", "collected", "aborted"}:
+            return value
+    except FileNotFoundError:
+        return {}
+    except (ValueError, OSError):
+        pass
+    return {"phase": "unreadable", "generation": "unavailable"}
+
+
+def delegation_marker(rt_dir):
+    state = collection_state(rt_dir)
+    if state and state["phase"] not in {"collected", "aborted"}:
+        return state
+    return read_json(os.path.join(rt_dir, "delegated.marker")) or {}
+
+
+def bound_delegation_host(rt_dir):
+    return os.path.isfile(os.path.join(rt_dir, _DELEGATION_HOST))
+
+
+def _replace_marker(staged, marker):
+    # The installed hook runs standalone. Match workspace_paths.replace_with_retry
+    # for readers that briefly hold the old marker open on Windows.
+    for delay in (0.05, 0.1, 0.2, 0.4, 0.8):
         try:
+            os.replace(staged, marker)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(staged, marker)
+
+
+def collection_guidance(marker, runner, session):
+    if marker.get("phase") == "unreadable":
+        return "Delegation state is unreadable. Report the condition before gathering."
+    if marker.get("phase") == "armed":
+        return "Select the evidence request: %s delegate-select --session '%s' --task '%s'" % (
+            runner, session, marker["command"])
+    if marker.get("phase") == "selected":
+        return "Dispatch the selected request: %s %s --session '%s' --request '%s' --task '<task>'" % (
+            runner, marker["command"], session, marker["generation"])
+    return ("Wait for the original runner. To retrieve its output: %s delegate-result --session '%s' --task '%s'. "
+            "Return the result to the main turn, then acknowledge its receipt with delegate-ack.") % (
+                runner, session, marker["generation"])
+
+
+def set_delegated_marker(resolved, rt_dir, provenance):
+    """New prompts may replace tentative intent, but never an active selection."""
+    marker = os.path.join(rt_dir, "delegated.marker")
+    with execution_transaction(rt_dir):
+        if not bound_delegation_host(rt_dir):
+            # Presence records delivery by a bound main host. It does not arm a
+            # command; a later dispatch is the first observable routing decision.
+            with open(os.path.join(rt_dir, _DELEGATION_HOST), "ab"):
+                pass
+        state = collection_state(rt_dir)
+        if state and state["phase"] not in {"aborted", "collected"}:
+            return
+        if resolved:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=rt_dir, delete=False) as f:
+                staged = f.name
+                json.dump({**provenance, "command": resolved, "set_at": _now(),
+                           "generation": secrets.token_hex(16), "phase": "armed"}, f)
+            try:
+                _replace_marker(staged, marker)
+            finally:
+                if os.path.exists(staged):
+                    os.unlink(staged)
+        elif os.path.isfile(marker):
             os.remove(marker)
-        except Exception:
-            pass
 
 
 def format_command(name, profile=None):
@@ -1285,12 +1375,10 @@ def intent_hint(hinted, root, main_id, runner=None, profile=None):
     runner = runner or "bash '%s/.workflow/run.sh'" % root.replace("\\", "/")
     return (
         "[INTENT HINT] This prompt resembles %s under the workflow NL map. If it "
-        "is that request, delegate first: %s %s%s --session '%s' --task '<task>'. "
-        "If it is a question or a remark, answer it. Nothing is blocked: the gate "
-        "arms only on an explicit %s."
-    ) % (format_command(hinted, profile), runner, hinted,
-         " --main-host codex" if (profile or {}).get("host") == "codex" else "", main_id,
-         format_command(hinted, profile))
+        "is that request, select it first: %s delegate-select%s --session '%s' --task '%s'. "
+        "Dispatch with the returned --request generation. A hint alone arms nothing."
+    ) % (format_command(hinted, profile), runner,
+         " --main-host codex" if (profile or {}).get("host") == "codex" else "", main_id, hinted)
 
 
 def session_binding(main_id, root, source, reused, profile=None):

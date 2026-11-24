@@ -8,9 +8,13 @@ pre-patch objects and make tests assert against something nothing else uses.
 """
 
 import errno
+import hashlib
+import json
 import os
+import secrets
 import sys
 import time
+from pathlib import Path
 
 from exoma.config.settings import (
     DEFAULT_IDLE_STALL_SECONDS,
@@ -26,7 +30,8 @@ from exoma.core.evidence import verify_tests
 from exoma.core.evidence.contract import make_error
 from exoma.core.jobs.job_manager import DEAD, JobCancellation, WorkerOwnership
 from exoma.core.evidence.result_shaping import _finalize_verify_result
-from exoma.core.workspace.workspace_paths import detect_project_root, now_iso
+from exoma.core.workspace.workspace_paths import REPLACE_RETRY_DELAYS, atomic_write_json, detect_project_root, now_iso
+from exoma._bundle.config.hosts.claude.hooks import workflow_policy as gate
 from exoma.utils import osutil
 
 
@@ -100,6 +105,9 @@ def submit(
     work_dir: str | None = None,
     model: str | None = None,
     allow_reuse: bool = True,
+    *,
+    on_admission=None,
+    expected_job=None,
 ) -> dict:
     normalized_command = command.strip().lower()
     # Every job, and so every worker spawn (_spawn_worker is reached only from here), goes
@@ -140,6 +148,8 @@ def submit(
                 return make_error("runtime_lock", str(exc),
                                   next_action="Use the update operation observer; do not start another provider.")
             active = _main().JOB_MANAGER.active_job_for_session(session_id)
+            if expected_job and (not active or active["job_id"] != expected_job):
+                return _gate_error("The original job is no longer active. Collect its existing result.")
             if (
                 active
                 and active.get("request_hash") != expected_hash
@@ -165,6 +175,8 @@ def submit(
                         active_job_id=active_id,
                     )
 
+                if on_admission:
+                    on_admission(active)
                 if active.get("worker_pid") and _main().JOB_MANAGER.liveness(active) != DEAD:
                     return {
                         "ok": True,
@@ -241,6 +253,14 @@ def submit(
                         model,
                         allow_reuse,
                     )
+                    if on_admission:
+                        try:
+                            on_admission(job)
+                        except OSError as exc:
+                            # Nobody can reclaim this reservation before the capacity guard
+                            # is released. Leave the pending test request for the next job.
+                            _main().JOB_MANAGER.fail_job(job["job_id"], f"cannot bind delegation: {exc}")
+                            raise
                     if normalized_command == "verify":
                         # A new job, not a recovery or an attach: the test request is this
                         # job's from here on, and an earlier job's leftover is dropped.
@@ -484,6 +504,176 @@ def check_stalled_job(
     )
 
 
+def _gate_error(message):
+    return make_error("session_state_error", message, next_action="Collect or report the current request in its original session.")
+
+
+def _with_generation(result, generation):
+    """Expose the recovery handle independently of any terminal receipt."""
+    return {**result, "meta": {**(result.get("meta") or {}), "generation": generation}}
+
+
+def _clear_armed_marker(rt, generation):
+    """An overlapping Windows reader may briefly deny delete sharing."""
+    marker = rt / "delegated.marker"
+    try:
+        for delay in REPLACE_RETRY_DELAYS:
+            try:
+                marker.unlink(missing_ok=True)
+                return
+            except PermissionError:
+                time.sleep(delay)
+        marker.unlink(missing_ok=True)
+    except OSError as exc:
+        return _with_generation(_gate_error(f"Could not clear the armed marker: {exc}. Retry in this session."), generation)
+
+
+def _owned_job(state, session, root):
+    job_id = state.get("job_id")
+    job = _main().JOB_MANAGER.get_job(job_id) if job_id else None
+    if (job and job.get("session_id") == session and job.get("command") == state["command"]
+            and job.get("request_hash") == state.get("request_hash") and job.get("work_dir")
+            and Path(job["work_dir"]).resolve() == Path(root)):
+        return job
+    return None
+
+
+def _result_identity(result):
+    encoded = json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("ascii")).hexdigest()
+
+
+def delegation_control(action, argument, session, work_dir):
+    """Host-facing controls; the state path and job ownership come from the bound session."""
+    refusal = _main()._recursion_refusal(action)
+    if refusal:
+        return refusal
+    root = str(Path(work_dir).resolve())
+    rt = Path(gate.runtime_dir(root, session))
+    path = rt / "delegation.json"
+    if action == "delegate-cancel":
+        with gate.execution_transaction(rt):
+            current = gate.collection_state(rt)
+            if (current.get("phase") != "running" or current.get("generation") != argument
+                    or not _owned_job(current, session, root)):
+                return _gate_error("Cancellation requires the matching admitted request.")
+            job_id = current["job_id"]
+        # Cancellation can wait for worker cleanup. Never hold the host state lock while waiting.
+        return _main().JOB_MANAGER.cancel(job_id, session, root)
+    with gate.execution_transaction(rt):
+        state = gate.collection_state(rt)
+        phase = state.get("phase")
+        active = phase not in {None, "collected", "aborted"}
+        if action == "delegate-select":
+            if argument not in _main().BACKGROUND_COMMANDS:
+                return _gate_error("Select an evidence command.")
+            marker = gate.delegation_marker(rt)
+            if marker and marker.get("command") != argument:
+                return _gate_error("A different delegation is pending.")
+            if not active:
+                state = {"command": argument, "generation": secrets.token_hex(16), "phase": "selected",
+                         "set_at": now_iso(), "session": session, "root": root}
+                atomic_write_json(path, state)
+            cleanup_error = _clear_armed_marker(rt, state["generation"])
+            if cleanup_error:
+                return cleanup_error
+            return {"ok": True, "meta": {"protocol": 1, **{key: state[key] for key in ("generation", "command", "phase")}}}
+        if state.get("session") != session or state.get("root") != root:
+            return _gate_error("No matching delegation for this project and session.")
+        if action == "delegate-ack":
+            if not argument or phase not in {"returned", "collected"} or argument != state.get("receipt"):
+                return _gate_error("Receipt does not match the current terminal result.")
+            if phase == "returned":
+                if (not _owned_job(state, session, root)
+                        or _result_identity(get_result(state["job_id"])) != state["result_digest"]):
+                    return _gate_error("The terminal result changed. Collect it again before acknowledgement.")
+                cleanup_error = _clear_armed_marker(rt, state["generation"])
+                if cleanup_error:
+                    return cleanup_error
+                atomic_write_json(path, {**state, "phase": "collected"})
+            return {"ok": True, "meta": {"phase": "collected", "job_id": state["job_id"]}}
+        if not active or argument != state.get("generation"):
+            return _gate_error("Request generation does not match the active selection.")
+        if action == "delegate-abort":
+            if phase != "selected" or state.get("job_id"):
+                return _gate_error("Abort is only available before job admission.")
+            cleanup_error = _clear_armed_marker(rt, argument)
+            if cleanup_error:
+                return cleanup_error
+            atomic_write_json(path, {**state, "phase": "aborted"})
+            return {"ok": True, "meta": {"phase": "aborted"}}
+        job_id = state.get("job_id")
+        job = _owned_job(state, session, root)
+        if not job:
+            return _gate_error("No owned job result is available for this request.")
+        result = get_result(job_id)
+        status = result.get("status")
+        if status not in {"completed", "failed"} or (result.get("meta") or {}).get("error_type") in {
+                "cleanup_pending", "cancellation_pending"}:
+            return {**result, "ok": False, "meta": {**(result.get("meta") or {}), "job_id": job_id, "phase": "running"}}
+        identity = _result_identity(result)
+        output = result.get("output") if status == "completed" else result
+        if not isinstance(output, dict) or not isinstance(output.get("ok"), bool):
+            output = _gate_error("Job returned an invalid terminal payload.")
+        output = _finalize_verify_result(state["command"], dict(output))
+        receipt = state.get("receipt")
+        if not receipt or state.get("result_digest") != identity:
+            receipt = secrets.token_hex(24)
+            atomic_write_json(path, {**state, "phase": "returned", "receipt": receipt, "result_digest": identity})
+        return {**output, "meta": {**(output.get("meta") or {}), "job_id": job_id,
+                "submitted_at": job["created_at"], "worker_pid": job.get("worker_pid"),
+                "delegation": {"generation": argument, "receipt": receipt, "command": state["command"]}}}
+
+
+def _submit_selected(command, task, session, work_dir, model, allow_reuse, generation):
+    rt = Path(gate.runtime_dir(work_dir, session))
+    path = rt / "delegation.json"
+    with gate.execution_transaction(rt):
+        if not generation:
+            marker = gate.delegation_marker(rt)
+            if marker and marker.get("phase") not in {None, "armed"}:
+                error = _gate_error("Recover the pending generation with delegate-select for the same session and command.")
+                if marker.get("session") == session and marker.get("command") == command and marker.get("root") == str(Path(work_dir).resolve()):
+                    return _with_generation(error, marker["generation"])
+                return error
+            selected = delegation_control("delegate-select", command, session, work_dir)
+            if not selected["ok"]:
+                return selected
+            generation = selected["meta"]["generation"]
+        state = gate.collection_state(rt)
+        if (state.get("session") != session or state.get("root") != str(Path(work_dir).resolve())
+                or state.get("generation") != generation or state.get("command") != command
+                or state.get("phase") not in {"selected", "running", "returned"}):
+            return _gate_error("Dispatch requires the current selected request.")
+        manager = _main().JOB_MANAGER
+        request_hash = manager.request_hash(command, task, session, work_dir, allow_reuse, model)
+        if state.get("request_hash", request_hash) != request_hash:
+            return _with_generation(_gate_error("An existing selection is already bound to another task."), generation)
+        original = state.get("job_id")
+        if original:
+            record = manager.get_job(original)
+            if not record or record.get("request_hash") != request_hash:
+                return _with_generation(_gate_error("The admitted job is unavailable."), generation)
+            result = get_result(original)
+            if (result.get("meta") or {}).get("error_type") != "worker_died" or not (result.get("meta") or {}).get("recoverable"):
+                return {"ok": True, "job_id": original, "submitted_at": record["created_at"], "generation": generation}
+
+        def bind(job):
+            atomic_write_json(path, {**state, "phase": "running", "job_id": job["job_id"], "request_hash": request_hash})
+
+        submitted = submit(command, task, session, work_dir, model, allow_reuse,
+                           on_admission=bind, expected_job=original)
+        if not submitted["ok"]:
+            # Only this validated dispatch can recover an admitted job that reached a
+            # terminal state during submit (for example a failed worker launch).
+            bound = gate.collection_state(rt)
+            job = _owned_job(bound, session, root=str(Path(work_dir).resolve()))
+            if not job or job.get("request_hash") != request_hash or job["status"] not in {"completed", "failed"}:
+                return _with_generation(submitted, generation)
+            submitted = {"ok": True, "job_id": job["job_id"], "submitted_at": job["created_at"]}
+        return {**submitted, "generation": generation}
+
+
 def await_job(
     command: str,
     task: str,
@@ -493,16 +683,29 @@ def await_job(
     poll_interval: float = DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     poll_timeout: int = DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
     allow_reuse: bool = True,
+    generation: str | None = None,
 ) -> dict:
     if command.strip().lower() == "sweep":
         return _main().run("sweep", task, session_id, work_dir, model)
 
     _apply_job_thresholds(work_dir)
     _main()._warn_if_workspace_stale(work_dir)
-    submitted = submit(command, task, session_id, work_dir, model, allow_reuse)
+    rt = gate.runtime_dir(work_dir or os.getcwd(), session_id)
+    if generation or gate.bound_delegation_host(rt) or gate.delegation_marker(rt):
+        work_dir = work_dir or os.getcwd()
+        submitted = _submit_selected(command, task, session_id, work_dir, model, allow_reuse, generation)
+        generation = submitted.get("generation")
+    else:
+        submitted = submit(command, task, session_id, work_dir, model, allow_reuse)
     if not submitted.get("ok"):
         return submitted
+    result = _await_submitted(submitted, command, task, session_id, work_dir, model, allow_reuse,
+                             generation, poll_interval, poll_timeout)
+    return _with_generation(result, generation) if generation else result
 
+
+def _await_submitted(submitted, command, task, session_id, work_dir, model, allow_reuse,
+                    generation, poll_interval, poll_timeout):
     job_id = submitted["job_id"]
     started_at = time.monotonic()
     interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
@@ -523,6 +726,8 @@ def await_job(
 
     while True:
         result = get_result(job_id)
+        if generation and result.get("status") in {"completed", "failed"}:
+            return delegation_control("delegate-result", generation, session_id, work_dir)
         if result.get("status") in {"pending", "running", "recovering"}:
             # Keep stdout a single final JSON result. Bounded stderr notices expose
             # observed diagnosis while awaiting the SAME worker; no extra probe here.
@@ -568,6 +773,8 @@ def await_job(
                 if reaped is not None:
                     if reaped.get("status") == "completed":
                         continue
+                    if generation:
+                        return delegation_control("delegate-result", generation, session_id, work_dir)
                     meta = dict(reaped.get("meta") or {})
                     meta.setdefault("job_id", job_id)
                     meta.setdefault("submitted_at", submitted.get("submitted_at"))
@@ -611,9 +818,15 @@ def await_job(
             queued = _main().JOB_MANAGER.get_job(job_id) or {}
             if queued.get("worker_pid") is None:
                 resumed = submit(
-                    command, task, session_id, work_dir, model, allow_reuse
+                    command, task, session_id, work_dir, model, allow_reuse, expected_job=job_id
                 )
                 if not resumed.get("ok"):
+                    if generation:
+                        # The worker can finish between the pending snapshot and the
+                        # capacity guard. Only collect this selection's owned result.
+                        terminal = delegation_control("delegate-result", generation, session_id, work_dir)
+                        if (terminal.get("meta") or {}).get("delegation", {}).get("receipt"):
+                            return terminal
                     return resumed
                 submitted = resumed
 

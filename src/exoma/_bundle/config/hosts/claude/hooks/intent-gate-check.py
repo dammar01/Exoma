@@ -175,13 +175,6 @@ try:
     kind = kind_of(tool_name)
     target = str(ti.get("file_path") or ti.get("notebook_path") or "")
 
-    def armed_key():
-        try:
-            with open(marker, "r", encoding="utf-8") as f:
-                return str((json.load(f) or {}).get("set_at") or "")
-        except Exception:
-            return ""
-
     def _log_block(rule_name):
         plan_id = (wp.read_json(os.path.join(runtime_dir, "execution.json")) or {}).get("plan_id")
         wp.log_refusal(runtime_dir, "intent-gate-check", rule_name, tool_name, "hybrid", True, plan_id)
@@ -199,28 +192,17 @@ try:
         sys.stderr.write("[PRE-FLIGHT GATE] " + wp.escape_write_message(tool_name, target) + "\n")
         sys.exit(2)
 
-    if env_local:
-        # The environment escape lifts the pre-flight block only; its use under an armed
-        # marker is written down.
-        if os.path.isfile(marker):
-            wp.log_gate_skip(runtime_dir, "intent-gate-check", "env_local_mode", root=root, key=armed_key())
+    marker_obj = wp.delegation_marker(runtime_dir)
+    if not marker_obj:
+        if not os.path.isfile(marker):
+            sys.exit(0)
+        hook_warning("marker_unreadable", ValueError("invalid delegated marker"))
+        marker_obj = {"command": "?", "phase": "unreadable", "generation": "unavailable"}
+    if env_local or os.path.isfile(local_flag):
+        reason = "env_local_mode" if env_local else "local_mode_flag"
+        wp.log_gate_skip(runtime_dir, "intent-gate-check", reason, root=root, key=str(marker_obj.get("set_at") or ""))
         sys.exit(0)
-
-    if not os.path.isfile(marker):
-        sys.exit(0)
-    if os.path.isfile(local_flag):
-        wp.log_gate_skip(runtime_dir, "intent-gate-check", "local_mode_flag", root=root, key=armed_key())
-        sys.exit(0)
-
-    cmd = "?"
-    marker_obj = {}
-    try:
-        with open(marker, "r", encoding="utf-8") as f:
-            marker_obj = json.load(f) or {}
-        cmd = str(marker_obj.get("command") or "?")
-    except Exception as exc:
-        marker_obj = {}
-        hook_warning("marker_unreadable", exc)
+    cmd = str(marker_obj.get("command") or "?")
 
     ctx = {
         "root": root,
@@ -255,6 +237,8 @@ try:
             "Do this instead: bash .workflow/run.sh %s --session '%s' --task '<task>'\n"
             "%s"
         ) % (main_id, cmd, main_id, user_escapes(local_flag, marker))
+    elif marker_obj.get("generation"):
+        reason = "[PRE-FLIGHT GATE] " + wp.collection_guidance(marker_obj, "bash .workflow/run.sh", main_id)
     else:
         what = (
             "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job"

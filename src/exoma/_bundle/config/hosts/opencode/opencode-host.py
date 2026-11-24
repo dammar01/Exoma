@@ -202,7 +202,7 @@ def pre_tool_use(payload):
     read_target = str(args.get("filePath") or args.get("file_path") or args.get("path") or "")
     kind = ("shell" if tool in SHELL_TOOLS else "write" if paths
             else "read" if tool in READ_TOOLS else "other")
-    marker = wp.read_json(os.path.join(rt, "delegated.marker"))
+    marker = wp.delegation_marker(rt)
     local = os.environ.get("WORKFLOW_LOCAL_MODE") == "1" or os.path.isfile(os.path.join(root, ".workflow", "local_mode.flag"))
     refusal = None
     if kind == "shell":
@@ -247,6 +247,8 @@ def pre_tool_use(payload):
         elif refusal_key == "session_binding":
             refusal = (refusal_key, "Use exactly --session '%s' from the authoritative binding; "
                        "missing, default, duplicate or different session arguments are refused." % main_id)
+        elif refusal_key and marker.get("generation"):
+            refusal = (refusal_key, wp.collection_guidance(marker, wp.runner_command(root, profile), main_id))
         elif refusal_key:
             refusal = (refusal_key, "Delegate /.%s first, in the foreground with a long timeout: %s %s --session '%s' --task '<task>'"
                        % (marker.get("command"), wp.runner_command(root, profile), marker.get("command"), main_id))

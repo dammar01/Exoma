@@ -165,6 +165,13 @@ accident.
    nothing is patched inside agent-workflow. See
    [docs/development.md](docs/development.md#staging-a-release-in-agent-workflow).
 
+   For the v1.2.2 W3 candidate, retain a versioned native trace for Claude Code, Codex,
+   Agy and OpenCode. Capture selection, observed project-read refusals, waiting, terminal
+   output and acknowledgement in order. Include Codex nested collection, Claude/Agy
+   background output and OpenCode foreground return. Exercise lost output and a prelaunch
+   denial. Record intercepted, advisory and unobserved paths separately. Check fresh and
+   upgraded installs against the same candidate. Source fixtures alone cannot qualify a host.
+
    This remains an engineering release gate. Harnesses, delegated E2E, and integrity checks
    for research records maintained there are required by the staging procedure; successful
    scientific validation or an answered research question is not a prerequisite for

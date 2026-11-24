@@ -2,12 +2,14 @@
 description: Structured planning — evidence (1-call) + main_agent reasoning. Claim attribution + a mechanical decision gate.
 argument-hint: <task>
 
+For delegated work, select `plan` using the session-bound `delegate-select` call before preparation. Wait for the original runner, return its result to the main turn, then use `delegate-ack` with its receipt before reading project evidence or synthesizing.
+
 ## Trigger
 {{CMD:plan}} <task>
 
 ## STEP 1 — Evidence
 Reuse LAST_EXPLORE_RESULT when it is in context. Otherwise 1-call:
-  Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' plan{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<task>'
+  Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' plan{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --request '<generation>' --task '<task>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation).
 - FAILED (ok:false | invalid_evidence | content is a menu/refusal) → STOP rule (yours to hold, no hook blocks it):
   STOP → "[PROXY FAILED] <reason>. Continue the plan via {{CMD:local}} or without evidence? (yes/no)" → WAIT. Do NOT auto-fallback.

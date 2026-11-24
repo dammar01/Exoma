@@ -2,10 +2,12 @@
 description: Verification through a real Playwright browser. DELEGATED: draft spec (second_agent) → browser run (runtime player) → review (second_agent). Interview only after the draft reports the project is not configured.
 argument-hint: [feature/flow]
 
+For delegated work, select `verify-browser` using the session-bound `delegate-select` call before preparation. Wait for the original runner, return its result to the main turn, then use `delegate-ack` with its receipt before reading project evidence or synthesizing.
+
 ## Trigger & Gate
 {{CMD:verify-browser}} [<feature/flow to test>]
 Different from {{CMD:verify}} (code review): {{CMD:verify-browser}} drives Playwright in the running app.
-DELEGATED command: Pre-flight gate applies — before `.workflow/run verify-browser` runs, Read/Grep/Glob/Bash/MCP (including reading `config.json`) are FORBIDDEN; writing `request.json` is allowed.
+DELEGATED command: Pre-flight gate applies — until the selected result has been acknowledged, Read/Grep/Glob/Bash/MCP (including reading `config.json`) are FORBIDDEN; writing `request.json` is allowed.
 Division of work: second_agent drafts spec (stage 1) and reviews evidence (stage 3); runtime player drives Playwright (stage 2). Neither main_agent nor second_agent opens the browser.
 Use `phase: auto`: ready preparation runs player + review in ONE invocation. Never ask "run it or not" or copy `draft.json` into a second request.
 
@@ -18,7 +20,7 @@ Use `phase: auto`: ready preparation runs player + review in ONE invocation. Nev
 The runtime reads `<project>/.workflow/config.json` `e2e` defaults during STEP 3 (main_agent does NOT read `config.json` before dispatch).
 - Go straight to STEP 2 (minimal `phase: auto` request) + STEP 3 (single pipeline dispatch). If the user named a `base_url`, set `settings.base_url`; otherwise omit so config/defaults apply (`http://localhost:8000`, headed, retry 2).
 - Ready preparation runs end-to-end → skip STEP 1 completely.
-- Draft returns `blocked` (`base_url_unreachable` or wrong target) / `invalid` for missing flow info → gate marker is now cleared, `config.json` may be read → read `{{SKILL_REF:verify-browser/interview.md}}` for STEP 1 interview, offer to save project defaults in `config.json`, then repeat STEP 2–3.
+- Draft returns `blocked` (`base_url_unreachable` or wrong target) / `invalid` for missing flow info → acknowledge the returned draft first, `config.json` may be read → read `{{SKILL_REF:verify-browser/interview.md}}` for STEP 1 interview, offer to save project defaults in `config.json`, then select `verify-browser` again. Use the new generation for STEP 2–3.
 - Relay `meta.e2e.config_warnings` (wrong-type/unknown config knobs are ignored and fall back to defaults).
 
 Non-negotiable safety boundaries (always apply):
@@ -37,7 +39,7 @@ Write `<project>/.workflow/data/sessions/<MAIN_SESSION_ID>/e2e/request.json` (le
 
 ## STEP 3 — Run the pipeline once
 Headed (default) → tell the user once before dispatching that a browser will open (do not wait for confirmation).
-Every OS ({{SHELL_TOOL}}): `bash '<work_dir>/.workflow/run.sh' verify-browser{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<task>'`
+Every OS ({{SHELL_TOOL}}): `bash '<work_dir>/.workflow/run.sh' verify-browser{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --request '<generation>' --task '<task>'`
 {{DELEGATED_RUN}} `<task>` ≤3000 chars: flow + expected claims, `base_url`, credential key names (`${E2E_USER}`...), side effects allowed or not, changed files when known. Do NOT paste code.
 
 Handle result:

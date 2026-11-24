@@ -1105,6 +1105,11 @@ def run_doctor(
     # a workspace whose front door rejects its own commands is not ready.
     drifted = script_drift(project_root)
     checks["run_script_drift"] = drifted or "none"
+    checks["delegation_collection"] = {
+        "runner": "upgrade_required" if any(d["script"] == "run.sh" for d in drifted) else "current",
+        "host_interception": "unconfirmed",
+        "main_turn_delivery": "unconfirmed",
+    }
     if drifted:
         issues.append(
             "entry script drift: "

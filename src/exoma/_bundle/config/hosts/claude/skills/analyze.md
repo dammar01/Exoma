@@ -2,12 +2,14 @@
 description: Deep analysis via second_agent (1-call). --local: main_agent local mode.
 argument-hint: [--local] <topic>
 
+For delegated work, select `analyze` using the session-bound `delegate-select` call before preparation. Wait for the original runner, return its result to the main turn, then use `delegate-ack` with its receipt before reading project evidence or synthesizing.
+
 ## Trigger
 {{CMD:analyze}} <topic>          → 1-call
 {{CMD:analyze}} --local <topic>  → main_agent directly (skips the proxy)
 
 ## Run (1-call)
-Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' analyze{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --task '<topic>'
+Every OS ({{SHELL_TOOL}}): bash '<work_dir>/.workflow/run.sh' analyze{{MAIN_HOST_OPTION}} --session '<MAIN_SESSION_ID>' --request '<generation>' --task '<topic>'
 <MAIN_SESSION_ID> from [SESSION BINDING], REQUIRED as `--session` (concurrent isolation). Reuse LAST_EXPLORE_RESULT when relevant.
 The task touches an external library → name the library; the proxy reads the context7 docs first → findings in external (not a guessed API).
 FAILED (ok:false | invalid_evidence | content is a menu/refusal) → STOP rule (yours to hold, no hook blocks it):

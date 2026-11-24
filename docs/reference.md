@@ -724,14 +724,14 @@ Before agent-workflow 3.8.0, `intent-gate-set` read the prompt from the `user_pr
 sends (the field is `prompt`). As a result the runtime gate was never active and only the
 prompt layer worked. Since that fix, in auto-intent mode `intent-gate-check`
 actually blocks gather tools after a prompt that names a delegated command until
-`.workflow/run` is called; the escape is still `WORKFLOW_LOCAL_MODE=1` or `local_mode.flag`.
+the selected result has been acknowledged; the escape is still `WORKFLOW_LOCAL_MODE=1` or `local_mode.flag`.
 Either lifts the gather block only: a Write of the runner scripts or of an escape file is
 refused under both, on every host.
 
-Only a command the user named arms the gate: the prefix typed at the start of the prompt
+At prompt submission, an explicit command arms the tentative marker: the prefix typed at the start of the prompt
 (`/.analyze ...`, `prefix_regex` in `intent-map.json`) or the slash-command payload
 (`<command-name>/.analyze</command-name>`). A prompt that only resembles a delegated command
-under the NL map arms nothing and clears a pending marker; it gets an `[INTENT HINT]` as
+under the NL map arms nothing and can clear only tentative intent; it gets an `[INTENT HINT]` as
 `additionalContext` naming the command and the runner call, and the prompt-level gate decides.
 Before agent-workflow 3.9.0 any NL match armed the gate, so questions and descriptions ("saat saya analisa
 ...", a question that mentions playwright) blocked the main agent's own reply.
@@ -748,7 +748,7 @@ project root or inside it (the Bash tool resets the working directory between ca
 is judged on its own. A runner path that appears as an argument of another command
 (`python -c "..." x/.workflow/run.sh`) and `run.ps1` (retired) are still blocked.
 
-The `command` field in the marker selects the pass rule. For `verify`, main_agent must select tests
+The phase and command select the pass rule. During preparation for `verify`, main_agent must select tests
 before delegating, so three things pass: a plain `git diff` or `git -C <dir inside the root> diff` (same word rules as the runner)
 with `--name-only`, `--name-status`, or `--stat[=N]`, plus optional `--cached`, `--staged`,
 `--relative`, `--no-renames`, `--no-color`, `--`, refs, and paths (other options such as `-p` or
@@ -775,16 +775,11 @@ background returns its result. The layout is Claude Code's and undocumented; if 
 reads are gated again. `cat <file>` (`type`, `Get-Content`, `gc`) of one such file, bare or
 single-quoted with nothing else on the line, passes like the Read.
 
-For every `command` in the marker, a **precision Read** also passes: a file inside the
-project root (relative paths resolved against the root, symlinks followed), not under
-`.workflow/`, spanning at most 200 lines — `limit` a number 1–200, or no
-`limit` on a file that is itself ≤ 200 lines (files > 1 MB are not counted, so they do not pass). At
-most 2 per marker; the count is in `runtime/delegated.reads`, keyed to the marker's `set_at`,
-so a new marker starts from zero. This is the enforced number for the "small
-slice, one/two anchors" exception in the `CLAUDE.md` Pre-flight gate rule: file:line attribution by the main
-agent itself, not evidence gathering. A 3rd Read, a span > 200 lines, a large file without
-`limit`, a file outside the root, Grep, Glob, MCP, and shell are still blocked, and the block message
-cites this rule. A marker without `set_at` (not written by `intent-gate-set`) does not open this lane.
+Current selections defer project evidence reads, including one-line reads, until the
+main host acknowledges the matching result. The historical two-read quota remains
+available to legacy tentative markers. For running jobs use the native wait, bound
+inspect, and the [collection controls](runtime-contracts.md#delegation-selection-and-collection-v122).
+
 
 `src/exoma/_bundle/config/hosts/claude/CLAUDE.md` deliberately contains **both** mode stanzas — `COMMAND-ONLY` and
 `AUTO-INTENT`, each wrapped in `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->` markers.
@@ -890,7 +885,7 @@ hooks keep the bare `bash`. A PowerShell call operator in front of the quoted ba
 '<root>/.workflow/run.sh' …`) is dropped before the gate judges the words, on Agy, Codex and
 OpenCode alike.
 
-**Read ranges.** A precision read passes on its line span. `read_range_keys` names the host's own
+**Read ranges.** A selected v1.2.2 delegation defers project reads until collection. Legacy preflight markers evaluate a precision read on its line span. `read_range_keys` names the host's own
 argument keys: a limit key (`limit`) gives a span; a start and an end line (Agy's `StartLine` /
 `EndLine` are the assumed names) give `end - start + 1`; when both are given the larger span
 counts. An end without a start, an end before the start, a value that is not a whole number in
@@ -958,7 +953,7 @@ The Codex host shares `workflow_policy.py` with Claude/Agy. Its adapter reads
 `exec_command`, file-read tools, and `apply_patch` calls and delegates the same pre-flight,
 write-scope and commit decisions. A single-file `cat` or `Get-Content` call can use a precision
 read when the file has at most 200 lines; `sed -n '<start>,<end>p'` and
-`Get-Content -TotalCount <n>` can read a bounded slice. Two precision reads pass per marker.
+`Get-Content -TotalCount <n>` can read a bounded slice. The two-read allowance applies only to legacy markers. New selections defer all project evidence reads until collection.
 The `UserPromptSubmit` event does not expose a prompt-source field; Exoma accepts an
 execute or commit approval only when the explicit command begins the submitted prompt.
 This is weaker provenance than Claude's source field. Codex hooks also require trust,
@@ -1333,7 +1328,7 @@ section "Contracts the runtime cannot enforce".
 | Contract | Content | Enforcer | Source |
 |---|---|---|---|
 | Intent mode | One of two, chosen by the installer. `AUTO-INTENT`: natural language is mapped to a command and announced with one `[INTENT]` line without waiting for an answer. `COMMAND-ONLY`: commands run only via the `/.` prefix; no prefix = ordinary conversation, may suggest one line and then stop | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; see [Intent mode](#intent-mode) |
-| Pre-flight gate | Once intent resolves to a delegated command (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), the next step must be `.workflow/run`. Gather tools (Read/Grep/Glob/Bash/MCP) are forbidden before that, except under `[LOCAL_MODE]`, proxy failure, or a small precision slice | main_agent + hooks `intent-gate-set` / `intent-gate-check` (auto-intent mode only; fail-open; writes of the runner scripts and of the escape files refused always; an escape in use while armed, or a delegated command the user named that could not arm, logged to `gate-skips.jsonl` and reported by `doctor`) | `CLAUDE.md`, "Pre-flight gate"; `src/exoma/_bundle/config/hosts/claude/hooks/intent-map.json` |
+| Delegation gate | Select a request, dispatch with its generation, wait for the same job, then acknowledge its terminal result before project reads or synthesis | Main host and shared policy on intercepted tool paths | [Collection protocol](runtime-contracts.md#delegation-selection-and-collection-v122) |
 | Output contract | Explore and `sweep`/`doctor` = RELAY the runtime result as is. Plan/analyze = SYNTHESIS by main_agent: three-part confidence (`problem_understanding`, `root_cause`, `solution_path`), per-claim attribution, `open_questions` kept separate from `uncertainty`. Required fields are still shown even when empty, with the reason | main_agent | `CLAUDE.md`, "Output Contract" and "Plan/analysis output" |
 | `[OPTIONS]` | See [Implementation options in `/.plan`](#implementation-options-in-plan) | main_agent | `skills/plan.md` |
 | New feature via plan | A command that describes new behavior ("buat agar …", "tambahkan …", a list of fixes) without an active plan is mapped to `plan`, not `execute`. Execute without an active plan stops and suggests `/.plan`. Requests for a spec/explanation are answered directly, without an unrequested `/.verify` (auto-verify after `/.execute` when `auto_verify_after_execute=true` still applies) | main_agent | `CLAUDE.md`, NL map and tie-break; `skills/execute.md` |
@@ -1365,6 +1360,9 @@ table differ, fix one of them in the same change.
 | `plan` | delegated | yes | evidence + reverse dependency trace |
 | `analyze` | delegated | yes | in-depth analysis, zero code changes |
 | `verify` | delegated¹ | yes | verification; depth set by `verify_mode` |
+| `delegate-select` | local | no | select command via `--task`; returns generation for runner dispatch via `--request` |
+| `delegate-result` / `delegate-cancel` / `delegate-abort` | local | no | take the active generation as `--task`; recover output, request cancellation, or abandon before admission |
+| `delegate-ack` | local | no | acknowledge the receipt from the returned terminal result via `--task` |
 | `verify-prepare` | local | no | effective verification policy and pending request diagnostics for an explicit session; no provider, tests, verdict, or marker removal |
 | `verify-browser` | delegated³ | yes | verification through a Playwright browser from a per-session request; `auto` prepares, runs and reviews in one invocation |
 | `sweep` | local | — | scan staged, unstaged, and untracked diff without OpenCode |
@@ -2319,8 +2317,11 @@ must be launched as a background tool task so the foreground tool call immediate
 returns a task ID; Claude then fetches that task's result. The runtime stays
 agent-agnostic—other callers may use the ordinary blocking runner.
 
-If the background task is lost or the call is interrupted, call the runner again with an
-identical session, command, and task. The runtime attaches if the worker is still alive.
+After an interrupted bound dispatch, keep `meta.generation`. If no response arrived, call
+`delegate-select` with the original session and command to obtain the pending generation.
+Use `delegate-result` to poll or collect an admitted job. To retry admission or recover a
+worker, pass `--request` with that generation and the identical session, command, task,
+model and reuse settings. The runtime attaches if the worker is still alive.
 If the worker is already dead, the same job is recovered once through the old provider thread (opencode, codex, or agy)
 with a structured continuation prompt. A second death yields
 `recovery_exhausted`, releases the lock, and does not trigger an automatic loop.
