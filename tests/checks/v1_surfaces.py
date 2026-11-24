@@ -256,7 +256,12 @@ for (const suffix of ['interview', 'interactive-and-tags']) {
     assert.equal(output.metadata.outputPath, undefined)
     return output.output
   }
-  assert.equal(await result(dir), original.toString().replaceAll('\\r\\n', '\\n'))
+  const expected = original.toString().replaceAll('\\r\\n', '\\n')
+  assert.equal(await result(dir), expected)
+  if (process.env.EXOMA_TEST_SHORT_HOME) {
+    const shortDir = path.join(process.env.EXOMA_TEST_SHORT_HOME, path.relative(process.cwd(), dir))
+    assert.equal(await result(shortDir), expected, 'installed skill via Windows short home')
+  }
   const alias = path.resolve('fixture-home-alias')
   fs.symlinkSync(process.cwd(), alias, process.platform === 'win32' ? 'junction' : 'dir')
   try {
@@ -279,6 +284,16 @@ const other = { output: 'ordinary skill result' }
 await after({ tool: 'skill', args: { name: 'exoma-plan' } }, other)
 assert.deepEqual(other, { output: 'ordinary skill result' })
 """
+    env = env.copy()
+    env.pop("EXOMA_TEST_SHORT_HOME", None)
+    if os.name == "nt":
+        import ctypes
+
+        # Volume settings determine whether a distinct 8.3 spelling exists.
+        short = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(home), short, len(short))
+        if 0 < length < len(short) and Path(short.value) != home.resolve():
+            env["EXOMA_TEST_SHORT_HOME"] = short.value
     result = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script], cwd=home,
                             env=env, capture_output=True, text=True, timeout=30, **no_console())
     assert_true(result.returncode == 0, result.stderr)

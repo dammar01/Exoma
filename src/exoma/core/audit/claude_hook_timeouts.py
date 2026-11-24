@@ -40,7 +40,7 @@ def _timestamp(value):
 
 
 def claude_hook_timeouts(project_root: Path) -> dict:
-    home = osutil.agent_home() / ".claude"
+    configured_home = osutil.agent_home() / ".claude"
     project = project_root.resolve()
     cwd_states = {}
     repository = (project / ".git").exists()
@@ -84,8 +84,12 @@ def claude_hook_timeouts(project_root: Path) -> dict:
     cutoff = now - timedelta(days=7)
     report = {"status": "unavailable", "window_days": 7, "files_scanned": 0, "count": None,
               "latest": None, "invalid_rows": 0, "unavailable_files": 0, "truncated": False}
-    registry = home / "session_registry.json"
     try:
+        if not configured_home.is_absolute() or ".." in configured_home.parts:
+            return report
+        # Only the configured prefix may be aliased. Check .claude and its descendants as recorded.
+        home = configured_home.parent.resolve(strict=True) / ".claude"
+        registry = home / "session_registry.json"
         if not _regular_under(registry, home):
             return report
         with registry.open("rb") as stream:
@@ -93,7 +97,7 @@ def claude_hook_timeouts(project_root: Path) -> dict:
         if len(data) > _MAX_REGISTRY:
             return {**report, "truncated": True}
         bindings = json.loads(data)
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RuntimeError):
         return report
     if not isinstance(bindings, dict) or len(bindings) > 256:
         return report
@@ -119,6 +123,8 @@ def claude_hook_timeouts(project_root: Path) -> dict:
     for _, sid, raw_path in matches[:_MAX_FILES]:
         try:
             path = Path(raw_path) if isinstance(raw_path, str) else None
+            if path is not None and path.is_relative_to(configured_home):
+                path = home / path.relative_to(configured_home)
             if (path is None or path.name != sid + ".jsonl" or path.parent.parent != home / "projects"
                     or not _regular_under(path, home)):
                 report["unavailable_files"] += 1

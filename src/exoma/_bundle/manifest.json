@@ -553,8 +553,8 @@
     },
     {
       "path": "hosts/opencode/exoma.js",
-      "sha256": "93775c0e4aa95120365ae3608525d7aa93cbe77934ca09fc894771ad2292c75e",
-      "bytes": 4188,
+      "sha256": "14c6ae0d1228194c6efcd5c6ee3429ca58ee4ee6b9d33eabc68c8a5a20c37181",
+      "bytes": 4357,
       "merge": "replace",
       "component": "runtime"
     },

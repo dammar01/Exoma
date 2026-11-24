@@ -14,6 +14,8 @@ import path from "node:path"
 const CONTINUATIONS = {{CONTINUATIONS_JSON}}
 const PYTHON = {{PYTHON_JSON}}
 const HOOK = {{HOOK_JSON}}
+// Python's Path.resolve() expands Windows short names in the installed metadata.
+const physicalPath = process.platform === "win32" ? realpathSync.native : realpathSync
 
 function managedContinuation(name, metadata) {
   const expected = CONTINUATIONS[name]
@@ -24,11 +26,11 @@ function managedContinuation(name, metadata) {
     // Resolve the home prefix only. A link at the skill or skills directory
     // must not give an unrelated installation the identity of the managed one.
     const home = path.resolve(metadata.dir, "../../../..")
-    const installed = path.join(realpathSync(home), path.relative(home, metadata.dir))
+    const installed = path.join(physicalPath(home), path.relative(home, metadata.dir))
     if (path.relative(expected.dir, installed) !== "" ||
-        path.relative(expected.dir, realpathSync(metadata.dir)) !== "") return
+        path.relative(expected.dir, physicalPath(metadata.dir)) !== "") return
     const info = lstatSync(file)
-    if (!info.isFile() || info.size > 256 * 1024 || path.relative(file, realpathSync(file)) !== "") return
+    if (!info.isFile() || info.size > 256 * 1024 || path.relative(file, physicalPath(file)) !== "") return
     const source = readFileSync(file, "utf8").replace(/\r\n/g, "\n")
     if (createHash("sha256").update(source).digest("hex") === expected.sha256) return source
   } catch {

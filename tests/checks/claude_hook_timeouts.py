@@ -1,6 +1,7 @@
 """Synthetic bindings and rows from the calibrated Claude attachment schema."""
 import json
 import os
+import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,8 @@ def check_timeout_observation():
         transcript.parent.mkdir(parents=True)
         bindings = host / "session_registry.json"
         assert claude_hook_timeouts(project)["count"] is None
-        bindings.write_text(json.dumps({"session": {"cwd": str(project), "transcript_path": str(transcript)}}))
+        binding = {"cwd": str(project), "transcript_path": str(transcript)}
+        bindings.write_text(json.dumps({"session": binding}))
         assert claude_hook_timeouts(project)["status"] == "unavailable"
         row = {"type": "attachment", "uuid": "fake-id", "sessionId": "session", "cwd": str(project),
                "version": "2.1.330", "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -29,6 +31,20 @@ def check_timeout_observation():
         write(row)
         normal = claude_hook_timeouts(project)
         assert normal["status"] == "complete" and normal["count"] == 0
+        with tempfile.TemporaryDirectory() as alias_parent:
+            alias = Path(alias_parent) / "agent-home"
+            if os.name == "nt":
+                subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(alias), str(project)],
+                               check=True, capture_output=True)
+            else:
+                alias.symlink_to(project, target_is_directory=True)
+            with patch.dict(os.environ, {"AGENT_HOME": str(alias)}):
+                for recorded in (transcript, alias / transcript.relative_to(project)):
+                    bindings.write_text(json.dumps({"session": {**binding, "transcript_path": str(recorded)}}))
+                    observed = claude_hook_timeouts(project)
+                    assert (observed["status"], observed["count"], observed["files_scanned"]) == (
+                        "complete", 0, 1), observed
+            bindings.write_text(json.dumps({"session": binding}))
         row["attachment"]["timedOut"] = True
         write(row, row)
         result = claude_hook_timeouts(project)
