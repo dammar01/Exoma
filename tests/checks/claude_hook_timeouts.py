@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from exoma.core.audit.claude_hook_timeouts import claude_hook_timeouts
+from tests.checks.support import no_console
 
 
 def check_timeout_observation():
@@ -35,7 +36,7 @@ def check_timeout_observation():
             alias = Path(alias_parent) / "agent-home"
             if os.name == "nt":
                 subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(alias), str(project)],
-                               check=True, capture_output=True)
+                               check=True, capture_output=True, **no_console())
             else:
                 alias.symlink_to(project, target_is_directory=True)
             with patch.dict(os.environ, {"AGENT_HOME": str(alias)}):
