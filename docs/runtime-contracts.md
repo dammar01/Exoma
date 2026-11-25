@@ -542,6 +542,50 @@ file system encoding, and a source reached through a symlink is checked (ignore,
 pattern, applicability) by its in-project target and never takes the commit/blob shortcut.
 The knowledge document schema is unchanged; served claims add `freshness` metadata.
 
+## Execution-scoped verification findings
+
+A standard delegated verify binds a round to the current execution, its history revision
+and input fingerprint. The runtime assigns finding IDs at publication. The reviewer gets
+a round-specific sidecar before dispatch with up to 32 open findings, previous diagnostic
+references, recent resolved findings and planned checks. Open findings beyond this window
+stay open and rotate into later reviews. Runtime tests run after the review. The result
+exposes the reviewer's blockers separately from the merged verdict.
+
+The optional `[FOLLOWUP_V1]` block carries one JSON object per line before `[VERIFICATION]`.
+A reviewer associates a new blocker with a behavior using its one-based blocker index and
+selection obligation ID. For an existing finding the reviewer echoes the exact ID and
+explains the diagnosis, strategy, current evidence and outcome. Missing, duplicate or
+unusable rows leave the finding open. Repeated experiments on identical inputs require
+a reason to close a finding. A fresh outcome for a required command updates the retry
+baseline when the run has an input fingerprint and a diagnostic receipt. A refused,
+unrelated, reused, or missing check preserves the previous observation. An unknown
+prior input requires an explicit repeat reason for closure. A regressed finding references a current blocker and retains
+its first origin. Independent discoveries receive new IDs.
+
+Publication writes verdict, coverage, finding records and round observations together in
+the execution transaction. A worker pins the round at admission. Its completion checks
+attempt ownership and cancellation after cleanup. A durable job checkpoint precedes the
+execution write. Recovery of that checkpoint commits or reuses the same round, then
+finishes the job. A collector can publish a dead worker's checkpoint under the same
+attempt. The selected host collects outside the execution lock and revalidates ownership
+and the terminal digest before issuing its receipt. Repeated collection of the same
+terminal result returns the same receipt. Stale cleanup preserves a checkpoint.
+Package update and upgrade of the affected workspace wait for result collection.
+A competing request leaves ownership with that job. Publication rejected
+because the execution, inputs, or history changed returns an incomplete verdict
+and a nonzero verify exit. The diagnostic retains the review content and test receipts.
+Legacy jobs bind to the plan and execution timestamps present at admission.
+Ordinary terminal collection reads the saved result. A crash before the checkpoint can
+still lose a consumed test request and produce an incomplete review on recovery.
+
+The effective verify verdict follows the normal routing and coverage policy. The follow-up
+assessment is advisory. For a deployment decision, maintainers examine confirmed
+introduced defects, verify- and release-due obligations, and outstanding technical debt.
+Record the owner, scope and rationale of any accepted debt in the release evidence.
+The initial ledger models blocker closure and recurrence. Risk acceptance remains a
+separate maintainer decision. Syntax checks, browser-only reviews and standalone verify do not
+establish finding closure. Older executions without history start at revision zero.
+
 ## /.verify-browser
 
 `--command verify-browser` is a **delegated** command: listed in the DELEGATED registry of

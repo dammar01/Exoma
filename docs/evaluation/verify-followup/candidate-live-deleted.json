@@ -1,0 +1,181 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d086+working-tree",
+  "wheel_sha256": "5239173e3f732af44b996c35d50ff5ac1d4ee052192aa1085b39abd2b5209218",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "deleted": [
+      {
+        "round": 1,
+        "input": "b1beb9793ebbd0684360c10c632c34288868d2ec",
+        "prior": [],
+        "seconds": 26.05,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[FOLLOWUP_V1]\n{\"blocker\":1,\"obligation\":\"quantity\"}\n\n[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` returns negative inputs unchanged, breaking its documented clamp to zero. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2` where the planned assertion expects `0`. [check_quantity.py:3]\n  impact: Callers that rely on `quantity` to normalize input receive negative unit counts.\n  fix: Restore `return max(0, value)`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-kiqlubrl.json\n- Reviewed the Git diff against `HEAD` and confirmed that it replaced the clamp with a direct return. [pricing.py:3]\n- Read both evidence sidecars and the verification record. The record lists no open or recently resolved blockers and identifies `quantity` as the planned obligation.\n- Searched repository references to `quantity` and `total`. The only in-repo caller is the assertion in `check_quantity.py`. `total` is unchanged and does not call `quantity`. [check_quantity.py:1] [check_quantity.py:3] [pricing.py:6]\n- Traced the planned assertion through the current code. A negative input reaches the return unchanged, so the assertion would fail. [check_quantity.py:3] [pricing.py:3]\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff and the existing assertion establish the regression directly.\n\n[DIGEST]\nsummary: The pricing change removes the negative-quantity clamp and breaks the planned `quantity` assertion.\nkey_findings:\n- `quantity(-2)` returns `-2` instead of `0`. [pricing.py:3] [check_quantity.py:3]\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the clamp in `quantity`.\nconfidence: high",
+        "followup": {
+          "execution_id": "5f93fc2cd8114e5bb17dc1a273ccf7cb",
+          "previous": 0,
+          "round_id": "5ac6e355dc7e4443978c23e6a7a35189",
+          "input": "b1beb9793ebbd0684360c10c632c34288868d2ec",
+          "digest": "df7335cf5b94814b1a0c9455fb03e896fa7f163f84a63980ffbac1200d39bb42",
+          "at": "2026-11-25T13:06:57.784030+00:00",
+          "open_obligations": [
+            "quantity"
+          ],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "failed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-kiqlubrl.json",
+              "fingerprint": "b1beb9793ebbd0684360c10c632c34288868d2ec"
+            }
+          ],
+          "events": [
+            {
+              "id": "F-87a20ecbdc2a45de",
+              "status": "new",
+              "origin": "regression"
+            }
+          ],
+          "advisory": true,
+          "open_count": 1
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "b1beb9793ebbd0684360c10c632c34288868d2ec"
+          }
+        ],
+        "reviewer_blockers": [
+          {
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` returns negative inputs unchanged, breaking its documented clamp to zero. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2` where the planned assertion expects `0`. [check_quantity.py:3]\n  impact: Callers that rely on `quantity` to normalize input receive negative unit counts.\n  fix: Restore `return max(0, value)`.",
+            "origin": "regression"
+          }
+        ],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 75042,
+            "actual_output_tokens": 771,
+            "actual_cached_input_tokens": 63104,
+            "actual_reasoning_tokens": 32
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "4ea6c4f39f990f420a373580fcf261a8a0f67cb1",
+        "prior": [
+          {
+            "id": "F-87a20ecbdc2a45de",
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` returns negative inputs unchanged, breaking its documented clamp to zero. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2` where the planned assertion expects `0`. [check_quantity.py:3]\n  impact: Callers that rely on `quantity` to normalize input receive negative unit counts.\n  fix: Restore `return max(0, value)`.",
+            "origin": "regression",
+            "disposition": "open",
+            "first_round": "5ac6e355dc7e4443978c23e6a7a35189",
+            "last_round": "5ac6e355dc7e4443978c23e6a7a35189",
+            "last_input": "b1beb9793ebbd0684360c10c632c34288868d2ec",
+            "obligation": "quantity",
+            "assertion": {
+              "reference": "check_quantity.py:3",
+              "file_sha256": "1d0bdb06a28e71375d82d1f55a12b70d73517dfece1375e332dcdb3fd10d537b",
+              "line_sha256": "792491b2d4adad03e655d69daadcf66cc892d7a19b30bee91507ea2aec792a3a"
+            },
+            "behavior": "negative quantity becomes zero",
+            "command": null,
+            "first_checks": [
+              {
+                "command": "python -B check_quantity.py",
+                "status": "failed",
+                "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-kiqlubrl.json",
+                "fingerprint": "b1beb9793ebbd0684360c10c632c34288868d2ec"
+              }
+            ]
+          }
+        ],
+        "seconds": 32.0,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[FOLLOWUP_V1]\n{\"id\":\"F-87a20ecbdc2a45de\",\"status\":\"present\",\"diagnosis\":\"The prior runtime check raised AssertionError at check_quantity.py:3 for quantity(-2) == 0. pricing.py:3 still returns -2. The current script ends at the import on check_quantity.py:1, so the assertion is gone and no equivalent remains.\",\"strategy\":\"Restore the original assertion and rerun the planned command. With the current implementation the restored assertion would fail. With the clamp restored it would pass. Running the import-only script cannot distinguish those cases.\",\"evidence\":null,\"obligation\":\"quantity\",\"repeat_reason\":\"The implementation still fails for the original input. The only change since the prior failure removed the assertion that detected it.\",\"blocker\":1}\n\n[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` still returns negative inputs unchanged, violating its documented clamp to zero. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2`. The planned behavior requires `0`.\n  impact: Callers that rely on the clamp receive negative unit counts.\n  fix: Restore `return max(0, value)`.\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: The planned verification script now stops after importing `quantity`. It no longer calls the function or checks its result. [check_quantity.py:1]\n  trigger: Run `python -B check_quantity.py` with the current code. Once the import succeeds, the script can exit successfully while the clamp remains broken.\n  impact: A successful exit no longer verifies that negative quantities become zero.\n  fix: Restore `assert quantity(-2) == 0` in the script used by the planned command.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-cufbb9ya.json\n- Reviewed both file diffs against `HEAD` and searched repository references. The verification script is the only in-repo importer of `quantity`. `total` is unchanged and has no in-repo callers. [check_quantity.py:1] [pricing.py:6]\n- Read both evidence sidecars, the verification record, and the prior runtime log. The log records exit code `1` and `AssertionError` on the original assertion.\n- Traced the original input through the current return and inspected the entire current verification script. The result remains `-2`, and the script contains no assertion. [pricing.py:3] [check_quantity.py:1]\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff, current source, and prior runtime log establish both regressions.\n\n[DIGEST]\nsummary: The negative-quantity clamp remains broken, and the verification script no longer checks it.\nkey_findings:\n- `quantity(-2)` still returns `-2`. [pricing.py:3]\n- The planned verification script now runs only an import. [check_quantity.py:1]\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the original assertion and the clamp, then rerun the planned quantity check.\nconfidence: high",
+        "followup": {
+          "execution_id": "5f93fc2cd8114e5bb17dc1a273ccf7cb",
+          "previous": 1,
+          "round_id": "f86659eff0c94abda324acb0b94dffb1",
+          "input": "4ea6c4f39f990f420a373580fcf261a8a0f67cb1",
+          "digest": "8838ab0d6d943b9030d5772af954313ccbfe6ca9903c9b0296d9a8633009cde7",
+          "at": "2026-11-25T13:07:30.225038+00:00",
+          "open_obligations": [
+            "quantity"
+          ],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "passed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-cufbb9ya.json",
+              "fingerprint": "4ea6c4f39f990f420a373580fcf261a8a0f67cb1"
+            }
+          ],
+          "events": [
+            {
+              "id": "F-87a20ecbdc2a45de",
+              "status": "present",
+              "diagnosis": "The prior runtime check raised AssertionError at check_quantity.py:3 for quantity(-2) == 0. pricing.py:3 still returns -2. The current script ends at the import on check_quantity.py:1, so the assertion is gone and no equivalent remains.",
+              "strategy": "Restore the original assertion and rerun the planned command. With the current implementation the restored assertion would fail. With the clamp restored it would pass. Running the import-only script cannot distinguish those cases.",
+              "repeat_reason": "The implementation still fails for the original input. The only change since the prior failure removed the assertion that detected it.",
+              "evidence": null,
+              "equivalence": "",
+              "retry_supported": true
+            },
+            {
+              "id": "F-da74a778335344c8",
+              "status": "new",
+              "origin": "regression"
+            }
+          ],
+          "advisory": true,
+          "open_count": 2
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "",
+            "stderr": "",
+            "fingerprint": "4ea6c4f39f990f420a373580fcf261a8a0f67cb1"
+          }
+        ],
+        "reviewer_blockers": [
+          {
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` still returns negative inputs unchanged, violating its documented clamp to zero. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2`. The planned behavior requires `0`.\n  impact: Callers that rely on the clamp receive negative unit counts.\n  fix: Restore `return max(0, value)`.",
+            "origin": "regression"
+          },
+          {
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: The planned verification script now stops after importing `quantity`. It no longer calls the function or checks its result. [check_quantity.py:1]\n  trigger: Run `python -B check_quantity.py` with the current code. Once the import succeeds, the script can exit successfully while the clamp remains broken.\n  impact: A successful exit no longer verifies that negative quantities become zero.\n  fix: Restore `assert quantity(-2) == 0` in the script used by the planned command.",
+            "origin": "regression"
+          }
+        ],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 160744,
+            "actual_output_tokens": 1970,
+            "actual_cached_input_tokens": 143360,
+            "actual_reasoning_tokens": 287
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

@@ -85,6 +85,7 @@ from exoma.core.jobs.job_lifecycle import (  # noqa: E402,F401
     submit,
 )
 from exoma.core.runtime import execution  # noqa: E402
+from exoma.core.evidence import verify_followup  # noqa: E402
 from exoma.core.evidence.result_shaping import (  # noqa: E402,F401
     _as_ref_only,
     _finalize_verify_result,
@@ -661,7 +662,16 @@ def run(
             meta={"lock": payload, "lock_path": str(lock_path)},
         )
     try:
-        verification_execution = execution.execution_identity(execution.current_execution(project_root, session_id))
+        current = execution.current_execution(project_root, session_id)
+        verification_execution = execution.execution_identity(current)
+        worker_round = verify_followup.active()
+        pin = None
+        if normalized_command == "verify":
+            admitted = verify_followup.admission(project_root, current, (worker_round or {}).get("round_id"))
+            pin = admitted if admitted and "round_id" in admitted else None
+            expected_round = None if (worker_round or {}).get("standalone") else worker_round
+            if worker_round and expected_round != admitted:
+                return execution.reject_verification({}, "the admitted execution or history was replaced")
         provider_sessions = _session_manager_for(project_root)
         try:
             session = provider_sessions.load_or_create(_session_storage_id(session_id))
@@ -681,29 +691,26 @@ def run(
                 ),
                 meta={"reason": "recovery_session_unavailable"},
             )
-        output = EXECUTOR.execute(
-            command,
-            task,
-            session,
-            work_dir,
-            model,
-            on_progress=on_progress,
-            allow_reuse=allow_reuse,
-            session_manager=provider_sessions,
-            workflow_session_id=session_id,
-            _runtime_lock=lock_claim,
-        )
+        try:
+            with verify_followup.using(pin):
+                output = EXECUTOR.execute(
+                    command, task, session, work_dir, model, on_progress=on_progress,
+                    allow_reuse=allow_reuse, session_manager=provider_sessions,
+                    workflow_session_id=session_id, _runtime_lock=lock_claim,
+                )
+        except verify_followup.StaleRound as exc:
+            return execution.reject_verification({}, str(exc))
         finalize_as = normalized_command
         if normalized_command == "verify-browser":
             # A browser run ends in the canonical [VERIFICATION] and is judged as one
             # (meta.command == "verify"); a draft is not a verification at all.
             finalize_as = str((output.get("meta") or {}).get("command") or normalized_command)
         output = _finalize_verify_result(finalize_as, output)
-        if finalize_as == "verify":
+        if finalize_as == "verify" and worker_round is None:
             try:
-                execution.record_verification(project_root, session_id, output, expected=verification_execution)
+                execution.record_verification(project_root, session_id, output, expected=verification_execution, pin=pin)
             except (OSError, ValueError) as exc:
-                output.setdefault("meta", {})["execution_state_error"] = f"{type(exc).__name__}: {exc}"
+                execution.reject_verification(output, f"{type(exc).__name__}: {exc}")
         try:
             provider_sessions.record_run(session, command)
         except (OSError, ValueError) as exc:

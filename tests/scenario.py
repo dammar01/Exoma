@@ -226,6 +226,7 @@ from tests.checks.os_resolvers import (
     _test_find_bash_and_os_locations,
     _test_find_python_runs_each_candidate,
 )
+from tests.checks.verify_followup import _test_verify_followup
 from tests.checks.verify_tests import _test_verify_runtime_tests, _test_verify_reuses_unchanged_runs, _test_verify_reuse_needs_git, _test_run_sh_test_command
 from tests.checks.metrics import _test_metrics_contract
 from tests.checks.replay import _test_fact_replay
@@ -309,6 +310,7 @@ def run_tests() -> None:
     _test_find_python_runs_each_candidate()
     _test_doctor_python_check_follows_the_launchers()
     _test_find_bash_and_os_locations()
+    _test_verify_followup()
     _test_verify_runtime_tests()
     _test_verify_reuses_unchanged_runs()
     _test_verify_reuse_needs_git()

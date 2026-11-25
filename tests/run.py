@@ -190,6 +190,7 @@ from tests.checks.os_resolvers import (  # noqa: E402
     _test_find_bash_and_os_locations,
     _test_find_python_runs_each_candidate,
 )
+from tests.checks.verify_followup import _test_verify_followup
 from tests.checks.verify_tests import _test_verify_runtime_tests, _test_verify_reuses_unchanged_runs, _test_verify_reuse_needs_git, _test_run_sh_test_command  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
 from tests.checks.replay import _test_fact_replay  # noqa: E402
@@ -319,6 +320,7 @@ SUITES: dict[str, tuple] = {
     "continuation": (_test_contract_continuation, "bounded continuation keeps the first reply's evidence"),
     "continuation-size": (_test_continuation_prompt_is_bounded, "the recovery prompt fits the command line it travels on"),
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
+    "verify-followup": (_test_verify_followup, "finding identity, stale rounds and replay across a lost terminal write"),
     "execution-chain": (_test_execution_chain, "plan-record refuses a proceed with open questions; execute-begin needs the user's own -y; verify writes its verdict"),
     "promote-boundaries": (_test_promote_boundaries, "promoted knowledge stays inside the project and is part of evidence reuse identity"),
     "knowledge-retrieve": (_test_knowledge_retrieval, "retrieval checks source freshness, detached HEAD, and staged/unstaged changes"),

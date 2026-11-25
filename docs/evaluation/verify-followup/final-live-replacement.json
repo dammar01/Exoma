@@ -1,0 +1,183 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d086+working-tree",
+  "wheel_sha256": "11d7a2171b05b88e0bb55c2820b9091a347b4d81658018111f18498946b08353",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "replacement": [
+      {
+        "round": 1,
+        "input": "81795f25be8293b1368717b38b4c1a92668e14e3",
+        "prior": [],
+        "seconds": 28.69,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[FOLLOWUP_V1]\n{\"blocker\":1,\"obligation\":\"quantity\"}\n[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` returns negative inputs unchanged, violating its clamp-to-zero contract. [pricing.py:3]\n  trigger: Call `quantity(-2)`. The current implementation returns `-2`, and the planned assertion expects `0`. [check_quantity.py:3]\n  impact: Callers receive a negative quantity where the function promises zero.\n  fix: Restore `return max(0, value)`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-_wgfjk8i.json\n- Compared the working-tree diff with `HEAD` and traced `quantity(-2)` through both versions. The previous implementation returns `0`. The current implementation returns `-2`.\n- Traced zero and positive numeric inputs. Both versions preserve their numeric values.\n- Searched for callers and read `check_quantity.py`. It directly checks the negative-input contract. `total` has no dependency on `quantity`.\n- Read both evidence sidecars and the verification round file. No prior blocker IDs were listed. The `quantity` obligation matches the current finding.\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — the diff and existing assertion establish the regression.\n\n[DIGEST]\nsummary: The pricing change breaks negative-quantity normalization. The existing assertion expects `quantity(-2)` to return `0`.\nkey_findings:\n- Blocker 1 matches the planned `quantity` obligation at check_quantity.py:3.\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the zero clamp in pricing.py:3.\nconfidence: high",
+        "followup": {
+          "execution_id": "a3f3227c37f14bbf9a9e2ddfba582864",
+          "previous": 0,
+          "round_id": "124977b00f8940d3b908807502d6a8ea",
+          "input": "81795f25be8293b1368717b38b4c1a92668e14e3",
+          "digest": "f4ebdbd675872ab0cd476ed4831589f0914a73fbdf4f508f358dae9c33a73d0e",
+          "at": "2026-11-25T13:11:00.174298+00:00",
+          "selection_input": "81795f25be8293b1368717b38b4c1a92668e14e3",
+          "open_obligations": [
+            "quantity"
+          ],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "failed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-_wgfjk8i.json",
+              "fingerprint": "81795f25be8293b1368717b38b4c1a92668e14e3"
+            }
+          ],
+          "events": [
+            {
+              "id": "F-56f42e092f234aa6",
+              "status": "new",
+              "origin": "regression"
+            }
+          ],
+          "advisory": true,
+          "open_count": 1
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "81795f25be8293b1368717b38b4c1a92668e14e3"
+          }
+        ],
+        "reviewer_blockers": [
+          {
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` returns negative inputs unchanged, violating its clamp-to-zero contract. [pricing.py:3]\n  trigger: Call `quantity(-2)`. The current implementation returns `-2`, and the planned assertion expects `0`. [check_quantity.py:3]\n  impact: Callers receive a negative quantity where the function promises zero.\n  fix: Restore `return max(0, value)`.",
+            "origin": "regression",
+            "blocker": 1
+          }
+        ],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 74976,
+            "actual_output_tokens": 772,
+            "actual_cached_input_tokens": 63104,
+            "actual_reasoning_tokens": 87
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "6c3cf4d9a0dc7d13e155cde3c5605f6fb6dcf4b0",
+        "prior": [
+          {
+            "id": "F-56f42e092f234aa6",
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity` returns negative inputs unchanged, violating its clamp-to-zero contract. [pricing.py:3]\n  trigger: Call `quantity(-2)`. The current implementation returns `-2`, and the planned assertion expects `0`. [check_quantity.py:3]\n  impact: Callers receive a negative quantity where the function promises zero.\n  fix: Restore `return max(0, value)`.",
+            "origin": "regression",
+            "disposition": "open",
+            "first_round": "124977b00f8940d3b908807502d6a8ea",
+            "last_round": "124977b00f8940d3b908807502d6a8ea",
+            "last_input": "81795f25be8293b1368717b38b4c1a92668e14e3",
+            "obligation": "quantity",
+            "assertion": {
+              "reference": "check_quantity.py:3",
+              "file_sha256": "1d0bdb06a28e71375d82d1f55a12b70d73517dfece1375e332dcdb3fd10d537b",
+              "line_sha256": "792491b2d4adad03e655d69daadcf66cc892d7a19b30bee91507ea2aec792a3a"
+            },
+            "behavior": "negative quantity becomes zero",
+            "command": null,
+            "first_checks": [
+              {
+                "command": "python -B check_quantity.py",
+                "status": "failed",
+                "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-_wgfjk8i.json",
+                "fingerprint": "81795f25be8293b1368717b38b4c1a92668e14e3"
+              }
+            ]
+          }
+        ],
+        "seconds": 29.66,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[FOLLOWUP_V1]\n{\"id\":\"F-56f42e092f234aa6\",\"status\":\"resolved\",\"diagnosis\":\"The prior run failed at check_quantity.py:3 because quantity(-2) returned -2. The restored clamp at pricing.py:3 returns 0 for that exact input.\",\"strategy\":\"Traced the original assertion against the restored clamp and confirmed the assertion file hash matches the prior round. Retrying the same command with the same assertion isolates the implementation change.\",\"evidence\":\"check_quantity.py:3\",\"obligation\":\"quantity\"}\n[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: critical | origin: regression | scope_relation: in_scope\n  problem: `total` adds the unit price and quantity, silently returning an incorrect charge. [pricing.py:8]\n  trigger: `total(10, 3)` returns `13`. The per-unit pricing contract calls for `30`. [pricing.py:7]\n  impact: Callers can receive incorrect charges for ordinary orders.\n  fix: Restore `return price * units`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-jrgc9a56.json\n- Compared the current diff with `HEAD` and traced `total(10, 3)` and `total(10, 0)`. The current code returns `13` and `10`. The previous code returns `30` and `0`.\n- Searched for callers. The only repository reference outside `pricing.py` is the `quantity` assertion in `check_quantity.py`.\n- Read both evidence sidecars, the current verification record, and the prior failure log. Confirmed the assertion file hash is unchanged and traced `quantity(-2) == 0` through the restored clamp.\n\nnot_verified:\n- none\n\nconfidence: high — the diff establishes the incorrect arithmetic, and tracing the original assertion confirms the quantity fix.\n\n[DIGEST]\nsummary: The negative-quantity clamp is restored. The current change introduces a separate blocker that silently miscalculates order totals.\nkey_findings:\n- `quantity(-2)` now returns `0`, as expected by `check_quantity.py:3`.\n- `total(10, 3)` now returns `13` instead of `30` at `pricing.py:8`.\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore multiplication in `total` at `pricing.py:8`.\nconfidence: high",
+        "followup": {
+          "execution_id": "a3f3227c37f14bbf9a9e2ddfba582864",
+          "previous": 1,
+          "round_id": "69c5ee8e817a471d823be3ba747b8bb1",
+          "input": "6c3cf4d9a0dc7d13e155cde3c5605f6fb6dcf4b0",
+          "digest": "6398eecdc1c7b15a36e7f9dc9749a0a6b9663e732db37d8826c77906bc8046e2",
+          "at": "2026-11-25T13:11:30.350327+00:00",
+          "selection_input": "6c3cf4d9a0dc7d13e155cde3c5605f6fb6dcf4b0",
+          "open_obligations": [],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "passed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-jrgc9a56.json",
+              "fingerprint": "6c3cf4d9a0dc7d13e155cde3c5605f6fb6dcf4b0"
+            }
+          ],
+          "events": [
+            {
+              "id": "F-56f42e092f234aa6",
+              "status": "resolved",
+              "diagnosis": "The prior run failed at check_quantity.py:3 because quantity(-2) returned -2. The restored clamp at pricing.py:3 returns 0 for that exact input.",
+              "strategy": "Traced the original assertion against the restored clamp and confirmed the assertion file hash matches the prior round. Retrying the same command with the same assertion isolates the implementation change.",
+              "repeat_reason": "",
+              "evidence": {
+                "reference": "check_quantity.py:3",
+                "file_sha256": "1d0bdb06a28e71375d82d1f55a12b70d73517dfece1375e332dcdb3fd10d537b",
+                "line_sha256": "792491b2d4adad03e655d69daadcf66cc892d7a19b30bee91507ea2aec792a3a"
+              },
+              "equivalence": "",
+              "retry_supported": true
+            },
+            {
+              "id": "F-c797c1812b4a413d",
+              "status": "new",
+              "origin": "regression"
+            }
+          ],
+          "advisory": true,
+          "open_count": 1
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "6c3cf4d9a0dc7d13e155cde3c5605f6fb6dcf4b0"
+          }
+        ],
+        "reviewer_blockers": [
+          {
+            "description": "severity: critical | origin: regression | scope_relation: in_scope\n  problem: `total` adds the unit price and quantity, silently returning an incorrect charge. [pricing.py:8]\n  trigger: `total(10, 3)` returns `13`. The per-unit pricing contract calls for `30`. [pricing.py:7]\n  impact: Callers can receive incorrect charges for ordinary orders.\n  fix: Restore `return price * units`.",
+            "origin": "regression",
+            "blocker": 1
+          }
+        ],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 160751,
+            "actual_output_tokens": 1704,
+            "actual_cached_input_tokens": 143360,
+            "actual_reasoning_tokens": 161
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

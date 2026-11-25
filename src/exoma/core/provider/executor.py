@@ -25,7 +25,8 @@ from exoma.core.evidence.contracts import TaskSpec, correlation_id_for, usage_fr
 from exoma.adapters.shared.usage import token_source_for
 from exoma.core.policy.governance import budget_limit, budget_state
 from exoma.core.audit import task_telemetry, telemetry
-from exoma.core.evidence import fact_store
+from exoma.core.evidence import fact_store, verify_followup, verify_tests
+from exoma.core.runtime import execution
 from exoma.core.evidence import evidence_store
 from exoma.core.graph import graph_index
 from exoma.core.prompt.prompt_builder import build_prompt
@@ -1429,7 +1430,12 @@ class Executor:
                 )
                 if value
             )
+        followup_file = None
+        if command == "verify" and not e2e_evidence and verify_followup.active():
+            followup_file = verify_followup.handoff(project_root, session_id,
+                execution.current_execution(project_root, session_id), verify_tests.read_request(project_root, session_id))
         prompt = build_prompt(
+            followup_file=followup_file,
             role=route["role"],
             task=task,
             session_id=session_id,
@@ -1805,6 +1811,9 @@ class Executor:
         if normalized_command == "verify":
             # The tests main_agent chose for this change, run here and written into the
             # review's [VERIFICATION] block, which the second agent never saw them in.
+            if verify_followup.active():
+                result.setdefault("meta", {})["review_observations"] = {
+                    "blockers": verify_followup.discoveries(result.get("content", ""))}
             result = _apply_runtime_tests(project_root, session_id, result, on_progress)
         prompt_id = (self._last_call_meta or {}).get("prompt_id")
 

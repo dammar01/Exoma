@@ -42,6 +42,16 @@ Relay `meta.runtime_tests.coverage`, including release-only work. In syntax mode
 `meta.unchecked_selection` if present. A known removed assertion remains open until its
 replacement is tested.
 
+### Follow up findings in the current execution
+
+Read `meta.verify_followup` from prepare. Carry forward open behaviors and select checks
+for the new diff and callers. Where a specific assertion exercises a behavior, put
+its project-relative `assertion` (file:line) on the matching selection obligation.
+Keep the original trigger, expected result and diagnostic references available across retries.
+Explain what changed or what an identical retry can distinguish. Inspect the stored log on failure.
+An unexplained nonreproduction leaves the finding open. Report the independent discoveries
+and each outstanding follow-up alongside the effective verdict, including advisory open findings.
+
 ## Protocol (verify_mode=delegated)
 1. Logic: does it solve the problem? are the assumptions valid? consistent with codebase patterns? → PASS/FAIL + reason
 2. Falsification: failure conditions? edge cases? malformed input? → list

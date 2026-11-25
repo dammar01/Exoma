@@ -29,6 +29,7 @@ from tests.checks.support import (
 def _test_submit_admission() -> None:
     """Initial dispatch and global capacity must admit exactly one worker."""
     _check_delegation_collection()
+    _check_selected_checkpoint()
     _check_first_dispatch_recovery()
     _check_mutation_admission()
     _check_reboot_cleanup()
@@ -1573,6 +1574,137 @@ def _check_worker_cleanup_uncertainty(root):
             pass
         else:
             raise AssertionError("uncertain normal cleanup admitted an update")
+
+
+def _check_selected_checkpoint():
+    import subprocess
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+    from exoma.core.runtime.scripts import _generate_run_scripts
+    from exoma.utils.osutil import find_bash
+    from tools.maintain.verify_followup_eval import REVIEW
+    from unittest.mock import patch
+    from exoma.core.jobs import job_lifecycle as lifecycle, clean_stale
+    from exoma.core.jobs.job_manager import DEAD
+    from exoma.core.runtime import execution
+    from exoma.core.runtime.upgrade import active_jobs_for_workspace
+
+    for entry in ("redispatch", "result"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            home = root / "home"
+            manager = JobManager(home / "storage/jobs")
+            _generate_run_scripts(root)
+            session = "selected-verify"
+
+            def runner(command, *options):
+                proc = subprocess.run([find_bash() or "bash", str(root / ".workflow/run.sh"), command,
+                                       "--session", session, *options], env={**os.environ, "EXOMA_HOME": str(home)},
+                                      cwd=root, capture_output=True, text=True, timeout=30, **no_console())
+                assert proc.returncode == 0, (proc.stdout, proc.stderr)
+                return json.loads(proc.stdout)
+            state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
+            execution._write(state, {"execution_id": "original", "status": "active"})
+            def control(action, token):
+                return lifecycle.delegation_control("delegate-" + action, token, session, str(root))
+
+            with patch.object(main, "JOB_MANAGER", manager), patch.object(main, "_spawn_worker",
+                    return_value={"ok": True, "meta": {"pid": os.getpid()}}) as spawn:
+                generation = control("select", "verify")["meta"]["generation"]
+                args = ("verify", "check", session, str(root), None, True, generation)
+                jid = lifecycle._submit_selected(*args)["job_id"]
+                manager.mark_running(jid)
+                with subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                                      stdin=subprocess.PIPE, **no_console()) as worker:
+                    manager.set_worker_pid(jid, worker.pid)
+                    worker.communicate(timeout=10)
+                payload = {"ok": True, "content": REVIEW.format(verdict="DONE", finding="none"), "meta": {
+                    "verdict": "pass", "review_observations": {"blockers": []}}}
+                save = manager._save
+                def lose_terminal(job, **kwargs):
+                    if job["status"] == "completed":
+                        raise OSError("lost terminal write")
+                    return save(job, **kwargs)
+                fault = (patch.object(execution, "record_verification", side_effect=OSError("lost execution write"))
+                         if entry == "result" else patch.object(manager, "_save", side_effect=lose_terminal))
+                with fault:
+                    try:
+                        manager.complete_verify_round(jid, 0, payload)
+                    except OSError:
+                        pass
+                    else:
+                        raise AssertionError("missing publication fault")
+                with patch.object(manager, "liveness", return_value=DEAD), patch.object(
+                        manager, "_admission_process_gone", return_value=True):
+                    if entry == "redispatch":
+                        delivered = runner("verify", "--request", generation, "--task", "check")
+                        assert delivered["meta"]["job_id"] == jid
+                    else:
+                        assert jid in manager.update_job_blockers()
+                        assert active_jobs_for_workspace(root, manager=manager)
+                        assert not active_jobs_for_workspace(root / "elsewhere", manager=manager)
+                        for apply in (False, True):
+                            rows = clean_stale.inspect_jobs(manager, apply=apply)
+                            assert any(row[0] == jid and "publication" in row[-1] for row in rows), rows
+                        stored = manager.get_job(jid)
+                        assert stored["status"] == "running"
+                        with patch.dict(os.environ, {"WORKFLOW_AGENT_ROLE": "second_agent"}):
+                            assert manager.get_result(jid)["meta"]["reason"] == "verify_checkpoint_pending"
+                        with patch.object(manager, "_read_lock", return_value={"job_id": "replacement"}):
+                            assert manager.get_result(jid)["meta"]["reason"] == "verify_checkpoint_pending"
+                        assert manager.get_job(jid) == stored
+                        from exoma.utils.osutil import run_bounded
+                        attach = [find_bash() or "bash", str(root / ".workflow/check.sh"), jid, "--wait"]
+                        env = {**os.environ, "EXOMA_HOME": str(home)}
+                        lock = manager._lock_path(session)
+                        original_claim = lock.read_bytes()
+                        try:
+                            for options in ([], ["--result"]):
+                                if options:
+                                    lock.write_text(json.dumps({"job_id": "replacement"}), encoding="utf-8")
+                                else:
+                                    lock.unlink()
+                                code, stdout, stderr = run_bounded(attach + options, 10, cwd=str(root), env=env)
+                                assert code == 2, (options, code, stdout, stderr)
+                                diagnostic = json.loads(stdout)
+                                assert diagnostic["job_id"] == jid and diagnostic["status"] == "running"
+                                assert diagnostic["done"] and not diagnostic["ok"]
+                                assert diagnostic["reason"] == "verify_checkpoint_pending"
+                                assert diagnostic["error_type"] == "runtime_lock" and diagnostic["next_action"]
+                                assert manager.get_job(jid) == stored
+                                if options:
+                                    assert json.loads(lock.read_bytes()) == {"job_id": "replacement"}
+                                else:
+                                    assert not lock.exists()
+                        finally:
+                            lock.write_bytes(original_claim)
+                        try:
+                            manager.reserve_update(root, "reservation")
+                        except ValueError:
+                            pass
+                        else:
+                            raise AssertionError("package update admitted a pending checkpoint")
+                        code, stdout, stderr = run_bounded(attach + ["--result"], 10, cwd=str(root), env=env)
+                        assert code == 0 and stdout.strip() == payload["content"].strip(), (code, stdout, stderr)
+                    with ThreadPoolExecutor(2) as pool:
+                        deliveries = list(pool.map(lambda _: runner("delegate-result", "--task", generation), range(2)))
+                    receipts = {r["meta"]["delegation"]["receipt"] for r in deliveries}
+                    assert len(receipts) == 1 and spawn.call_count == 1
+                    assert execution.current_execution(root, session)["finding_history"]["revision"] == 1
+                    receipt = receipts.pop()
+                    def advance_selection(job_id):
+                        assert control("ack", receipt)["ok"] and control("ack", receipt)["ok"]
+                        assert control("select", "verify")["meta"]["generation"] != generation
+                        return manager.result_snapshot(manager.get_job(job_id))
+
+                    with patch.object(lifecycle, "get_result", side_effect=advance_selection):
+                        stale = (control("result", generation) if entry == "result"
+                                 else lifecycle._submit_selected(*args))
+                    assert not stale["ok"] and "delegation" not in stale["meta"] and spawn.call_count == 1
+                    assert not control("result", generation)["ok"]
+                    assert jid not in manager.update_job_blockers()
+                    assert not active_jobs_for_workspace(root, manager=manager)
+                    assert manager.reserve_update(root, "reservation").is_file()
 
 
 def _check_delegation_collection():

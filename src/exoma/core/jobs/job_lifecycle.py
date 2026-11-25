@@ -26,7 +26,7 @@ from exoma.config.settings import (
     PACKAGE_PARENT,
     load_provider_config_for,
 )
-from exoma.core.evidence import verify_tests
+from exoma.core.evidence import verify_tests, verify_followup
 from exoma.core.evidence.contract import make_error
 from exoma.core.jobs.job_manager import DEAD, JobCancellation, WorkerOwnership
 from exoma.core.evidence.result_shaping import _finalize_verify_result
@@ -176,7 +176,10 @@ def submit(
                     )
 
                 if on_admission:
-                    on_admission(active)
+                    try:
+                        on_admission(active)
+                    except _SelectionChanged as exc:
+                        return _gate_error(str(exc))
                 if active.get("worker_pid") and _main().JOB_MANAGER.liveness(active) != DEAD:
                     return {
                         "ok": True,
@@ -256,6 +259,9 @@ def submit(
                     if on_admission:
                         try:
                             on_admission(job)
+                        except _SelectionChanged as exc:
+                            _main().JOB_MANAGER.fail_job(job["job_id"], str(exc))
+                            return _gate_error(str(exc))
                         except OSError as exc:
                             # Nobody can reclaim this reservation before the capacity guard
                             # is released. Leave the pending test request for the next job.
@@ -504,6 +510,10 @@ def check_stalled_job(
     )
 
 
+class _SelectionChanged(ValueError):
+    """The host advanced its selected request before admission."""
+
+
 def _gate_error(message):
     return make_error("session_state_error", message, next_action="Collect or report the current request in its original session.")
 
@@ -584,8 +594,9 @@ def delegation_control(action, argument, session, work_dir):
             if not argument or phase not in {"returned", "collected"} or argument != state.get("receipt"):
                 return _gate_error("Receipt does not match the current terminal result.")
             if phase == "returned":
-                if (not _owned_job(state, session, root)
-                        or _result_identity(get_result(state["job_id"])) != state["result_digest"]):
+                job = _owned_job(state, session, root)
+                if (not job or job["status"] not in {"completed", "failed"}
+                        or _result_identity(_main().JOB_MANAGER.result_snapshot(job)) != state["result_digest"]):
                     return _gate_error("The terminal result changed. Collect it again before acknowledgement.")
                 cleanup_error = _clear_armed_marker(rt, state["generation"])
                 if cleanup_error:
@@ -606,12 +617,24 @@ def delegation_control(action, argument, session, work_dir):
         job = _owned_job(state, session, root)
         if not job:
             return _gate_error("No owned job result is available for this request.")
-        result = get_result(job_id)
+    # Publication takes the job guard and then the execution guard. Collect without
+    # the host guard, then fence the result against the current selection.
+    result = get_result(job_id)
+    with gate.execution_transaction(rt):
+        current = gate.collection_state(rt)
+        job = _owned_job(current, session, root) if current.get("job_id") == job_id else None
+        if (not job or current.get("root") != root or current.get("session") != session
+                or current.get("generation") != argument or current.get("phase") not in {"running", "returned"}
+                or current.get("request_hash") != state.get("request_hash") or current.get("command") != state["command"]):
+            return _gate_error("Selection changed during result collection.")
+        state = current
         status = result.get("status")
         if status not in {"completed", "failed"} or (result.get("meta") or {}).get("error_type") in {
                 "cleanup_pending", "cancellation_pending"}:
             return {**result, "ok": False, "meta": {**(result.get("meta") or {}), "job_id": job_id, "phase": "running"}}
         identity = _result_identity(result)
+        if job["status"] != status or _result_identity(_main().JOB_MANAGER.result_snapshot(job)) != identity:
+            return _gate_error("Terminal result changed during collection.")
         output = result.get("output") if status == "completed" else result
         if not isinstance(output, dict) or not isinstance(output.get("ok"), bool):
             output = _gate_error("Job returned an invalid terminal payload.")
@@ -650,27 +673,50 @@ def _submit_selected(command, task, session, work_dir, model, allow_reuse, gener
         if state.get("request_hash", request_hash) != request_hash:
             return _with_generation(_gate_error("An existing selection is already bound to another task."), generation)
         original = state.get("job_id")
-        if original:
-            record = manager.get_job(original)
-            if not record or record.get("request_hash") != request_hash:
-                return _with_generation(_gate_error("The admitted job is unavailable."), generation)
-            result = get_result(original)
-            if (result.get("meta") or {}).get("error_type") != "worker_died" or not (result.get("meta") or {}).get("recoverable"):
+        root = str(Path(work_dir).resolve())
+        if original and not _owned_job(state, session, root):
+            return _with_generation(_gate_error("The admitted job is unavailable."), generation)
+
+    def matches(current):
+        return (current.get("generation") == generation and current.get("command") == command
+                and current.get("session") == session and current.get("root") == root
+                and current.get("request_hash", request_hash) == request_hash
+                and current.get("phase") in {"selected", "running", "returned"})
+
+    if original:
+        result = get_result(original)
+        with gate.execution_transaction(rt):
+            current = gate.collection_state(rt)
+            record = _owned_job(current, session, root) if current.get("job_id") == original else None
+            if not matches(current) or not record:
+                return _with_generation(_gate_error("The admitted selection changed during redispatch."), generation)
+            meta = result.get("meta") or {}
+            if meta.get("error_type") != "worker_died" or not meta.get("recoverable"):
                 return {"ok": True, "job_id": original, "submitted_at": record["created_at"], "generation": generation}
 
-        def bind(job):
-            atomic_write_json(path, {**state, "phase": "running", "job_id": job["job_id"], "request_hash": request_hash})
+    def bind(job):
+        with gate.execution_transaction(rt):
+            current = gate.collection_state(rt)
+            if not matches(current) or current.get("job_id") not in (None, job["job_id"]):
+                raise _SelectionChanged("Selection changed before job admission.")
+            if current.get("job_id") is None:
+                atomic_write_json(path, {**current, "phase": "running", "job_id": job["job_id"], "request_hash": request_hash})
 
-        submitted = submit(command, task, session, work_dir, model, allow_reuse,
-                           on_admission=bind, expected_job=original)
+    submitted = submit(command, task, session, work_dir, model, allow_reuse,
+                       on_admission=bind, expected_job=original)
+    with gate.execution_transaction(rt):
+        current = gate.collection_state(rt)
+        if not matches(current):
+            return _with_generation(_gate_error("Selected request changed during admission."), generation)
         if not submitted["ok"]:
             # Only this validated dispatch can recover an admitted job that reached a
             # terminal state during submit (for example a failed worker launch).
-            bound = gate.collection_state(rt)
-            job = _owned_job(bound, session, root=str(Path(work_dir).resolve()))
+            job = _owned_job(current, session, root)
             if not job or job.get("request_hash") != request_hash or job["status"] not in {"completed", "failed"}:
                 return _with_generation(submitted, generation)
             submitted = {"ok": True, "job_id": job["job_id"], "submitted_at": job["created_at"]}
+        elif current.get("job_id") != submitted.get("job_id"):
+            return _with_generation(_gate_error("The admitted job changed."), generation)
         return {**submitted, "generation": generation}
 
 
@@ -758,7 +804,8 @@ def _await_submitted(submitted, command, task, session_id, work_dir, model, allo
                     "submitted_at": submitted.get("submitted_at"),
                 },
             }
-        if (result.get("meta") or {}).get("error_type") in {"cleanup_pending", "cancellation_pending"}:
+        if ((result.get("meta") or {}).get("error_type") in {"cleanup_pending", "cancellation_pending"}
+                or (result.get("meta") or {}).get("reason") == "verify_checkpoint_pending"):
             return {"ok": False, "content": result.get("content"),
                     "meta": {**(result.get("meta") or {}), "job_id": job_id,
                              "submitted_at": submitted.get("submitted_at")}}
@@ -925,23 +972,33 @@ def run_worker(job_id: str) -> dict:
                 "do not repeat completed findings. Return the normal evidence contract."
             )
 
-        with verify_tests.job(job_id):
-            output = _main().run(
-                job["command"],
-                effective_task,
-                job["session_id"],
-                job.get("work_dir"),
-                job.get("model"),
-                on_progress=_beat,
-                allow_reuse=bool(job.get("allow_reuse", True)),
-                require_provider_session=require_provider_session,
-            )
+        pin = job.get("verify_round")
+        if pin and "verify_checkpoint" in job:
+            output = job["verify_checkpoint"]["output"]
+        else:
+            admitted = pin
+            if "verify_round" in job and pin is None:
+                admitted = {"standalone": True}
+            with verify_tests.job(job_id), verify_followup.using(admitted):
+                output = _main().run(
+                    job["command"], effective_task, job["session_id"], job.get("work_dir"),
+                    job.get("model"), on_progress=_beat,
+                    allow_reuse=bool(job.get("allow_reuse", True)),
+                    require_provider_session=require_provider_session,
+                )
         _beat({"phase": "finishing"})
         if owner:
             owner.cleanup()
             _main().JOB_MANAGER.confirm_worker_cleanup(job_id)
         output.setdefault("meta", {}).setdefault("job_id", job_id)
-        if output.get("ok"):
+        if pin:
+            finished = _main().JOB_MANAGER.complete_verify_round(job_id, job.get("recovery_attempt", 0), output)
+            if finished.get("status") in ("completed", "failed") and finished.get("output"):
+                return finished["output"]
+            if not finished.get("cancellation"):
+                return make_error("runtime_lock", "verification attempt lost publication ownership",
+                                  next_action="Collect the result of the current attempt.")
+        elif output.get("ok"):
             finished = _main().JOB_MANAGER.complete_job(job_id, output)
         else:
             finished = _main().JOB_MANAGER.fail_job(
@@ -980,6 +1037,9 @@ def run_worker(job_id: str) -> dict:
             str(exc),
             next_action="inspect the worker log for this job_id, then resubmit",
         )
+        if job.get("verify_round") and (_main().JOB_MANAGER.get_job(job_id) or {}).get("verify_checkpoint"):
+            failure["meta"]["reason"] = "verify_checkpoint_pending"
+            return failure
         failure["job_id"] = job_id
         failure["status"] = "failed"
         failure.setdefault("meta", {})["job_id"] = job_id

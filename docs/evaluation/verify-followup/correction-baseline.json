@@ -1,0 +1,78 @@
+{
+  "mode": "replay",
+  "model": "scripted",
+  "revision": "1c9d086",
+  "wheel_sha256": "149094acf914421cd34ddcabf04e161f32df1767259a44446a5de24b446cc484",
+  "distribution_version": "1.2.3",
+  "package_files_verified": 221,
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "d07f96484f0c7945a24eb936f167becd7766997560cb70037bb9a0ae729d4cfa",
+  "cases": {
+    "unexercised": [
+      {
+        "round": 1,
+        "input": "a7de8935098ab1cb61bb40f81a7506e3fdd38820",
+        "prior": [],
+        "seconds": 1.26,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: introduced | scope_relation: in_scope — Negative quantity(-2) returns -2 at pricing.py:3; expected zero.\nescalations:\n- none\nnotes:\n- none\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-r_b4g6_h.json\n- inspected pricing and its callers\nnot_verified:\n- tests: coverage quantity remains unverified\nconfidence: high\n[DIGEST]\nsummary: inspected current change\n",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "a7de8935098ab1cb61bb40f81a7506e3fdd38820"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "estimated",
+            "actual_input_tokens": null,
+            "actual_output_tokens": null,
+            "actual_cached_input_tokens": null,
+            "actual_reasoning_tokens": null
+          }
+        ],
+        "provider_version": null
+      },
+      {
+        "round": 2,
+        "input": "953b78b029d2eda4f3b1ab4769080ad4a5f1ecdb",
+        "prior": [],
+        "seconds": 1.28,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[VERIFICATION]\nverdict: DONE\nblocking_findings:\n- none\nescalations:\n- none\nnotes:\n- none\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.0 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-4qwo0tzd.json\n- inspected pricing and its callers\nnot_verified:\n- none\nconfidence: high\n[DIGEST]\nsummary: inspected current change\n",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "check complete\n",
+            "stderr": "",
+            "fingerprint": "953b78b029d2eda4f3b1ab4769080ad4a5f1ecdb"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "estimated",
+            "actual_input_tokens": null,
+            "actual_output_tokens": null,
+            "actual_cached_input_tokens": null,
+            "actual_reasoning_tokens": null
+          }
+        ],
+        "provider_version": null
+      }
+    ]
+  }
+}

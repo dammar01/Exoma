@@ -1,0 +1,77 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d08609fc474dc1ee41f915f2d58a8057cfc90",
+  "wheel_sha256": "149094acf914421cd34ddcabf04e161f32df1767259a44446a5de24b446cc484",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "replacement": [
+      {
+        "round": 1,
+        "input": "38e09efed7dbf64f17502d3f92f3f37e8c1c4486",
+        "prior": [],
+        "seconds": 27.5,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` now returns negative inputs unchanged, violating its documented contract and the existing consumer assertion. [pricing.py:2, pricing.py:3, check_quantity.py:3]\n  trigger: `quantity(-2)` returns `-2` where the assertion expects `0`.\n  impact: Callers that rely on `quantity()` to enforce a nonnegative value receive a negative quantity.\n  fix: Restore `return max(0, value)`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-4i796zh7.json\n- Read both evidence sidecars and confirmed that no graph directory was present.\n- Compared `pricing.py` against `HEAD` and traced the negative input through the old and current code and the assertion in `check_quantity.py`.\n- Searched repository references to `pricing`, `quantity`, and `total`. `check_quantity.py` was the only consumer found. `total()` is unchanged and does not call `quantity()`.\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff and the existing assertion establish the regression directly.\n\n[DIGEST]\nsummary: The change removes the negative-quantity clamp. The existing assertion expects `quantity(-2)` to return `0`.\nkey_findings:\n- `quantity(-2)` returns `-2` under the current code.\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the clamp in `pricing.py`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "38e09efed7dbf64f17502d3f92f3f37e8c1c4486"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 96998,
+            "actual_output_tokens": 714,
+            "actual_cached_input_tokens": 77696,
+            "actual_reasoning_tokens": 46
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "56e966ff00ffccafeedf81f5fa24148dc9a78cb0",
+        "prior": [],
+        "seconds": 21.5,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: critical | origin: regression | scope_relation: in_scope\n  problem: `total()` adds the unit price and quantity, silently returning an incorrect charge. [pricing.py:7, pricing.py:8]\n  trigger: `total(10, 3)` returns `13` instead of `30`. `total(10, 0)` returns `10` instead of `0`.\n  impact: Callers can undercharge or overcharge, including charging for zero units.\n  fix: Restore `return price * units`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-2znl4boa.json\n- Read both evidence sidecars and confirmed that `graphify-out/` was absent.\n- Compared `pricing.py` against `HEAD` and traced `total()` with three units and zero units.\n- Searched repository references to `pricing`, `quantity`, and `total`. Found no call sites for `total()`. The assertion in `check_quantity.py` checks only the unchanged `quantity()` function.\n\nnot_verified:\n- none\n\nconfidence: high — The diff and the documented pricing contract establish the incorrect results directly.\n\n[DIGEST]\nsummary: `total()` now adds price and units, silently miscalculating charges.\nkey_findings:\n- A zero-unit order returns the unit price instead of zero.\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore multiplication in `total()`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "56e966ff00ffccafeedf81f5fa24148dc9a78cb0"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 166600,
+            "actual_output_tokens": 1312,
+            "actual_cached_input_tokens": 143488,
+            "actual_reasoning_tokens": 73
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

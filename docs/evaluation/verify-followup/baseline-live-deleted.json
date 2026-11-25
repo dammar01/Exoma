@@ -1,0 +1,77 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d08609fc474dc1ee41f915f2d58a8057cfc90",
+  "wheel_sha256": "149094acf914421cd34ddcabf04e161f32df1767259a44446a5de24b446cc484",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "deleted": [
+      {
+        "round": 1,
+        "input": "0ad324b05327bcff61e079410984127f15fe30e4",
+        "prior": [],
+        "seconds": 31.58,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` returns negative inputs unchanged, violating its documented zero-clamping contract. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2`. The existing check expects `0`. [check_quantity.py:3]\n  impact: Callers receive a negative quantity where they previously received zero.\n  fix: Restore `return max(0, value)` in `quantity()`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-i2epgrdm.json\n- Read both evidence sidecars. Leads were `null` and facts were empty.\n- Compared `pricing.py` with `HEAD`. The only change removes the clamp. Zero and positive numeric quantities still return the same values.\n- Searched repository references and traced the existing negative-quantity assertion. It would fail with the current implementation.\n- Traced `total()`. It still multiplies its arguments directly, and no repository caller was found that passes `quantity()` into `total()`.\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff, documented contract, and existing assertion establish the regression by inspection.\n\n[DIGEST]\nsummary: The pricing change breaks `quantity()` for negative inputs. The existing assertion captures the regression.\nkey_findings:\n- `quantity(-2)` now returns `-2` instead of `0`. [pricing.py:3] [check_quantity.py:3]\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the zero clamp in `quantity()`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "0ad324b05327bcff61e079410984127f15fe30e4"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 130453,
+            "actual_output_tokens": 905,
+            "actual_cached_input_tokens": 110592,
+            "actual_reasoning_tokens": 187
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "c39199cbf40da28ba020f8053d7c223bbbaa4168",
+        "prior": [],
+        "seconds": 23.48,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` no longer clamps negative inputs to zero as documented. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2`. At `HEAD` it returned `0`.\n  impact: Callers receive negative quantities where the function guarantees zero.\n  fix: Restore `return max(0, value)`.\n\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `check_quantity.py` now only imports `quantity`. The diff removes its sole assertion. [check_quantity.py:1]\n  trigger: Running the script with the current `pricing.py` would exit successfully after importing the function, without checking `quantity(-2)`.\n  impact: The check can report success while negative-quantity handling is broken.\n  fix: Restore `assert quantity(-2) == 0`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-sm5dk3_h.json\n- Read both evidence sidecars. Leads were `null` and facts were empty.\n- Compared both changed files with `HEAD` and traced negative, zero, and positive numeric inputs. Only negative inputs produce different results.\n- Traced the check script by inspection. Its remaining import does not call `quantity()`.\n- Searched repository references. `total()` still multiplies its arguments directly, and no repository caller combines it with `quantity()`.\n\nnot_verified:\n- none\n\nconfidence: high — The diff and current source establish both regressions by inspection.\n\n[DIGEST]\nsummary: Negative quantities now pass through unchanged. The check script also lost the assertion that would catch the regression.\nkey_findings:\n- `quantity(-2)` now returns `-2` instead of `0`. [pricing.py:3]\n- `check_quantity.py` only imports the function and checks no result. [check_quantity.py:1]\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the clamp and the negative-quantity assertion together.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "",
+            "stderr": "",
+            "fingerprint": "c39199cbf40da28ba020f8053d7c223bbbaa4168"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 204545,
+            "actual_output_tokens": 1638,
+            "actual_cached_input_tokens": 178688,
+            "actual_reasoning_tokens": 286
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

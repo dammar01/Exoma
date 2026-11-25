@@ -1,0 +1,77 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d08609fc474dc1ee41f915f2d58a8057cfc90",
+  "wheel_sha256": "149094acf914421cd34ddcabf04e161f32df1767259a44446a5de24b446cc484",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "clean": [
+      {
+        "round": 1,
+        "input": "070b86d1e8e65e44f29860b412d3d2f6b5d9767c",
+        "prior": [],
+        "seconds": 41.58,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-7m9klmgy.json\n- Read both evidence sidecars. Leads was null and facts was empty.\n- Checked Git status, the diff, and blob hashes. The index matches HEAD byte for byte. The working copy matches HEAD after CRLF normalization.\n- Traced the only repository caller. `check_quantity.py:3` checks that `quantity(-2)` returns zero, as implemented in `pricing.py:3`. The search found no repository callers of `total`.\n\nnot_verified:\n- none\n\nconfidence: high — The normalized blob matches HEAD and the repository caller was traced.\n\n[DIGEST]\nsummary: The pricing change consists entirely of line endings. Pricing behavior is unchanged.\nkey_findings:\n- The index and normalized working copy match HEAD.\n- The existing negative-quantity check still matches the implementation.\nevidence_basis: grounded\nrisk_level: low\nrecommended_next_action: Close the pricing review.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "070b86d1e8e65e44f29860b412d3d2f6b5d9767c"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 151615,
+            "actual_output_tokens": 1384,
+            "actual_cached_input_tokens": 138240,
+            "actual_reasoning_tokens": 231
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "070b86d1e8e65e44f29860b412d3d2f6b5d9767c",
+        "prior": [],
+        "seconds": 29.58,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.0 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-xmcu5wf7.json\n- Read both evidence sidecars. Leads was null and facts was empty.\n- Rechecked Git status, the diff, and blob hashes. `pricing.py` matches HEAD after CRLF normalization, and the index matches HEAD byte for byte.\n- Traced `check_quantity.py:3` to `pricing.py:3`. The implementation still returns zero for `quantity(-2)`. Found no repository callers of `total`.\n\nnot_verified:\n- none\n\nconfidence: high — The normalized source matches HEAD, and the only repository caller was traced.\n\n[DIGEST]\nsummary: The working copy of `pricing.py` differs from HEAD only in line endings. Pricing behavior is unchanged.\nkey_findings:\n- No pricing regression found.\nevidence_basis: grounded\nrisk_level: low\nrecommended_next_action: Close the pricing review.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "070b86d1e8e65e44f29860b412d3d2f6b5d9767c"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 266726,
+            "actual_output_tokens": 2273,
+            "actual_cached_input_tokens": 247552,
+            "actual_reasoning_tokens": 261
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

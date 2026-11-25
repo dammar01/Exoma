@@ -1,0 +1,169 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d086+working-tree",
+  "wheel_sha256": "5239173e3f732af44b996c35d50ff5ac1d4ee052192aa1085b39abd2b5209218",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "repair": [
+      {
+        "round": 1,
+        "input": "a05cb110ff3d84180898645086bc405ec018e4e7",
+        "prior": [],
+        "seconds": 28.06,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[FOLLOWUP_V1]\n{\"blocker\":1,\"obligation\":\"quantity\"}\n[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` returns negative inputs unchanged, breaking its documented clamp-to-zero contract [pricing.py:2].\n  trigger: `quantity(-2)` returns `-2`, causing the zero expectation at [check_quantity.py:3] to fail.\n  impact: Callers receive a negative quantity where they previously received zero.\n  fix: Restore `return max(0, value)` at [pricing.py:3].\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-ch17acqa.json\n- Compared `git diff HEAD -- pricing.py` with `git show HEAD:pricing.py`. The only change replaces the clamp with a direct return.\n- Searched for `quantity` and `total` callers. The only repository caller found was the assertion in [check_quantity.py:3]. `total()` still multiplies its two arguments directly [pricing.py:8].\n- Traced the planned `quantity` assertion by inspection. The baseline returns `0` for `-2`, while the current code returns `-2`. Zero and positive numeric inputs retain their values.\n- Read both evidence sidecars and the verification record. The record lists one planned obligation and has no open or recently resolved blocker IDs.\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff and the planned assertion establish the regression directly.\n\n[DIGEST]\nsummary: The pricing change breaks the clamp for negative quantities. The planned `quantity` assertion catches the regression with an input of `-2`.\nkey_findings:\n- `quantity(-2)` returns `-2` where the existing assertion expects `0`.\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the clamp in `quantity()` and rerun the planned assertion through the verification runtime.\nconfidence: high",
+        "followup": {
+          "execution_id": "4cf15c840fd646f7ac352c655bff8cff",
+          "previous": 0,
+          "round_id": "30db7e24090c4506b097ca8e76a49abb",
+          "input": "a05cb110ff3d84180898645086bc405ec018e4e7",
+          "digest": "7a646573dfe87a0f34129414fbf9b83ec467e32d4f343805d893c8c16c53ace5",
+          "at": "2026-11-25T13:07:59.185737+00:00",
+          "open_obligations": [
+            "quantity"
+          ],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "failed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-ch17acqa.json",
+              "fingerprint": "a05cb110ff3d84180898645086bc405ec018e4e7"
+            }
+          ],
+          "events": [
+            {
+              "id": "F-605fa92acb6e49ce",
+              "status": "new",
+              "origin": "regression"
+            }
+          ],
+          "advisory": true,
+          "open_count": 1
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "a05cb110ff3d84180898645086bc405ec018e4e7"
+          }
+        ],
+        "reviewer_blockers": [
+          {
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` returns negative inputs unchanged, breaking its documented clamp-to-zero contract [pricing.py:2].\n  trigger: `quantity(-2)` returns `-2`, causing the zero expectation at [check_quantity.py:3] to fail.\n  impact: Callers receive a negative quantity where they previously received zero.\n  fix: Restore `return max(0, value)` at [pricing.py:3].",
+            "origin": "regression"
+          }
+        ],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 74936,
+            "actual_output_tokens": 797,
+            "actual_cached_input_tokens": 65920,
+            "actual_reasoning_tokens": 58
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "7f69110913d517e3ece976235b7a603d1ba6f6e6",
+        "prior": [
+          {
+            "id": "F-605fa92acb6e49ce",
+            "description": "severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` returns negative inputs unchanged, breaking its documented clamp-to-zero contract [pricing.py:2].\n  trigger: `quantity(-2)` returns `-2`, causing the zero expectation at [check_quantity.py:3] to fail.\n  impact: Callers receive a negative quantity where they previously received zero.\n  fix: Restore `return max(0, value)` at [pricing.py:3].",
+            "origin": "regression",
+            "disposition": "open",
+            "first_round": "30db7e24090c4506b097ca8e76a49abb",
+            "last_round": "30db7e24090c4506b097ca8e76a49abb",
+            "last_input": "a05cb110ff3d84180898645086bc405ec018e4e7",
+            "obligation": "quantity",
+            "assertion": {
+              "reference": "check_quantity.py:3",
+              "file_sha256": "1d0bdb06a28e71375d82d1f55a12b70d73517dfece1375e332dcdb3fd10d537b",
+              "line_sha256": "792491b2d4adad03e655d69daadcf66cc892d7a19b30bee91507ea2aec792a3a"
+            },
+            "behavior": "negative quantity becomes zero",
+            "command": null,
+            "first_checks": [
+              {
+                "command": "python -B check_quantity.py",
+                "status": "failed",
+                "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-ch17acqa.json",
+                "fingerprint": "a05cb110ff3d84180898645086bc405ec018e4e7"
+              }
+            ]
+          }
+        ],
+        "seconds": 36.09,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[FOLLOWUP_V1]\n{\"id\":\"F-605fa92acb6e49ce\",\"status\":\"resolved\",\"diagnosis\":\"The prior run recorded an AssertionError at check_quantity.py:3 because quantity(-2) returned -2. The restored clamp at pricing.py:3 returns 0 for that same input. The assertion file matches its recorded SHA-256.\",\"strategy\":\"same_assertion\",\"evidence\":\"check_quantity.py:3\",\"obligation\":\"quantity\",\"repeat_reason\":\"Retry the same command with the original input and expected result. The assertion is byte-identical, so a pass confirms the restored clamp rather than a changed check.\"}\n[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-v7k8f1lq.json\n- Compared `pricing.py` and `check_quantity.py` against `HEAD`. Git reported no content diff. Its line-ending report showed CRLF in the working copy of `pricing.py` and LF in the index.\n- Searched for callers of `quantity()` and `total()`. The only caller found was the original `quantity()` assertion [check_quantity.py:3].\n- Read both evidence sidecars, the follow-up record, and the prior failure log. Verified the assertion file hash and traced the original trigger through the restored clamp [pricing.py:3].\n\nnot_verified:\n- none\n\nconfidence: high — The prior failure log, byte-identical assertion, and restored implementation establish that the original trigger now returns zero.\n\n[DIGEST]\nsummary: The clamp is restored, so `quantity(-2)` returns `0` and satisfies the original assertion by inspection.\nkey_findings:\n- No independent pricing defect surfaced in the current diff or caller trace.\nevidence_basis: grounded\nrisk_level: low\nrecommended_next_action: Re-run `python -B check_quantity.py` through the verification runtime.\nconfidence: high",
+        "followup": {
+          "execution_id": "4cf15c840fd646f7ac352c655bff8cff",
+          "previous": 1,
+          "round_id": "f19518eb517441ed8d77d30d51ebb2ec",
+          "input": "7f69110913d517e3ece976235b7a603d1ba6f6e6",
+          "digest": "fcf0df7f44e33e664355fc52e97202dafc68cca3afa67222fc39c5fb2d62fd4f",
+          "at": "2026-11-25T13:08:35.636110+00:00",
+          "open_obligations": [],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "passed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-v7k8f1lq.json",
+              "fingerprint": "7f69110913d517e3ece976235b7a603d1ba6f6e6"
+            }
+          ],
+          "events": [
+            {
+              "id": "F-605fa92acb6e49ce",
+              "status": "resolved",
+              "diagnosis": "The prior run recorded an AssertionError at check_quantity.py:3 because quantity(-2) returned -2. The restored clamp at pricing.py:3 returns 0 for that same input. The assertion file matches its recorded SHA-256.",
+              "strategy": "same_assertion",
+              "repeat_reason": "Retry the same command with the original input and expected result. The assertion is byte-identical, so a pass confirms the restored clamp rather than a changed check.",
+              "evidence": {
+                "reference": "check_quantity.py:3",
+                "file_sha256": "1d0bdb06a28e71375d82d1f55a12b70d73517dfece1375e332dcdb3fd10d537b",
+                "line_sha256": "792491b2d4adad03e655d69daadcf66cc892d7a19b30bee91507ea2aec792a3a"
+              },
+              "equivalence": "",
+              "retry_supported": true
+            }
+          ],
+          "advisory": true,
+          "open_count": 0
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "7f69110913d517e3ece976235b7a603d1ba6f6e6"
+          }
+        ],
+        "reviewer_blockers": [],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 228282,
+            "actual_output_tokens": 2020,
+            "actual_cached_input_tokens": 203648,
+            "actual_reasoning_tokens": 303
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

@@ -1794,6 +1794,31 @@ an older runtime without `selection_version`, report deferred work explicitly.
 When a verification assesses a selection, its receipt includes command outcomes and
 available log pointers. Unchecked verify obligations remain visible on subsequent attempts.
 
+For standard verify on an execution, `verify-prepare` also returns
+`meta.verify_followup`. Use its open findings when selecting tests. For an obligation
+with a known regression check, include `"assertion": "tests/test_price.py:25"`.
+A closure proposal needs a matching behavior and assertion plus fresh passing receipts
+for all required commands. The execution keeps the original assertion receipt for each
+obligation, including later rounds after a finding closes. Changing or removing that
+assertion leaves verify-due coverage open. Release-due gaps remain in the coverage report.
+If the declared assertion cannot be read at `execute-end`, its baseline stays unbound.
+Older selections with a null receipt follow the same rule. An unambiguous receipt
+from the obligation's finding history takes precedence. Conflicting history keeps
+coverage open. Without historical evidence, the first readable assertion can bind
+when a required command runs on unchanged inputs and produces a diagnostic receipt.
+Subsequent rounds retain that receipt and its original provenance.
+Before first publishing covered assertion evidence, the runtime checks the current
+assertion receipt and the fingerprint of the tested inputs. If either has changed
+since the test, checkpoint collection returns an incomplete verdict and leaves the
+execution record intact. Collecting an already committed checkpoint returns its
+historical result even after later edits.
+A baseline marked `current_observation` establishes continuity from that observation onward.
+For an intentional replacement, keep the first reference and add
+`"equivalent_assertion": {"reference": "tests/test_price.py:31", "reason": "..."}`.
+This records the proposed replacement for review. Coverage stays open until the original assertion receipt and fresh passing command receipts match.
+Check `meta.verify_followup.events` and `open_count` alongside the verdict. A finding
+without sufficient identifiable evidence can remain open after a green command.
+
 For browser verification, a passing playback with an outstanding historical assertion
 returns `incomplete` and exit 2. A dynamic title can recover when the effective inputs
 and page match. A retained DOM assertion whose entire selector list previously missed
@@ -2334,6 +2359,12 @@ bash .workflow/check.sh <job_id> --wait --result
 `check` status exit codes: `0` finished · `1` failed · `2` still running/queued · `3` not
 found. With `--result` for a verify job, `0` only means verdict `pass`; a verdict of
 `fail` or `incomplete` returns `2`.
+
+If a worker has left a checkpoint and the runtime cannot confirm recovery ownership,
+both `--wait` and `--wait --result` stop with exit `2`. The JSON diagnostic includes
+the job ID, `status: running`, `reason: verify_checkpoint_pending`, and `next_action`.
+The checkpoint remains with the original job. Once its session claim is valid,
+collect that same job ID to retrieve its result.
 
 If no matching job exists, the last result is still in `.workflow/data/sessions/<id>/runtime/response.last.md`. What is currently running is visible in `.workflow/current/session.json` and `progress.jsonl`.
 

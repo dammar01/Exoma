@@ -1,0 +1,77 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d08609fc474dc1ee41f915f2d58a8057cfc90",
+  "wheel_sha256": "149094acf914421cd34ddcabf04e161f32df1767259a44446a5de24b446cc484",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "repair": [
+      {
+        "round": 1,
+        "input": "564d7e61e8c422959705722b94568b36aa82bda9",
+        "prior": [],
+        "seconds": 30.14,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: The diff removes the zero clamp required by `quantity` and asserted by its existing consumer. [pricing.py:2] [pricing.py:3] [check_quantity.py:3]\n  trigger: Call `quantity(-2)`.\n  impact: The caller receives `-2` where it expects `0`, so the assertion in `check_quantity.py` fails.\n  fix: Restore `return max(0, value)` in `quantity`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-6j4fkvht.json\n- Read both evidence sidecars and compared the working-tree diff with `HEAD`. The diff replaces the clamp with a direct return.\n- Searched repository references and traced the existing assertion. `quantity(-2)` evaluates to `-2` under the changed implementation.\n- Traced zero and positive integer inputs through both implementations. Both return the input value.\n- Read `total(price, units)`. It multiplies its two arguments directly. [pricing.py:6]\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff, documented contract, and existing assertion establish the regression.\n\n[DIGEST]\nsummary: The pricing change lets negative quantities pass through and breaks the existing quantity check.\nkey_findings:\n- `quantity(-2)` returns `-2` instead of the expected `0`. [pricing.py:3] [check_quantity.py:3]\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the zero clamp in `quantity`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "564d7e61e8c422959705722b94568b36aa82bda9"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 73981,
+            "actual_output_tokens": 850,
+            "actual_cached_input_tokens": 55936,
+            "actual_reasoning_tokens": 168
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "f2f887b665b595fe9da4715cc6937d47766afc75",
+        "prior": [],
+        "seconds": 29.52,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.0 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-tk0rym5m.json\n- Read both evidence sidecars and compared `pricing.py` with `HEAD`. The diff is empty, and the Git-normalized file hash matches `HEAD`. The working copy uses CRLF line endings.\n- Traced `quantity` and its caller. `quantity(-2)` returns `0`, satisfying the existing assertion. Zero and positive integer quantities retain their values. [pricing.py:3] [check_quantity.py:3]\n- Searched for pricing callers and traced `total(price, units)`, which multiplies its arguments directly. [pricing.py:8]\n\nnot_verified:\n- none\n\nconfidence: high — The current source, Git comparison, and caller assertion agree.\n\n[DIGEST]\nsummary: The zero clamp is restored, resolving the previously reported regression.\nkey_findings:\n- `quantity(-2)` now returns the expected `0`. [pricing.py:3] [check_quantity.py:3]\nevidence_basis: grounded\nrisk_level: low\nrecommended_next_action: Have the verification runtime run `check_quantity.py`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "f2f887b665b595fe9da4715cc6937d47766afc75"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 222715,
+            "actual_output_tokens": 1592,
+            "actual_cached_input_tokens": 190336,
+            "actual_reasoning_tokens": 249
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

@@ -43,7 +43,10 @@ def _terminal_meta(result: dict) -> dict:
     if not error_type:
         return {}
     fields = {"error_type": error_type}
-    if error_type in _TERMINAL_ERROR_TYPES:
+    checkpoint_pending = meta.get("reason") == "verify_checkpoint_pending"
+    if checkpoint_pending:
+        fields["reason"] = meta["reason"]
+    if error_type in _TERMINAL_ERROR_TYPES or checkpoint_pending:
         fields["done"] = True
         if meta.get("next_action"):
             fields["next_action"] = meta["next_action"]
@@ -88,7 +91,7 @@ def _reap_if_stalled(job_id: str, payload: dict) -> dict | None:
 
 def _resume_pending_reservation(job_id: str, payload: dict) -> dict:
     """Let attach polling reclaim a submit that died before spawning its worker."""
-    if payload.get("status") != "pending":
+    if payload.get("done") or payload.get("status") != "pending":
         return payload
     job = JOB_MANAGER.get_job(job_id) or {}
     if job.get("worker_pid") is not None:
@@ -177,7 +180,7 @@ def _wait_for_result(job_id: str, poll_interval: float, poll_timeout: int):
 
     while True:
         ok, payload = _result_payload(job_id)
-        if not ok and payload.get("status") == "pending":
+        if not ok and not payload.get("done") and payload.get("status") == "pending":
             status = _resume_pending_reservation(job_id, _status_payload(job_id))
             if status.get("status") != "pending":
                 ok, payload = _result_payload(job_id)

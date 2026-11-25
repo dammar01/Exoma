@@ -303,6 +303,7 @@ def build_prompt(
     transport: dict | None = None,
     e2e_evidence: str | None = None,
     has_e2e_knowledge: bool = False,
+    followup_file: str | None = None,
     _changed_block: list[str] | None = None,
 ) -> str:
     if role not in VALID_ROLES:
@@ -336,6 +337,7 @@ def build_prompt(
             e2e_evidence=e2e_evidence,
             has_e2e_knowledge=has_e2e_knowledge,
             _changed_block=changed_block,
+            followup_file=followup_file,
         )
         cap, cap_info = _transport_cap(transport, probe, task)
         if meta_sink is not None:
@@ -446,6 +448,18 @@ def build_prompt(
                 "[OUTPUT_FORMAT]",
                 "Return ONLY this structure:",
                 "",
+                *([f"Read {runtime_dir}/{followup_file} for prior blocker IDs and planned checks.",
+                   "First review the new diff and callers for independent defects. Then assess each prior ID.",
+                   "Immediately before [VERIFICATION], emit [FOLLOWUP_V1] and one JSON object per line.",
+                   'Prior row keys: id, status (present/resolved/nonreproduced/unchecked), diagnosis, strategy, '
+                   'evidence (current assertion file:line), obligation (exact ID), repeat_reason if repeating.',
+                   'For a still-present finding include blocker (1-based index in current blocking_findings). '
+                   'For a new blocker optionally emit {"blocker":1,"obligation":"exact ID"} when its behavior matches.',
+                   "For a recurrence of a recently resolved ID, report regressed with a current blocker index and diagnosis. "
+                   "Keep a changed or missing original assertion open. A proposed replacement is informational.",
+                   "Only propose resolved when the original trigger and expectation are exercised. "
+                   "Record changed conditions, prior diagnostic evidence, and why a retry distinguishes causes."]
+                  if followup_file else []),
                 *_verification_format(),
                 "",
                 *_digest_format(),

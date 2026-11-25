@@ -143,6 +143,8 @@ def _reboot_skip_reason(manager, job, claim, boot):
 
 def _decision(manager, job, claim, boot):
     status = job["status"]
+    if status in ("pending", "running", "recovering") and "verify_checkpoint" in job:
+        return "active", "verification awaiting publication; collect the original job result"
     if status in ("pending", "recovering"):
         owners = ("worker", "launcher", "reservation_owner")
         if any(manager.admission_process_state(job, prefix) == "alive" for prefix in owners):

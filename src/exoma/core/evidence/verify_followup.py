@@ -1,0 +1,417 @@
+"""Advisory, execution-scoped follow-up for standard verification rounds."""
+from __future__ import annotations
+
+import contextlib
+from contextvars import ContextVar
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import uuid
+
+from exoma.core.evidence.contract import (
+    _expected_verification_section, _meaningful_items, _section_items, _verification_tags,
+)
+from exoma.core.workspace.workspace_paths import atomic_write_text, now_iso, workflow_paths
+from exoma.core.policy.secret_patterns import is_secret_path
+from exoma.utils import git
+from exoma.utils.redact import redact_value
+
+_ACTIVE = ContextVar("verify_round", default=None)
+MAX_PRIOR = 32
+MAX_BLOCK = 65536
+
+
+class StaleRound(ValueError):
+    """The execution changed before the reviewer received its pinned inputs."""
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+
+def binding(current, round_id=None, *, input_id=None):
+    if not current or not current.get("execution_id"):
+        return None
+    history = current.get("finding_history", {})
+    return {"execution_id": current["execution_id"], "previous": history.get("revision", 0),
+            "round_id": round_id or uuid.uuid4().hex, "input": input_id}
+
+
+def bind_current(root, current, round_id=None):
+    from exoma.core.evidence import verify_tests
+
+    if current and current.get("execution_id"):
+        return binding(current, round_id, input_id=verify_tests._identity(root))
+    return None
+
+
+def admission(root, current, round_id):
+    """Persist the execution identity even for records predating finding history."""
+    from exoma.core.runtime.execution import execution_identity
+
+    identity = execution_identity(current)
+    if isinstance(identity, tuple):
+        return {"legacy_identity": list(identity)}
+    return bind_current(root, current, round_id)
+
+
+def matches_revision(current, pin):
+    return binding(current, pin["round_id"], input_id=pin.get("input")) == pin
+
+
+@contextlib.contextmanager
+def using(pin):
+    token = _ACTIVE.set(pin)
+    try:
+        yield
+    finally:
+        _ACTIVE.reset(token)
+
+
+def active():
+    return _ACTIVE.get()
+
+
+def summary(current):
+    ledger = (current or {}).get("finding_history", {})
+    pending = [f for f in ledger.get("findings", {}).values() if f["disposition"] == "open"]
+    pending.sort(key=lambda f: (f.get("reviewed_revision", 0), f["id"]))
+    closed = [f for f in ledger.get("findings", {}).values() if f["disposition"] == "resolved"]
+    closed.sort(key=lambda f: f.get("reviewed_revision", 0), reverse=True)
+    return {"version": 1, "revision": ledger.get("revision", 0), "open_count": len(pending),
+            "open": pending[:MAX_PRIOR], "recently_resolved": closed[:MAX_PRIOR],
+            "remaining": max(0, len(pending) - MAX_PRIOR)}
+
+
+def handoff(root, session_id, current, request):
+    pin = active()
+    if not pin:
+        return None
+    prior = summary(current)
+    if not matches_revision(current, pin):
+        raise StaleRound("verification snapshot is stale; prepare a fresh verification")
+    selection = (request or {}).get("selection") or (current or {}).get("selection") or {}
+    obligations = selection.get("obligations") if isinstance(selection, dict) else None
+    data = {**prior, **pin, "planned_obligations": obligations[:MAX_PRIOR] if isinstance(obligations, list) else [],
+            "planned_count": len(obligations) if isinstance(obligations, list) else 0}
+    path = workflow_paths(Path(root), session_id)["runtime_dir"] / ("verify-" + pin["round_id"] + ".json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(redact_value(data)[0], ensure_ascii=False))
+    return path.name
+
+
+def rows(content):
+    before, marker, _ = content.partition("[VERIFICATION]")
+    if not marker or len(before) > MAX_BLOCK + 1024 or before.count("[FOLLOWUP_V1]") != 1:
+        return []
+    block = before.split("[FOLLOWUP_V1]", 1)[1].strip()
+    if len(block) > MAX_BLOCK:
+        return []
+    try:
+        items = [json.loads(line) for line in block.splitlines() if line.strip()]
+    except (ValueError, RecursionError):
+        return []
+    return items if all(isinstance(item, dict) for item in items) else []
+
+
+def discoveries(content):
+    review = content.partition("[VERIFICATION]")[2].partition("[DIGEST]")[0]
+    found = []
+    for section in ("blocking_findings", "escalations", "notes"):
+        for index, item in enumerate(_meaningful_items(_section_items(review, section)), 1):
+            tags, invalid = _verification_tags(item)
+            destination = section if invalid else _expected_verification_section(tags)
+            if destination == "blocking_findings":
+                found.append({"description": item[:1800], "origin": tags.get("origin", "unknown"),
+                              "blocker": index if section == "blocking_findings" else None})
+    return found
+
+
+def assertion_receipt(root, ref):
+    """Bind a project-local assertion reference to its source. Store only hashes."""
+    if not isinstance(ref, str):
+        return None
+    relative, sep, line = ref.rpartition(":")
+    if not sep or not line.isascii() or not line.isdecimal() or len(line) > 8 or not relative:
+        return None
+    target = Path(relative)
+    if target.is_absolute() or PureWindowsPath(relative).drive or ".." in target.parts or is_secret_path(relative):
+        return None
+    root = Path(root).resolve()
+    try:
+        path = (root / target).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 2_000_000:
+            return None
+        resolved = path.relative_to(root).as_posix()
+        if is_secret_path(resolved) or any(git.is_ignored(root, name) for name in {relative, resolved}):
+            return None
+        data = path.read_bytes()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    lines = data.splitlines()
+    number = int(line)
+    if not 1 <= number <= len(lines) or not lines[number-1].strip():
+        return None
+    return {"reference": ref, "file_sha256": hashlib.sha256(data).hexdigest(),
+            "line_sha256": hashlib.sha256(lines[number-1].strip()).hexdigest()}
+
+
+def _string(row, key, limit=600):
+    value = row.get(key)
+    return value.strip()[:limit] if isinstance(value, str) else ""
+
+
+def selection_assertions(root, selection):
+    baselines = {}
+    for item in selection["obligations"]:
+        if item.get("assertion"):
+            receipt = assertion_receipt(root, item["assertion"])
+            if receipt is not None:
+                baselines[item["id"]] = {"source": "selection", "receipt": receipt}
+    return baselines
+
+
+def _bound_baseline(execution, oid):
+    baseline = execution.get("assertion_baselines", {}).get(oid)
+    # Earlier execute-end records used this placeholder for an unreadable reference.
+    return None if baseline == {"source": "selection", "receipt": None} else baseline
+
+
+def _first_baseline(execution, item, current, outcomes, fingerprint):
+    findings = execution.get("finding_history", {}).get("findings", {}).values()
+    previous = [f["assertion"] for f in findings if f.get("obligation") == item["id"] and f.get("assertion")]
+    if previous:
+        original = previous[0]
+        if (original.get("reference") != item["assertion"] or any(receipt != original for receipt in previous)):
+            return None, "conflicting historical assertion receipts"
+        return {"source": "finding_history", "receipt": original}, None
+    if current and any(c.get("command") in item["commands"] and _observed(c, fingerprint) for c in outcomes):
+        return {"source": "current_observation", "receipt": current}, None
+    return None, "original assertion missing or unobserved"
+
+
+def check_assertions(root, execution, coverage, outcomes=(), fingerprint=None):
+    """Keep the original obligation evidence even after its finding closes."""
+    if coverage.get("inputs_changed"):
+        fingerprint = None
+    for item, row in zip(coverage["selection"]["obligations"], coverage["obligations"]):
+        if not item.get("assertion"):
+            continue
+        oid = item["id"]
+        current = assertion_receipt(root, item["assertion"])
+        baseline = _bound_baseline(execution, oid)
+        if baseline is None:
+            baseline, reason = _first_baseline(execution, item, current, outcomes, fingerprint)
+            if baseline is None:
+                row.update(status="open", reason=reason)
+                continue
+        row["assertion_baseline"] = baseline
+        if not current or baseline.get("receipt") != current:
+            row.update(status="open", reason="original assertion missing or changed")
+
+
+def bind_assertions(root, execution, coverage, outcomes):
+    """Compare and bind under the caller's transaction, preserving original provenance."""
+    from exoma.core.evidence import verify_tests
+
+    items = {item["id"]: item for item in coverage["selection"]["obligations"]}
+    additions = {}
+    fingerprint = coverage.get("selection_input")
+    needs_fresh_input = False
+    for row in coverage["obligations"]:
+        item = items.get(row["id"])
+        if not item or not item.get("assertion"):
+            continue
+        proposal = row.get("assertion_baseline") or {}
+        receipt = proposal.get("receipt")
+        if receipt is None:
+            if row["status"] == "covered":
+                return False
+            continue
+        baseline = _bound_baseline(execution, row["id"])
+        covered = row["status"] == "covered"
+        current = assertion_receipt(root, item["assertion"]) if covered or baseline is None else None
+        if covered and current != receipt:
+            return False
+        if baseline is None:
+            baseline, _ = _first_baseline(execution, item, current, outcomes,
+                                          None if coverage.get("inputs_changed") else fingerprint)
+            if baseline is None:
+                return False
+            additions[row["id"]] = baseline
+            if baseline["source"] == "current_observation":
+                needs_fresh_input = True
+        if baseline.get("receipt") != receipt:
+            return False
+        needs_fresh_input = needs_fresh_input or covered
+    if needs_fresh_input and (coverage.get("inputs_changed") or not fingerprint
+                              or verify_tests._identity(root) != fingerprint):
+        return False
+    if additions:
+        execution.setdefault("assertion_baselines", {}).update(additions)
+    return True
+
+
+def _observed(check, fingerprint):
+    return (bool(fingerprint) and check.get("fingerprint") == fingerprint and check.get("log_ref")
+            and not check.get("reused") and check.get("status") in {"passed", "failed", "timeout"})
+
+
+def _observed_commands(checks, commands, fingerprint):
+    observed = {check["command"] for check in checks if _observed(check, fingerprint)}
+    return bool(commands) and observed.issuperset(commands)
+
+
+def _prior_retry_input(finding, rounds, commands):
+    if "observed_input" in finding:
+        return finding["observed_input"]
+    # Older ledgers advanced last_input even for refused commands. Recover from receipts.
+    previous = None
+    for round_ in rounds.values():
+        fingerprint = round_.get("selection_input")
+        if (any(event.get("id") == finding["id"] for event in round_.get("events", []))
+                and _observed_commands(round_.get("checks", []), commands, fingerprint)):
+            previous = fingerprint
+    return previous
+
+
+def publish(root, execution, pin, result):
+    """Apply exactly one review under the caller's execution transaction."""
+    ledger = execution.setdefault("finding_history", {"version": 1, "revision": 0, "findings": {}, "rounds": {}})
+    runtime = result["meta"].get("runtime_tests") or {}
+    content = result.get("content", "")
+    proposal = result["meta"].get("review_observations") or {}
+    observed = proposal.get("blockers", [])
+    replies = rows(content)
+    report_hash = digest([pin, content, runtime, proposal])
+    past = ledger["rounds"].get(pin["round_id"])
+    if past:
+        if past["digest"] != report_hash:
+            raise ValueError("conflicting result for committed verification round")
+        result["meta"]["verify_followup"] = past
+        return False
+    if not matches_revision(execution, pin):
+        raise ValueError("stale verification history revision")
+    coverage = runtime.get("coverage") or {}
+    obligations = {o["id"]: o for o in coverage.get("selection", {}).get("obligations", [])}
+    covered = {o["id"] for o in coverage.get("obligations", []) if o["status"] == "covered"}
+    outcomes = runtime.get("outcomes", [])
+    fingerprint = coverage.get("selection_input")
+    if pin.get("input"):
+        from exoma.core.evidence import verify_tests
+
+        if ((fingerprint and pin["input"] != fingerprint)
+                or verify_tests._identity(root) != pin["input"]):
+            raise ValueError("verification input changed after dispatch; prepare a new round")
+    events = []
+    by_index = {item["blocker"]: item for item in observed if type(item.get("blocker")) is int}
+    consumed = set()
+    findings = ledger["findings"]
+    prior = summary(execution)
+    offered = {f["id"] for f in prior["open"]}
+    previously_closed = {f["id"] for f in prior["recently_resolved"]}
+    checks = [{k: o[k] for k in ("command", "status", "log_ref", "log_error", "fingerprint", "reused") if k in o}
+              for o in outcomes]
+    handled_failures = set()
+
+    def record_observation(finding, commands):
+        required = [finding["command"]] if finding.get("command") in commands else commands
+        previous = _prior_retry_input(finding, ledger["rounds"], required)
+        observed = _observed_commands(checks, required, fingerprint)
+        finding["observed_input"] = finding["last_input"] = fingerprint if observed else previous
+        return previous
+
+    def associate(index, obligation):
+        if type(index) is not int or index not in by_index or index in consumed:
+            return False
+        consumed.add(index)
+        if obligation:
+            handled_failures.update(obligation["commands"])
+        return True
+
+    for fid in sorted(previously_closed):
+        reports = [r for r in replies if r.get("id") == fid]
+        if len(reports) != 1 or reports[0].get("status") != "regressed":
+            continue
+        row = reports[0]
+        f = findings[fid]
+        if _string(row, "diagnosis") and associate(row.get("blocker"), obligations.get(f.get("obligation"))):
+            record_observation(f, obligations.get(f.get("obligation"), {}).get("commands", []))
+            f.update(disposition="open", last_round=pin["round_id"])
+            events.append({"id": fid, "status": "regressed", "diagnosis": _string(row, "diagnosis"),
+                           "observation": by_index[row["blocker"]]["description"]})
+
+    for fid in sorted(offered):
+        f = findings[fid]
+        f["reviewed_revision"] = ledger["revision"] + 1
+        oid = f.get("obligation")
+        obligation = obligations.get(oid)
+        commands = obligation["commands"] if obligation else []
+        prior_input = record_observation(f, commands)
+        matches = [r for r in replies if r.get("id") == fid]
+        if len(matches) != 1:
+            events.append({"id": fid, "status": "unchecked", "reason": "absent or ambiguous follow-up"})
+            continue
+        row = matches[0]
+        status = _string(row, "status")
+        diagnosis = _string(row, "diagnosis")
+        strategy = _string(row, "strategy")
+        repeat = _string(row, "repeat_reason")
+        assertion = assertion_receipt(root, _string(row, "evidence"))
+        original = f.get("assertion")
+        fresh = {c["command"] for c in checks if c.get("status") == "passed" and _observed(c, fingerprint)}
+        # Wording alone cannot make an unchanged experiment materially different.
+        changed_input = bool(prior_input and fingerprint and prior_input != fingerprint)
+        f["latest_checks"] = [check for check in checks if check["command"] in commands]
+        valid_retry = bool(diagnosis and strategy and (changed_input or repeat))
+        disposition = "open"
+        if status == "resolved" and valid_retry and oid in covered and commands and set(commands) <= fresh:
+            if original and assertion == original and _string(row, "obligation") == oid:
+                disposition = "resolved"
+        if status == "present" and diagnosis:
+            associate(row.get("blocker"), obligation)
+        events.append({"id": fid, "status": disposition if disposition == "resolved" else
+                       status if status in ("present", "nonreproduced", "unchecked") else "unchecked",
+                       "diagnosis": diagnosis, "strategy": strategy, "repeat_reason": repeat,
+                       "evidence": assertion, "equivalence": _string(row, "equivalence"),
+                       "retry_supported": valid_retry})
+        f.update(disposition=disposition, last_strategy=strategy, last_round=pin["round_id"])
+
+    def create(description, origin, oid, command=None):
+        obligation = obligations.get(oid)
+        fid = "F-" + uuid.uuid4().hex[:16]
+        f = {"id": fid, "description": description, "origin": origin, "disposition": "open",
+             "first_round": pin["round_id"], "last_round": pin["round_id"], "observed_input": None,
+             "obligation": oid, "assertion": assertion_receipt(root, (obligation or {}).get("assertion")),
+             "behavior": (obligation or {}).get("behavior"), "command": command,
+             "first_checks": [check for check in checks if check["command"] in (obligation or {}).get("commands", [])]}
+        record_observation(f, (obligation or {}).get("commands", []))
+        findings[fid] = f
+        events.append({"id": fid, "status": "new", "origin": origin})
+        return f
+
+    for item in observed:
+        index = item.get("blocker")
+        if index in consumed:
+            continue
+        links = [r for r in replies if not r.get("id") and type(r.get("blocker")) is int and r["blocker"] == index]
+        oid = _string(links[0], "obligation") if len(links) == 1 else None
+        create(item["description"], item["origin"], oid if oid in obligations else None)
+        if oid in obligations:
+            handled_failures.update(obligations[oid]["commands"])
+    for check in checks:
+        command = check["command"]
+        if check["status"] not in ("failed", "timeout", "error") or command in handled_failures:
+            continue
+        ids = [oid for oid, item in obligations.items() if command in item["commands"]]
+        create("Runtime check " + command + " " + check["status"], "unknown",
+               ids[0] if len(ids) == 1 else None, command)
+    record = {**pin, "digest": report_hash, "at": now_iso(), "selection_input": fingerprint,
+              "open_obligations": [o["id"] for o in coverage.get("obligations", []) if o["status"] == "open"],
+              "checks": checks, "events": events, "advisory": True,
+              "open_count": sum(f["disposition"] == "open" for f in findings.values())}
+    ledger["rounds"][pin["round_id"]] = record
+    ledger["revision"] += 1
+    result["meta"]["verify_followup"] = record
+    return True
+

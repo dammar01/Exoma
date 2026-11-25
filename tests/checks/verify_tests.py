@@ -439,6 +439,19 @@ def _check_worker_selection() -> None:
             for entry, changed in (("await", False), ("await", True), ("submit", False), ("submit", True)):
                 session = f"s-{entry}-{int(changed)}"
                 env.pop("WORKFLOW_TEST_INPUT", None)
+                selected = dict(selection)
+                if entry == "submit" and not changed:
+                    selected["execution_id"] = "worker-execution"
+                    state = workflow_paths(root, session)["runtime_dir"] / "execution.json"
+                    state.parent.mkdir(parents=True, exist_ok=True)
+                    state.write_text(json.dumps({"execution_id": selected["execution_id"],
+                        "status": "implemented", "selection": selected}), encoding="utf-8")
+                legacy = entry == "await" and not changed
+                if legacy:
+                    state = workflow_paths(root, session)["runtime_dir"] / "execution.json"
+                    state.parent.mkdir(parents=True, exist_ok=True)
+                    state.write_text(json.dumps({"plan_id": "old", "started_at": "first", "approved_at": "first",
+                                                 "status": "implemented", "selection": selected}), encoding="utf-8")
                 before = {p.relative_to(objects) for p in objects.rglob("*") if p.is_file()}
                 prepared = cli("--command", "verify-prepare")["meta"]
                 fp = prepared["selection_input"]
@@ -447,7 +460,7 @@ def _check_worker_selection() -> None:
                             "CLI prepare cannot add working-tree contents to the project object store")
                 request = Path(prepared["request"]["path"])
                 request.parent.mkdir(parents=True, exist_ok=True)
-                request.write_text(json.dumps({"commands": [command], "selection": selection, "selection_input": fp}))
+                request.write_text(json.dumps({"commands": [command], "selection": selected, "selection_input": fp}))
                 marker = root / ".workflow/test-observed"
                 marker.unlink(missing_ok=True)
                 if changed:
@@ -467,6 +480,14 @@ def _check_worker_selection() -> None:
                 assert_true(cli("--command", "status", "--job-id", job)["status"] == "completed",
                             "a completed job retains its verification verdict")
                 meta = stored["output"]["meta"]
+                if legacy:
+                    published = json.loads(state.read_text(encoding="utf-8"))
+                    assert published["verification"] == "pass" and "finding_history" not in published
+                if selected["execution_id"]:
+                    round_id = meta["verify_followup"]["round_id"]
+                    duplicate = cli("--command", "result", "--job-command", "verify", "--job-id", job)
+                    assert duplicate["output"]["meta"]["verify_followup"]["round_id"] == job == round_id
+                    assert json.loads(state.read_text(encoding="utf-8"))["finding_history"]["revision"] == 1
                 assert_true(meta["verdict"] == ("incomplete" if changed else "pass")
                             and (marker.read_text() if marker.exists() else "") == ("" if changed else "x"),
                             "only the prepared inputs run the test, exactly once")

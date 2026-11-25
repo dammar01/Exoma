@@ -1,0 +1,77 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d08609fc474dc1ee41f915f2d58a8057cfc90",
+  "wheel_sha256": "149094acf914421cd34ddcabf04e161f32df1767259a44446a5de24b446cc484",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "persistent": [
+      {
+        "round": 1,
+        "input": "cd9f1d408c6f1eae6d335f77c99bec5fb9749f94",
+        "prior": [],
+        "seconds": 25.59,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` returns negative values unchanged, violating its documented zero-clamp contract. [pricing.py:2] [pricing.py:3]\n  trigger: `quantity(-2)` returns `-2`. The existing check expects `0`. [check_quantity.py:3]\n  impact: Callers receive a negative quantity where the function promises zero.\n  fix: Restore `return max(0, value)` in `quantity()`.\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-we35vgwn.json\n- Read both evidence sidecars. Leads were `null` and facts were empty.\n- Compared `pricing.py` with `HEAD`. The only change replaced the zero clamp with a direct return.\n- Read `pricing.py` and `check_quantity.py`. Traced negative, zero, and positive quantities. Negative values regress, while zero and positive values retain their previous numeric results.\n- Searched for callers. `check_quantity.py` is the only repository consumer found. `total()` is unchanged and has no repository caller.\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\nconfidence: high — The diff, documented contract, and existing assertion establish the regression.\n\n[DIGEST]\nsummary: The change removes the negative-quantity clamp and breaks the existing `quantity(-2) == 0` assertion.\nkey_findings:\n- `quantity()` now passes negative inputs through.\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the zero clamp in `pricing.py`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "cd9f1d408c6f1eae6d335f77c99bec5fb9749f94"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 73726,
+            "actual_output_tokens": 739,
+            "actual_cached_input_tokens": 62336,
+            "actual_reasoning_tokens": 112
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "c68ac96c0707d81acbd7ab70becd2701b68358ae",
+        "prior": [],
+        "seconds": 19.98,
+        "ok": true,
+        "verdict": "fail",
+        "review": "[VERIFICATION]\nverdict: NEEDS FIX\n\nblocking_findings:\n- severity: high | origin: unknown | scope_relation: in_scope — runtime test `python -B check_quantity.py` exited 1 — tail: Traceback (most recent call last): File \"<fixture>\\check_quantity.py\", line 3, in <module> assert quantity(-2) == 0 AssertionError — fix the failure or show it is unrelated, then re-verify\n\n- severity: high | origin: regression | scope_relation: in_scope\n  problem: `quantity()` still returns negative values unchanged, violating its documented zero-clamp contract. [pricing.py:3] [pricing.py:4]\n  trigger: `quantity(-2)` returns `-2`.\n  impact: Callers receive a negative quantity, and the existing assertion expecting zero would fail. [check_quantity.py:3]\n  fix: Restore `return max(0, value)`.\n\nescalations:\n\n- none\n\nnotes:\n\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` failed (exited 1) — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-mdp5kbii.json\n\n- Read both evidence sidecars. Leads were `null` and facts were empty.\n- Compared `pricing.py` with `HEAD`. The diff adds a leading blank line and removes the clamp.\n- Traced negative, zero, and positive inputs against the implementation and the existing assertion. Negative inputs regress. Zero and positive inputs keep their numeric results.\n- Searched for consumers. `check_quantity.py` is the only repository consumer found. `total()` has no repository caller, and its implementation is unchanged.\n\nnot_verified:\n- tests: coverage quantity remains unverified\n\n\nconfidence: high — The diff and the existing assertion establish the regression by inspection.\n\n[DIGEST]\nsummary: The revision still breaks the documented behavior for negative quantities.\nkey_findings:\n\n- `quantity(-2)` returns `-2`, while the existing assertion expects `0`.\n\nevidence_basis: grounded\nrisk_level: high\nrecommended_next_action: Restore the zero clamp in `pricing.py`.\nconfidence: high",
+        "followup": null,
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "failed",
+            "exit": 1,
+            "stdout": "",
+            "stderr": "Traceback (most recent call last):\n  File \"<fixture>\\check_quantity.py\", line 3, in <module>\n    assert quantity(-2) == 0\nAssertionError\n",
+            "fingerprint": "c68ac96c0707d81acbd7ab70becd2701b68358ae"
+          }
+        ],
+        "reviewer_blockers": null,
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 127757,
+            "actual_output_tokens": 1286,
+            "actual_cached_input_tokens": 112768,
+            "actual_reasoning_tokens": 138
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

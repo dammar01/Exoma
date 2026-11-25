@@ -17,7 +17,9 @@ from exoma.config.settings import (
     DATA_DIR,
     JOB_DIR,
 )
-from exoma.core.workspace.workspace_paths import atomic_write_json, atomic_write_text
+from exoma.core.workspace.workspace_paths import atomic_write_json, atomic_write_text, detect_project_root
+from exoma.core.evidence import verify_followup
+from exoma.core.runtime import execution
 from exoma.utils import osutil
 from exoma.utils.path_guard import safe_path_component
 
@@ -256,6 +258,9 @@ class JobManager:
             "error": None,
         }
         try:
+            if workflow_command == "verify":
+                root = detect_project_root(work_dir)
+                job["verify_round"] = verify_followup.admission(root, execution.current_execution(root, session_id), job_id)
             self._save(job)
         except Exception:
             self._release_session_lock(job)
@@ -303,7 +308,8 @@ class JobManager:
             if not job:
                 self.release_recovery_claim(job_id)
                 return {"action": "missing", "job": None}
-            if _cleanup_unconfirmed(job) or job.get("cancellation") or job.get("status") not in {"pending", "running", "recovering"}:
+            if ("verify_checkpoint" in job or _cleanup_unconfirmed(job) or job.get("cancellation")
+                    or job.get("status") not in {"pending", "running", "recovering"}):
                 self.release_recovery_claim(job_id)
                 return {"action": "attach", "job": job}
             worker_pid = job.get("worker_pid")
@@ -539,6 +545,50 @@ class JobManager:
             self._save(job)
             return job
 
+    def complete_verify_round(self, job_id, attempt, output, *, recover=False):
+        """Checkpoint after cleanup, then publish while cancellation and other attempts are excluded."""
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if (job.get("status") != "running" or job.get("recovery_attempt", 0) != attempt
+                    or job.get("cancellation") or _cleanup_unconfirmed(job)):
+                return job
+            checkpoint = job.get("verify_checkpoint")
+            if recover:
+                claim = self._read_lock(self._lock_path(job["session_id"]))
+                if (checkpoint is None or self.liveness(job) != DEAD or not claim or claim.get("cleanup_required")
+                        or claim.get("job_id") != job_id or claim.get("session_id") != job["session_id"]
+                        or not job.get("lock_token") or claim.get("token") != job["lock_token"]):
+                    raise ValueError("verification checkpoint recovery ownership could not be confirmed")
+            if checkpoint is None:
+                checkpoint = {"attempt": attempt, "output": output, "digest": verify_followup.digest(output)}
+                job["verify_checkpoint"] = checkpoint
+                self._save(job, durable=True)
+            if (not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("output"), dict)
+                    or checkpoint.get("attempt", attempt) != attempt
+                    or verify_followup.digest(checkpoint["output"]) != checkpoint.get("digest")):
+                raise ValueError("verification checkpoint integrity error")
+            # Mutate a separate object so that the durable checkpoint remains replayable.
+            result = json.loads(json.dumps(checkpoint["output"]))
+            pin = job["verify_round"]
+            if "legacy_identity" in pin:
+                expected = tuple(pin["legacy_identity"])
+                pin = None
+            else:
+                expected = pin["execution_id"]
+            try:
+                execution.record_verification(detect_project_root(job.get("work_dir")), job["session_id"],
+                                              result, expected=expected, pin=pin, legacy_job_id=None if pin else job_id)
+            except ValueError as exc:
+                execution.reject_verification(result, str(exc))
+            status = "completed" if result.get("ok") else "failed"
+            job.update(status=status, completed_at=self._now(), output=result,
+                       error=None if status == "completed" else result.get("content") or "verification failed")
+            job.pop("verify_checkpoint")
+            job.pop("recovery_in_progress", None)
+            self._save(job, durable=True)
+        self._release_after_finish(job_id, job)
+        return job
+
     def complete_job(self, job_id: str, output: dict) -> dict:
         # Release in `finally`, outside the mutation: a failed save used to raise past the
         # release, leaving the job "running" AND its session locked until a reaper ran. The
@@ -548,7 +598,7 @@ class JobManager:
         try:
             with self._job_mutation(job_id):
                 job = self._load(job_id)
-                if job.get("status") == "completed":
+                if "verify_checkpoint" in job or job.get("status") == "completed":
                     pass
                 elif _cleanup_unconfirmed(job) or job.get("cancellation") or job.get("reaped") or job.get("status") == "failed":
                     job["late_output"] = output
@@ -573,8 +623,8 @@ class JobManager:
         some other job holds.
         """
         if job is not None:
-            if _cleanup_unconfirmed(job):
-                return  # Cleanup-unconfirmed cancellation still owns this session.
+            if "verify_checkpoint" in job or _cleanup_unconfirmed(job):
+                return  # Publication or cleanup still owns this session.
             self._release_session_lock(job)
             return
         for path in sorted(self.lock_dir.glob("*.lock")):
@@ -604,6 +654,8 @@ class JobManager:
     def _apply_failure(
         self, job: dict, error: str, output: dict | None, reaped: bool
     ) -> None:
+        if "verify_checkpoint" in job:
+            return
         if _cleanup_unconfirmed(job):
             job["late_output"] = output
             self._save(job)
@@ -642,6 +694,9 @@ class JobManager:
                                   next_action="Use the job's bound project and session.")
             if job.get("status") in {"completed", "failed"}:
                 return {"ok": True, "content": "Job already terminal; outcome preserved", "meta": {"job_id": job_id}}
+            if "verify_checkpoint" in job:
+                return make_error("runtime_lock", "verification is already publishing its checkpoint",
+                                  next_action="Collect or recover the original job result.")
             request = job.setdefault("cancellation", {"source": "explicit_cli", "actor_pid": os.getpid(),
                 "requested_at": self._now(), "reason": reason, "cleanup_confirmed": False})
             self._publish_cancellation(job, {"ok": False, "reason": "requested"})
@@ -744,7 +799,19 @@ class JobManager:
 
         if job["status"] in {"pending", "running"}:
             state = self.liveness(job)
-            if state == DEAD:
+            if "verify_checkpoint" in job:
+                # Cleanup already finished. A collector can replay the durable result
+                # under the original attempt's mutation guard without another worker.
+                if state == DEAD:
+                    try:
+                        if os.environ.get("WORKFLOW_AGENT_ROLE", "").strip().lower() == "second_agent":
+                            raise ValueError("verification publication requires the original main host")
+                        job = self.complete_verify_round(job_id, job.get("recovery_attempt", 0), None, recover=True)
+                    except (ValueError, OSError) as exc:
+                        return {"ok": False, "job_id": job_id, "status": job["status"], "content": str(exc),
+                                "meta": {"error_type": "runtime_lock", "reason": "verify_checkpoint_pending",
+                                         "next_action": "Collect the original job after checking its session claim."}}
+            elif state == DEAD:
                 attempt = int(job.get("recovery_attempt") or 0)
                 if attempt >= 1:
                     from exoma.core.evidence.contract import make_error
@@ -820,6 +887,11 @@ class JobManager:
                     },
                 }
 
+        return self.result_snapshot(job)
+
+    def result_snapshot(self, job):
+        """Render a persisted job without recovery or liveness side effects."""
+        job_id = job["job_id"]
         if job["status"] == "completed":
             return {
                 "ok": True,
@@ -924,7 +996,7 @@ class JobManager:
     def _release_stale_owner(self, path, data, released_by, dead_worker_only):
         job_id = data.get("job_id") or ""
         job = self.get_job(job_id) if job_id else None
-        if job and _cleanup_unconfirmed(job):
+        if job and ("verify_checkpoint" in job or _cleanup_unconfirmed(job)):
             return None
         if job is None:
             reason = "no_job_record"
@@ -1196,7 +1268,7 @@ class JobManager:
                     # A probe started before cancel must not publish a terminal
                     # outcome or free ownership after cancellation wins the guard.
                     return self.get_result(job_id)
-                if job.get("status") not in {"pending", "running", "recovering"}:
+                if "verify_checkpoint" in job or job.get("status") not in {"pending", "running", "recovering"}:
                     terminal = True
                 else:
                     if job.get("ownership") and not job["ownership"].get("cleanup_confirmed"):
@@ -1496,7 +1568,9 @@ class JobManager:
                 blockers[path.name] = str(exc)
                 continue
             if decision == "block" or (after_retirement and decision == "retire_startup"):
-                blockers.setdefault(path.stem, "job is active or cleanup is unconfirmed")
+                reason = ("verification awaiting publication" if "verify_checkpoint" in record
+                          else "job is active or cleanup is unconfirmed")
+                blockers.setdefault(path.stem, reason)
             elif decision == "retire_startup" or self._startup_retired(record):
                 reason = self._startup_ownership_error(path, record)
                 if reason:
@@ -1580,6 +1654,8 @@ class JobManager:
             raise ValueError("unreadable job admission status")
         if status in {"completed", "failed"}:
             return "ignore"
+        if "verify_checkpoint" in job:
+            return "block"
         if status not in {"pending", "running", "recovering"} or job.get("cancellation"):
             return "block"
         processes = [prefix for prefix in ("worker", "launcher") if job.get(prefix + "_pid") is not None]
@@ -1649,7 +1725,7 @@ class JobManager:
             self.assert_update_admission()
             self.retire_startup_reservations()
             if self.update_job_blockers(after_retirement=True):
-                raise ValueError("active Exoma jobs exist; finish or confirm cleanup before updating")
+                raise ValueError("active Exoma jobs exist; collect pending verification results or confirm cleanup before updating")
             path = self.job_dir / ".update-reservation.json"
             atomic_write_json(path, {"token": token, "operation": str(operation), "owner_pid": os.getpid()})
             return path
@@ -1841,6 +1917,8 @@ class JobManager:
                     "running",
                     "recovering",
                 }:
+                    if "verify_checkpoint" in existing_job:
+                        raise ValueError(f"session {session_id} has a verification awaiting publication")
                     if self._worker_dead(existing_job):
                         self.fail_job(
                             existing_job["job_id"],

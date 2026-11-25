@@ -432,6 +432,12 @@ def selection_error(selection, execution_id, *, previous=None) -> str | None:
         ids.add(item["id"])
         if not line(item.get("behavior")) or item.get("due") not in ("verify", "release"):
             return "each obligation needs a behavior and due stage (verify or release)"
+        if "assertion" in item and not line(item["assertion"]):
+            return "selection assertion must be a project-relative file:line"
+        equivalent = item.get("equivalent_assertion")
+        if equivalent is not None and (not item.get("assertion") or not isinstance(equivalent, dict)
+                or not line(equivalent.get("reference")) or not line(equivalent.get("reason"))):
+            return "an equivalent assertion needs the original assertion, replacement reference and reason"
         commands = item.get("commands")
         if not isinstance(commands, list) or not all(line(c) for c in commands) or len(commands) != len(set(commands)):
             return "each obligation needs a list of distinct command strings"
@@ -442,6 +448,7 @@ def selection_error(selection, execution_id, *, previous=None) -> str | None:
         for original in previous["obligations"]:
             new = items.get(original["id"])
             if (not new or new["behavior"] != original["behavior"]
+                    or (original.get("assertion") and original["assertion"] != new.get("assertion"))
                     or (original["due"] == "verify" and new["due"] != "verify")
                     or not set(original["commands"]).issubset(new["commands"])):
                 return f"selection removed or weakened obligation {original['id']}"
@@ -460,7 +467,10 @@ def end_execution(project_root: Path, session_id: str, *, expected=_UNSPECIFIED,
         error = selection_error(selection, execution.get("execution_id"))
         if error:
             return {"ok": False, "reason": "selection_invalid", "error": error}
+        from exoma.core.evidence.verify_followup import selection_assertions
+
         execution["selection"] = selection
+        execution["assertion_baselines"] = selection_assertions(project_root, selection)
     end_tree = _tree(project_root)
     changed = _changed(project_root, execution.get("begin_tree"), end_tree)
     scope = execution.get("scope") or []
@@ -485,26 +495,50 @@ def execution_identity(execution: dict | None):
     return execution.get("execution_id") or (execution.get("plan_id"), execution.get("started_at"), execution.get("approved_at"))
 
 
+def reject_verification(result, message):
+    """Expose a publication failure while preserving the review and its receipts."""
+    meta = result.setdefault("meta", {})
+    meta.update(verdict="incomplete", error_type="runtime_lock", reason="verification_publication_rejected",
+                execution_state_error=message, review_content=result.get("content"),
+                next_action="Prepare a new verify request on the current execution.")
+    result.update(ok=False, content=message)
+    return result
+
+
 @_transactional
-def record_verification(project_root: Path, session_id: str, result: dict, *, expected=_UNSPECIFIED) -> None:
+def record_verification(project_root: Path, session_id: str, result: dict, *, expected=_UNSPECIFIED,
+                        pin=None, legacy_job_id=None) -> None:
     """Write a finished /.verify's verdict onto the session's execution, if there is one.
 
     The verdict is the runtime's (`meta.verdict`: pass | fail | incomplete), never the
     second agent's own line. A syntax-mode verify records `syntax_only`: a parse check
     is not evidence the change works, and the guard must not read it as `pass`.
     """
+    if isinstance(result, dict) and (result.get("meta") or {}).get("reason") == "verification_publication_rejected":
+        return
     path = _runtime_file(project_root, session_id, EXECUTION_FILE)
     execution = _read(path)
     if expected is not _UNSPECIFIED and execution_identity(execution) != expected:
         if isinstance(result, dict):
-            result.setdefault("meta", {})["execution_state_error"] = "stale verification: execution was replaced; verdict not attached"
+            reject_verification(result, "stale verification: execution was replaced; verdict not attached")
         return
     if execution is None or not isinstance(result, dict):
         return
+    from exoma.core.evidence import verify_followup
+
     meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    legacy_digest = verify_followup.digest(result) if legacy_job_id else None
+    committed = bool(legacy_job_id and execution.get("last_verify_job") == legacy_job_id)
+    if committed and execution.get("last_verify_job_digest", legacy_digest) != legacy_digest:
+        reject_verification(result, "conflicting result for committed verification job")
+        return
+    if pin:
+        committed = pin["round_id"] in execution.get("finding_history", {}).get("rounds", {})
+        if not committed and not verify_followup.matches_revision(execution, pin):
+            raise ValueError("stale verification history revision")
     runtime_tests = meta.get("runtime_tests") or {}
     if runtime_tests.get("stale_execution"):
-        meta["execution_state_error"] = "stale selection: verdict not attached"
+        reject_verification(result, "stale selection: verdict not attached")
         return
     if meta.get("mode") == "quick" or "quick_verify" in meta:
         verdict = "syntax_only"
@@ -512,28 +546,10 @@ def record_verification(project_root: Path, session_id: str, result: dict, *, ex
         verdict = meta.get("verdict")
     if not result.get("ok") or verdict not in ("pass", "fail", "incomplete", "syntax_only"):
         verdict = "incomplete"
-    # Edits after execute-end are not the execution's: name them beside the verdict.
-    changed = (
-        _changed(project_root, execution.get("end_tree"), _tree(project_root))
-        if execution.get("status") == STATUS_IMPLEMENTED else None
-    )
-    execution.update(verification=verdict, verified_at=now_iso(), changed_since_execute=changed)
     coverage = runtime_tests.get("coverage")
-    if coverage:
-        previous = execution.get("selection")
-        execution_id = execution.get("execution_id")
-        error = selection_error(previous, execution_id) if previous is not None else None
-        error = error or selection_error(coverage["selection"], execution_id, previous=previous)
-        if error:
-            meta["execution_state_error"] = f"stale coverage: {error}; verdict not attached"
-            return
-        execution["selection"] = coverage["selection"]
-        execution.setdefault("coverage_history", []).append({
-            "at": execution["verified_at"], "verdict": verdict, **coverage,
-        })
-    elif "selection" in execution:
+    if not coverage and "selection" in execution:
         # Quick verification, a provider failure, or a browser-only review has no
-        # runner evidence for this selection.
+        # runner evidence for this selection. Rebuild this output on checkpoint replay too.
         meta["unchecked_selection"] = execution["selection"]
         selection = execution["selection"]
         if verdict != "syntax_only" and result.get("ok"):
@@ -546,7 +562,41 @@ def record_verification(project_root: Path, session_id: str, result: dict, *, ex
                 result["content"] = verify_tests.merge_gap(result.get("content") or "",
                     "tests: execution coverage unchecked: " + ", ".join(pending))
                 _finalize_verify_result("verify", result)
-                execution["verification"] = result["meta"]["verdict"]
+                verdict = result["meta"]["verdict"]
+    if committed:
+        if pin:
+            # Checks the report digest and restores the recorded round to the result.
+            verify_followup.publish(project_root, execution, pin, result)
+        return
+    verified_at = now_iso()
+    if coverage:
+        previous = execution.get("selection")
+        execution_id = execution.get("execution_id")
+        error = selection_error(previous, execution_id) if previous is not None else None
+        error = error or selection_error(coverage["selection"], execution_id, previous=previous)
+        if error:
+            reject_verification(result, f"stale coverage: {error}; verdict not attached")
+            return
+        from exoma.core.evidence.verify_followup import bind_assertions
+
+        if not bind_assertions(project_root, execution, coverage, runtime_tests.get("outcomes", [])):
+            reject_verification(result, "stale assertion baseline: verdict not attached")
+            return
+        execution["selection"] = coverage["selection"]
+        execution.setdefault("coverage_history", []).append({
+            "at": verified_at, "verdict": verdict, **coverage,
+        })
+    if pin and verdict != "syntax_only" and result.get("ok") and "review_observations" in meta:
+        if not verify_followup.publish(project_root, execution, pin, result):
+            return
+    if legacy_job_id:
+        execution["last_verify_job"] = legacy_job_id
+        execution["last_verify_job_digest"] = legacy_digest
+    changed = (
+        _changed(project_root, execution.get("end_tree"), _tree(project_root))
+        if execution.get("status") == STATUS_IMPLEMENTED else None
+    )
+    execution.update(verification=verdict, verified_at=verified_at, changed_since_execute=changed)
     _write(path, execution)
     if changed and isinstance(result.get("meta"), dict):
         result["meta"]["changed_since_execute"] = changed

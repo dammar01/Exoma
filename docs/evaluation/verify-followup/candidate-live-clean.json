@@ -1,0 +1,115 @@
+{
+  "mode": "live",
+  "model": "gpt-6.2-sol",
+  "revision": "1c9d086+working-tree",
+  "wheel_sha256": "5239173e3f732af44b996c35d50ff5ac1d4ee052192aa1085b39abd2b5209218",
+  "distribution_version": "1.2.3",
+  "package": "Lib\\site-packages\\exoma\\__init__.py",
+  "harness_sha256": "352aedf646672f1608969ab921a9e9f7df1b87935700822337f6fc6063d91ffe",
+  "cases": {
+    "clean": [
+      {
+        "round": 1,
+        "input": "d70aac68ad3ed0eb1df0f939043b2e952cd15429",
+        "prior": [],
+        "seconds": 36.22,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[FOLLOWUP_V1]\n[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.1 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-twahqyjk.json\n- Compared `pricing.py` with the index and `HEAD`. The normalized Git blob matches both. The working copy uses CRLF line endings.\n- Traced the planned assertion at `check_quantity.py:3`. It calls `quantity(-2)` and expects `0`, which follows from `max(0, value)` at `pricing.py:3`.\n- Searched project callers. `check_quantity.py:1` is the only pricing import found, and no callers of `total` were found.\n- Read both evidence sidecars and the verification record. The record contains one planned obligation, `quantity`, and no prior blocker IDs.\n\nnot_verified:\n- none\n\nconfidence: high — Git comparison and source tracing agree.\n\n[DIGEST]\nsummary: The working copy has no behavioral pricing diff. The selected assertion covers the required negative-quantity clamp.\nkey_findings:\n- `quantity(-2)` evaluates to `0` by inspection.\n- `total` is unchanged and has no repository callers.\nevidence_basis: grounded\nrisk_level: low\nrecommended_next_action: Collect the runtime result for the selected `quantity` check.\nconfidence: high",
+        "followup": {
+          "execution_id": "d30b1c0322ac459fac66074e1353319b",
+          "previous": 0,
+          "round_id": "b00de60561fe4b128d9a1a48b4067e2f",
+          "input": "d70aac68ad3ed0eb1df0f939043b2e952cd15429",
+          "digest": "131dbb2a94e4d7583dc328b30450c0a3f64bd88326bb8157714ff5ef7959455e",
+          "at": "2026-11-25T13:11:26.693786+00:00",
+          "open_obligations": [],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "passed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-twahqyjk.json",
+              "fingerprint": "d70aac68ad3ed0eb1df0f939043b2e952cd15429"
+            }
+          ],
+          "events": [],
+          "advisory": true,
+          "open_count": 0
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "d70aac68ad3ed0eb1df0f939043b2e952cd15429"
+          }
+        ],
+        "reviewer_blockers": [],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 131972,
+            "actual_output_tokens": 1099,
+            "actual_cached_input_tokens": 111104,
+            "actual_reasoning_tokens": 244
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      },
+      {
+        "round": 2,
+        "input": "d70aac68ad3ed0eb1df0f939043b2e952cd15429",
+        "prior": [],
+        "seconds": 39.91,
+        "ok": true,
+        "verdict": "pass",
+        "review": "[FOLLOWUP_V1]\n[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- runtime: `python -B check_quantity.py` passed in 0.0 s — log: <fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-4mjfg05o.json\n- Compared the worktree and index with `HEAD`. The normalized `pricing.py` blob matches `HEAD`, and `check_quantity.py` has no diff.\n- Traced `check_quantity.py:3` to `pricing.py:3`. For input `-2`, `max(0, value)` returns the expected `0`.\n- Searched repository callers. `check_quantity.py:1` imports `quantity`. No callers of `total` were found.\n- Read both evidence sidecars and the round record. The record lists obligation `quantity` and contains no open or recently resolved blocker IDs.\n- Read `.workflow/data/sessions/review/verify/test-output/test-twahqyjk.json`. The recorded runtime check passed with exit code `0`.\n\nnot_verified:\n- none\n\nconfidence: high — Git comparison, source tracing, and the recorded runtime result agree.\n\n[DIGEST]\nsummary: The current pricing code has no behavioral diff from `HEAD`. The recorded runtime check passed for the selected negative-quantity assertion.\nkey_findings:\n- `quantity(-2)` returns `0`.\n- The round contains no blocker IDs requiring follow-up.\nevidence_basis: grounded\nrisk_level: low\nrecommended_next_action: Record the DONE verdict for this round.\nconfidence: high",
+        "followup": {
+          "execution_id": "d30b1c0322ac459fac66074e1353319b",
+          "previous": 1,
+          "round_id": "7b230df3da594cad83c933047de9b2bf",
+          "input": "d70aac68ad3ed0eb1df0f939043b2e952cd15429",
+          "digest": "f213883be1f29c546edf9f5b2b6115ad3e2fd0880febc20875e8f21b1d615f6e",
+          "at": "2026-11-25T13:12:06.999555+00:00",
+          "open_obligations": [],
+          "checks": [
+            {
+              "command": "python -B check_quantity.py",
+              "status": "passed",
+              "log_ref": "<fixture>\\.workflow\\data\\sessions\\review\\verify\\test-output\\test-4mjfg05o.json",
+              "fingerprint": "d70aac68ad3ed0eb1df0f939043b2e952cd15429"
+            }
+          ],
+          "events": [],
+          "advisory": true,
+          "open_count": 0
+        },
+        "diagnostics": [
+          {
+            "command": "python -B check_quantity.py",
+            "status": "passed",
+            "exit": 0,
+            "stdout": "checked negative quantity\n",
+            "stderr": "",
+            "fingerprint": "d70aac68ad3ed0eb1df0f939043b2e952cd15429"
+          }
+        ],
+        "reviewer_blockers": [],
+        "error_type": null,
+        "usage": [
+          {
+            "token_source": "provider",
+            "actual_input_tokens": 328173,
+            "actual_output_tokens": 2131,
+            "actual_cached_input_tokens": 298368,
+            "actual_reasoning_tokens": 374
+          }
+        ],
+        "provider_version": "codex-cli 0.168.0"
+      }
+    ]
+  }
+}

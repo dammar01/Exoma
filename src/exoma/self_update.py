@@ -281,7 +281,7 @@ def _handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int
         blockers = jobs.update_job_blockers()
         if blockers:
             raise ValueError("active Exoma jobs or unresolved records in this user store: " +
-                             ", ".join(blockers) + "; run exoma jobs clean-stale to clean stale jobs")
+                             ", ".join(blockers) + "; collect pending verification results and run exoma jobs clean-stale for stale jobs")
         descriptor = install_method.update_descriptor()
         api = worker.platform_api()
         key = worker.installation_key(descriptor["prefix"], api.user())

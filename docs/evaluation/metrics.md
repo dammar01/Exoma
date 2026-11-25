@@ -20,6 +20,14 @@ operational report or per-run metadata fields produced alongside them (`core/aud
 signals — **not** a complete semantic history of how an agent reasoned through or solved a
 problem.
 
+## Finding continuity
+
+Measure false closures against the original finding, independently discovered defects
+against the labeled code changes, and false blocks against clean controls. Report the
+number of evaluable live pairs, missing observations, times and provider-reported
+tokens. Keep replay outcomes and human or reviewer judgments separately attributable.
+[Two-round fixture and measurement protocol](verify-followup.md)
+
 ## Comparing risk-based test selection
 
 Pair the same fixture and labeled defect (or clean control) on the 1.1.2 baseline

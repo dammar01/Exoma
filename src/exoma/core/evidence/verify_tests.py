@@ -269,6 +269,8 @@ def _command_error(command: str, tokens: list[str], prefixes: list[list[str]]) -
 
 def prepare(project_root, session_id: str) -> dict:
     """Inspect pending inputs only: no claim, test, provider, state write or verdict."""
+    from exoma.core.evidence import verify_followup
+
     effective, warnings = policy(project_root)
     path = request_path(project_root, session_id)
     data = _read_request(path)  # deliberately ignores this process's job/claimed context
@@ -304,6 +306,7 @@ def prepare(project_root, session_id: str) -> dict:
             "selection_version": 1, "execution_id": current.get("execution_id"),
             "selection_input": fingerprint, "execution_selection": current.get("selection"),
             "coverage_status": "pending" if "selection" in current else "unknown",
+            "verify_followup": verify_followup.summary(current),
             "request": {"path": str(path), "status": status, "commands": commands,
                         "selection": pending_selection, "reason": reason, "validation_errors": errors},
             "next_step": {"action": action, "session_id": session_id, "automatic": False},
@@ -629,6 +632,13 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
     fingerprint = None
     if selected:
         fingerprint = samples[0] if samples else sample()
+        # Closing a known failure requires a fresh observation of its behavior.
+        open_ids = {f.get("obligation") for f in current.get("finding_history", {}).get("findings", {}).values()
+                    if f.get("disposition") == "open"}
+        for o in (current.get("selection") or {}).get("obligations", []):
+            if o["id"] in open_ids:
+                for command in o["commands"]:
+                    eligible.pop(command, None)
     request = _selection_request(request, current, fingerprint)
     selection = (request or {}).get("selection") or current.get("selection")
     outcomes = (
@@ -645,6 +655,9 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
         bound = bool(request and "selection" in request)
         changed = bound and any(after != fingerprint for after in samples)
         coverage = _coverage(selection, outcomes, bound=bound and fingerprint is not None, inputs_changed=changed)
+        from exoma.core.evidence import verify_followup
+
+        verify_followup.check_assertions(project_root, current, coverage, outcomes, fingerprint if bound else None)
         reason = " (no input fingerprint available)" if bound and fingerprint is None else ""
         gaps = [f"{RUNTIME_GAP_PREFIX} coverage {row['id']} remains unverified{reason}" for row in coverage["obligations"]
                 if row["status"] == "open" and row["due"] == "verify"]

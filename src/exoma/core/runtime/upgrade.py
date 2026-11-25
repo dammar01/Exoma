@@ -163,7 +163,7 @@ def upgrade_workflow_workspace(
         listed = ", ".join(f"{j['job_id']} ({j['command']})" for j in active[:3])
         raise ValueError(
             f"{len(active)} job(s) still running against {project_root}: {listed}. "
-            "Wait for them to finish (or fail them) before upgrading — regenerating the "
+            "Collect pending verification results and wait for active jobs before upgrading — regenerating the "
             "workspace under a live call can lose its session state."
         )
 
