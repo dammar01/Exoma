@@ -206,6 +206,7 @@ from tests.checks.host_profiles import (
 )
 from tests.checks.self_update import _test_self_update
 from tests.checks.native_update_gate import _test_native_update_gate
+from tests.checks.w3_opencode_control import _test_w3_opencode_control
 from tests.checks.v1_surfaces import (
     _test_claude_second_agent,
     _test_e2e_stays_opt_in,
@@ -286,6 +287,7 @@ def run_tests() -> None:
     _test_codex_host_install()
     _test_self_update()
     _test_native_update_gate()
+    _test_w3_opencode_control()
     _test_opencode_host_contract()
     _test_opencode_host_install()
     _test_contract_renders_per_host()

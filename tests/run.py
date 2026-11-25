@@ -15,6 +15,7 @@ inventing independence it does not have.
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 import time
@@ -74,6 +75,7 @@ from tests.checks.continuation import (  # noqa: E402
 from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E402
 from tests.checks.self_update import _test_self_update, _check_windows_update_observer  # noqa: E402
 from tests.checks.native_update_gate import _test_native_update_gate  # noqa: E402
+from tests.checks.w3_opencode_control import _test_w3_opencode_control  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.promote import _test_promote_boundaries  # noqa: E402
 from tests.checks.knowledge_retrieve import _test_knowledge_retrieval  # noqa: E402
@@ -273,6 +275,7 @@ SUITES: dict[str, tuple] = {
     "secret-files": (_test_secret_files, "secret files found by name, an ignored .env watched by the agy guard, codex selectable with its boundary warning, EXOMA_/AI_PROXY_ env alias"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
     "native-update-gate": (_test_native_update_gate, "native update-gate matrix collector accepts only complete, clean, commit-bound strict receipts"),
+    "w3-opencode-control": (_test_w3_opencode_control, "offline fresh Control diagnostics, deadlines, receipt binding and archive integrity"),
     "self-update": (_test_self_update, "shared updater lifecycle, native containment, queries, and opt-in A-to-B/no-op wheel gate"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
@@ -410,6 +413,10 @@ SUITES: dict[str, tuple] = {
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Exoma tests")
+    parser.add_argument("--w3-control-archive", type=Path, metavar="DIR",
+                        help="verify the real pinned Control-02 archive as a standalone check")
+    parser.add_argument("--w3-archive-check-id", metavar="ID",
+                        help="fresh 32-character lowercase hex identifier for this archive observation")
     parser.add_argument(
         "--only",
         action="append",
@@ -441,6 +448,20 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if args.w3_control_archive is not None or args.w3_archive_check_id is not None:
+        if args.w3_control_archive is None or not re.fullmatch("[0-9a-f]{32}", args.w3_archive_check_id or ""):
+            parser.error("archive checks require --w3-control-archive and a fresh --w3-archive-check-id")
+        if any(value for name, value in vars(args).items()
+               if name not in {"w3_control_archive", "w3_archive_check_id"}):
+            parser.error("run the real archive check separately from other suites or options")
+        from tools.maintain.w3_opencode_control import CONTROL_02_PIN, validate_archive
+        try:
+            count = validate_archive(args.w3_control_archive, CONTROL_02_PIN)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"Control-02 archive check failed ({type(exc).__name__})", file=sys.stderr)
+            return 1
+        print(f"Control-02 check={args.w3_archive_check_id} manifest_sha256={CONTROL_02_PIN} entries={count}")
+        return 0
     if args.wsl_distro:
         if os.name != "nt" or args.record:
             parser.error("--wsl-distro requires Windows and cannot be combined with --record")

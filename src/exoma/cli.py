@@ -876,6 +876,7 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> None:
     import argparse
     import json
+    from textwrap import fill
 
     # A Windows pipe defaults to the ANSI codepage, so the text reports (`install --check`,
     # `session export`) reached the agent with every em dash as a replacement character.
@@ -895,16 +896,45 @@ def main(argv: list[str] | None = None) -> None:
         print(f"exoma {TOOL_VERSION}")
         raise SystemExit(0)
 
+    if (argv[:2] in (["--command", "upgrade"], ["-c", "upgrade"])
+            and any(arg in ("--help", "-h") for arg in argv[2:])):
+        help_parser = argparse.ArgumentParser(
+            prog="exoma upgrade", description="Refresh an existing project's .workflow directory.",
+            epilog="Create a workspace with exoma init. Update the installed package with exoma update.",
+        )
+        help_parser.add_argument("--work-dir", "-w", metavar="DIR", help="project directory (default: current directory)")
+        help_parser.add_argument("--pretty", action="store_true", help="indent JSON output")
+        help_parser.print_help()
+        raise SystemExit(0)
+
     parser = argparse.ArgumentParser(
-        prog="exoma", description="Exoma CLI",
-        epilog="Package commands: exoma install, exoma check, exoma update [--check | --status], "
-               "exoma jobs clean-stale [--apply], exoma session export",
+        prog="exoma", usage="exoma COMMAND [OPTIONS]", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""Commands
+  Installation    install, update, check
+  Workspace       init, upgrade, doctor, clean, provider
+  Workflow        explore, plan, analyze, verify, verify-browser, sweep
+  Jobs & reports  jobs clean-stale, inspect, status, result, cancel, report,
+                  audit, session export
+
+Examples
+  exoma update                  Update the package and any current workspace
+  exoma upgrade --work-dir DIR  Refresh an existing workspace
+  exoma jobs clean-stale        Clean stale jobs and show totals
+  exoma jobs clean-stale --dry-run
+                                Preview cleanup totals""",
+        epilog="Use exoma COMMAND --help for options or exoma --version for the version.\n\n"
+               + fill("Runtime commands: " + ", ".join(command for command in COMMANDS if command not in
+                      {"init", "upgrade", "doctor", "clean", "provider", "explore", "plan", "analyze",
+                       "verify", "verify-browser", "sweep", "inspect", "status", "result", "cancel", "report", "audit"}),
+                      width=78, subsequent_indent="  "),
     )
     parser.add_argument(
         "--command",
         "-c",
         required=True,
         choices=COMMANDS,
+        metavar="COMMAND",
+        help="alternate spelling for a workflow or runtime command",
     )
     parser.add_argument("--prompt", "-p", default=None)
     parser.add_argument(

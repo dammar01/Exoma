@@ -1,4 +1,4 @@
-# Exoma v1.2.2
+# Exoma v1.2.3
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.2.2)
+## Install (v1.2.3)
 
 ### New team member — full sequence from scratch
 
@@ -885,7 +885,7 @@ hooks keep the bare `bash`. A PowerShell call operator in front of the quoted ba
 '<root>/.workflow/run.sh' …`) is dropped before the gate judges the words, on Agy, Codex and
 OpenCode alike.
 
-**Read ranges.** A selected v1.2.2 delegation defers project reads until collection. Legacy preflight markers evaluate a precision read on its line span. `read_range_keys` names the host's own
+**Read ranges.** A selected delegation defers project reads until collection. Legacy preflight markers evaluate a precision read on its line span. `read_range_keys` names the host's own
 argument keys: a limit key (`limit`) gives a span; a start and an end line (Agy's `StartLine` /
 `EndLine` are the assumed names) give `end - start + 1`; when both are given the larger span
 counts. An end without a start, an end before the start, a value that is not a whole number in
@@ -1603,7 +1603,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.2.2):
+Reliability keys (v1.2.3):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -2288,29 +2288,25 @@ two projects cannot resume each other's provider sessions.
 ## Async jobs & recovery
 
 ```sh
-exoma jobs clean-stale          # Preview each job or session lock and the reason for its status
-exoma jobs clean-stale --apply  # Recheck and recover all eligible jobs in the user store
+exoma jobs clean-stale           # Clean the current user's store across workspaces
+exoma jobs clean-stale --dry-run # Preview what would be cleaned
+exoma jobs clean-stale --apply   # Explicit spelling of the default
 ```
 
-Both commands inspect the current user's store across workspaces. Preview is
-read-only and exits 0 after listing findings. `eligible` means Windows verified
-a reboot on the same machine after the job's latest attempt. A dead worker or
-an old heartbeat alone leaves the lock in place because a descendant can still
-be running. If the job or its lock lacks boot evidence for the latest attempt,
-the job shows `skipped` with a reason. This includes records written before Exoma
-started storing boot identities.
+The command prints one line of counters. `examined` includes job records and
+unmatched session claims. `active`, `cleaned` (or `would_clean` in preview),
+`terminal`, `unverified` and `errors` describe the findings. `update_blockers`
+counts remaining admission blockers, including any update reservation. Preview
+reports current blockers. Apply exits 1 for remaining blockers or errors.
+A read-only second agent may use `--dry-run`.
 
-During apply, Exoma rereads the job and session lock under the same guards used
-for status changes. If the job ID, session or ownership token has changed, it
-skips the job. For a verified recovery, Exoma marks an abandoned `running` job
-as `failed` with a recovery reason. A job already marked `failed` keeps its
-original error, output and completion time. Exoma saves the reboot audit before
-releasing the matching lock. A repeat run preserves that history.
-
-The final `Update blocker` lines identify jobs, locks or an update reservation
-that still block an update. Apply exits 1 if a blocker remains or a repair
-fails. A skipped job can coexist with exit 0 when the update checks find no
-blockers and every attempted repair succeeds.
+A confirmed worker exit or reused PID allows immediate cleanup on the same boot
+when other recorded owners have stopped and descendant ownership is clear. An
+unverifiable generation stays unresolved. Verified Windows restart evidence can
+resolve unacknowledged descendant cleanup, including a running record with a
+missing lock. A changed owner or unreadable lock prevents release. The cleaner
+preserves terminal history before releasing the matching claim. Repeated cleanup
+leaves that history intact.
 
 Delegated commands automatically run through a separate worker. On Claude Code, the runner
 must be launched as a background tool task so the foreground tool call immediately
@@ -2352,7 +2348,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.2.2)
+### Liveness worker (v1.2.3)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

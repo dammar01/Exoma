@@ -175,10 +175,24 @@ last. The operation observer returns a nonzero status when any step fails. Witho
 is created. A missing, unreadable, or malformed workspace `config.json` is reported before
 the package is changed. Global configuration keeps the last host, mode, and provider choices.
 
-If job ownership blocks an update, run `exoma jobs clean-stale` to inspect the
-user store. On Windows, `exoma jobs clean-stale --apply` can release ownership
-after a verified reboot and reports any jobs that still block update. Records
-created before boot evidence was available require independent investigation.
+A configured workspace can be found from a subdirectory. A bare `.workflow/` in
+an unrelated ancestor such as the home directory is ignored. Running directly
+at an incomplete workspace root still reports its missing configuration.
+`exoma upgrade` refreshes an existing workspace and requires its `.workflow/`.
+
+If job ownership blocks an update, run `exoma jobs clean-stale` to retire
+confirmed stale jobs, then check the reported `update_blockers` count.
+`--dry-run` previews the totals. When an older installation cannot update to
+obtain the new cleaner, use a temporary copy of the released cleaner with the
+same user and Exoma store. For example, after v1.2.3 is published:
+
+```sh
+uvx --from exoma==1.2.3 exoma jobs clean-stale
+exoma update
+```
+
+Run the older updater from a directory outside any bare ancestor `.workflow/`
+if it diagnoses a missing workspace configuration there.
 
 `exoma update` uses the same asynchronous handoff on Windows, Linux and macOS.
 A verified Python runtime and immutable worker snapshot outside the target installation

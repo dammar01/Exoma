@@ -29,6 +29,30 @@ _MUTATION_WAIT_SECONDS = 5.0
 # The recorded process is no longer the one the PID names: it exited, or the PID was reused.
 _GONE = frozenset({osutil.PROCESS_DEAD, osutil.PROCESS_REUSED})
 _CANCEL_WAIT_SECONDS = 10.0
+_FILETIME_UNIX_EPOCH = 116444736000000000
+
+
+def _start_identity(value):
+    """Decode only the generation formats produced by osutil.process_identity."""
+    if not isinstance(value, str) or len(value) > 96:
+        return None
+    if match := re.fullmatch(r"native:([1-9][0-9]{0,19})", value):
+        ticks = int(match[1])
+        return ("native", ticks) if _FILETIME_UNIX_EPOCH < ticks < 2**64 else None
+    if match := re.fullmatch(
+        r"proc:(unknown-boot|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}):(0|[1-9][0-9]{0,19})", value
+    ):
+        ticks = int(match[2])
+        boot = match[1]
+        if boot.replace("-", "") in ("0" * 32, "f" * 32) or ticks >= 2**64:
+            return None
+        return ("proc", boot, ticks)
+    if value.startswith("ps:"):
+        try:
+            return ("ps", datetime.strptime(value[3:], "%a %b %d %H:%M:%S %Y"))
+        except ValueError:
+            pass
+    return None
 
 
 class JobCancellation(BaseException):
@@ -1494,27 +1518,49 @@ class JobManager:
         return None
 
     @staticmethod
-    def _admission_process_gone(job, prefix):
-        """Prove exit/reuse without interpreting an inaccessible process as dead."""
+    def admission_process_state(job, prefix):
+        """Classify a recorded generation without folding an OS error into death."""
         pid = job.get(prefix + "_pid")
-        if type(pid) is not int or pid <= 0:
-            return False
-        state = osutil.process_state(pid)
+        max_pid = 0xffffffff if osutil.IS_WINDOWS else 0x7fffffff
+        if type(pid) is not int or not 0 < pid <= max_pid:
+            return "unknown"
+        try:
+            state = osutil.process_state(pid)
+        except (OSError, ValueError, OverflowError):
+            return "unknown"
         if state == "dead":
-            return True
+            return "gone"
         if state != "alive":
-            return False
+            return "unknown"
         identity = job.get(prefix + "_identity")
         if identity is not None:
-            if not isinstance(identity, str) or not identity:
-                return False
-            current = osutil.process_identity(pid)
-        else:
-            identity = job.get(prefix + "_create_time")
-            if type(identity) is not int or identity <= 0:
-                return False
-            current = osutil.pid_create_time(pid)
-        return current is not None and current != identity
+            recorded = _start_identity(identity)
+            if recorded is None:
+                return "unknown"
+            observed = _start_identity(osutil.process_identity(pid))
+            if observed is None or observed[0] != recorded[0]:
+                return "unknown"
+            birth = job.get(prefix + "_create_time")
+            if birth is not None and (type(birth) is not int or recorded != ("native", birth)):
+                return "unknown"
+            if recorded == observed:
+                return "alive"
+            # ps renders local wall time. A timezone change can alter lstart
+            # for a process that is still alive.
+            if recorded[0] == "ps" or (recorded[0] == "proc" and "unknown-boot" in
+                    (recorded[1], observed[1]) and recorded[2] == observed[2]):
+                return "unknown"
+            return "gone"
+        birth = job.get(prefix + "_create_time")
+        if type(birth) is not int or not _FILETIME_UNIX_EPOCH < birth < 2**64:
+            return "unknown"
+        current = osutil.pid_create_time(pid)
+        if type(current) is not int or not _FILETIME_UNIX_EPOCH < current < 2**64:
+            return "unknown"
+        return "alive" if current == birth else "gone"
+
+    def _admission_process_gone(self, job, prefix):
+        return self.admission_process_state(job, prefix) == "gone"
 
     def mutation_admission(self, job):
         """Read-only classification; an orphan is eligible, never permission by itself.

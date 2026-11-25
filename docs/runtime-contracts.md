@@ -215,11 +215,22 @@ even if the job record becomes unreadable.
 Windows submissions and recovery attempts bind a random attempt ID, timestamp,
 machine fingerprint and boot generation to both the job and its session claim.
 The fingerprint combines the installation ID and SMBIOS system UUID. Recovery
-requires a changed kernel boot GUID and a verified restart after the attempt.
-Under the capacity, job mutation and session guards, `jobs clean-stale --apply`
+uses the current kernel boot GUID and verifies that startup follows the attempt.
+When the GUID repeats, two distinct Kernel-Boot cold-start records must identify
+the prior and current startups. Their record IDs must be ordered, their time
+windows disjoint, and the earlier event must precede or coincide with the job
+reservation. Missing log history leaves cleanup unresolved. The recorded process
+generations and machine identity are checked in either case.
+Under the capacity, job mutation and session guards, `jobs clean-stale`
 checks ownership again, retains admission, persists the terminal job and its
 `reboot_cleanup` entry, then removes the matching claim. A retry after a failed
 release reuses the entry. Ordinary history retention applies after release.
+
+A running job with a confirmed dead or reused worker PID can also be retired
+on the same boot when descendant ownership is clear. This path records
+`pid_cleanup`. An absent lock allows recovery from the job record. A conflicting
+or unreadable lock keeps ownership unresolved. Dry run applies the same
+classification and leaves the store untouched.
 
 Only confirmed cleanup publishes typed `cancelled` (exit 130) and releases ownership;
 unconfirmed cleanup remains active and blocks recovery/update. Completed jobs stay completed,

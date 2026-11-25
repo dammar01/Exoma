@@ -131,6 +131,38 @@ def _check_workspace_admission_errors() -> None:
                         and "other-project" in errors.getvalue(), "global preflight includes lock-only blockers")
         descriptor.assert_not_called()
 
+        # A disposable interpreter without pip also isolates a broken updater
+        # that might accidentally reach the package stage in this test.
+        import venv
+        interpreter = venv.EnvBuilder(with_pip=False)
+        cli_venv = root / "cli-venv"
+        interpreter.create(cli_venv)
+        cli_python = cli_venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        plain = root / "plain"
+        plain.mkdir()
+        (plain / ".git").mkdir()
+        (root / ".workflow").mkdir()
+        user_store = JobManager(root / "cli-home/storage/jobs")
+        (user_store.lock_dir / "external.lock").write_text(json.dumps({
+            "job_id": "external-project", "work_dir": str(project), "cleanup_required": True,
+        }), encoding="utf-8")
+        env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "EXOMA_HOME": str(root / "cli-home"),
+               "AGENT_HOME": str(root / "cli-agent"), "PIP_NO_INDEX": "1", "PIP_CONFIG_FILE": os.devnull}
+        for argv in (["update", "--manager", "pip"], ["upgrade"]):
+            result = subprocess.run([str(cli_python), "-m", "exoma", *argv], env=env, cwd=plain,
+                                    capture_output=True, text=True, timeout=30, **no_console())
+            assert_true(result.returncode == 1, result.stdout + result.stderr)
+            if argv[0] == "update":
+                assert_true("external-project" in result.stderr and "before package mutation" in result.stderr,
+                            "global job admission still applies in a plain directory")
+                if not any((p / ".workflow/config.json").exists() for p in root.parents):
+                    assert_true("workspace: none" in result.stdout, "bare ancestor is optional at the CLI")
+            else:
+                response = json.loads(result.stdout)
+                assert_true(response["meta"]["error_type"] == "workflow_upgrade_error" and
+                            "no .workflow/" in response["content"], "explicit upgrade requires its workspace")
+            assert_true(not (plain / ".workflow").exists(), "neither command initialized the plain directory")
+
 
 def _check_update_dispatch() -> None:
     """Source checks never start either opt-in wheel/network gate."""
@@ -172,6 +204,19 @@ def _check_update_admission() -> None:
         root = Path(tmp).resolve()
         project = root / "project"
         project.mkdir()
+        (root / ".workflow").mkdir()
+        # A test host may put TEMP below a configured checkout. Isolate that
+        # outer boundary while exercising real discovery throughout the fixture.
+        outside = {p / ".workflow/config.json" for p in root.parents}
+        exists = Path.exists
+        def fixture_exists(path):
+            return path not in outside and exists(path)
+        with patch.object(Path, "exists", fixture_exists):
+            assert_true(self_update._workspace_root(project) is None,
+                        "bare ancestor does not own a plain directory")
+            assert_true(self_update._workspace_root(root) == root, "diagnose an incomplete current workspace")
+            (root / ".workflow/config.json").write_text("{}", encoding="utf-8")
+            assert_true(self_update._workspace_root(project) == root, "configured ancestor owns its subdirectory")
         with patch.object(self_update.Path, "cwd", return_value=project), \
              patch.object(self_update, "_package_command", return_value=("pip", [sys.executable, "-m", "pip"])), \
              patch.object(self_update, "_handoff", return_value=3) as handoff:
@@ -277,6 +322,13 @@ def _check_update_admission() -> None:
                                 capture_output=True, text=True, timeout=15, **no_console())
         assert_true(result.returncode == 0 and "--manager" in result.stdout and "pipx" in result.stdout and "--timeout" in result.stdout,
                     f"public CLI routes {spelling} to update help, pipx among the managers")
+    for spelling, labels in ((("--help",), ("Installation", "Workspace", "jobs clean-stale")),
+                             (("upgrade", "--help"), ("existing", "--work-dir")),
+                             (("jobs", "clean-stale", "--help"), ("totals", "--dry-run"))):
+        result = subprocess.run([sys.executable, str(REPO / "main.py"), *spelling],
+                                capture_output=True, text=True, timeout=15, **no_console())
+        assert_true(result.returncode == 0 and all(label in result.stdout for label in labels),
+                    f"public CLI shows contextual help for {spelling}")
 
 
 

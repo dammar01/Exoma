@@ -11,6 +11,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 1.2.3 (candidate) | [docs/releases/v1.2.3.md](docs/releases/v1.2.3.md) | Update from ordinary directories, clean stale jobs by process identity, and find CLI commands by purpose |
 | 1.2.2 (candidate) | [docs/releases/v1.2.2.md](docs/releases/v1.2.2.md) | Preserve concurrent edits during installer recovery and improve gate diagnostics, browser references and session retention reporting |
 | 1.2.1 | [docs/releases/v1.2.1.md](docs/releases/v1.2.1.md) | `exoma jobs clean-stale` previews stale jobs and can release matching locks after a verified Windows reboot while preserving job history |
 | 1.2.0 | [docs/releases/v1.2.0.md](docs/releases/v1.2.0.md) | Risk-based test selection across workers and browser retry evidence that preserves missing assertions through the CLI exit status |

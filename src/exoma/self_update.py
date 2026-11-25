@@ -23,13 +23,12 @@ IS_WINDOWS = os.name == "nt"
 
 
 def _workspace_root(cwd: Path) -> Path | None:
-    incomplete = None
     for candidate in (cwd, *cwd.parents):
         if (candidate / ".workflow" / "config.json").exists():
             return candidate
-        if incomplete is None and (candidate / ".workflow").is_dir():
-            incomplete = candidate
-    return incomplete
+    # Diagnose an incomplete workspace when invoked at its root. A bare
+    # .workflow elsewhere (e.g. in the user's home) does not own this cwd.
+    return cwd if (cwd / ".workflow").is_dir() else None
 
 
 _uv_tool = install_method.uv_tool
@@ -138,7 +137,10 @@ def _positive_seconds(value: str) -> float:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="exoma update", description="Update Exoma and refresh its installed config and current workspace")
+    parser = argparse.ArgumentParser(
+        prog="exoma update", description="Update the package and global configuration from any directory.",
+        epilog="Inside a configured workspace, update also refreshes its .workflow directory.",
+    )
     parser.add_argument("--manager", choices=("auto", "uv", "pipx", "pip"), default="auto",
                         help="package manager for this Exoma installation "
                              "(default: detect uv tool, then pipx, otherwise pip)")
@@ -279,7 +281,7 @@ def _handoff(manager: str, package: list[str], cwd: Path, timeout: float) -> int
         blockers = jobs.update_job_blockers()
         if blockers:
             raise ValueError("active Exoma jobs or unresolved records in this user store: " +
-                             ", ".join(blockers) + "; run exoma jobs clean-stale for details")
+                             ", ".join(blockers) + "; run exoma jobs clean-stale to clean stale jobs")
         descriptor = install_method.update_descriptor()
         api = worker.platform_api()
         key = worker.installation_key(descriptor["prefix"], api.user())

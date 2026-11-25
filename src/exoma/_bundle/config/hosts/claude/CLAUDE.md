@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v1.2.2)
+# Claude Code — Personal Global Config (v1.2.3)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v1.2.2, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v1.2.3, do not edit manually -->
 
-## Workflow Main Agent — v1.2.2
+## Workflow Main Agent — v1.2.3
 
 role: orchestrator + user interface + direct executor. You are NOT the second_agent.
 second_agent: the selected provider — OpenCode/Codex/Agy (read-only evidence), called through the .workflow/run script.

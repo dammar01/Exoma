@@ -324,14 +324,14 @@ def _check_mutation_admission() -> None:
     from exoma.utils import osutil
 
     base = {"status": "pending", "worker_pid": None, "created_at": "2020-01-01T00:00:00+00:00",
-            "reservation_owner_pid": 42424242, "reservation_owner_identity": "owner"}
+            "reservation_owner_pid": 42424242, "reservation_owner_identity": "native:132223104000000041"}
     with tempfile.TemporaryDirectory(prefix="mutation-admission-") as tmp:
         root = Path(tmp)
         manager = JobManager(root / "classify")
         cases = (
             ("dead owner", {}, "dead", None, "retire_startup"),
-            ("reused owner", {}, "alive", "replacement", "retire_startup"),
-            ("live owner", {}, "alive", "owner", "block"),
+            ("reused owner", {}, "alive", "native:132223104000000042", "retire_startup"),
+            ("live owner", {}, "alive", "native:132223104000000041", "block"),
             ("unknown owner", {}, "unknown", "replacement", "block"),
             ("inaccessible identity", {}, "alive", None, "block"),
             ("legacy without owner", {"reservation_owner_pid": None}, "dead", None, "block"),
@@ -346,7 +346,7 @@ def _check_mutation_admission() -> None:
             ("terminal", {"status": "failed"}, "unknown", None, "ignore"),
             ("dead worker", {"worker_pid": 777}, "dead", None, "ignore"),
             ("unknown worker", {"worker_pid": 777}, "unknown", None, "block"),
-            ("live launcher", {"launcher_pid": 777, "launcher_identity": "owner"}, "alive", "owner", "block"),
+            ("live launcher", {"launcher_pid": 777, "launcher_identity": "native:132223104000000041"}, "alive", "native:132223104000000041", "block"),
         )
         for label, changes, state, identity, expected in cases:
             with patch.object(osutil, "process_state", return_value=state), \
@@ -356,11 +356,25 @@ def _check_mutation_admission() -> None:
             for age, expected in ((29.999, "block"), (30.0, "retire_startup")):
                 with patch.object(manager, "_age_seconds", return_value=age):
                     assert_true(manager.mutation_admission(base) == expected, "startup grace boundary")
-        for current, expected in ((42, "block"), (43, "retire_startup"), (None, "block")):
+        for current, expected in ((132223104000000041, "block"), (132223104000000042, "retire_startup"), (None, "block")):
             with patch.object(osutil, "process_state", return_value="alive"), \
                  patch.object(osutil, "pid_create_time", return_value=current):
                 assert_true(manager.mutation_admission({**base, "reservation_owner_identity": None,
-                            "reservation_owner_create_time": 42}) == expected, "create-time proof fallback")
+                            "reservation_owner_create_time": 132223104000000041}) == expected, "create-time proof fallback")
+        boot_id = "991b0d3a-7f97-4d00-bc0d-9adc67a9acfd"
+        proc = f"proc:{boot_id}:77"
+        ps = "ps:Wed Nov 25 12:00:00 2026"
+        for recorded, observed, expected in (
+            (proc, proc, "alive"), (proc, f"proc:{boot_id}:78", "gone"),
+            ("proc:unknown-boot:77", proc, "unknown"),
+            ("proc:00000000-0000-0000-0000-000000000000:77", proc, "unknown"),
+            ("native:42", "native:132223104000000042", "unknown"),
+            (ps, ps, "alive"), (ps, "ps:Wed Nov 25 13:00:00 2026", "unknown"),
+        ):
+            with patch.object(osutil, "process_state", return_value="alive"), \
+                 patch.object(osutil, "process_identity", return_value=observed):
+                assert_true(manager.admission_process_state({"worker_pid": 42, "worker_identity": recorded},
+                                                            "worker") == expected, "compare only proven generations")
 
         def fixture(name):
             store = JobManager(root / name)
@@ -474,7 +488,8 @@ def _check_reboot_cleanup():
         empty = root / "empty"
         env = {**os.environ, "EXOMA_HOME": str(empty),
                "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}
-        for flags, role, expected in (([], "", 0), (["--apply"], " SECOND_AGENT ", 1)):
+        for flags, role, expected in (([], "", 0), ([], "second_agent", 1),
+                                      (["--dry-run"], "second_agent", 0), (["--apply"], " SECOND_AGENT ", 1)):
             proc = subprocess.run([sys.executable, "-B", "-m", "exoma", "jobs", "clean-stale", *flags],
                                   cwd=root, env={**env, "WORKFLOW_AGENT_ROLE": role},
                                   timeout=15, capture_output=True, text=True, **no_console())
@@ -497,7 +512,8 @@ def _check_reboot_cleanup():
                 seeded = isolated.create_job("plan", "", "native-cli", str(root), None)
                 seeded.update(status="running", started_at=stamp, reservation_owner_pid=None)
                 isolated._save(seeded)
-            for flags, expected in (([], "eligible"), (["--apply"], "recovered")):
+            for flags, expected in ((["--dry-run"], "would_clean=1"), ([], "cleaned=1"),
+                                    (["--apply"], "cleaned=0")):
                 proc = subprocess.run([sys.executable, "-B", "-m", "exoma", "jobs", "clean-stale", *flags],
                                       cwd=root, env={**env, "WORKFLOW_AGENT_ROLE": ""},
                                       timeout=15, capture_output=True, text=True, **no_console())
@@ -522,6 +538,101 @@ def _check_reboot_cleanup():
 
         def results(apply=False):
             return {row[0]: row[2:] for row in clean_stale.inspect_jobs(store, apply=apply)}
+
+        missing = fixture("cancelled-no-lock")
+        mid = missing["job_id"]
+        missing["cancellation"] = {"targets": [], "cleanup_confirmed": False}
+        store._save(missing)
+        store._lock_path(missing["session_id"]).unlink()
+        failed_missing = fixture("failed-cancel-no-lock")
+        fid = failed_missing["job_id"]
+        failed_missing.update(status="failed", error="original failure", completed_at="2020-01-02T00:00:00+00:00",
+                              output={"reason": "original"}, cancellation={"targets": [], "cleanup_confirmed": False})
+        store._save(failed_missing)
+        store._lock_path(failed_missing["session_id"]).unlink()
+
+        def cold_event(number, stamp):
+            return (f"<Event><System><TimeCreated SystemTime='{stamp}'/><EventRecordID>{number}</EventRecordID>"
+                    "</System><EventData><Data Name='BootType'>0</Data></EventData></Event>")
+
+        previous = cold_event(7, "2017-07-14T02:40:01Z")
+        latest = cold_event(8, "2023-11-14T22:13:21Z")
+        with patch.object(osutil, "process_state", return_value="dead"), \
+             patch.object(osutil, "windows_boot_evidence", return_value={**new, "boot_id": old["boot_id"]}), \
+             patch.dict(os.environ, {"SystemRoot": str(root)}):
+            with patch.object(osutil, "run_bounded", return_value=(0, f"<Events>{previous}</Events>", "")):
+                assert_true(not clean_stale._distinct_cold_starts(old["boot_us"], old["boot_us"] + 250_000,
+                                                                  old["boot_us"] + 500_000),
+                            "a clock adjustment cannot reuse the original startup event")
+            for events in (latest, previous, latest + latest, latest + previous.replace(">7<", ">9<")):
+                with patch.object(osutil, "run_bounded", return_value=(0, f"<Events>{events}</Events>", "")):
+                    assert_true(results()[mid][0] == "skipped", "a single or unordered event cannot prove two boots")
+            with patch.object(osutil, "run_bounded", return_value=(0, f"<Events>{latest}{previous}</Events>", "")):
+                assert_true(mid in store.update_job_blockers() and results()[mid][0] == "eligible"
+                            and results(True)[mid][0] == "recovered" and mid not in store.update_job_blockers(),
+                            "cancelled old job without a lock clears admission after a confirmed cold start")
+                terminal = store._load(fid)
+                assert_true(terminal["reboot_cleanup"]["prior_status"] == "failed" and fid not in store.update_job_blockers()
+                            and all(terminal[k] == failed_missing[k] for k in ("status", "completed_at", "error", "output")),
+                            "lockless failed cancellation is confirmed without overwriting terminal history")
+                assert_true(results(True)[mid][0] == results(True)[fid][0] == "skipped" and store._load(fid) == terminal,
+                            "terminal history is stable")
+
+        ghost = fixture("pid-cleanup")
+        gid = ghost["job_id"]
+        ghost.pop("attempt_origin", None)
+        ghost["ownership"]["cleanup_confirmed"] = True
+        store._save(ghost)
+        pid_lock = store._lock_path(ghost["session_id"])
+        pid_lock.unlink()
+        with patch.object(osutil, "process_state", return_value="unknown"):
+            assert_true(results(True)[gid][0] == "skipped", "unknown PID is retained")
+        with patch.object(osutil, "process_state", return_value="alive"):
+            with patch.object(osutil, "process_identity", return_value=identity):
+                assert_true(results(True)[gid][0] == "active", "original live process is retained")
+            proc = "proc:c6d5955d-bd76-42eb-aa9f-076e9437e053:51"
+            ps = "ps:Wed Nov 25 12:00:00 2026"
+            for recorded, observed in (("unknown", proc), ("proc:x:7", proc), (proc, "proc:bad"),
+                                       ("ps:not a date", ps), (ps, proc), (identity, "native:invalid")):
+                store._save({**ghost, "worker_identity": recorded, "worker_create_time": None})
+                with patch.object(osutil, "process_identity", return_value=observed):
+                    assert_true(results(True)[gid][0] == "skipped" and store._load(gid)["status"] == "running",
+                                "invalid or incomparable generations retain a live PID")
+            store._save(ghost)
+            oversized = fixture("oversized-pid")
+            oid = oversized["job_id"]
+            oversized.update(worker_pid=2**80)
+            store._save(oversized)
+            def pid_state(pid):
+                if pid == oversized["worker_pid"]:
+                    raise AssertionError("out-of-range PID reached native API")
+                return "alive"
+            with patch.object(osutil, "process_identity", return_value="native:132223104000000042"):
+                pid_lock.write_text("{", encoding="utf-8")
+                assert_true(results(True)[gid][0] == "skipped" and store._load(gid) == ghost,
+                            "unreadable lock cannot act as an absent lock")
+                pid_lock.unlink()
+                with patch.object(osutil, "process_state", side_effect=pid_state):
+                    batch = results(True)
+                    assert_true(batch[gid][0] == "recovered" and batch[oid][0] == "skipped"
+                                and store._load(gid)["status"] == "failed" and store._load(oid) == oversized,
+                                "oversized PID stays unresolved while a verified reused PID is retired")
+            # This test record intentionally remains a blocker; keep later fixtures independent.
+            store._path(oid).unlink()
+            store._lock_path(oversized["session_id"]).unlink()
+
+        interrupted = fixture("pid-write-interrupted")
+        iid = interrupted["job_id"]
+        with patch.object(osutil, "process_identity", return_value=identity):
+            store.confirm_worker_cleanup(iid)
+        with patch.object(osutil, "process_state", return_value="dead"), \
+             patch.object(osutil, "windows_boot_evidence", return_value=old):
+            with patch.object(store, "_save", side_effect=OSError("interrupted")):
+                assert_true(results(True)[iid][0] == "error" and iid in store.update_job_blockers(),
+                            "failed PID cleanup write retains admission")
+            assert_true(results(True)[iid][0] == "recovered" and iid not in store.update_job_blockers()
+                        and store._load(iid)["pid_cleanup"]["reason"] == "worker_process_gone",
+                        "retry commits terminal history and releases only its claim")
 
         job = fixture("running")
         failed = fixture("failed")
@@ -549,7 +660,7 @@ def _check_reboot_cleanup():
                             "preview recognizes prior boot and preserves history")
                 with patch.object(osutil, "process_state", return_value="alive"), \
                      patch.object(osutil, "process_identity", return_value=identity):
-                    assert_true(results(True)[jid][0] == "skipped", "a matching live worker wins")
+                    assert_true(results(True)[jid][0] == "active", "a matching live worker wins")
                 too_late = 116444736000000000 + 10 * new["boot_us"]
                 store._save({**job, "worker_create_time": too_late, "worker_identity": f"native:{too_late}"})
                 assert_true(results(True)[jid][0] == "skipped" and lock.exists(),
@@ -627,11 +738,15 @@ with JobManager(sys.argv[1], initialize=False)._job_mutation(sys.argv[2], reclai
                 orphan = store.lock_dir / "orphan.lock"
                 orphan.write_text(json.dumps({"job_id": "lost", "cleanup_required": True}), encoding="utf-8")
                 (store.job_dir / "job_bad.json").write_text("{", encoding="utf-8")
+                (root / ".workflow").mkdir(exist_ok=True)
+                (root / ".workflow/config.json").write_text("{}", encoding="utf-8")
                 output = io.StringIO()
-                with patch.object(clean_stale, "JobManager", return_value=store), redirect_stdout(output):
+                with patch.object(clean_stale, "JobManager", return_value=store), \
+                     patch.object(Path, "cwd", return_value=root), redirect_stdout(output):
                     code = clean_stale.main(["clean-stale", "--apply"])
-                assert_true(code == 1 and orphan.exists() and "Update blocker lost" in output.getvalue()
-                            and "Update blocker job_bad.json" in output.getvalue()
+                assert_true(code == 1 and orphan.exists() and "update_blockers=" in output.getvalue()
+                            and int(output.getvalue().split("update_blockers=")[1]) == 2
+                            and "job_bad.json" not in output.getvalue() and jid not in output.getvalue()
                             and "private task" not in output.getvalue(), "reports all remaining blockers")
 
         retry = fixture("recovery")
@@ -683,8 +798,8 @@ def _check_replaced_cleanup_owner():
                 output = io.StringIO()
                 with redirect_stdout(output):
                     code = clean_stale.main(["clean-stale", "--apply"])
-                assert_true(code == 0 and f"{old['job_id']} [failed] skipped: session owner or token differs"
-                            in output.getvalue(), "obsolete owner skips without failing an unblocked batch")
+                assert_true(code == 0 and "cleaned=0" in output.getvalue() and old["job_id"] not in output.getvalue(),
+                            "obsolete owner skips without failing an unblocked batch or printing job IDs")
                 assert_true(store._load(old["job_id"]) == old and store._read_lock(lock) == claim,
                             "failed history and session claim survive")
 
