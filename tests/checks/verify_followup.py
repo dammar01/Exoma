@@ -28,13 +28,15 @@ def _check_retry_and_recurrence():
         observation = {"blocker": 1, "description": "negative input escapes clamp", "origin": "introduced"}
 
         def publish(replies, blockers, status="passed", reused=False, fingerprint="unchanged",
-                    command="python check.py"):
+                    command="python check.py", log_ref="receipt", coverage_status=None):
+            if coverage_status is None:
+                coverage_status = "covered" if status == "passed" else "open"
             coverage = {"selection": {"obligations": [obligation]}, "selection_input": fingerprint,
-                        "obligations": [{"id": "quantity", "status": "covered" if status == "passed" else "open"}]}
+                        "obligations": [{"id": "quantity", "status": coverage_status}]}
             result = {"content": "[FOLLOWUP_V1]\n" + "\n".join(json.dumps(r) for r in replies) + "\n[VERIFICATION]",
                       "meta": {"review_observations": {"blockers": blockers}, "runtime_tests": {
                           "coverage": coverage, "outcomes": [{"command": command, "status": status,
-                          "log_ref": "receipt", "fingerprint": fingerprint, "reused": reused}] if command else []}}}
+                          "log_ref": log_ref, "fingerprint": fingerprint, "reused": reused}] if command else []}}}
             follow.publish(root, state, follow.binding(state), result)
             return result["meta"]["verify_followup"]
 
@@ -55,16 +57,36 @@ def _check_retry_and_recurrence():
         publish([dict(reply, status="unchecked")], [], fingerprint="B", command="smoke")
         assert finding["last_input"] == "unchanged"
         obligation["commands"].remove("smoke")
-        assert publish([reply], [])["open_count"] == 1  # Unjustified identical input.
+        def check_reason(replies, reason, **options):
+            record = publish(replies, [], **options)
+            event = record["events"][0]
+            assert (event["id"], event["reason_code"]) == (fid, reason), event
+            assert finding["last_reason_code"] == reason
+            assert record["open_count"] == (reason != "closure_accepted")
+
+        check_reason([reply], "missing_retry_basis")
         reply["repeat_reason"] = "discriminate intermittent input from a deterministic failure"
-        assert publish([reply], [], reused=True)["open_count"] == 1
-        assert publish([dict(reply, status="nonreproduced")], [])["open_count"] == 1
-        assert publish([reply, reply], [])["open_count"] == 1  # Ambiguous decision.
-        assert publish([reply], [])["events"][0]["status"] == "resolved"
+        check_reason([dict(reply, diagnosis="", strategy="")], "missing_diagnosis")
+        check_reason([dict(reply, strategy="")], "missing_strategy")
+        check_reason([dict(reply, obligation="unrelated")], "obligation_unmatched")
+        with patch.dict(finding, assertion=None):
+            check_reason([reply], "original_assertion_unbound")
+        check_reason([dict(reply, evidence="missing.py:1")], "assertion_unmatched")
+        check_reason([reply], "fresh_pass_missing", reused=True)
+        check_reason([reply], "fresh_pass_missing", log_ref=None)
+        check_reason([reply], "obligation_open", coverage_status="open")
+        check_reason([dict(reply, status="nonreproduced")], "reported_nonreproduced")
+        check_reason([dict(reply, status="present")], "blocker_unmatched")
+        check_reason([dict(reply, status="unchecked")], "reported_unchecked")
+        check_reason([dict(reply, status="unexpected")], "unsupported_status")
+        check_reason([], "followup_missing")
+        check_reason([reply, reply], "followup_ambiguous")
+        check_reason([reply], "closure_accepted")
         repeated = publish([dict(reply, status="regressed", blocker=1)], [observation], "failed")
         assert [(e["id"], e["status"]) for e in repeated["events"]] == [(fid, "regressed")]
+        assert finding["last_reason_code"] == "regression_linked"
         del reply["repeat_reason"]
-        assert publish([reply], [], fingerprint="genuinely-changed")["open_count"] == 0
+        check_reason([reply], "closure_accepted", fingerprint="genuinely-changed")
 
 
 def _check_paired_controls():
@@ -76,6 +98,8 @@ def _check_paired_controls():
             with patch.dict(os.environ, {"PYTHONDONTWRITEBYTECODE": "1"}):
                 root = Path(temp)
                 first, second = drive(root, case, "replay", "fixture")
+                if case == "persistent":
+                    _check_green_with_open_finding(root)
                 if case in ("repair", "clean"):
                     _check_later_assertion(root, legacy=case == "repair")
                 if case == "clean":
@@ -91,13 +115,50 @@ def _check_paired_controls():
         assert any(event["id"] == fid for event in result["events"])
         if case == "replacement":
             assert statuses == ["resolved", "new"] and second["verdict"] == "fail"
+            assert result["events"][0]["reason_code"] == "closure_accepted"
         elif case == "persistent":
             assert statuses == ["present"] and result["open_count"] == 1
+            assert result["events"][0]["reason_code"] == "blocker_linked"
         elif case == "repair":
             assert statuses == ["resolved"] and result["open_count"] == 0
         else:
             assert statuses == ["unchecked"] and "quantity" in result["open_obligations"]
+            assert result["events"][0]["reason_code"] == "assertion_unmatched"
             assert second["diagnostics"][0]["status"] == "passed" and second["verdict"] == "incomplete"
+
+
+def _check_green_with_open_finding(root):
+    from exoma import cli
+    from exoma.core.workspace.workspace_paths import workflow_paths
+    from tools.maintain.verify_followup_eval import COMMAND, FIXTURE, REVIEW, SESSION, write_json
+
+    (root / "pricing.py").write_bytes((FIXTURE / "pricing.py").read_bytes())
+    prepared = cli.run("verify-prepare", "", SESSION, str(root))["meta"]
+    prior = prepared["verify_followup"]["open"][0]
+    assert prior["last_reason_code"] == "blocker_linked"
+    row = json.dumps({"id": prior["id"], "status": "nonreproduced"})
+    for replies, status, reason in (([], "unchecked", "followup_missing"),
+                                   ([row, row], "unchecked", "followup_ambiguous"),
+                                   ([row], "nonreproduced", "reported_nonreproduced")):
+        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP_V1]", *replies, REVIEW.format(verdict="DONE", finding="none")])
+        write_json(Path(prepared["request"]["path"]), {"commands": [COMMAND], "selection": prepared["execution_selection"],
+                                                      "selection_input": prepared["selection_input"]})
+        result = cli.run("verify", "Check repaired quantity", SESSION, str(root), model="fixture")
+        meta = result["meta"]
+        assert result["ok"] and meta["verdict"] == "pass" and cli._verify_exit_code("verify", result) == 0
+        assert meta["runtime_tests"]["coverage"]["obligations"][0]["status"] == "covered"
+        event, = meta["verify_followup"]["events"]
+        assert (event["id"], event["status"], event["reason_code"]) == (prior["id"], status, reason)
+        prepared = cli.run("verify-prepare", "", SESSION, str(root))["meta"]
+        upcoming = prepared["verify_followup"]["open"]
+        assert upcoming[0]["last_reason_code"] == reason
+        if status == "unchecked":
+            assert upcoming[0]["last_round"] == prior["last_round"]
+    state = execution.current_execution(root, SESSION)
+    with follow.using(follow.binding(state)):
+        name = follow.handoff(root, SESSION, state, {})
+    handoff = workflow_paths(root, SESSION)["runtime_dir"] / name
+    assert json.loads(handoff.read_text(encoding="utf-8"))["open"] == upcoming
 
 
 def _check_later_assertion(root, legacy):
@@ -172,7 +233,9 @@ def _check_first_binding(root):
             return result["meta"]["verdict"]
 
         assert review() == "incomplete"
-        check.write_text("from pricing import quantity\n\nassert quantity(-2) == 0\n", encoding="utf-8")
+        # A late receipt can describe even a print if no earlier assertion was observed.
+        late_line = "print('first observed here')" if legacy else "assert quantity(-2) == 0"
+        check.write_text("from pricing import quantity\n\n" + late_line + "\n", encoding="utf-8")
         assert review() == "pass", "first fresh observation should bind the previously missing assertion"
         baseline = execution.current_execution(root, SESSION)["assertion_baselines"][item["id"]]
         assert baseline == {"source": "current_observation", "receipt": follow.assertion_receipt(root, item["assertion"])}

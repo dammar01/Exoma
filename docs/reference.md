@@ -1819,6 +1819,39 @@ This records the proposed replacement for review. Coverage stays open until the 
 Check `meta.verify_followup.events` and `open_count` alongside the verdict. A finding
 without sufficient identifiable evidence can remain open after a green command.
 
+Each follow-up event for a previously offered finding can carry an optional
+`reason_code`. Read it from the published JSON result at
+`meta.verify_followup.events`. The next `verify-prepare` and reviewer handoff
+include the latest code as `last_reason_code` on that finding, including when
+the reviewer omitted its ID. A newly discovered finding or a historical record
+can have no code. Collecting a published round again returns its original record.
+
+For a single `resolved` proposal the runtime reports the first applicable row
+in the following table.
+
+| Code | What to check |
+| --- | --- |
+| `missing_diagnosis`, then `missing_strategy` | Supply the missing account of the failure or the approach taken. |
+| `missing_retry_basis` | Identify a change in observed inputs or give the reason for a repeat. |
+| `obligation_unmatched` | Check the proposed obligation ID and its required commands against the finding. |
+| `original_assertion_unbound` | The finding has no original assertion receipt to compare. |
+| `assertion_unmatched` | Check the proposed evidence reference against the original receipt, including its file and line hashes. |
+| `fresh_pass_missing` | Inspect the outcomes and diagnostic receipts for all required commands on this input. |
+| `obligation_open` | The coverage row does not establish coverage of the required behavior. |
+| `closure_accepted` | All closure conditions were met. |
+
+A missing or duplicated ID in the review produces `followup_missing` or
+`followup_ambiguous`. A review reporting `nonreproduced` or `unchecked`
+produces `reported_nonreproduced` or `reported_unchecked`. An unrecognized
+status produces `unsupported_status`. A `present` report produces
+`missing_diagnosis`, `blocker_linked`, or `blocker_unmatched`. A confirmed link
+reopening a resolved finding produces `regression_linked`.
+
+For example, all required commands can pass and the obligation can be
+`covered` while an omitted finding stays `open` with `followup_missing`.
+A rejected publication instead returns `meta.reason` equal to
+`verification_publication_rejected` with an `incomplete` verdict.
+
 For browser verification, a passing playback with an outstanding historical assertion
 returns `incomplete` and exit 2. A dynamic title can recover when the effective inputs
 and page match. A retained DOM assertion whose entire selector list previously missed

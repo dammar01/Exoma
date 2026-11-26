@@ -1604,7 +1604,10 @@ def _check_selected_checkpoint():
                 assert proc.returncode == 0, (proc.stdout, proc.stderr)
                 return json.loads(proc.stdout)
             state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
-            execution._write(state, {"execution_id": "original", "status": "active"})
+            # An existing open finding from a version without reason codes.
+            execution._write(state, {"execution_id": "original", "status": "active", "finding_history": {
+                "version": 1, "revision": 1, "rounds": {"old": {"events": [{"id": "F-old", "status": "new"}]}},
+                "findings": {"F-old": {"id": "F-old", "disposition": "open", "last_round": "old"}}}})
             def control(action, token):
                 return lifecycle.delegation_control("delegate-" + action, token, session, str(root))
 
@@ -1690,7 +1693,12 @@ def _check_selected_checkpoint():
                         deliveries = list(pool.map(lambda _: runner("delegate-result", "--task", generation), range(2)))
                     receipts = {r["meta"]["delegation"]["receipt"] for r in deliveries}
                     assert len(receipts) == 1 and spawn.call_count == 1
-                    assert execution.current_execution(root, session)["finding_history"]["revision"] == 1
+                    ledger = execution.current_execution(root, session)["finding_history"]
+                    assert ledger["revision"] == 2 and "reason_code" not in ledger["rounds"]["old"]["events"][0]
+                    for delivery in deliveries:
+                        assert delivery["meta"]["verify_followup"] == ledger["rounds"][jid]
+                        event, = delivery["meta"]["verify_followup"]["events"]
+                        assert (event["id"], event["reason_code"]) == ("F-old", "followup_missing")
                     receipt = receipts.pop()
                     def advance_selection(job_id):
                         assert control("ack", receipt)["ok"] and control("ack", receipt)["ok"]

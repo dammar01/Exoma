@@ -275,6 +275,34 @@ def _prior_retry_input(finding, rounds, commands):
     return previous
 
 
+def _retry_gap(diagnosis, strategy, changed_input, repeat):
+    if not diagnosis:
+        return "missing_diagnosis"
+    if not strategy:
+        return "missing_strategy"
+    if not (changed_input or repeat):
+        return "missing_retry_basis"
+    return None
+
+
+def _closure_reason(finding, row, assertion, commands, fresh, covered, retry_gap):
+    """Return the first unmet closure condition or the accepted decision."""
+    if retry_gap:
+        return retry_gap
+    oid = finding.get("obligation")
+    if not commands or _string(row, "obligation") != oid:
+        return "obligation_unmatched"
+    if not finding.get("assertion"):
+        return "original_assertion_unbound"
+    if assertion != finding["assertion"]:
+        return "assertion_unmatched"
+    if not fresh.issuperset(commands):
+        return "fresh_pass_missing"
+    if oid not in covered:
+        return "obligation_open"
+    return "closure_accepted"
+
+
 def publish(root, execution, pin, result):
     """Apply exactly one review under the caller's execution transaction."""
     ledger = execution.setdefault("finding_history", {"version": 1, "revision": 0, "findings": {}, "rounds": {}})
@@ -314,6 +342,11 @@ def publish(root, execution, pin, result):
               for o in outcomes]
     handled_failures = set()
 
+    def record_followup(finding, status, reason_code, **details):
+        # summary() exposes this even when a missing reply leaves last_round unchanged.
+        finding["last_reason_code"] = reason_code
+        events.append({"id": finding["id"], "status": status, "reason_code": reason_code, **details})
+
     def record_observation(finding, commands):
         required = [finding["command"]] if finding.get("command") in commands else commands
         previous = _prior_retry_input(finding, ledger["rounds"], required)
@@ -338,8 +371,8 @@ def publish(root, execution, pin, result):
         if _string(row, "diagnosis") and associate(row.get("blocker"), obligations.get(f.get("obligation"))):
             record_observation(f, obligations.get(f.get("obligation"), {}).get("commands", []))
             f.update(disposition="open", last_round=pin["round_id"])
-            events.append({"id": fid, "status": "regressed", "diagnosis": _string(row, "diagnosis"),
-                           "observation": by_index[row["blocker"]]["description"]})
+            record_followup(f, "regressed", "regression_linked", diagnosis=_string(row, "diagnosis"),
+                            observation=by_index[row["blocker"]]["description"])
 
     for fid in sorted(offered):
         f = findings[fid]
@@ -350,7 +383,8 @@ def publish(root, execution, pin, result):
         prior_input = record_observation(f, commands)
         matches = [r for r in replies if r.get("id") == fid]
         if len(matches) != 1:
-            events.append({"id": fid, "status": "unchecked", "reason": "absent or ambiguous follow-up"})
+            record_followup(f, "unchecked", "followup_ambiguous" if matches else "followup_missing",
+                            reason="absent or ambiguous follow-up")
             continue
         row = matches[0]
         status = _string(row, "status")
@@ -358,24 +392,27 @@ def publish(root, execution, pin, result):
         strategy = _string(row, "strategy")
         repeat = _string(row, "repeat_reason")
         assertion = assertion_receipt(root, _string(row, "evidence"))
-        original = f.get("assertion")
         fresh = {c["command"] for c in checks if c.get("status") == "passed" and _observed(c, fingerprint)}
         # Wording alone cannot make an unchanged experiment materially different.
         changed_input = bool(prior_input and fingerprint and prior_input != fingerprint)
         f["latest_checks"] = [check for check in checks if check["command"] in commands]
-        valid_retry = bool(diagnosis and strategy and (changed_input or repeat))
-        disposition = "open"
-        if status == "resolved" and valid_retry and oid in covered and commands and set(commands) <= fresh:
-            if original and assertion == original and _string(row, "obligation") == oid:
-                disposition = "resolved"
-        if status == "present" and diagnosis:
-            associate(row.get("blocker"), obligation)
-        events.append({"id": fid, "status": disposition if disposition == "resolved" else
-                       status if status in ("present", "nonreproduced", "unchecked") else "unchecked",
-                       "diagnosis": diagnosis, "strategy": strategy, "repeat_reason": repeat,
-                       "evidence": assertion, "equivalence": _string(row, "equivalence"),
-                       "retry_supported": valid_retry})
-        f.update(disposition=disposition, last_strategy=strategy, last_round=pin["round_id"])
+        retry_gap = _retry_gap(diagnosis, strategy, changed_input, repeat)
+        if status == "resolved":
+            reason = _closure_reason(f, row, assertion, commands, fresh, covered, retry_gap)
+            status = "resolved" if reason == "closure_accepted" else "unchecked"
+        elif status == "present":
+            reason = "missing_diagnosis"
+            if diagnosis:
+                reason = "blocker_linked" if associate(row.get("blocker"), obligation) else "blocker_unmatched"
+        elif status == "nonreproduced":
+            reason = "reported_nonreproduced"
+        else:
+            reason = "reported_unchecked" if status == "unchecked" else "unsupported_status"
+            status = "unchecked"
+        record_followup(f, status, reason, diagnosis=diagnosis, strategy=strategy, repeat_reason=repeat,
+                        evidence=assertion, equivalence=_string(row, "equivalence"), retry_supported=retry_gap is None)
+        f.update(disposition="resolved" if status == "resolved" else "open",
+                 last_strategy=strategy, last_round=pin["round_id"])
 
     def create(description, origin, oid, command=None):
         obligation = obligations.get(oid)
