@@ -75,12 +75,25 @@ def active():
 
 def summary(current):
     ledger = (current or {}).get("finding_history", {})
+    def for_review(finding):
+        # Older runtime findings can lack first_checks. Only project a unique
+        # first-round failure; committed observations remain immutable.
+        if not finding.get("command") or finding.get("first_checks"):
+            return finding
+        first_round = ledger.get("rounds", {}).get(finding.get("first_round"), {})
+        matches = [c for c in first_round.get("checks", [])
+                   if c.get("command") == finding["command"] and c.get("status") in ("failed", "timeout", "error")]
+        if len(matches) == 1:
+            return {**finding, "first_checks": matches}
+        return finding
+
     pending = [f for f in ledger.get("findings", {}).values() if f["disposition"] == "open"]
     pending.sort(key=lambda f: (f.get("reviewed_revision", 0), f["id"]))
     closed = [f for f in ledger.get("findings", {}).values() if f["disposition"] == "resolved"]
     closed.sort(key=lambda f: f.get("reviewed_revision", 0), reverse=True)
     return {"version": 1, "revision": ledger.get("revision", 0), "open_count": len(pending),
-            "open": pending[:MAX_PRIOR], "recently_resolved": closed[:MAX_PRIOR],
+            "open": [for_review(f) for f in pending[:MAX_PRIOR]],
+            "recently_resolved": [for_review(f) for f in closed[:MAX_PRIOR]],
             "remaining": max(0, len(pending) - MAX_PRIOR)}
 
 
@@ -522,14 +535,20 @@ def publish(root, execution, pin, result):
         f.update(disposition="resolved" if status == "resolved" else "open",
                  last_strategy=strategy, last_round=pin["round_id"])
 
-    def create(description, origin, oid, command=None):
+    def create(description, origin, oid, trigger=None):
         obligation = obligations.get(oid)
+        first_checks = [c for c in checks if c["command"] in (obligation or {}).get("commands", [])]
         fid = "F-" + uuid.uuid4().hex[:16]
         f = {"id": fid, "description": description, "origin": origin, "disposition": "open",
              "first_round": pin["round_id"], "last_round": pin["round_id"], "observed_input": None,
              "obligation": oid, "assertion": assertion_receipt(root, (obligation or {}).get("assertion")),
-             "behavior": (obligation or {}).get("behavior"), "command": command,
-             "first_checks": [check for check in checks if check["command"] in (obligation or {}).get("commands", [])]}
+             "behavior": (obligation or {}).get("behavior"), "command": trigger["command"] if trigger else None,
+             "first_checks": first_checks}
+        if trigger is not None:
+            if not first_checks:
+                f["first_checks"] = [trigger]
+            elif len(first_checks) > 1:
+                f["first_trigger"] = trigger
         record_observation(f, (obligation or {}).get("commands", []))
         findings[fid] = f
         events.append({"id": fid, "status": "new", "origin": origin})
@@ -556,7 +575,7 @@ def publish(root, execution, pin, result):
         candidates = [fid for fid in sorted(offered) if findings[fid].get("command") == command
                       and not (findings[fid].get("first_case") and cases.get(command)
                                and not _same_case(findings[fid]["first_case"], cases[command]))]
-        finding = create("Runtime check " + command + " " + check["status"], "unknown", oid, command)
+        finding = create("Runtime check " + command + " " + check["status"], "unknown", oid, check)
         if case:
             finding["first_case"] = case
         if candidates:

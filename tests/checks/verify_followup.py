@@ -21,6 +21,46 @@ def _test_verify_followup():
     _check_paired_controls()
     _check_publication()
     _check_retry_and_recurrence()
+    _check_first_failure_handoffs()
+
+
+def _check_first_failure_handoffs():
+    from exoma.core.evidence import verify_tests
+    from exoma.core.workspace.workspace_paths import workflow_paths
+
+    with TemporaryDirectory() as temp:
+        root = Path(temp)
+        session = "first-failure"
+        state = {"execution_id": "one"}
+        checks = [{"command": "same", "status": "failed", "log_ref": "first.json"},
+                  {"command": "same", "status": "failed", "log_ref": "second.json"},
+                  {"command": "another", "status": "error", "log_error": "storage unavailable"}]
+        result = {"meta": {"runtime_tests": {"outcomes": checks}}}
+        follow.publish(root, state, follow.binding(state, "one"), result)
+        ledger = state["finding_history"]
+        events = ledger["rounds"]["one"]["events"]
+        assert len(events) == 3
+        expected = {event["id"]: [check] for event, check in zip(events, checks, strict=True)}
+
+        def read_handoffs():
+            path = execution._runtime_file(root, session, execution.EXECUTION_FILE)
+            execution._write(path, state)
+            prepared = verify_tests.prepare(root, session)["meta"]["verify_followup"]
+            with follow.using(follow.binding(state)):
+                name = follow.handoff(root, session, state, {})
+            sidecar = workflow_paths(root, session)["runtime_dir"] / name
+            reviewed = json.loads(sidecar.read_text(encoding="utf-8"))
+            assert prepared["open"] == reviewed["open"]
+            return {f["id"]: f["first_checks"] for f in prepared["open"]}
+
+        assert read_handoffs() == expected
+        for finding in ledger["findings"].values():
+            finding["first_checks"] = []
+        before = deepcopy(ledger)
+        legacy = read_handoffs()
+        assert legacy == {e["id"]: ([c] if c["command"] == "another" else [])
+                          for e, c in zip(events, checks, strict=True)}
+        assert ledger == before
 
 
 def _check_retry_and_recurrence():

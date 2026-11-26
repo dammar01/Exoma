@@ -1690,6 +1690,8 @@ def _test_verify_reuses_unchanged_runs() -> None:
     _check_index_flags_do_not_hide_edits()
     _check_batch_binds_each_pass_to_its_own_state()
     _check_verify_failure_ends_an_earlier_pass()
+    _check_interrupted_verify_reuse()
+    _check_verify_failure_overlapping_writer()
     _check_reusable_rechecks_after_reading()
     _check_usage_row_counts_reused_tests()
     _check_unrecorded_verify_failure_still_withholds()
@@ -2154,6 +2156,79 @@ def _check_verify_failure_ends_an_earlier_pass() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_interrupted_verify_reuse() -> None:
+    """Exit a disposable verify process after B's diagnostic and before command three."""
+    import subprocess
+    from textwrap import dedent
+
+    root, _, python = _stale_reuse_repo()
+    try:
+        command, noop, other = (f"{python} {name}" for name in ("counter.py", "noop.py", "noop.py other"))
+        verify_tests.run_and_record(root, "s1", [command, other])
+        fingerprint = verify_tests._identity(root)
+        (root / "fail.txt").write_text("1", encoding="utf-8")
+        _request(root, {"commands": [noop, command, noop]})
+        child = dedent("""
+            import os, sys
+            from pathlib import Path
+            from exoma.core.evidence import verify_tests
+            def interrupt(event):
+                if event.get("command_index") == 2:
+                    os._exit(73)
+            verify_tests.apply(Path(sys.argv[1]), "s1", {"content": ""}, interrupt)
+        """)
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, sys.path))}
+        proc = subprocess.run([sys.executable, "-c", child, str(root)], env=env, capture_output=True,
+                              timeout=45, **no_console())
+        assert proc.returncode == 73, proc.stderr
+        assert fingerprint is not None and fingerprint == verify_tests._identity(root)
+        diagnostics = verify_tests.runs_path(root, "s1").parent / "test-output"
+        assert any(json.loads(p.read_text(encoding="utf-8"))["status"] == "failed" for p in diagnostics.glob("*.json"))
+        before = (root / "count.txt").read_text()
+        _request(root, {"commands": [command]})
+        outcome, = _verify(root)[0]["meta"]["runtime_tests"]["outcomes"]
+        assert outcome["status"] == "failed" and not outcome.get("reused")
+        assert (root / "count.txt").read_text() == before + "x"
+        assert other in verify_tests.reusable(root, "s1")
+        (root / "fail.txt").unlink()
+        verify_tests.run_and_record(root, "s1", [command])
+        assert command in verify_tests.reusable(root, "s1")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_verify_failure_overlapping_writer() -> None:
+    from unittest.mock import patch
+
+    root, _, python = _stale_reuse_repo()
+    try:
+        command = f"{python} counter.py"
+        original = verify_tests.run_tests
+
+        def delayed_pass(*args, **kwargs):
+            older = original(*args, **kwargs)
+            with patch.object(verify_tests, "run_tests", original):
+                (root / "fail.txt").write_text("1", encoding="utf-8")
+                _request(root, {"commands": [command]})
+                failure, = _verify(root)[0]["meta"]["runtime_tests"]["outcomes"]
+                assert failure["status"] == "failed"
+                # Even a fresh standalone writer must not retire the failure
+                # protection while the older writer can still append its pass.
+                newer = verify_tests.run_and_record(root, "s1", [command])
+                assert newer["outcomes"][0]["status"] == "failed"
+            return older
+
+        with patch.object(verify_tests, "run_tests", delayed_pass):
+            older = verify_tests.run_and_record(root, "s1", [command])
+        assert older["outcomes"][0]["status"] == "passed"
+        assert command not in verify_tests.reusable(root, "s1")
+        (root / "fail.txt").unlink()
+        verify_tests.run_and_record(root, "s1", [command])
+        assert command in verify_tests.reusable(root, "s1")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _check_reusable_rechecks_after_reading() -> None:
     """A `run.sh test` that starts or finishes while `reusable` reads is not missed."""
     from unittest.mock import patch
@@ -2230,7 +2305,7 @@ def _check_usage_row_counts_reused_tests() -> None:
 
 def _check_unrecorded_verify_failure_still_withholds() -> None:
     """A failure verify saw but could not append still ends the earlier pass: a marker
-    withholds the command until a later run records it; with no marker, the record goes."""
+    withholds the command until a later run records it. Marker admission precedes launch."""
     import pathlib
     from unittest.mock import patch
 
@@ -2273,8 +2348,8 @@ def _check_unrecorded_verify_failure_still_withholds() -> None:
 
         with patch.object(verify_tests, "_marker_path", lambda *_: record / "cannot.pending"):
             tests = failing_verify()
-        assert_true(not record.exists() and verify_tests.reusable(root, "s1") == {},
-                    f"no marker either: the record is removed, nothing is reused: {tests}")
+        assert tests["outcomes"][0]["status"] == "refused" and "pending marker" in tests["record_error"]
+        assert tests["outcomes"][1].get("reused") and record.is_file()
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

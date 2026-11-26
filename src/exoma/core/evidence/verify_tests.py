@@ -59,7 +59,7 @@ from pathlib import Path
 from exoma.core.evidence.contract import RUNTIME_GAP_PREFIX, RUNTIME_NO_TEST_ITEM
 from exoma.core.runtime import execution
 from exoma.core.runtime.config_defaults import verification_settings
-from exoma.core.workspace.workspace_paths import read_json_file, workflow_paths
+from exoma.core.workspace.workspace_paths import atomic_write_text, read_json_file, workflow_paths
 from exoma.utils import osutil
 from exoma.utils.redact import redact
 
@@ -420,7 +420,7 @@ def diagnostic_note(outcome: dict) -> str:
 
 def run_tests(
     project_root, request: dict, on_progress=None, reuse: dict | None = None, identity=None,
-    session_id: str | None = None, initial_fingerprint=_UNSAMPLED,
+    session_id: str | None = None, initial_fingerprint=_UNSAMPLED, guard_reuse=False,
 ) -> list[dict]:
     """One outcome per requested command: passed | failed | timeout | error | refused.
 
@@ -461,6 +461,15 @@ def run_tests(
         started = time.monotonic()
         progress = {"command_index": index, "commands": min(len(commands), MAX_COMMANDS)}
         _beat(on_progress, run_started, **progress)
+        marker = None
+        if guard_reuse:
+            marker = _marker_path(project_root, session_id)
+            try:
+                _write_marker(marker, [command])
+            except OSError as exc:
+                detail = f"pending marker not written: {type(exc).__name__}: {exc}"
+                outcomes.append({"command": command, "status": "refused", "detail": detail, "record_error": detail})
+                continue
         stdout, stderr = "", ""
         try:
             # Bounded and tree-killed: a runner whose worker outlives it must not hang verify.
@@ -481,6 +490,10 @@ def run_tests(
             outcome = {"command": command, "status": "error", "detail": redact(str(exc))[0][:200]}
         outcome["seconds"] = round(time.monotonic() - started, 1)
         _store_output(project_root, session_id, outcome, stdout, stderr)
+        if marker is not None:
+            error = _settle_verify_check(project_root, session_id, marker, outcome)
+            if error:
+                outcome["record_error"] = error
         # Redact before truncating: a cut through a credential must not expose its suffix.
         text = lambda v: v.decode("utf-8", errors="replace") if isinstance(v, bytes) else v or ""
         outcome["tail"] = redact(text(stdout) + "\n" + text(stderr))[0].strip()[-OUTPUT_TAIL_CHARS:]
@@ -644,11 +657,11 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
     outcomes = (
         run_tests(project_root, request, on_progress, eligible,
                   identity=sample if selected and fingerprint is not None else None,
-                  session_id=session_id, initial_fingerprint=fingerprint)
+                  session_id=session_id, initial_fingerprint=fingerprint, guard_reuse=True)
         if request and not request.get("invalid")
         else []
     )
-    record_error = _record_verify_failures(project_root, session_id, outcomes)
+    record_error = "; ".join(o["record_error"] for o in outcomes if o.get("record_error"))
     result["content"] = merge(result.get("content") or "", request, outcomes)
     coverage = None
     if selection is not None and not execution.selection_error(selection, current.get("execution_id")):
@@ -698,61 +711,43 @@ _NOT_PASSED = ("failed", "timeout", "error")
 VERIFY_FAILURE_MARKER = "verify_failure"
 
 
-def _record_verify_failures(project_root, session_id: str, outcomes: list[dict]) -> str | None:
-    """Append a row for every command verify ran that did not pass, so an earlier `run.sh
-    test` pass for it stops being the latest row and is no longer reused. A pass inside
-    verify is still not recorded: only `run.sh test` makes a command reusable. The rows
-    carry no fingerprint, so they can never be reused themselves. Returns an error, or None.
+def _write_marker(marker: Path, commands: list[str], *, kind=None) -> None:
+    pid = os.getpid()
+    owner = {"pid": pid, "identity": osutil.process_identity(pid), "commands": commands, "at": _now()}
+    if kind:
+        owner["kind"] = kind
+    atomic_write_text(marker, json.dumps(owner))
 
-    When the rows cannot be appended the earlier pass would stay the latest row, so the
-    failure is kept another way: a pending marker owned by this process names the failed
-    commands, which `reusable` withholds until a `run.sh test` started after this process
-    started records them again (`run_and_record` retires it then, owner alive or not: the
-    failure is over, and that run's rows are newer than it). When even the marker
-    cannot be written, the record is removed: no pass is reused rather than a stale one."""
-    failed = [o for o in outcomes if o.get("status") in _NOT_PASSED and not o.get("reused")]
-    if not failed:
-        return None
-    rows = "".join(
-        json.dumps({
-            "command": o["command"], "status": o["status"], "seconds": o.get("seconds"),
-            "fingerprint": None, "at": _now(), "source": "verify",
-            "fingerprint_reason": "verification_test_failed",
-            **{k: o[k] for k in _DIAGNOSTIC_FIELDS if k in o},
-        }) + "\n"
-        for o in failed
-    )
-    path = runs_path(project_root, session_id)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(rows)
-    except OSError as exc:
-        error = f"verify failure not recorded: {type(exc).__name__}: {exc}"
-    else:
-        return None
-    marker = _marker_path(project_root, session_id)
-    partial = marker.with_name(marker.name + ".tmp")
-    try:
-        pid = os.getpid()
-        partial.write_text(json.dumps({
-            "pid": pid, "identity": osutil.process_identity(pid),
-            "commands": [o["command"] for o in failed], "at": _now(),
-            "kind": VERIFY_FAILURE_MARKER,
-        }), encoding="utf-8")
-        os.replace(partial, marker)
-    except OSError as exc:
+
+def _settle_verify_check(project_root, session_id, marker: Path, outcome: dict) -> str | None:
+    """Publish this result before another command starts. Only standalone checks grant reuse."""
+    if outcome["status"] == "passed":
         try:
-            partial.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            path.unlink(missing_ok=True)
-        except OSError as unlink_exc:
-            return (f"{error}; marker not written ({type(exc).__name__}) and record not removed "
-                    f"({type(unlink_exc).__name__}): an earlier pass may still be reused")
-        return f"{error}; marker not written ({type(exc).__name__}): record removed, nothing is reused"
-    return f"{error}; the earlier pass is withheld by {marker.name} until the command is recorded again"
+            marker.unlink()
+        except OSError as exc:
+            return f"pass marker retained: {exc}"
+        return None
+
+    command = outcome["command"]
+    row = {"command": command, "status": outcome["status"], "seconds": outcome["seconds"],
+           "fingerprint": None, "at": _now(), "source": "verify",
+           "fingerprint_reason": "verification_test_failed",
+           **{k: outcome[k] for k in _DIAGNOSTIC_FIELDS if k in outcome}}
+    errors = []
+    try:
+        with runs_path(project_root, session_id).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+    except OSError as exc:
+        errors.append(f"verify failure not recorded: {exc}")
+    # A standalone check started earlier can still append an older pass. Keep the
+    # terminal marker until a later standalone observation can supersede it.
+    try:
+        _write_marker(marker, [command], kind=VERIFY_FAILURE_MARKER)
+    except OSError as exc:
+        errors.append(f"could not mark failure terminal: {exc}")
+    if errors:
+        return "; ".join(errors) + f"; earlier pass withheld by {marker.name}"
+    return None
 
 
 def _now() -> str:
@@ -911,30 +906,23 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
     """
     clean = [str(command).strip() for command in commands]
     marker = _marker_path(project_root, session_id)
-    partial = marker.with_name(marker.name + ".tmp")
     try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        pid = os.getpid()
-        partial.write_text(json.dumps({
-            "pid": pid, "identity": osutil.process_identity(pid), "commands": clean, "at": _now(),
-        }), encoding="utf-8")
-        os.replace(partial, marker)
+        _write_marker(marker, clean)
     except OSError as exc:
-        try:
-            partial.unlink(missing_ok=True)
-        except OSError:
-            pass
         return {
             "outcomes": [], "fingerprint": None, "reusable": [],
             "record_error": f"pending marker not written, nothing was run: {type(exc).__name__}: {exc}",
         }
     # Taken before the run: only these may be cleared after it (see the docstring).
     retire, torn = [], []
+    overlapping_commands = set()
+    unknown_writer = False
     limit = _torn_marker_limit(project_root)
     for other, owner in _markers(project_root, session_id):
         if other == marker:
             continue
         if owner is None:
+            unknown_writer = True
             try:
                 if time.time() - other.stat().st_mtime > limit:
                     torn.append(other)
@@ -942,6 +930,8 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
                 pass
         elif owner.get("kind") == VERIFY_FAILURE_MARKER or not _owner_alive(owner):
             retire.append((other, owner))
+        else:
+            overlapping_commands.update(owner["commands"])
     record_error = _retire_torn(project_root, session_id, torn)
     # Sampled around every command, not once around the batch: each row carries the
     # identity its own command ran on, None when that command changed it (`run_tests`).
@@ -992,7 +982,8 @@ def run_and_record(project_root, session_id: str, commands: list[str]) -> dict:
         # marker before it, is cleared once every command it named has a row from this run,
         # which is then provably the newer outcome.
         for other, owner in retire:
-            if set(owner["commands"]) <= recorded:
+            protected = set(owner["commands"])
+            if protected <= recorded and not unknown_writer and protected.isdisjoint(overlapping_commands):
                 try:
                     other.unlink(missing_ok=True)
                 except OSError:
