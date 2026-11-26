@@ -12,6 +12,12 @@ from exoma.core.runtime import execution
 
 
 def _test_verify_followup():
+    from tools.maintain.verify_followup_eval import replacement_controls
+
+    with TemporaryDirectory() as temp:
+        controls = replacement_controls(Path(temp))
+        assert {name for name, result in controls.items() if result["supported"]} == {"moved"}, controls
+        assert len(controls) == 8
     _check_paired_controls()
     _check_publication()
     _check_retry_and_recurrence()
@@ -105,6 +111,7 @@ def _check_paired_controls():
                 if case == "clean":
                     _check_first_binding(root)
                     _check_binding_publication(root)
+                    _check_case_linkage(root)
         assert first["ok"] and second["ok"] and first["diagnostics"] and second["diagnostics"]
         result = second["followup"]
         statuses = [event["status"] for event in result["events"]]
@@ -125,6 +132,219 @@ def _check_paired_controls():
             assert statuses == ["unchecked"] and "quantity" in result["open_obligations"]
             assert result["events"][0]["reason_code"] == "assertion_unmatched"
             assert second["diagnostics"][0]["status"] == "passed" and second["verdict"] == "incomplete"
+
+
+def _check_late_attachment(root):
+    from exoma import cli
+    from tools.maintain.verify_followup_eval import COMMAND, FIXTURE, REVIEW, TAG, write_json
+
+    session = "attachment"
+    state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
+    eid = "attach-execution"
+    selection = {"version": 1, "execution_id": eid, "tier": "integration", "reason": "late quantity check",
+                 "obligations": [{"id": "release", "due": "release", "commands": [], "behavior": "release check"}]}
+    execution._write(state, {"execution_id": eid, "status": "implemented", "selection": selection})
+    code = (FIXTURE / "pricing.py").read_text(encoding="utf-8")
+    (root / "pricing.py").write_text(code.replace("max(0, value)", "value"), encoding="utf-8")
+    ref = "check_quantity.py:4"
+    (root / "check_quantity.py").write_text(
+        'import json\nfrom pricing import quantity\ntry:\n    assert quantity(-2) == 0\n'
+        'except AssertionError:\n    status = "failed"\nelse:\n    status = "passed"\n'
+        'print("EXOMA_CASE_V1 " + json.dumps({"id":"negative-two","assertion":"check_quantity.py:4","status":status}))\n'
+        'raise SystemExit(int(status == "failed"))\n', encoding="utf-8")
+
+    def review(rows, blocker=False):
+        prepared = cli.run("verify-prepare", "", session, str(root))["meta"]
+        write_json(Path(prepared["request"]["path"]), {"commands": [COMMAND], "selection": selection,
+                                                      "selection_input": prepared["selection_input"]})
+        report = REVIEW.format(verdict="NEEDS FIX" if blocker else "DONE",
+                               finding=TAG + " independent total defect at pricing.py:8" if blocker else "none")
+        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP_V1]", *(json.dumps(row) for row in rows), report])
+        result = cli.run("verify", "check pricing cases", session, str(root), model="fixture")
+        assert result["ok"], result
+        return result["meta"]
+
+    first = review([])["verify_followup"]
+    fid = first["events"][0]["id"]
+    before = execution.current_execution(root, session)
+    old = before["finding_history"]["findings"][fid]
+    assert old["first_case"]["id"] == "negative-two" and old["obligation"] is None
+    item = {"id": "quantity", "due": "verify", "commands": [COMMAND], "behavior": "clamp negative", "assertion": ref}
+    selection["obligations"].append(item)
+    proposal = {"id": fid, "execution_id": eid, "status": "attach", "case": "negative-two", "command": COMMAND,
+                "obligation": "quantity", "evidence": ref, "diagnosis": "Same negative input and expected zero"}
+    second = review([proposal])
+    linked = execution.current_execution(root, session)
+    finding = linked["finding_history"]["findings"][fid]
+    event, = second["verify_followup"]["events"]
+    assert event["reason_code"] == "case_linked" and second["verdict"] == "fail"
+    assert finding["attachment"]["source"] == "first_failure" and finding["disposition"] == "open"
+    assert finding["assertion"] is None and finding["first_case"] == old["first_case"]
+    assert linked["finding_history"]["rounds"][first["round_id"]] == first
+
+    # Replay rejected proposals independently of one another against the first-round snapshot.
+    def alternative(rows, *, legacy=False, reused=False, shared=False, other_case=False):
+        snapshot = deepcopy(before)
+        snapshot["assertion_baselines"] = linked["assertion_baselines"]
+        prior = snapshot["finding_history"]["findings"][fid]
+        if legacy:
+            prior.pop("first_case")
+        runtime = deepcopy(second["runtime_tests"])
+        if reused:
+            runtime["outcomes"][0]["reused"] = True
+        if shared:
+            runtime["coverage"]["selection"]["obligations"].append(dict(item, id="other"))
+        if other_case:
+            runtime["outcomes"][0]["case_observation"]["id"] = "different-trigger"
+        content = "\n".join(["[FOLLOWUP_V1]", *(json.dumps(r) for r in rows), "[VERIFICATION]"])
+        result = {"content": content, "meta": {"runtime_tests": runtime, "review_observations": {"blockers": []}}}
+        pin = follow.bind_current(root, snapshot)
+        assert follow.publish(root, snapshot, pin, result)
+        stored = deepcopy(snapshot)
+        assert not follow.publish(root, snapshot, pin, result) and snapshot == stored
+        return prior, result["meta"]["verify_followup"]["events"]
+
+    for rows, flags, reason in [
+        ([dict(proposal, execution_id="elsewhere")], {}, "attachment_unmatched"),
+        ([proposal], {"reused": True}, "case_evidence_missing"),
+        ([proposal], {"shared": True}, "attachment_ambiguous"),
+        ([proposal, dict(proposal, id="second-id")], {}, "attachment_ambiguous"),
+        ([dict(proposal, case="different-trigger")], {"other_case": True}, "case_mismatch"),
+    ]:
+        prior, events = alternative(rows, **flags)
+        assert "attachment" not in prior and events[0]["reason_code"] == reason
+        assert events[1]["id"] != fid
+        assert (fid in events[1].get("possible_prior_ids", [])) == (reason != "case_mismatch")
+    prior, events = alternative([proposal], legacy=True)
+    assert prior["attachment"]["source"] == "current_observation" and events[1]["id"] != fid
+    _check_competing_legacy_attachments(before, proposal, alternative)
+    _check_attachment_recovery(root, session, before, second, proposal)
+    execution._write(state, linked)
+    (root / "pricing.py").write_text(code.replace("price * units", "price + units"), encoding="utf-8")
+    resolved = dict(proposal, status="resolved", strategy="repair clamp and rerun original case")
+    last = review([resolved], blocker=True)
+    closure, independent = last["verify_followup"]["events"]
+    assert closure["id"] == fid and closure["reason_code"] == "closure_accepted"
+    assert independent["status"] == "new" and independent["id"] != fid and last["verdict"] == "fail"
+
+    for source, alter_case, expected in (("current_observation", False, "historical_trigger_unconfirmed"),
+                                         ("first_failure", True, "case_evidence_missing")):
+        snapshot = deepcopy(linked)
+        attached = snapshot["finding_history"]["findings"][fid]
+        attached["attachment"]["source"] = source
+        if source == "current_observation":
+            attached.pop("first_case")
+        runtime = deepcopy(last["runtime_tests"])
+        if alter_case:
+            runtime["outcomes"][0]["case_observation"]["id"] = "other-passing-case"
+        result = {"content": "[FOLLOWUP_V1]\n" + json.dumps(resolved) + "\n[VERIFICATION]",
+                  "meta": {"runtime_tests": runtime}}
+        follow.publish(root, snapshot, follow.bind_current(root, snapshot), result)
+        assert attached["disposition"] == "open" and attached["last_reason_code"] == expected
+
+
+def _check_attachment_recovery(root, session, before, published, proposal):
+    from exoma.core.jobs.job_manager import DEAD
+
+    jobs = JobManager(root / ".workflow/jobs")
+    state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
+    meta = deepcopy(published)
+    meta.pop("verify_followup")
+    payload = {"ok": True, "meta": meta, "content": "[FOLLOWUP_V1]\n" + json.dumps(proposal) + "\n[VERIFICATION]"}
+    for stale in (True, False):
+        execution._write(state, before)
+        job = jobs.create_job("verify", "attachment recovery", session, str(root), None)
+        jid = job["job_id"]
+        jobs.mark_running(jid)
+        with patch.object(execution, "record_verification", side_effect=OSError("worker interrupted")):
+            try:
+                jobs.complete_verify_round(jid, job["recovery_attempt"], payload)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("checkpoint was not exercised")
+        changed = root / "new_input.py"
+        if stale:
+            changed.write_text("changed = True\n", encoding="utf-8")
+        else:
+            # A checkpoint already contains the case observed by the live runner.
+            Path(meta["runtime_tests"]["outcomes"][0]["log_ref"]).unlink()
+        try:
+            with patch.object(jobs, "liveness", return_value=DEAD):
+                result = jobs.get_result(jid)
+            stored = execution.current_execution(root, session)
+            if stale:
+                assert result["meta"]["reason"] == "verification_publication_rejected" and stored == before
+            else:
+                record = result["output"]["meta"]["verify_followup"]
+                assert record["events"][0]["reason_code"] == "case_linked"
+                assert stored["finding_history"]["revision"] == before["finding_history"]["revision"] + 1
+                assert jobs.get_result(jid)["output"]["meta"]["verify_followup"] == record
+                assert execution.current_execution(root, session) == stored
+        finally:
+            if stale:
+                changed.unlink()
+
+
+def _check_case_linkage(root):
+    _check_late_attachment(root)
+    _check_initially_bound_case(root)
+
+
+def _check_initially_bound_case(root):
+    """One command can exercise two different cases on the same assertion line."""
+    from exoma import cli
+    from tools.maintain.verify_followup_eval import COMMAND, FIXTURE, REVIEW, write_json
+
+    session = "initial-case"
+    eid = "initially-bound"
+    ref = "check_quantity.py:6"
+    selection = {"version": 1, "execution_id": eid, "tier": "targeted", "reason": "track the failing case",
+                 "obligations": [{"id": "quantity", "behavior": "clamp negative inputs", "due": "verify",
+                                  "commands": [COMMAND], "assertion": ref}]}
+    state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
+    execution._write(state, {"execution_id": eid, "status": "implemented", "selection": selection})
+    source = (FIXTURE / "pricing.py").read_text(encoding="utf-8")
+    (root / "pricing.py").write_text(source.replace("max(0, value)", "value"), encoding="utf-8")
+    (root / "check_quantity.py").write_text(
+        'import json\nfrom pathlib import Path\nfrom pricing import quantity\n'
+        'value = int(Path("case.txt").read_text())\ntry:\n    assert quantity(value) == max(0, value)\n'
+        'except AssertionError:\n    status = "failed"\nelse:\n    status = "passed"\n'
+        'print("EXOMA_CASE_V1 " + json.dumps({"id":str(value),"assertion":"check_quantity.py:6","status":status}))\n'
+        'raise SystemExit(int(status == "failed"))\n', encoding="utf-8")
+
+    def review(value, rows):
+        (root / "case.txt").write_text(str(value), encoding="utf-8")
+        prepared = cli.run("verify-prepare", "", session, str(root))["meta"]
+        write_json(Path(prepared["request"]["path"]), {"commands": [COMMAND], "selection": selection,
+                                                      "selection_input": prepared["selection_input"]})
+        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP_V1]", *(json.dumps(row) for row in rows),
+                                                REVIEW.format(verdict="DONE", finding="none")])
+        result = cli.run("verify", "review quantity cases", session, str(root), model="fixture")
+        assert result["ok"], result
+        return result["meta"]["verify_followup"]
+
+    first = review(-2, [])
+    fid = first["events"][0]["id"]
+    finding = execution.current_execution(root, session)["finding_history"]["findings"][fid]
+    assert finding["obligation"] == "quantity" and "attachment" not in finding and finding["first_case"]["id"] == "-2"
+    proposal = {"id": fid, "status": "resolved", "diagnosis": "clamp under test",
+                "strategy": "exercise original input", "obligation": "quantity", "evidence": ref}
+    other = review(2, [proposal])
+    assert other["open_count"] == 1 and other["events"][0]["reason_code"] == "case_evidence_missing", other["events"]
+    (root / "pricing.py").write_text(source, encoding="utf-8")
+    repaired = review(-2, [proposal])
+    assert repaired["open_count"] == 0 and repaired["events"][0]["reason_code"] == "closure_accepted"
+
+    # The same command on an assertion outside the declared obligation starts unbound.
+    selection["execution_id"] = "other-assertion"
+    selection["obligations"][0]["assertion"] = "pricing.py:3"
+    execution._write(state, {"execution_id": selection["execution_id"], "status": "implemented", "selection": selection})
+    (root / "pricing.py").write_text(source.replace("max(0, value)", "value"), encoding="utf-8")
+    mismatch = review(-2, [])
+    new_id = mismatch["events"][0]["id"]
+    unbound = execution.current_execution(root, session)["finding_history"]["findings"][new_id]
+    assert unbound["first_case"]["id"] == "-2" and unbound["obligation"] is None
 
 
 def _check_green_with_open_finding(root):
@@ -491,4 +711,23 @@ def _check_publication():
         assert published["last_verify_job"] == jid and execution.current_execution(root, session) == published
         assert follow.rows("[FOLLOWUP_V1]\n{}\ninvalid\n[VERIFICATION]") == []
         assert follow.assertion_receipt(root, "../escape:1") is None
+
+
+def _check_competing_legacy_attachments(before, proposal, alternative):
+    findings = before["finding_history"]["findings"]
+    first_id = proposal["id"]
+    second_id = "F-0000000000000000"
+    second = dict(findings[first_id], id=second_id)
+    second.pop("first_case")
+    for padded in (dict(proposal, command=proposal["command"] + " "), dict(proposal, status=" attach ")):
+        with patch.dict(findings, {second_id: second}):
+            prior, events = alternative([proposal, dict(padded, id=second_id)], legacy=True)
+        assert {e["id"]: e.get("reason_code") for e in events if e["id"] in (first_id, second_id)} == {
+            first_id: "attachment_ambiguous", second_id: "attachment_ambiguous",
+        }, events
+        assert "attachment" not in prior
+        new, = [e for e in events if e["status"] == "new"]
+        assert new["id"] not in (first_id, second_id)
+        prior, _ = alternative([padded], legacy=True)
+        assert prior["attachment"]["source"] == "current_observation"
 

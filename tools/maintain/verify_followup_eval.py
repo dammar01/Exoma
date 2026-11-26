@@ -56,6 +56,121 @@ def write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# The experiment owns these sources and both variants. Observe the input/output
+# of quantity and the actual assertion line even on the successful run.
+PROBE = '''import json
+import runpy
+import sys
+from pathlib import Path
+import pricing
+
+target = Path("replacement.py").resolve()
+quantity = pricing.quantity.__code__
+seen = {"calls": [], "lines": [], "assertion_failures": []}
+
+def trace(frame, event, arg):
+    if frame.f_code is quantity and event == "return":
+        seen["calls"].append([frame.f_locals["value"], arg])
+    if frame.f_code.co_filename == str(target):
+        if event == "line":
+            seen["lines"].append(frame.f_lineno)
+        elif event == "exception" and arg[0] is AssertionError:
+            seen["assertion_failures"].append(frame.f_lineno)
+    return trace
+
+sys.settrace(trace)
+try:
+    runpy.run_path(str(target))
+finally:
+    sys.settrace(None)
+    print(json.dumps(seen))
+'''
+REPLACEMENTS = {
+    "moved": "assert quantity(-2) == 0",
+    "print_only": "print(quantity(-2))",
+    "skipped": "if False:\n    assert quantity(-2) == 0",
+    "wrong_trigger": "assert quantity(-3) == 0",
+    "unrelated_failure": "if quantity(-2) < 0:\n    raise RuntimeError('unrelated setup error')\nassert quantity(-2) == 0",
+}
+
+
+def _sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _replacement_arm(root, variant, pricing, replacement):
+    from exoma.core.evidence import verify_tests
+    from exoma.core.runtime.state import ensure_workflow_workspace
+    from exoma.core.workspace.workspace_paths import workflow_paths
+
+    root.mkdir()
+    ensure_workflow_workspace(root)
+    config_path = workflow_paths(root)["config"]
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["commands"]["verify_test_commands"] = [COMMAND]
+    write_json(config_path, config)
+    for name, data in (("pricing.py", pricing), ("replacement.py", replacement), ("check_quantity.py", PROBE.encode())):
+        (root / name).write_bytes(data)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    identity = lambda: verify_tests._identity(root)
+    before = identity()
+    outcome, = verify_tests.run_tests(root, {"commands": [COMMAND]}, identity=identity, session_id=SESSION)
+    log = Path(outcome["log_ref"]).read_bytes() if outcome.get("log_ref") else b""
+    return {"variant": variant, "pricing_sha256": _sha(pricing), "assertion_sha256": _sha(replacement),
+            "probe_sha256": _sha(PROBE.encode()), "input": before, "observed_input": outcome.get("fingerprint"),
+            "command": outcome["command"], "reused": outcome.get("reused", False), "status": outcome["status"],
+            "exit": outcome.get("exit_code"), "diagnostic": log.decode("utf-8"), "log_sha256": _sha(log)}
+
+
+def _supports_replacement(arms, sources, replacement):
+    from ast import Assert, parse, walk
+
+    assertions = [node.lineno for node in walk(parse(replacement)) if isinstance(node, Assert)]
+    if len(assertions) != 1 or len(arms) != 2:
+        return False
+    line, = assertions
+    for arm, variant, expected_exit, value in zip(arms, ("broken", "fixed"), (1, 0), (-2, 0)):
+        if (arm["variant"] != variant or arm["pricing_sha256"] != _sha(sources[variant])
+                or arm["assertion_sha256"] != _sha(replacement) or arm["probe_sha256"] != _sha(PROBE.encode())
+                or not arm["input"] or arm["observed_input"] != arm["input"] or arm["reused"]
+                or arm["command"] != COMMAND or arm["exit"] != expected_exit
+                or arm["status"] != ("failed" if expected_exit else "passed")
+                or not arm["diagnostic"] or _sha(arm["diagnostic"].encode()) != arm["log_sha256"]):
+            return False
+        try:
+            receipt = json.loads(arm["diagnostic"])
+            observed = json.loads(receipt["stdout"].splitlines()[-1])
+            supported = (receipt["exit_code"] == expected_exit and receipt["status"] == arm["status"]
+                         and observed["calls"] == [[-2, value]] and line in observed["lines"]
+                         and observed["assertion_failures"] == ([line] if expected_exit else []))
+        except (ValueError, IndexError, KeyError, TypeError, AttributeError):
+            return False
+        if not supported:
+            return False
+    return arms[0]["input"] != arms[1]["input"]
+
+
+def replacement_controls(root):
+    fixed = (FIXTURE / "pricing.py").read_bytes()
+    broken = fixed.replace(b"max(0, value)", b"value")
+    assert broken != fixed
+    sources = {"broken": broken, "fixed": fixed}
+    reports = {}
+    for name, check in REPLACEMENTS.items():
+        replacement = ("from pricing import quantity\n\n# Moved regression check\n" + check + "\n").encode()
+        arms = [_replacement_arm(root / (name + "-" + variant), variant, source, replacement)
+                for variant, source in sources.items()]
+        reports[name] = {"supported": _supports_replacement(arms, sources, replacement), "arms": arms}
+    # Exercise receipt validation independently of which command exited zero.
+    for name, change in (("reused", {"reused": True}), ("missing", {"diagnostic": ""}),
+                         ("stale", {"observed_input": "older-input"})):
+        arms = [dict(arm) for arm in reports["moved"]["arms"]]
+        arms[1].update(change)
+        replacement = (root / "moved-fixed/replacement.py").read_bytes()
+        reports[name] = {"supported": _supports_replacement(arms, sources, replacement), "altered_receipt": change}
+    return reports
+
+
 def drive(root, case, mode, model):
     from exoma import cli
     from exoma.core.runtime import execution
@@ -186,7 +301,7 @@ def verified_package(wheel):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("replay", "live"), required=True)
-    parser.add_argument("--case", choices=CASES + ("all",), default="all")
+    parser.add_argument("--case", choices=CASES + ("all", "assertion-controls"), default="all")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--revision", required=True)
@@ -196,6 +311,12 @@ def main():
               "revision": args.revision, "wheel_sha256": hashlib.sha256(args.wheel.read_bytes()).hexdigest(),
               **verified_package(args.wheel),
               "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "cases": {}}
+    if args.case == "assertion-controls":
+        with tempfile.TemporaryDirectory(prefix="pricing-assertions-") as temp:
+            os.environ["EXOMA_HOME"] = str(Path(temp) / "store")
+            output["assertion_controls"] = replacement_controls(Path(temp))
+        write_json(args.report, output)
+        return 0 if all(r["supported"] == (name == "moved") for name, r in output["assertion_controls"].items()) else 1
     for case in CASES if args.case == "all" else (args.case,):
         with tempfile.TemporaryDirectory(prefix="pricing-eval-") as temp:
             root = Path(temp) / "project"

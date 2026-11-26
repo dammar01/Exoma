@@ -87,3 +87,33 @@ the number of installed package files compared byte for byte before the run.
 The live measurements above refer to the earlier wheels.
 [Baseline negative control](verify-followup/correction-baseline.json) · [Six candidate replays](verify-followup/correction-replay.json)
 
+### Assertion replacement on a known defect
+
+The `assertion-controls` case runs five pairs of disposable Git workspaces.
+Each pair uses the same replacement bytes and the same allowlisted command
+(`python -B check_quantity.py`). The fixture changes only the implementation of
+the negative-quantity clamp between arms. A fixture-owned Python trace records
+the argument and return value of `quantity`, lines reached in the replacement,
+and assertion failures on those lines. Each arm records source, replacement,
+probe and diagnostic hashes, the command outcome, the diagnostic contents,
+and the input fingerprint sampled before and across execution.
+
+On 26 November 2026 the Windows integration run supported the moved assertion
+and rejected all seven negative controls. Five pairs executed the command on
+both variants. The remaining three controls independently altered the positive
+pair's receipt. No live reviewer or release wheel was used for this measurement.
+
+| Control | Observed result |
+| --- | --- |
+| Moved assertion on `quantity(-2) == 0` | Supported. The assertion runs in both arms, fails on the observed result `-2`, and passes on `0`. |
+| Print only or skipped assertion | Unsupported. A zero exit does not establish that the assertion ran. |
+| Test checks `-3` instead | Unsupported even with red and green exits. The input differs. |
+| Setup fails before the assertion | Unsupported even with red and green exits. The failure location differs. |
+| Fixed-arm receipt marked reused, missing, or stale | Unsupported in each of three separate receipt controls. |
+
+Run `python tests/run.py --only verify-followup --traceback` for the deterministic
+matrix. To retain both arms' diagnostics by value, use the wheel driver described
+above with `--mode replay --case assertion-controls` and a separate report path.
+This evaluates one known pricing defect. Production verification continues to
+treat `equivalent_assertion` as a proposal.
+

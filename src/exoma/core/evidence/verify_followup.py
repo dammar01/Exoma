@@ -6,6 +6,7 @@ from contextvars import ContextVar
 import hashlib
 import json
 from pathlib import Path, PureWindowsPath
+import re
 import uuid
 
 from exoma.core.evidence.contract import (
@@ -194,6 +195,14 @@ def check_assertions(root, execution, coverage, outcomes=(), fingerprint=None):
     """Keep the original obligation evidence even after its finding closes."""
     if coverage.get("inputs_changed"):
         fingerprint = None
+    # Freeze test-owned case evidence with the fresh command outcome, before the
+    # worker checkpoints it. Recovery need not reopen a mutable diagnostic file.
+    for outcome in outcomes:
+        outcome.pop("case_observation", None)
+        if "EXOMA_CASE_V1 " in outcome.get("tail", ""):
+            case = _case_observation(root, outcome, fingerprint)
+            if case:
+                outcome["case_observation"] = case
     for item, row in zip(coverage["selection"]["obligations"], coverage["obligations"]):
         if not item.get("assertion"):
             continue
@@ -262,6 +271,42 @@ def _observed_commands(checks, commands, fingerprint):
     return bool(commands) and observed.issuperset(commands)
 
 
+def _case_observation(root, outcome, fingerprint):
+    """Read an opt-in, single-case report from the runtime's retained stdout."""
+    if not _observed(outcome, fingerprint) or outcome["status"] not in ("passed", "failed"):
+        return None
+    try:
+        sessions = workflow_paths(root)["sessions_dir"].resolve()
+        path = Path(outcome["log_ref"]).resolve(strict=True)
+        relative = path.relative_to(sessions)
+        if (len(relative.parts) != 4 or relative.parts[1:3] != ("verify", "test-output")
+                or not path.match("test-*.json") or path.stat().st_size > 4_000_000):
+            return None
+        data = path.read_bytes()
+        record = json.loads(data)
+        if (record["version"] != 1 or record["status"] != outcome["status"]
+                or record["exit_code"] != outcome["exit_code"] or record["output"] != outcome["log_output"]
+                or any(s["truncated"] for s in record["output"].values())):
+            return None
+        line, = (line for line in record["stdout"].splitlines() if line.startswith("EXOMA_CASE_V1 "))
+        if line not in outcome["tail"].splitlines():
+            return None
+        case = json.loads(line[len("EXOMA_CASE_V1 "):])
+        if (case["status"] != outcome["status"] or not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,128}", case["id"])):
+            return None
+        receipt = assertion_receipt(root, case["assertion"])
+        if receipt:
+            return {"id": case["id"], "assertion": receipt, "command": outcome["command"],
+                    "log_ref": str(path), "log_sha256": hashlib.sha256(data).hexdigest()}
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _same_case(left, right):
+    return bool(left and right and all(left[k] == right[k] for k in ("command", "id", "assertion")))
+
+
 def _prior_retry_input(finding, rounds, commands):
     if "observed_input" in finding:
         return finding["observed_input"]
@@ -285,21 +330,29 @@ def _retry_gap(diagnosis, strategy, changed_input, repeat):
     return None
 
 
-def _closure_reason(finding, row, assertion, commands, fresh, covered, retry_gap):
+def _closure_reason(finding, row, assertion, commands, fresh, covered, retry_gap, cases):
     """Return the first unmet closure condition or the accepted decision."""
     if retry_gap:
         return retry_gap
     oid = finding.get("obligation")
     if not commands or _string(row, "obligation") != oid:
         return "obligation_unmatched"
-    if not finding.get("assertion"):
+    link = finding.get("attachment", {})
+    if link.get("source") == "current_observation":
+        return "historical_trigger_unconfirmed"
+    original = finding.get("assertion") or link.get("case", {}).get("assertion")
+    if not original:
         return "original_assertion_unbound"
-    if assertion != finding["assertion"]:
+    if assertion != original:
         return "assertion_unmatched"
     if not fresh.issuperset(commands):
         return "fresh_pass_missing"
     if oid not in covered:
         return "obligation_open"
+    expected = finding.get("first_case") or link.get("case")
+    if expected and (expected["command"] not in fresh or expected["assertion"] != assertion
+                     or not _same_case(expected, cases.get(expected["command"]))):
+        return "case_evidence_missing"
     return "closure_accepted"
 
 
@@ -341,6 +394,50 @@ def publish(root, execution, pin, result):
     checks = [{k: o[k] for k in ("command", "status", "log_ref", "log_error", "fingerprint", "reused") if k in o}
               for o in outcomes]
     handled_failures = set()
+    cases = {}
+    if fingerprint and pin.get("input") == fingerprint and not coverage.get("inputs_changed"):
+        for outcome in outcomes:
+            command = outcome["command"]
+            # Repeated invocations in one round cannot identify a unique observation.
+            case = outcome.get("case_observation") if _observed(outcome, fingerprint) else None
+            cases[command] = None if command in cases else case
+
+    def attachment(finding, row):
+        oid, command = _string(row, "obligation"), _string(row, "command")
+        item, case = obligations.get(oid), cases.get(command)
+        if (row.get("execution_id") != pin["execution_id"] or not item
+                or command not in item["commands"] or not _string(row, "diagnosis")
+                or finding.get("obligation") not in (None, oid) or finding.get("command") not in (None, command)):
+            return "attachment_unmatched"
+        baseline = _bound_baseline(execution, oid) or {}
+        if (not case or baseline.get("receipt") != case["assertion"]
+                or case["id"] != _string(row, "case") or item.get("assertion") != _string(row, "evidence")
+                or case["assertion"]["reference"] != item.get("assertion")
+                or finding.get("assertion") not in (None, case["assertion"])
+                or not any(c["command"] == command and c["status"] == "failed" for c in checks)):
+            return "case_evidence_missing"
+        claimants = [r for r in replies if _string(r, "status") == "attach" and _string(r, "command") == command]
+        if (len(claimants) != 1 or sum(command in o["commands"] for o in obligations.values()) != 1
+                or any(other is not finding and other["disposition"] == "open"
+                       and _same_case(other.get("first_case"), case) for other in findings.values())):
+            return "attachment_ambiguous"
+        first = finding.get("first_case")
+        if not first and finding.get("assertion") and finding.get("obligation"):
+            return "attachment_unmatched"
+        if first and not _same_case(first, case):
+            return "case_mismatch"
+        link = finding.get("attachment")
+        if link and not _same_case(link["case"], case):
+            return "case_mismatch"
+        if not link:
+            link = {"source": "first_failure" if first else "current_observation",
+                    "round_id": pin["round_id"], "input": fingerprint, "obligation": oid,
+                    "case": case, "diagnosis": _string(row, "diagnosis")}
+            finding.update(attachment=link, obligation=oid, behavior=item["behavior"])
+        if first:
+            handled_failures.add(command)
+        finding["observed_input"] = finding["last_input"] = fingerprint
+        return "case_linked" if first else "case_observed_prospectively"
 
     def record_followup(finding, status, reason_code, **details):
         # summary() exposes this even when a missing reply leaves last_round unchanged.
@@ -359,7 +456,8 @@ def publish(root, execution, pin, result):
             return False
         consumed.add(index)
         if obligation:
-            handled_failures.update(obligation["commands"])
+            # A reviewer blocker on a suite does not identify its runtime case.
+            handled_failures.update(cmd for cmd in obligation["commands"] if not cases.get(cmd))
         return True
 
     for fid in sorted(previously_closed):
@@ -388,6 +486,16 @@ def publish(root, execution, pin, result):
             continue
         row = matches[0]
         status = _string(row, "status")
+        if status == "attach":
+            reason = attachment(f, row)
+            f["last_round"] = pin["round_id"]
+            observation = {}
+            if reason in ("case_linked", "case_observed_prospectively"):
+                observation["observation"] = cases[_string(row, "command")]
+            record_followup(f, "present" if reason == "case_linked" else "unchecked", reason,
+                            obligation=_string(row, "obligation"), case=_string(row, "case"),
+                            diagnosis=_string(row, "diagnosis"), **observation)
+            continue
         diagnosis = _string(row, "diagnosis")
         strategy = _string(row, "strategy")
         repeat = _string(row, "repeat_reason")
@@ -398,7 +506,7 @@ def publish(root, execution, pin, result):
         f["latest_checks"] = [check for check in checks if check["command"] in commands]
         retry_gap = _retry_gap(diagnosis, strategy, changed_input, repeat)
         if status == "resolved":
-            reason = _closure_reason(f, row, assertion, commands, fresh, covered, retry_gap)
+            reason = _closure_reason(f, row, assertion, commands, fresh, covered, retry_gap, cases)
             status = "resolved" if reason == "closure_accepted" else "unchecked"
         elif status == "present":
             reason = "missing_diagnosis"
@@ -435,14 +543,24 @@ def publish(root, execution, pin, result):
         oid = _string(links[0], "obligation") if len(links) == 1 else None
         create(item["description"], item["origin"], oid if oid in obligations else None)
         if oid in obligations:
-            handled_failures.update(obligations[oid]["commands"])
+            handled_failures.update(cmd for cmd in obligations[oid]["commands"] if not cases.get(cmd))
     for check in checks:
         command = check["command"]
         if check["status"] not in ("failed", "timeout", "error") or command in handled_failures:
             continue
         ids = [oid for oid, item in obligations.items() if command in item["commands"]]
-        create("Runtime check " + command + " " + check["status"], "unknown",
-               ids[0] if len(ids) == 1 else None, command)
+        oid = ids[0] if len(ids) == 1 else None
+        case = cases.get(command) if check["status"] == "failed" else None
+        if case and oid and (_bound_baseline(execution, oid) or {}).get("receipt") != case["assertion"]:
+            oid = None
+        candidates = [fid for fid in sorted(offered) if findings[fid].get("command") == command
+                      and not (findings[fid].get("first_case") and cases.get(command)
+                               and not _same_case(findings[fid]["first_case"], cases[command]))]
+        finding = create("Runtime check " + command + " " + check["status"], "unknown", oid, command)
+        if case:
+            finding["first_case"] = case
+        if candidates:
+            events[-1]["possible_prior_ids"] = candidates
     record = {**pin, "digest": report_hash, "at": now_iso(), "selection_input": fingerprint,
               "open_obligations": [o["id"] for o in coverage.get("obligations", []) if o["status"] == "open"],
               "checks": checks, "events": events, "advisory": True,

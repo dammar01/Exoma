@@ -455,6 +455,10 @@ def build_prompt(
                    'evidence (current assertion file:line), obligation (exact ID), repeat_reason if repeating.',
                    'For a still-present finding include blocker (1-based index in current blocking_findings). '
                    'For a new blocker optionally emit {"blocker":1,"obligation":"exact ID"} when its behavior matches.',
+                   'To link an offered open ID to a selected assertion, propose status "attach" with id, execution_id, '
+                   'obligation, evidence (assertion file:line), exact command, case (test-owned case ID), and '
+                   'diagnosis explaining the common trigger and expectation. Runtime checks its fresh failure. '
+                   'Command-only matches are candidates. Attachment keeps the finding open this round.',
                    "For a recurrence of a recently resolved ID, report regressed with a current blocker index and diagnosis. "
                    "Keep a changed or missing original assertion open. A proposed replacement is informational.",
                    "Only propose resolved when the original trigger and expectation are exercised. "

@@ -1840,8 +1840,11 @@ in the following table.
 | `obligation_open` | The coverage row does not establish coverage of the required behavior. |
 | `closure_accepted` | All closure conditions were met. |
 
-A missing or duplicated ID in the review produces `followup_missing` or
-`followup_ambiguous`. A review reporting `nonreproduced` or `unchecked`
+`followup_missing` means the runtime found no usable row for this finding ID.
+Check the entire `[FOLLOWUP_V1]` block even if the ID appears in it. One invalid
+JSON line causes the parser to discard every row in the block. In a valid block,
+multiple rows with the same finding ID produce `followup_ambiguous`.
+A review reporting `nonreproduced` or `unchecked`
 produces `reported_nonreproduced` or `reported_unchecked`. An unrecognized
 status produces `unsupported_status`. A `present` report produces
 `missing_diagnosis`, `blocker_linked`, or `blocker_unmatched`. A confirmed link
@@ -1851,6 +1854,48 @@ For example, all required commands can pass and the obligation can be
 `covered` while an omitted finding stays `open` with `followup_missing`.
 A rejected publication instead returns `meta.reason` equal to
 `verification_publication_rejected` with an `incomplete` verdict.
+
+#### Linking later evidence to an open finding
+
+A project-owned, allowlisted check can report the case it actually exercised.
+After evaluating its assertion, emit **one** line on stdout near the end of
+the run, with the same status as the command outcome:
+
+```text
+EXOMA_CASE_V1 {"id":"negative-two","assertion":"check_quantity.py:4","status":"failed"}
+```
+
+Use a stable ID for one trigger and expectation. On a later successful run
+the check reports `passed` for the same case. The runtime captures the command,
+case ID, assertion receipt, diagnostic path and diagnostic hash during the run.
+It requires a fresh observation, a complete retained diagnostic, a readable
+assertion, and the marker in the captured output tail. An ordinary suite can
+continue to run without case reporting. Matching command names alone produces
+advisory `possible_prior_ids` on a new runtime finding.
+
+In a subsequent round a reviewer can propose this optional `[FOLLOWUP_V1]` row:
+
+```json
+{"status":"attach","id":"<offered finding ID>","execution_id":"<current execution ID>","obligation":"quantity","command":"python -B check_quantity.py","case":"negative-two","evidence":"check_quantity.py:4","diagnosis":"The original and current checks exercise quantity(-2) and expect zero."}
+```
+
+The runtime validates the proposal after the selected tests run. A unique current
+failure matching the initial case, command and assertion snapshot can retain the
+original ID (`case_linked`). The event and finding stay open for that round.
+The finding's `attachment` records its source, round, input and receipt. Closure
+in a later round requires the ordinary closure conditions and a fresh passing
+observation of that case. The first failure and original assertion remain
+available for comparison. When the first failure reports a case, the runtime can
+bind it immediately to a single obligation whose assertion receipt matches. The
+same fresh passing case is required for closure after either kind of binding.
+Independent blockers still contribute to the verdict.
+
+A legacy finding without an original case can receive a prospective attachment
+(`case_observed_prospectively`). Its historical trigger remains unconfirmed and
+the fresh failure retains a separate ID. Shared commands across obligations,
+competing proposals, reused passes, and conflicting case evidence cannot establish
+a unique link. A test-owned case ID expresses what the check reports. The quality
+of that check and the equivalence of a rewritten assertion require separate review.
 
 For browser verification, a passing playback with an outstanding historical assertion
 returns `incomplete` and exit 2. A dynamic title can recover when the effective inputs
