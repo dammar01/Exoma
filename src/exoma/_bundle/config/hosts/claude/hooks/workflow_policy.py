@@ -541,6 +541,37 @@ def skill_read(candidate, home, roots):
         return False
 
 
+_ALLOWED_OUTPUT_FILENAMES = frozenset({"result.json", "output.raw.md"})
+
+
+def delegated_output_read(candidate, home, rt_dir, root=None, marker=None):
+    # True when a Read names a completed delegated output (`result.json` or `output.raw.md`)
+    # inside the bound session's own `logs/<run_id>/` directory. Blocked while the job is
+    # actively `running`, and never allows `runtime/` (markers/tokens) or other sessions.
+    if not candidate or not rt_dir:
+        return False
+    if isinstance(marker, dict) and marker.get("phase") == "running":
+        return False
+    path = local_path(candidate, home)
+    if not path.strip():
+        return False
+    if not os.path.isabs(path):
+        if not root:
+            return False
+        path = os.path.join(root, path)
+    if ".." in re.split(r"[\\/]", path):
+        return False
+    try:
+        full = os.path.realpath(path)
+        if os.path.basename(full) not in _ALLOWED_OUTPUT_FILENAMES or not os.path.isfile(full):
+            return False
+        logs_base = os.path.normcase(os.path.realpath(os.path.join(os.path.dirname(rt_dir), "logs"))).rstrip("\\/")
+        norm_full = os.path.normcase(full)
+        return norm_full.startswith(logs_base + os.sep)
+    except Exception:
+        return False
+
+
 # A precision read: the small slice the main agent may read itself to attribute a
 # claim to file:line, as CLAUDE.md allows. Bounded by span and by count so it cannot become
 # the bulk gather the gate exists to route to second_agent.
@@ -916,12 +947,14 @@ def preflight_refusal(kind, target, command, marker, ctx):
         elif malformed_runner_attempt(command, root, home, ctx["is_bash"]):
             return "runner_malformed"
         one = shell_read_one(command)
-        if one is not None and ctx["host_read"](one):
+        if one is not None and (
+            ctx["host_read"](one) or delegated_output_read(one, home, rt_dir, root, marker)
+        ):
             return None
         return "preflight"
     if kind == "read":
         target = target or ""
-        if ctx["host_read"](target):
+        if ctx["host_read"](target) or delegated_output_read(target, home, rt_dir, root, marker):
             return None
         if cmd == "verify" and marker.get("phase") in {None, "armed", "selected"}:
             tests_json = os.path.join(os.path.dirname(rt_dir), "verify", "tests.json")

@@ -161,6 +161,41 @@ def _skill_and_task_reads(r: _Repro) -> None:
     finally:
         shutil.rmtree(tasks.parent.parent, ignore_errors=True)
 
+    # Delegated session logs (result.json / output.raw.md) pass Read & cat once returned,
+    # while runtime/ files, wrong sessions, traversal, and running phase stay gated.
+    out_sid = "output-read"
+    out_main = r.bind(out_sid)
+    r.prompt(out_sid, "/.analyze check output")
+    logs_dir = r.project / ".workflow" / "data" / "sessions" / out_main / "logs" / "p1"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    res_json = logs_dir / "result.json"
+    raw_md = logs_dir / "output.raw.md"
+    res_json.write_text('{"ok": true}', encoding="utf-8")
+    raw_md.write_text("[EVIDENCE]\n", encoding="utf-8")
+    rt_dir = r.project / ".workflow" / "data" / "sessions" / out_main / "runtime"
+    marker_file = rt_dir / "delegated.marker"
+    marker_data = json.loads(marker_file.read_text(encoding="utf-8"))
+    marker_file.write_text(json.dumps({**marker_data, "phase": "running", "generation": "g1"}), encoding="utf-8")
+    assert_true(
+        r.tool(out_sid, "intent-gate-check", "Read", {"file_path": str(res_json)}) == 2,
+        "H: reading result.json while job is actively running stays gated",
+    )
+    marker_file.write_text(json.dumps({**marker_data, "phase": "returned", "generation": "g1"}), encoding="utf-8")
+    assert_true(
+        r.tool(out_sid, "intent-gate-check", "Read", {"file_path": str(res_json)}) == 0
+        and r.tool(out_sid, "intent-gate-check", "Read", {"file_path": str(raw_md)}) == 0
+        and r.tool(out_sid, "intent-gate-check", "Bash", {"command": f"cat '{res_json.as_posix()}'"}) == 0,
+        "H: reading completed session result.json and output.raw.md passes Read and cat",
+    )
+    other_logs = r.project / ".workflow" / "data" / "sessions" / "other_session" / "logs" / "p1"
+    other_logs.mkdir(parents=True, exist_ok=True)
+    (other_logs / "result.json").write_text("{}", encoding="utf-8")
+    assert_true(
+        r.tool(out_sid, "intent-gate-check", "Read", {"file_path": str(other_logs / "result.json")}) == 2
+        and r.tool(out_sid, "intent-gate-check", "Read", {"file_path": str(logs_dir / ".." / ".." / "runtime" / "delegated.marker")}) == 2,
+        "H: other session logs and runtime traversal remain gated",
+    )
+
 
 def _commit_runner_data(r: _Repro) -> None:
     """Commit text in an evidence task is data; shell execution and test tasks are not."""

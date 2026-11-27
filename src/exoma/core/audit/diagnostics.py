@@ -1298,6 +1298,11 @@ def run_doctor(
             f"Run doctor where {entry['path']} can be read (outside the host's sandbox), "
             "grant read access to it, or save it as UTF-8"
         )
+    for warn in mcp.get("config_warnings") or []:
+        issues.append(f"provider config warning ({warn['path']}): {warn['detail']}")
+        recommended_fixes.append(
+            f"Clean up invalid/ignored key(s) in {warn['path']} so second_agent MCP loads without warnings"
+        )
     active_risky = [
         s["name"]
         for s in mcp["servers"]

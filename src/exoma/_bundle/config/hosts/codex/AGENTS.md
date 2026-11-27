@@ -33,7 +33,8 @@ Use the tools available in this session:
 - AskUserQuestion: use the available user-input tool.
 - Background task: wait on the same running `exec_command` session, never launch a duplicate.
   Collect it with `write_stdin`. A code-mode cell ID belongs to `functions.wait`, not
-  `write_stdin`; follow the tool response and keep the two IDs separate.
+  `write_stdin`; follow the tool response and keep the two IDs separate. On return, read
+  `output_path` (`result.json`, containing `digest` and `content`) before acknowledging with `delegate-ack`.
 
 Current runner examples include `--main-host codex` for presentation only. Before using
 that option in an older workspace, run `exoma upgrade --work-dir <root>` through the

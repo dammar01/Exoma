@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 import re
+from pathlib import Path
 
 from exoma.core.workspace.workspace_paths import CONFIG_VERSION
 from exoma.utils.redact import redact_value
@@ -65,6 +67,101 @@ def scope_warnings(content: str) -> list[dict]:
         for category, text in scope_gaps(content)
         if category not in SCOPE_CAPPING
     ]
+
+
+_PATH_TOKEN_RE = re.compile(
+    r"""(?:`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|((?:[A-Za-z]:[\\/]|~[\\/]|(?:\.\.?[\\/])+)[^\s,;:)\]]+|(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}))"""
+)
+_BINARY_ATTACHMENT_EXTS = frozenset({
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+    ".zip", ".7z", ".tar", ".gz", ".rar", ".exe", ".dll", ".bin",
+})
+
+
+def _extract_path_candidates(text: str) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _PATH_TOKEN_RE.finditer(text or ""):
+        raw = next((g for g in match.groups() if g), "").strip()
+        if not raw or "://" in raw or raw in seen:
+            continue
+        seen.add(raw)
+        found.append(raw)
+    return found
+
+
+def unreachable_readable_paths(project_root: Path, content: str) -> list[str]:
+    """Project-root text files claimed `in_scope_unreachable` that are actually readable."""
+    from exoma.core.evidence.fact_store import resolve_project_file
+
+    root = Path(project_root).resolve()
+    readable: list[str] = []
+    seen: set[str] = set()
+    for category, detail in scope_gaps(content):
+        if category not in SCOPE_CAPPING:
+            continue
+        for token in _extract_path_candidates(detail):
+            rel = resolve_project_file(root, token)
+            if not rel or rel in seen:
+                continue
+            target = (root / rel).resolve()
+            if target.suffix.lower() in _BINARY_ATTACHMENT_EXTS:
+                continue
+            try:
+                with target.open("rb") as fh:
+                    sample = fh.read(4096)
+                if b"\x00" in sample:
+                    continue
+                sample.decode("utf-8", errors="strict")
+            except (OSError, UnicodeDecodeError):
+                continue
+            seen.add(rel)
+            readable.append(rel)
+    return readable
+
+
+def find_unreadable_attachments(project_root: Path, task: str) -> list[dict]:
+    """Detect explicit binary/PDF or outside-root file attachments referenced in `task`."""
+    root = Path(project_root).resolve()
+    issues: list[dict] = []
+    seen: set[str] = set()
+    for token in _extract_path_candidates(task):
+        expanded = token
+        if token == "~" or token.startswith(("~/", "~\\")):
+            expanded = str(Path.home() / token[2:])
+        p = Path(expanded)
+        has_explicit_prefix = p.is_absolute() or token.startswith(("~/", "~\\", "../", "..\\", "./", ".\\"))
+        has_dir_sep = "/" in token or "\\" in token
+        ext = p.suffix.lower()
+        if not has_explicit_prefix and not has_dir_sep and ext not in _BINARY_ATTACHMENT_EXTS:
+            continue
+        try:
+            candidate = p.resolve() if p.is_absolute() else (root / p).resolve()
+        except (OSError, ValueError):
+            continue
+        inside = candidate == root or root in candidate.parents
+        exists = candidate.is_file()
+        key = str(candidate)
+        if key in seen:
+            continue
+        if ext in _BINARY_ATTACHMENT_EXTS and (exists or has_explicit_prefix or has_dir_sep):
+            seen.add(key)
+            issues.append({
+                "path": token,
+                "reason": "binary_attachment",
+                "inside_root": inside,
+                "exists": exists,
+            })
+        elif not inside and (exists or (has_explicit_prefix and ext)):
+            seen.add(key)
+            issues.append({
+                "path": token,
+                "reason": "outside_project_root",
+                "inside_root": False,
+                "exists": exists,
+            })
+    return issues
 
 def _attach_redactions(meta: dict, hits: list[dict]) -> None:
     if not hits:

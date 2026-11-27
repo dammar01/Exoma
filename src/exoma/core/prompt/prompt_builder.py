@@ -248,7 +248,7 @@ def _sidecar_block(
         else "empty this call → no cached facts to reuse"
     )
     lines = [
-        "[EVIDENCE_SIDECARS — READ these files yourself before answering; full protocol in AGENTS.md]",
+        "[EVIDENCE_SIDECARS — READ these files yourself before answering; full protocol in global provider instructions]",
         f"- leads: {runtime_dir}/leads.json — {lead_note}",
         f"- facts: {runtime_dir}/facts.json — {fact_note}",
     ]
@@ -279,8 +279,7 @@ def _sidecar_block(
         )
     if fanout:
         lines.append(
-            "- FAN-OUT call: dispatch one sub-agent per community in leads.json, then merge;"
-            " fan-out rules in AGENTS.md"
+            "- FAN-OUT call: dispatch one read-only sub-agent per community in leads.json, tag merged claims [cN], and list `subagents: cN` (or `subagents: none (no spawn tool|denied|declined: <reason>)`); full fan-out rules live in your global provider instructions, not the project's AGENTS.md"
         )
     lines.append("")
     return lines
@@ -349,6 +348,9 @@ def build_prompt(
     if trunc_info and meta_sink is not None:
         meta_sink.update(trunc_info)
 
+    fanout_active = subagent_fanout and role in _EVIDENCE_ROLES
+    effective_tools = list(declared_tools) if declared_tools else []
+
     header = [
         "[WORKFLOW_AGENT]",
         "source: second_agent",
@@ -361,8 +363,8 @@ def build_prompt(
         # provider's own permission config. Written here so the narrower per-command
         # policy is visible to the thing being asked to honour it.
         *(
-            [f"permitted_tools: {', '.join(declared_tools)}"]
-            if declared_tools
+            [f"permitted_tools: {', '.join(effective_tools)}"]
+            if effective_tools
             else []
         ),
         "",
@@ -374,7 +376,13 @@ def build_prompt(
         has_facts=has_facts,
         has_knowledge=has_knowledge,
         has_e2e_knowledge=has_e2e_knowledge,
-        fanout=subagent_fanout and role in _EVIDENCE_ROLES,
+        fanout=fanout_active,
+    )
+
+    worker_constraint = (
+        "- fan-out coordinator: dispatch read-only sub-agents per community in leads.json and merge with [cN] tags (trace reverse deps into `dependents`, state `scope_covered` vs `scope_not_covered`); fall back to reading sequentially yourself only if spawning is absent or denied by host/developer policy"
+        if fanout_active
+        else "- you are the PRIMARY worker: do the exploration yourself, trace reverse deps into `dependents`, state `scope_covered` vs `scope_not_covered`"
     )
 
     if role in _EVIDENCE_ROLES:
@@ -383,9 +391,9 @@ def build_prompt(
                 *header,
                 *changed_block,
                 *sidecar_block,
-                "[CONSTRAINTS — full evidence protocol in AGENTS.md; anchors only here]",
+                "[CONSTRAINTS — full evidence protocol in AGENTS.md (global provider instructions); anchors only here]",
                 "- read-only evidence; grounded claims need file:line; unproven numbers/deps → `assumptions`; DB/MCP findings → `external`",
-                "- you are the PRIMARY worker: do the exploration yourself, trace reverse deps into `dependents`, state `scope_covered` vs `scope_not_covered`",
+                worker_constraint,
                 ANCHOR_PATH_RULE,
                 *(_e2e_spec_constraints() if command == "e2e_spec" else []),
                 "",

@@ -17,6 +17,7 @@ rather than three near-copies: a fourth provider joins this check by existing, w
 the same reason the accounting itself now lives in adapters/redaction.py.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -351,3 +352,36 @@ def _test_error_types_are_registered() -> None:
         not unregistered,
         f"make_error called with an unregistered error_type (it would raise): {unregistered}",
     )
+
+    import tempfile
+    from exoma.core.provider.result_prep import find_unreadable_attachments
+
+    with tempfile.TemporaryDirectory(prefix="exoma-attach-") as tmp:
+        root = Path(tmp) / "proj"
+        root.mkdir()
+        outside = Path(tmp) / "spec.pdf"
+        outside.write_bytes(b"%PDF-1.4")
+        local_pdf = root / "docs" / "uat.pdf"
+        local_pdf.parent.mkdir()
+        local_pdf.write_bytes(b"%PDF-1.4")
+        assert_true(
+            len(find_unreadable_attachments(root, f"Analyze {outside} and docs/uat.pdf")) == 2,
+            "explicit binary/PDF and outside-root attachments must be detected",
+        )
+        assert_true(
+            find_unreadable_attachments(root, "Check whether PDFs are supported in general") == [],
+            "generic prose mentioning PDFs without a file path must not trigger preflight error",
+        )
+        outside_txt = Path(tmp) / "secret.txt"
+        outside_txt.write_text("secret", encoding="utf-8")
+        link_dir = root / "linked"
+        try:
+            os.symlink(tmp, link_dir, target_is_directory=True)
+        except OSError:
+            pass
+        else:
+            escaped = find_unreadable_attachments(root, "Inspect linked/secret.txt")
+            assert_true(
+                len(escaped) == 1 and escaped[0]["reason"] == "outside_project_root",
+                f"relative symlink pointing outside project_root must be rejected: {escaped}",
+            )

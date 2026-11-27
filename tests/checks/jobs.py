@@ -1696,8 +1696,10 @@ def _check_selected_checkpoint():
                     ledger = execution.current_execution(root, session)["finding_history"]
                     assert ledger["revision"] == 2 and "reason_code" not in ledger["rounds"]["old"]["events"][0]
                     for delivery in deliveries:
-                        assert delivery["meta"]["verify_followup"] == ledger["rounds"][jid]
-                        event, = delivery["meta"]["verify_followup"]["events"]
+                        assert (delivery.get("meta") or {}).get("content_mode") == "path_only"
+                        archived = json.loads(Path(delivery["output_path"]).read_text(encoding="utf-8"))
+                        assert archived["meta"]["verify_followup"] == ledger["rounds"][jid]
+                        event, = archived["meta"]["verify_followup"]["events"]
                         assert (event["id"], event["reason_code"]) == ("F-old", "followup_missing")
                     receipt = receipts.pop()
                     def advance_selection(job_id):
@@ -1828,7 +1830,9 @@ def _check_delegation_collection():
                 finally:
                     manager.complete_job(pending["job_id"], {"ok": True, "content": "CLI evidence", "meta": {}})
                 stdout, stderr = child.communicate(timeout=30)
-            assert_true(child.returncode == 0 and json.loads(stdout)["content"] == "CLI evidence",
+            ptr_out = json.loads(stdout)
+            archived_out = json.loads(Path(ptr_out["output_path"]).read_text(encoding="utf-8"))
+            assert_true(child.returncode == 0 and archived_out["content"] == "CLI evidence",
                         f"bound runner returns its own evidence: {stderr}")
             # Recover using only information known before dispatch, as if the
             # caller had received none of the runner's stdout.

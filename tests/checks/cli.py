@@ -68,3 +68,32 @@ def _test_cli_script_reaches_its_exit_code() -> None:
     for arguments, expected, label in cases:
         got = main._browser_exit_commands(*arguments)
         assert_true(got == expected, f"{label}: expected {expected}, got {got}")
+
+    import tempfile
+    from exoma.core.evidence.result_shaping import archive_and_pointer_result
+
+    with tempfile.TemporaryDirectory(prefix="exoma-cli-ptr-") as tmp:
+        root = Path(tmp)
+        (root / ".workflow").mkdir()
+        art = root / ".workflow" / "data" / "sessions" / "s1" / "logs" / "p1" / "output.raw.md"
+        art.parent.mkdir(parents=True)
+        art.write_text("[EVIDENCE]\n" + "x" * 5000, encoding="utf-8")
+        sample = {
+            "ok": True,
+            "content": "[EVIDENCE]\n" + "x" * 5000,
+            "digest": {"summary": "big"},
+            "evidence_ref": {"artifact_path": str(art)},
+            "meta": {"prompt_id": "p1", "delegation": {"generation": "g1", "receipt": "r1", "command": "analyze"}},
+        }
+        full, ptr = archive_and_pointer_result(sample, project_root=root, session_id="s1", command="await")
+        out_file = Path(ptr["output_path"])
+        assert_true(
+            out_file.is_file()
+            and ptr["ok"] is True
+            and ptr["receipt"] == "r1"
+            and ptr["meta"]["delegation"]["receipt"] == "r1"
+            and "content" not in ptr
+            and len(json.dumps(ptr)) < 1024
+            and json.loads(out_file.read_text(encoding="utf-8"))["digest"] == {"summary": "big"},
+            f"path-only CLI pointer must stay compact and archive full JSON: {ptr}",
+        )

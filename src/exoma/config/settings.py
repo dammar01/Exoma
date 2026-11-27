@@ -58,7 +58,7 @@ LEGACY_ENV_NAMES = frozenset({
     "MAX_TASK_CHARS", "MAX_TASK_CHARS_NO_ARGV", "TASK_TRUNCATION_HARD_RATIO", "SLIM_CONTENT",
     "CONTENT_PREVIEW_CHARS", "SLIM_CONTENT_MIN_CHARS", "OPENCODE_AGENT", "AGY_AGENT", "FANOUT_RECHECK_HOURS",
     "JOB_POLL_INTERVAL_SECONDS", "JOB_POLL_TIMEOUT_SECONDS", "MAX_GLOBAL_WORKERS",
-    "MODEL_CATALOG", "ALLOW_DEFAULT_SESSION",
+    "MODEL_CATALOG", "ALLOW_DEFAULT_SESSION", "FULL_STDOUT", "THREAD_INPUT_TOKEN_LIMIT",
 })
 
 
@@ -250,6 +250,8 @@ DEFAULT_JOB_POLL_TIMEOUT_SECONDS = _env_int("EXOMA_JOB_POLL_TIMEOUT_SECONDS", 0)
 # parallel main-agents cannot spawn unbounded opencode processes. Admission is serialized
 # across processes so the configured ceiling is a hard bound for this runtime version.
 DEFAULT_MAX_GLOBAL_WORKERS = _env_int("EXOMA_MAX_GLOBAL_WORKERS", 6)
+# Provider thread freshness ceiling (input tokens). 0 disables the token-based reset.
+DEFAULT_THREAD_INPUT_TOKEN_LIMIT = _env_int("EXOMA_THREAD_INPUT_TOKEN_LIMIT", 200_000)
 
 
 def _provider_defaults(provider: str) -> tuple[str, str | None]:

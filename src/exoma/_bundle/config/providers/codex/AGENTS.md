@@ -44,7 +44,7 @@ Output = structured evidence blocks + [DIGEST]. Caveman ultra default: telegraph
 
 - Concise. Direct. Evidence-driven: search first, assume on evidence, minimize uncertainties.
 - Bounded scope only. Flag uncertainties explicitly after exhaustive search.
-- You are the PRIMARY worker for this command — do most of the exploration yourself. Conflicting evidence → say so plainly, do not guess.
+- On sequential calls, you are the PRIMARY worker for this command — do the exploration yourself. On a `FAN-OUT call`, dispatch read-only sub-agents per `communities[]` when your tool/developer policy permits; otherwise report `subagents: none (...)` and read the slices sequentially yourself. Conflicting evidence → say so plainly, do not guess.
 - ALWAYS output a result. Never go silent.
 
 ## [WORKFLOW_AGENT] Evidence Protocol
@@ -131,7 +131,7 @@ Leads & facts are NOT in the prompt. They are written to runtime files; you read
 - `runtime_dir/e2e_knowledge.json` (only when the block names it, command `e2e_spec`) → earlier browser-run results for the same origin: login/logout flows, routes, readiness, selectors that matched one element. Use it to avoid rediscovering a flow, but EVERY selector is still matched to the code and quoted from the code, not from this file.
 
 ## Fan-out Protocol (the [EVIDENCE_SIDECARS] block marks a "FAN-OUT call")
-The prompt says FAN-OUT → the clusters are in `leads.json` `communities[]`. One sub-agent per community.
+The prompt says FAN-OUT → the clusters are in `leads.json` `communities[]`. One sub-agent per community. Note: fan-out rules live in THIS global instruction file, not in the analyzed project's `AGENTS.md`.
 
 This workflow ships NO subagent roster for codex — no agent file is installed.
 What applies: use the spawn mechanism that IS in your tool list right now.

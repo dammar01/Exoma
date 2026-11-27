@@ -123,5 +123,53 @@ def _test_provider_threads_are_kept_per_provider() -> None:
             and stored.get("provider_session_id") == "codex-thread-1",
             f"both threads are persisted, the flat key follows the active provider: {stored}",
         )
+
+        # Freshness reset: degraded low-confidence + in_scope_unreachable opens a fresh thread next call.
+        degraded_session = store.load_or_create("degraded-reset")
+
+        class _DegradedAdapter(_ThreadAdapter):
+            def __init__(self, thread_id: str, reply: str, input_tokens: int = 100) -> None:
+                super().__init__("codex", thread_id)
+                self._reply = reply
+                self._input_tokens = input_tokens
+
+            def run(self, prompt: str, session: dict, model: str | None = None, work_dir: str | None = None) -> dict:
+                res = super().run(prompt, session, model, work_dir)
+                res["content"] = self._reply
+                self.last_call_meta = {"provider_usage": {"input_tokens": self._input_tokens, "output_tokens": 50}}
+                return res
+
+        low_reply = (
+            "[EVIDENCE]\nconfidence: low\ngrounded:\n- a [a.py:1]\n"
+            "scope_not_covered:\n- [in_scope_unreachable] uninspected\nuncertainties:\n- incomplete\n"
+            "[DIGEST]\nsummary: low.\nkey_findings:\n- x\nevidence_basis: mixed\nrisk_level: high\n"
+            "recommended_next_action: retry\nconfidence: low\n"
+        )
+        ok_reply = (
+            "[EVIDENCE]\nconfidence: high\ngrounded:\n- a [a.py:1]\n"
+            "scope_not_covered: none\nuncertainties: none\n"
+            "[DIGEST]\nsummary: ok.\nkey_findings:\n- x\nevidence_basis: grounded\nrisk_level: low\n"
+            "recommended_next_action: none\nconfidence: high\n"
+        )
+        d1 = _DegradedAdapter("codex-bad-1", low_reply, input_tokens=500)
+        Executor(router=_router("codex"), adapter=d1, session_manager=store).execute(
+            "analyze", "q1", degraded_session, str(root), allow_reuse=False, session_manager=store
+        )
+        d2 = _DegradedAdapter("codex-fresh-2", ok_reply, input_tokens=250_000)
+        res2 = Executor(router=_router("codex"), adapter=d2, session_manager=store).execute(
+            "analyze", "q2", degraded_session, str(root), allow_reuse=False, session_manager=store
+        )
+        assert_true(
+            d2.resumed == [None] and (res2.get("meta") or {}).get("thread_reset_reason", "").startswith("prior_degraded:"),
+            f"degraded prior result must reset codex thread: resumed={d2.resumed} meta={res2.get('meta')}",
+        )
+        d3 = _DegradedAdapter("codex-fresh-3", ok_reply, input_tokens=100)
+        res3 = Executor(router=_router("codex"), adapter=d3, session_manager=store).execute(
+            "analyze", "q3", degraded_session, str(root), allow_reuse=False, session_manager=store
+        )
+        assert_true(
+            d3.resumed == [None] and (res3.get("meta") or {}).get("thread_reset_reason") == "input_token_limit",
+            f"exceeding thread input token cap must reset codex thread: resumed={d3.resumed} meta={res3.get('meta')}",
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)

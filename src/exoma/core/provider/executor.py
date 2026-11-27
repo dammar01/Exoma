@@ -4,7 +4,10 @@ from pathlib import Path
 from exoma.adapters.contract.base import SecondAgentAdapter
 from exoma.adapters.contract.registry import hint_conflict, resolve_adapter, selected_provider
 from exoma.config.providers import provider_boundary, transport_budget
-from exoma.config.settings import DEFAULT_TASK_TRUNCATION_HARD_RATIO
+from exoma.config.settings import (
+    DEFAULT_TASK_TRUNCATION_HARD_RATIO,
+    DEFAULT_THREAD_INPUT_TOKEN_LIMIT,
+)
 from exoma.core.evidence.contract import (
     FANOUT_DECLINED,
     anchor_cap,
@@ -23,7 +26,7 @@ from exoma.core.evidence.contract import (
 )
 from exoma.core.evidence.contracts import TaskSpec, correlation_id_for, usage_from_result
 from exoma.adapters.shared.usage import token_source_for
-from exoma.core.policy.governance import budget_limit, budget_state
+from exoma.core.policy.governance import budget_limit, budget_state, tools_for
 from exoma.core.audit import task_telemetry, telemetry
 from exoma.core.evidence import fact_store, verify_followup, verify_tests
 from exoma.core.runtime import execution
@@ -44,7 +47,13 @@ from exoma.core.evidence.runtime_io import (
     write_response_snapshot,
     write_usage_record,
 )
-from exoma.core.workspace.session_manager import bind_provider, record_provider_session
+from exoma.core.workspace.session_manager import (
+    bind_provider,
+    provider_thread_meta,
+    record_provider_session,
+    record_provider_thread_state,
+    reset_provider_session,
+)
 from exoma.core.workspace.runtime_lock import (
     acquire_runtime_lock,
     release_runtime_lock,
@@ -66,7 +75,9 @@ from exoma.core.provider.result_prep import (
     _sanitize_result,
     _scope_incomplete,
     _without_raw_args,
+    find_unreadable_attachments,
     scope_warnings,
+    unreachable_readable_paths,
 )
 from exoma.core.workspace.workspace_paths import (
     CONFIG_VERSION,
@@ -1024,6 +1035,38 @@ class Executor:
                 )
         else:
             bind_provider(session, route.get("provider"))
+
+        thread_reset_reason: str | None = None
+        provider_name = route.get("provider")
+        if session.get("provider_session_id"):
+            tmeta = provider_thread_meta(session, provider_name)
+            token_limit = DEFAULT_THREAD_INPUT_TOKEN_LIMIT
+            if not self._router_override:
+                try:
+                    from exoma.config.settings import load_provider_config_for
+
+                    raw_limit = load_provider_config_for(project_root).get(
+                        "thread_input_token_limit"
+                    )
+                    if isinstance(raw_limit, int) and raw_limit >= 0:
+                        token_limit = raw_limit
+                except Exception:
+                    pass
+            if tmeta.get("degraded"):
+                thread_reset_reason = f"prior_degraded:{tmeta.get('degraded_reason') or 'low_confidence'}"
+            elif token_limit > 0 and int(tmeta.get("last_input_tokens") or 0) >= token_limit:
+                thread_reset_reason = "input_token_limit"
+            if thread_reset_reason:
+                if session_manager is not None:
+                    try:
+                        session_manager.reset_provider_session(
+                            session, provider_name, thread_reset_reason
+                        )
+                    except OSError:
+                        reset_provider_session(session, provider_name, thread_reset_reason)
+                else:
+                    reset_provider_session(session, provider_name, thread_reset_reason)
+
         adapter_session = dict(session)
         adapter_session["session_id"] = session_id
 
@@ -1077,7 +1120,7 @@ class Executor:
             # work, so asking for the missing block costs one call and saves the whole read.
             # Strictly once — a second agent that cannot produce the contract twice will not
             # produce it on the tenth try, and a loop here would spend quota discovering that.
-            gap = _contract_gap(command, route.get("role"), result)
+            gap = _contract_gap(command, route.get("role"), result, project_root=project_root)
             if gap:
                 first_reply = result.get("content") or ""
                 continuation_meta = {
@@ -1114,7 +1157,7 @@ class Executor:
                         # malformed first reply can never block a recovery that worked.
                         for candidate, joined in ((merged, True), (retry, False)):
                             if _contract_gap(
-                                command, route.get("role"), candidate
+                                command, route.get("role"), candidate, project_root=project_root
                             ):
                                 continue
                             continuation_meta["continuation_recovered"] = True
@@ -1239,6 +1282,8 @@ class Executor:
             # Rides out on the result too, not just the archived call meta: whether an
             # answer arrived first-try or needed a nudge changes how much to trust it.
             result.setdefault("meta", {}).update(continuation_meta)
+        if thread_reset_reason:
+            result.setdefault("meta", {})["thread_reset_reason"] = thread_reset_reason
 
         write_response_snapshot(
             project_root,
@@ -1434,6 +1479,14 @@ class Executor:
         if command == "verify" and not e2e_evidence and verify_followup.active():
             followup_file = verify_followup.handoff(project_root, session_id,
                 execution.current_execution(project_root, session_id), verify_tests.read_request(project_root, session_id))
+        declared_tools = route.get("declared_tools")
+        if fanout and not self._router_override:
+            try:
+                from exoma.config.settings import load_provider_config_for
+
+                declared_tools = tools_for(command, load_provider_config_for(project_root), fanout=True)
+            except Exception:
+                pass
         prompt = build_prompt(
             followup_file=followup_file,
             role=route["role"],
@@ -1448,7 +1501,7 @@ class Executor:
             subagent_fanout=fanout,
             e2e_evidence=e2e_evidence,
             has_e2e_knowledge=has_e2e_knowledge,
-            declared_tools=route.get("declared_tools"),
+            declared_tools=declared_tools,
             meta_sink=prompt_meta,
             # Sized from the transport, not from one constant shared by every provider.
             # The adapter is still bound late (below), but the provider NAME is settled
@@ -1552,6 +1605,19 @@ class Executor:
             result["meta"]["verify_mode"] = mode
             result["meta"]["command"] = normalized_command
             return _sanitize_result(result)[0]
+
+        if normalized_command in ("explore", "plan", "analyze", "verify"):
+            bad_attachments = find_unreadable_attachments(project_root, task)
+            if bad_attachments:
+                names = ", ".join(item["path"] for item in bad_attachments[:3])
+                return make_error(
+                    "unreadable_attachment",
+                    f"task references binary/PDF or outside-root attachment(s) that the read-only text second_agent cannot inspect: {names}",
+                    next_action=(
+                        "Extract text from the PDF/binary or copy needed text excerpts inside the project workspace, then retry without binary/outside-root attachments."
+                    ),
+                    meta={"command": normalized_command, "attachments": bad_attachments},
+                )
 
         if _resolved_route is None:
             refusal = self._provider_config_refusal(project_root, normalized_command)
@@ -1863,6 +1929,20 @@ class Executor:
                         f"{', ...' if len(outside) > 3 else ''})"
                     )
                 issues.append({"kind": "scope_wide", "detail": detail})
+            readable_unreachable = unreachable_readable_paths(
+                project_root, result.get("content") or ""
+            )
+            if readable_unreachable:
+                issues.append(
+                    {
+                        "kind": "false_in_scope_unreachable",
+                        "detail": (
+                            f"{len(readable_unreachable)} path(s) marked in_scope_unreachable exist "
+                            f"and are readable inside project_root: {', '.join(readable_unreachable[:5])}"
+                        ),
+                        "paths": readable_unreachable,
+                    }
+                )
             if issues:
                 result.setdefault("meta", {})["contract_warnings"] = issues
 
@@ -1890,6 +1970,8 @@ class Executor:
                     # Truncated output is not partially right — the reasoning that would
                     # have qualified the conclusion is the part that went missing.
                     caps.append(("low", f"output structurally incomplete: {issue['kind']}"))
+                elif issue["kind"] == "false_in_scope_unreachable":
+                    caps.append(("low", "in_scope_unreachable lists readable project files"))
                 elif issue["kind"] == "trailing_non_evidence":
                     caps.append(
                         ("medium", "output closes by addressing the user, not on evidence")
@@ -1898,13 +1980,51 @@ class Executor:
                     # Reasoning done over a tree that has already drifted past its plan is
                     # reasoning about a codebase nobody has described yet.
                     caps.append(("medium", "working tree is wider than the declared scope"))
-            if _scope_incomplete(result.get("content") or ""):
+            scope_inc = _scope_incomplete(result.get("content") or "")
+            if scope_inc:
                 caps.append(("medium", "scope_not_covered lists in-scope ground the run could not reach"))
             gaps = scope_warnings(result.get("content") or "")
             if gaps:
                 result.setdefault("meta", {})["scope_warnings"] = gaps
             if caps and digest is not None:
                 result["digest"] = cap_confidence(digest, caps)
+
+            last_meta = self._last_call_meta or {}
+            observed_input = (
+                last_meta.get("actual_input_tokens")
+                if isinstance(last_meta.get("actual_input_tokens"), int)
+                else last_meta.get("estimated_input_tokens")
+            )
+            final_conf = (result.get("digest") or {}).get("confidence")
+            degraded = final_conf == "low" and (scope_inc or bool(damaged) or bool(readable_unreachable))
+            degraded_reason = (
+                "false_in_scope_unreachable"
+                if readable_unreachable
+                else "content_incomplete"
+                if damaged
+                else "in_scope_unreachable"
+                if scope_inc
+                else None
+            )
+            if effective_session_manager is not None:
+                try:
+                    effective_session_manager.record_provider_thread_state(
+                        session,
+                        route.get("provider"),
+                        input_tokens=observed_input,
+                        degraded=degraded,
+                        degraded_reason=degraded_reason,
+                    )
+                except OSError:
+                    pass
+            else:
+                record_provider_thread_state(
+                    session,
+                    route.get("provider"),
+                    input_tokens=observed_input,
+                    degraded=degraded,
+                    degraded_reason=degraded_reason,
+                )
 
             # Keep prose and anchors derived from the same claims so presentation cannot
             # become a second source of truth.

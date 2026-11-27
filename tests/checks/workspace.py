@@ -458,6 +458,24 @@ def _check_mcp_scan_names_an_unreadable_config(root: Path) -> None:
                 and scanned["verdict"] == "none",
                 f"a denied and a non-UTF-8 provider config are named, not raised: {scanned}")
 
+    codex_toml = root / "config.toml"
+    codex_toml.write_text(
+        'mcp = {}\n[mcp_servers.context7]\ntype = "http"\nurl = "https://mcp.context7.com/mcp"\n',
+        encoding="utf-8",
+    )
+    mcp_scan._mcp_config_candidates = lambda project_root, provider=None: [codex_toml]
+    try:
+        toml_scan = mcp_scan._scan_mcp(root)
+    finally:
+        mcp_scan._mcp_config_candidates = saved
+    warn_keys = {w.get("key") for w in toml_scan.get("config_warnings") or []}
+    assert_true(
+        "mcp" in warn_keys
+        and "mcp_servers.context7.type" in warn_keys
+        and any(s["name"] == "context7" and s["classification"] == "safe" for s in toml_scan["servers"]),
+        f"Codex TOML scanner must classify mcp_servers and flag invalid keys: {toml_scan}",
+    )
+
 
 def _test_init_upgrade_and_session_guard() -> None:
     """init must not hand back a stale workspace, and the entry script must refuse

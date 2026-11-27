@@ -430,6 +430,44 @@ def _test_contract_continuation() -> None:
             gap is not None and "`- none`" in gap.get("wants", ""),
             f"the re-prompt names `- none` for an entry that only says nothing was found: {gap}",
         )
+
+        # Shallow early-stop (1 grounded claim + missing digest) must trigger full task
+        # completion continuation, not digest-only.
+        shallow = (
+            "[EVIDENCE]\nconfidence: low\ngrounded:\n- single item [app/main.py:1]\n"
+            "assumptions: none\nuncertainties:\n- truncated"
+        )
+        shallow_adapter = _ScriptedAdapter([shallow, _EVIDENCE])
+        shallow_res = Executor(adapter=shallow_adapter).execute(
+            "analyze", "check all files", _session(), str(root)
+        )
+        assert_true(
+            len(shallow_adapter.calls) == 2
+            and "finish reading the remaining uninspected files" in shallow_adapter.calls[1]["prompt"]
+            and "entry point located" in (shallow_res.get("content") or ""),
+            f"shallow early stop must trigger full-task continuation: {shallow_res.get('meta')}",
+        )
+
+        # Claiming a readable project file is in_scope_unreachable triggers continuation + warning.
+        (root / "readable.py").write_text("x = 1\n", encoding="utf-8")
+        fake_unreachable = (
+            "[EVIDENCE]\nconfidence: high\ngrounded:\n- entry point [readable.py:1]\n"
+            "scope_not_covered:\n- [in_scope_unreachable] readable.py could not be inspected\n"
+            "uncertainties: none\n"
+            "[DIGEST]\nsummary: skipped.\nkey_findings:\n- x\nevidence_basis: mixed\n"
+            "risk_level: high\nrecommended_next_action: retry\nconfidence: high\n"
+        )
+        unreach_adapter = _ScriptedAdapter([fake_unreachable, fake_unreachable])
+        unreach_res = Executor(adapter=unreach_adapter).execute(
+            "analyze", "inspect readable.py", _session(), str(root)
+        )
+        kinds = [w.get("kind") for w in (unreach_res.get("meta") or {}).get("contract_warnings") or []]
+        assert_true(
+            len(unreach_adapter.calls) == 2
+            and "false_in_scope_unreachable" in kinds
+            and (unreach_res.get("digest") or {}).get("confidence") == "low",
+            f"readable path marked in_scope_unreachable must trigger continuation, warning, and low cap: {unreach_res.get('meta')}",
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

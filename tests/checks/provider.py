@@ -934,6 +934,7 @@ def _provider_selection_static(temp_root: Path, workflow_dir: Path, config_file:
     assert_true(
         effort_args("opencode", "high") == ["--variant", "high"]
         and effort_args("codex", "high") == ["-c", 'model_reasoning_effort="high"']
+        and effort_args("codex", "medium") == ["-c", 'model_reasoning_effort="medium"']
         and effort_args("opencode", None) == [],
         "each provider must spell effort its own way, and say nothing when unset",
     )

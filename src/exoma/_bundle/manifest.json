@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "51a5fb8983cd04e4b0c2f6612db43ace33293a2b0d3d1a7cfb15b7f72a148c6f",
-      "bytes": 27436,
+      "sha256": "5e7606754e0d0a9f15918121fb47f4a2ffeda64d0c3727422a98321085e0752d",
+      "bytes": 27776,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -413,15 +413,15 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "73d73f74d597d848f16285efb2e9db3c54f53af6fb7ab1c0336baf18c4b30053",
-      "bytes": 64595,
+      "sha256": "e2f6c37c113f45006fab43b106d4f8ad6a04bf3aaefaa402e49a36e1a42fec1f",
+      "bytes": 66002,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "providers/opencode/AGENTS.md",
-      "sha256": "e9fbf45e734f17083743310efb8c800ecd4601d13c3692ef35a673ae82fb9615",
-      "bytes": 19367,
+      "sha256": "75fba26dde9a9c66399b9e0d25b01cff89aa91fef9b6045997d1c51fdf7b0fc5",
+      "bytes": 19531,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -462,8 +462,8 @@
     },
     {
       "path": "providers/codex/AGENTS.md",
-      "sha256": "b1cb04e7e7cb923466158e8a59981887144af107770047ee60f0fbf2c5f5e8b7",
-      "bytes": 16640,
+      "sha256": "1171451867ead9303db8876b16ddf844764cfc1ddd4e196f5ec0b632c23b485f",
+      "bytes": 16950,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -518,8 +518,8 @@
     },
     {
       "path": "hosts/codex/AGENTS.md",
-      "sha256": "19f08576ff2d04a6cbd83dadf8f19124bdacdb1651aeb9b4c408446fe7123eaa",
-      "bytes": 3605,
+      "sha256": "81a2cbc3ff5718d1e112da7fd3df3dc6d260b420543be80d4b06c781b33b8061",
+      "bytes": 3730,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -546,8 +546,8 @@
     },
     {
       "path": "hosts/opencode/AGENTS.md",
-      "sha256": "a8ace9f70e598f843850e0fd3fc068d3433f1c9d15ed1e0b35fca203f5eadf31",
-      "bytes": 2213,
+      "sha256": "d44b3c43a844afe57187ec3d74cef6abac8d0954de0c7cbbeb8d65e67e68db53",
+      "bytes": 2351,
       "merge": "merge",
       "component": "prompt_bundle"
     },

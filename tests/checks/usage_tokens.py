@@ -145,6 +145,20 @@ def _adapters_read_usage_out_of_their_own_streams() -> None:
         CodexAdapter.extract_usage("plain text, no events") is None,
         "a build that emits no usage must leave the row estimated, not zeroed",
     )
+    zero_reason = CodexAdapter.extract_usage(
+        '{"type":"turn.completed","usage":{"input_tokens":139730,"cached_input_tokens":93952,"output_tokens":1422,"reasoning_tokens":0}}\n'
+    )
+    assert_true(
+        zero_reason
+        == {
+            "input_tokens": 139730,
+            "output_tokens": 1422,
+            "reasoning_tokens": 0,
+            "cached_input_tokens": 93952,
+        }
+        and token_source_for(zero_reason) == "provider",
+        f"explicit reasoning_tokens=0 from codex turn.completed is preserved: {zero_reason}",
+    )
     assert_true(
         OpenCodeAdapter.extract_usage("some log line\nthe answer") is None,
         "OpenCode's formatted output carries no counts — bootstrap and every error tail "

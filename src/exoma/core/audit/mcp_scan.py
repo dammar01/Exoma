@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import tomllib
 from pathlib import Path
 
 from exoma.core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, WORKFLOW_DIRNAME
@@ -126,7 +127,7 @@ def _mcp_reachable(spec) -> tuple[bool | None, str]:
     """
     if not isinstance(spec, dict):
         return None, "spec not an object — cannot resolve command"
-    if spec.get("type") == "remote" or spec.get("url"):
+    if spec.get("type") == "remote" or spec.get("url") or spec.get("http_url"):
         return None, "remote server (liveness not probed)"
     cmd = spec.get("command")
     if isinstance(cmd, list) and cmd:
@@ -141,11 +142,42 @@ def _mcp_reachable(spec) -> tuple[bool | None, str]:
     return False, f"'{exe}' not found on PATH — second_agent cannot start this server"
 
 
+def _codex_toml_warnings(path: Path, data: dict) -> list[dict]:
+    """Flag Codex TOML settings that Codex CLI ignores/rejects at startup."""
+    warnings: list[dict] = []
+    if "mcp" in data:
+        warnings.append(
+            {
+                "path": str(path),
+                "kind": "codex_invalid_key",
+                "key": "mcp",
+                "detail": "top-level 'mcp' is ignored by Codex CLI (use [mcp_servers.<name>])",
+            }
+        )
+    servers = data.get("mcp_servers")
+    if isinstance(servers, dict):
+        for name, spec in servers.items():
+            if isinstance(spec, dict) and "type" in spec:
+                warnings.append(
+                    {
+                        "path": str(path),
+                        "kind": "codex_invalid_key",
+                        "key": f"mcp_servers.{name}.type",
+                        "detail": (
+                            f"Codex is ignoring unrecognized setting 'mcp_servers.{name}.type' "
+                            "(remove 'type' from ~/.codex/config.toml so MCP loads cleanly)"
+                        ),
+                    }
+                )
+    return warnings
+
+
 def _scan_mcp(project_root: Path) -> dict:
     """Enumerate MCP servers the provider exposes to second_agent + a safety verdict."""
     servers: list[dict] = []
     sources: list[str] = []
     unreadable: list[dict] = []
+    config_warnings: list[dict] = []
     seen: set[str] = set()
     for path in _mcp_config_candidates(project_root):
         # exists() is inside the try: on Windows a path the process may not stat raises
@@ -163,12 +195,30 @@ def _scan_mcp(project_root: Path) -> dict:
             # Not UTF-8: as unreadable to the scan as a denied file, and reported the same way.
             unreadable.append({"path": str(path), "error": f"UnicodeDecodeError: {exc.reason}"})
             continue
-        try:
-            cleaned = re.sub(r"(?m)^\s*//.*$", "", raw)  # tolerate // comments (jsonc)
-            data = json.loads(cleaned)
-        except ValueError:
-            continue
-        mcp = data.get("mcp") if isinstance(data, dict) else None
+        if path.suffix.lower() == ".toml":
+            try:
+                data = tomllib.loads(raw)
+            except tomllib.TOMLDecodeError as exc:
+                config_warnings.append(
+                    {
+                        "path": str(path),
+                        "kind": "toml_parse_error",
+                        "key": None,
+                        "detail": f"invalid TOML in {path}: {exc}",
+                    }
+                )
+                continue
+            if not isinstance(data, dict):
+                continue
+            config_warnings.extend(_codex_toml_warnings(path, data))
+            mcp = data.get("mcp_servers")
+        else:
+            try:
+                cleaned = re.sub(r"(?m)^\s*//.*$", "", raw)  # tolerate // comments (jsonc)
+                data = json.loads(cleaned)
+            except ValueError:
+                continue
+            mcp = data.get("mcp") if isinstance(data, dict) else None
         if not isinstance(mcp, dict) or not mcp:
             continue
         sources.append(str(path))
@@ -197,4 +247,10 @@ def _scan_mcp(project_root: Path) -> dict:
         verdict = "review"
     else:
         verdict = "safe"
-    return {"sources": sources, "servers": servers, "verdict": verdict, "unreadable": unreadable}
+    return {
+        "sources": sources,
+        "servers": servers,
+        "verdict": verdict,
+        "unreadable": unreadable,
+        "config_warnings": config_warnings,
+    }

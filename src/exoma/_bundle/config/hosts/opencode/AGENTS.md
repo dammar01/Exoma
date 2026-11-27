@@ -23,7 +23,8 @@ tools:
 - Write / Edit: `write` / `edit` (or `patch`).
 - AskUserQuestion: ask in the reply, one question per open question, with the options listed.
 - Background task (`run_in_background`): none here — run the runner call in the foreground
-  with a long timeout and wait for it; never launch a second runner call for the same task.
+  with a long timeout and wait for it; once the compact pointer JSON returns, read
+  `output_path` (`result.json`, holding `digest` and `content`) via `read`, then acknowledge; never launch a second runner call for the same task.
 
 Every system prompt carries a `[SESSION BINDING]` block from Exoma's plugin
 (`~/.config/opencode/plugins/exoma.js`). Pass its `MAIN_SESSION_ID` to every stateful

@@ -36,23 +36,27 @@ _DEFAULT_TOOL_POLICY = ("read", "grep", "glob", "list")
 FORBIDDEN_TOOLS = frozenset({"write", "edit", "patch", "apply", "delete", "rm"})
 
 
-def tools_for(command: str, config: dict | None = None) -> list[str]:
+def tools_for(command: str, config: dict | None = None, *, fanout: bool = False) -> list[str]:
     """The declared tool set for one command, forbidden entries removed.
 
     A project may narrow the default via `command_tools` in its provider config. It may
     not widen it past FORBIDDEN_TOOLS — a config is a preference, and this one is an
-    invariant.
+    invariant. When `fanout` is active for an evidence command, `task` (read-only
+    sub-agent spawn) is included unless explicitly overridden.
     """
     normalized = (command or "").strip().lower()
     configured = (config or {}).get("command_tools") or {}
     declared = configured.get(normalized)
-    if not isinstance(declared, (list, tuple)) or not declared:
+    custom = isinstance(declared, (list, tuple)) and bool(declared)
+    if not custom:
         declared = COMMAND_TOOL_POLICY.get(normalized, _DEFAULT_TOOL_POLICY)
     seen: list[str] = []
     for tool in declared:
         name = str(tool).strip().lower()
         if name and name not in FORBIDDEN_TOOLS and name not in seen:
             seen.append(name)
+    if fanout and not custom and normalized in {"explore", "analyze", "plan"} and "task" not in seen:
+        seen.append("task")
     return seen
 
 

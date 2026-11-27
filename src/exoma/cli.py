@@ -93,6 +93,7 @@ from exoma.core.evidence.result_shaping import (  # noqa: E402,F401
     _slim_result,
     _verify_exit_code,
     _without_raw_args,
+    archive_and_pointer_result,
 )
 
 
@@ -1132,16 +1133,34 @@ Examples
         stored_job = JOB_MANAGER.get_job(args.job_id)
         if stored_job:
             exit_job_command = str(stored_job.get("command") or exit_job_command)
-    result = _slim_result(result)
     from exoma.config.hosts import present_result
-    result = present_result(result, args.main_host, args.command)
-    print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
+    _DELEGATED_POINTER_COMMANDS = {
+        "await",
+        "delegate-result",
+        "explore",
+        "plan",
+        "analyze",
+        "verify",
+        "verify-browser",
+    }
+    if args.command in _DELEGATED_POINTER_COMMANDS:
+        result = present_result(result, args.main_host, args.command)
+        full_result, shown_result = archive_and_pointer_result(
+            result,
+            project_root=detect_project_root(work_dir),
+            session_id=effective_session,
+            command=args.command,
+        )
+    else:
+        full_result = present_result(_slim_result(result), args.main_host, args.command)
+        shown_result = full_result
+    print(json.dumps(shown_result, indent=2) if args.pretty else json.dumps(shown_result))
     exit_command = args.command
-    if args.command == "delegate-result" and (result.get("meta") or {}).get("delegation"):
+    if args.command == "delegate-result" and (full_result.get("meta") or {}).get("delegation"):
         exit_command = "await"
-        exit_job_command = result["meta"]["delegation"]["command"]
-    exit_command, exit_job_command = _browser_exit_commands(exit_command, result, exit_job_command)
-    raise SystemExit(_verify_exit_code(exit_command, result, exit_job_command))
+        exit_job_command = full_result["meta"]["delegation"]["command"]
+    exit_command, exit_job_command = _browser_exit_commands(exit_command, full_result, exit_job_command)
+    raise SystemExit(_verify_exit_code(exit_command, full_result, exit_job_command))
 
 
 if __name__ == "__main__":

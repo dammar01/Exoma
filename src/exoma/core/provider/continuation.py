@@ -5,8 +5,10 @@ from exoma.core.evidence.contract import (
     contract_warnings,
     digest_split,
     digest_trim_point,
+    readable_claims,
     validate_verification_contract,
 )
+from exoma.core.provider.result_prep import unreachable_readable_paths
 
 
 # Markers that say the reply is evidence rather than conversation. Kept as one list so the
@@ -54,7 +56,7 @@ _VERIFY_WANT_BY_KIND = {
 }
 
 
-def _contract_gap(command: str, role: str, result) -> dict | None:
+def _contract_gap(command: str, role: str, result, *, project_root=None) -> dict | None:
     """Did the reply stop before the contract, or is it simply not evidence?
 
     Distinct from a failed call, and distinct from a refusal. The observed case: the
@@ -115,7 +117,28 @@ def _contract_gap(command: str, role: str, result) -> dict | None:
             for issue in contract_warnings(command, content)
             if issue["kind"] in STRUCTURAL_KINDS
         ]
+        false_unreachable = (
+            unreachable_readable_paths(project_root, content)
+            if project_root is not None
+            else []
+        )
+        claims = readable_claims(content)
+        if false_unreachable:
+            return {
+                "reason": "readable project files marked in_scope_unreachable",
+                "missing": [f"uninspected readable files: {', '.join(false_unreachable[:5])}"],
+                "wants": "full inspection of those readable project files and complete [EVIDENCE] + [DIGEST] blocks",
+                "complete_task": True,
+            }
         if damaged:
+            # Shallow early stop (< 2 grounded claims) needs task completion, not a digest patch.
+            if len(claims) < 2:
+                return {
+                    "reason": "reply ended before its digest",
+                    "missing": damaged,
+                    "wants": "full completion of the task (inspecting remaining files in scope) with complete [EVIDENCE] + [DIGEST] blocks",
+                    "complete_task": True,
+                }
             return {
                 "reason": "reply ended before its digest",
                 "missing": damaged,
@@ -146,6 +169,9 @@ def _merge_continuation(first: str | None, retry: str | None) -> str:
     # first reply outright; concatenating there would duplicate every section.
     head = "\n".join(first.splitlines()[:3]).strip()
     if head and head in retry:
+        return retry
+    lower_retry = retry.lower()
+    if "[evidence]" in lower_retry and "[digest]" in lower_retry:
         return retry
     # Everything past the digest header is digest anyway, so the body is what precedes it
     # and the truncated header the first reply stopped inside has to go: left in place it
@@ -181,6 +207,15 @@ def _continuation_prompt(command: str, gap: dict) -> str:
     # adapter refuses the call that existed to rescue the run.
     if len(missing) > _MISSING_CHARS:
         missing = missing[:_MISSING_CHARS] + f" …(+{len(missing) - _MISSING_CHARS} chars)"
+    if gap.get("complete_task"):
+        return (
+            f"Your previous reply for this {command} call stopped short or skipped readable "
+            f"files: {gap['reason']} ({missing}).\n"
+            "Verified findings already in this session still count. Do NOT redo what you "
+            "already verified — finish reading the remaining uninspected files/items (without "
+            "truncating reads) and reply with "
+            f"{gap['wants']}."
+        )
     return (
         f"Your previous reply for this {command} call stopped before the required "
         f"output: {gap['reason']} ({missing}).\n"

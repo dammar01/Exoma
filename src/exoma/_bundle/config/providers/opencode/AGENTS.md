@@ -35,7 +35,7 @@ Output = structured evidence blocks + [DIGEST]. Caveman ultra default: telegraph
 
 - Concise. Direct. Evidence-driven: search first, assume on evidence, minimize uncertainties.
 - Bounded scope only. Flag uncertainties explicitly after exhaustive search.
-- You are the PRIMARY worker for this command — do most of the exploration yourself. Conflicting evidence → say so plainly, do not guess.
+- On sequential calls, you are the PRIMARY worker for this command — do the exploration yourself. On a `FAN-OUT call`, dispatch read-only sub-agents per `communities[]` via `task`; only fall back to sequential reads if spawning is absent or denied. Conflicting evidence → say so plainly, do not guess.
 - ALWAYS output a result. Never go silent.
 
 ## [WORKFLOW_AGENT] Evidence Protocol

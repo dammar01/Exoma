@@ -382,6 +382,18 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             installed_missing.append(f"{CODEX_CONFIG_KEY} (Auto-review context)")
         elif policy_status not in ("installed", "disabled"):
             installed_drift.append(f"{CODEX_CONFIG_KEY} (Auto-review context: {policy_status})")
+        if config.is_file() and config_text.strip():
+            import tomllib
+            from exoma.core.audit.mcp_scan import _codex_toml_warnings
+
+            try:
+                parsed_codex = tomllib.loads(config_text)
+            except tomllib.TOMLDecodeError as exc:
+                print(f"  Codex config warning: invalid TOML in {config}: {exc}")
+            else:
+                if isinstance(parsed_codex, dict):
+                    for warn in _codex_toml_warnings(config, parsed_codex):
+                        print(f"  Codex config warning: {warn['detail']}")
 
     settings_dest = HOME / ".claude" / "settings.json"
     if settings_src.exists() and "claude" in hosts:

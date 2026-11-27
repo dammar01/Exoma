@@ -7,8 +7,12 @@ ref_only path against a short fixture. Importing them here by value would freeze
 defaults, and the test would assert against knobs nothing reads.
 """
 
+from pathlib import Path
+import secrets
+
 from exoma.config.settings import SLIM_CONTENT_ENV, getenv
 from exoma.core.evidence.contract import validate_verification_contract, verify_exit_status
+from exoma.core.workspace.workspace_paths import WORKFLOW_DIRNAME, atomic_write_json, workflow_paths
 from exoma.utils.redact import redact_value
 
 
@@ -158,6 +162,91 @@ def _slim_result(result: dict, slim_content: bool | None = None) -> dict:
     slim_meta = {k: v for k, v in meta.items() if k not in _HEAVY_META_KEYS}
     clean = {**clean, "meta": slim_meta}
     return _as_ref_only(clean) if slim_content else clean
+
+
+def archive_and_pointer_result(
+    result: dict,
+    *,
+    project_root: Path,
+    session_id: str,
+    command: str,
+    slim_content: bool | None = None,
+) -> tuple[dict, dict]:
+    """Write full redacted `result.json` into session logs and return (full_result, pointer).
+
+    The CLI prints `pointer` (<500B) for delegated commands so stdout never exceeds host
+    bash output limits while preserving `ok`, `output_path`, `artifact_path`, `receipt`,
+    and `meta.delegation`. Falls back to `_slim_result` if the workspace has no `.workflow`
+    dir or the file write fails.
+    """
+    full = _slim_result(result, slim_content=False)
+    if getenv("EXOMA_FULL_STDOUT", "") not in ("", "0", "false", "False"):
+        return full, _slim_result(result, slim_content=slim_content)
+    if not isinstance(full, dict):
+        return full, full
+    root = Path(project_root).resolve()
+    if not (root / WORKFLOW_DIRNAME).is_dir():
+        return full, _slim_result(result, slim_content=slim_content)
+
+    meta = full.get("meta") if isinstance(full.get("meta"), dict) else {}
+    ref = full.get("evidence_ref") if isinstance(full.get("evidence_ref"), dict) else {}
+    artifact = str(ref.get("artifact_path") or "") if ref else ""
+    logs_dir = workflow_paths(root, session_id)["logs_dir"]
+
+    output_path: Path | None = None
+    if artifact:
+        try:
+            art_path = Path(artifact).resolve()
+            logs_resolved = logs_dir.resolve()
+            if logs_resolved in art_path.parents:
+                output_path = art_path.parent / "result.json"
+        except (OSError, ValueError):
+            output_path = None
+    if output_path is None:
+        run_key = str(
+            meta.get("prompt_id")
+            or meta.get("job_id")
+            or f"{command}_{secrets.token_hex(4)}"
+        )
+        safe_key = "".join(c if c.isalnum() or c in "._-" else "_" for c in run_key)
+        output_path = logs_dir / safe_key / "result.json"
+
+    try:
+        atomic_write_json(output_path, full)
+    except OSError:
+        return full, _slim_result(result, slim_content=slim_content)
+
+    delegation = meta.get("delegation") if isinstance(meta.get("delegation"), dict) else None
+    pointer_meta: dict = {
+        "content_mode": "path_only",
+        "output_path": str(output_path),
+    }
+    pointer: dict = {
+        "ok": bool(full.get("ok")),
+        "output_path": str(output_path),
+    }
+    if artifact:
+        pointer["artifact_path"] = artifact
+        pointer_meta["artifact_path"] = artifact
+    if meta.get("job_id"):
+        pointer_meta["job_id"] = meta["job_id"]
+    if delegation:
+        pointer_meta["delegation"] = delegation
+        if delegation.get("receipt"):
+            pointer["receipt"] = delegation["receipt"]
+        if delegation.get("generation"):
+            pointer["generation"] = delegation["generation"]
+    if not pointer["ok"]:
+        err_type = meta.get("error_type")
+        next_action = meta.get("next_action")
+        if err_type:
+            pointer["error_type"] = err_type
+            pointer_meta["error_type"] = err_type
+        if next_action:
+            pointer["next_action"] = next_action
+            pointer_meta["next_action"] = next_action
+    pointer["meta"] = pointer_meta
+    return full, pointer
 
 
 def _verify_exit_code(

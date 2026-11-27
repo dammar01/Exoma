@@ -227,6 +227,26 @@ def _test_permitted_tools_line() -> None:
         "rather than 'unspecified'",
     )
 
+    from exoma.core.policy.governance import tools_for
+
+    fanout_tools = tools_for("analyze", fanout=True)
+    fanout_prompt = _build(
+        ROLE_REASONING,
+        "analyze",
+        runtime_dir="/repo/.workflow/runtime",
+        declared_tools=fanout_tools,
+        has_leads=True,
+        subagent_fanout=True,
+    )
+    assert_true(
+        "FAN-OUT call" in fanout_prompt
+        and "you are the PRIMARY worker" not in fanout_prompt
+        and "permitted_tools: read, grep, glob, list, task" in fanout_prompt
+        and "fan-out rules in AGENTS.md" not in fanout_prompt
+        and tools_for("analyze", {"command_tools": {"analyze": ["read"]}}, fanout=True) == ["read"],
+        "fan-out prompt must align instructions/tools while respecting explicit command_tools overrides",
+    )
+
 
 def _test_task_cap_is_visible_in_and_out_of_band() -> None:
     sink: dict = {}

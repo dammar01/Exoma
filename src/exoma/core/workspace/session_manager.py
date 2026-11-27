@@ -67,6 +67,59 @@ def record_provider_session(session: dict, provider_session_id: str) -> None:
         threads[provider] = provider_session_id
 
 
+def provider_thread_meta(session: dict, provider: str | None) -> dict:
+    """Return freshness metadata dict for `provider` on `session`."""
+    if not provider:
+        return {}
+    all_meta = session.get("provider_thread_meta")
+    if not isinstance(all_meta, dict):
+        all_meta = session["provider_thread_meta"] = {}
+    entry = all_meta.get(provider)
+    if not isinstance(entry, dict):
+        entry = all_meta[provider] = {}
+    return entry
+
+
+def record_provider_thread_state(
+    session: dict,
+    provider: str | None,
+    *,
+    input_tokens: int | None = None,
+    degraded: bool | None = None,
+    degraded_reason: str | None = None,
+) -> None:
+    """Update freshness telemetry (latest input tokens and degradation flag) for `provider`."""
+    if not provider:
+        return
+    entry = provider_thread_meta(session, provider)
+    if isinstance(input_tokens, int) and input_tokens >= 0:
+        entry["last_input_tokens"] = input_tokens
+    if degraded is not None:
+        entry["degraded"] = bool(degraded)
+        entry["degraded_reason"] = degraded_reason if degraded else None
+
+
+def reset_provider_session(session: dict, provider: str | None, reason: str) -> bool:
+    """Drop the stored thread id for `provider` so the next call opens a fresh thread."""
+    if not provider:
+        return False
+    threads = session.get("provider_sessions")
+    had_thread = bool(session.get("provider_session_id")) or (
+        isinstance(threads, dict) and bool(threads.get(provider))
+    )
+    if isinstance(threads, dict):
+        threads.pop(provider, None)
+    if session.get("provider") == provider:
+        session["provider_session_id"] = None
+    entry = provider_thread_meta(session, provider)
+    entry["last_input_tokens"] = 0
+    entry["degraded"] = False
+    entry["degraded_reason"] = None
+    entry["reset_count"] = int(entry.get("reset_count") or 0) + 1
+    entry["last_reset_reason"] = reason
+    return had_thread
+
+
 class SessionManager:
     def __init__(self, session_dir: Path = SESSION_DIR) -> None:
         self.session_dir = Path(session_dir)
@@ -123,6 +176,30 @@ class SessionManager:
     def bind_provider(self, session: dict, provider: str | None) -> None:
         if bind_provider(session, provider):
             self._save(session)
+
+    def reset_provider_session(self, session: dict, provider: str | None, reason: str) -> bool:
+        changed = reset_provider_session(session, provider, reason)
+        if changed:
+            self._save(session)
+        return changed
+
+    def record_provider_thread_state(
+        self,
+        session: dict,
+        provider: str | None,
+        *,
+        input_tokens: int | None = None,
+        degraded: bool | None = None,
+        degraded_reason: str | None = None,
+    ) -> None:
+        record_provider_thread_state(
+            session,
+            provider,
+            input_tokens=input_tokens,
+            degraded=degraded,
+            degraded_reason=degraded_reason,
+        )
+        self._save(session)
 
     def record_run(self, session: dict, command: str) -> None:
         history = session.setdefault("history", {})

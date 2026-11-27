@@ -83,7 +83,7 @@ PROFILES: dict[str, HostProfile] = {
         background="auto_async",
         delegated_run=(
             "Agy moves a long `run_command` to the background by itself: when it does, wait for that task's "
-            "completion notice and read its output before acknowledging the receipt. Never "
+            "completion notice, read its compact pointer and open `output_path` (`result.json`) before acknowledging the receipt. Never "
             "start a second runner call for the same task, and never read `.workflow/data` by hand while it "
             "runs. For live diagnosis use the bound `.workflow/inspect.sh --session <MAIN_SESSION_ID>` snapshot."
         ),
@@ -104,7 +104,7 @@ PROFILES: dict[str, HostProfile] = {
             "Run it with `exec_command` using the parameters available in the current tool schema. "
             "When it returns a session_id, collect that same process through `write_stdin` until JSON arrives. "
             "In code mode, `functions.exec` may separately return a cell ID: resume that cell with "
-            "`functions.wait`; a cell ID is not an exec_command session_id. Return the result from the outer cell; acknowledge in a separate call. Follow the CURRENT host "
+            "`functions.wait`; a cell ID is not an exec_command session_id. Return the pointer result from the outer cell, open `output_path` (`result.json`) with your file-read tool for `digest`/`content`, and acknowledge in a separate call. Follow the CURRENT host "
             "permissions, not a sandbox assumed by this contract. "
             "If the runner is allowed normally, omit escalation arguments. With approval_policy=never "
             "or when the host forbids escalation, omit `sandbox_permissions`, `justification`, and "
@@ -140,7 +140,7 @@ PROFILES: dict[str, HostProfile] = {
         background="blocking",
         delegated_run=(
             "OpenCode cannot run a call in the background: run the runner in the foreground with a long timeout "
-            "(600000 ms) and wait; acknowledge after the foreground JSON returns. Never start a second runner call for "
+            "(600000 ms) and wait; once the compact pointer JSON returns, read `output_path` (`result.json`) for `digest`/`content`, then acknowledge. Never start a second runner call for "
             "the same task, and never read `.workflow/data` by hand while it runs. For live diagnosis use `.workflow/inspect.sh --session <MAIN_SESSION_ID>`; it only reads a bounded snapshot and does not start another provider. No output at all means the "
             "call did not reach Git Bash: check that it starts with the exact prefix above."
         ),

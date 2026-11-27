@@ -116,6 +116,7 @@ ERROR_TYPES = {
     "test_input_invalid",
     "test_not_configured",
     "tests_failed",
+    "unreadable_attachment",
     "unknown",
 }
 
@@ -167,7 +168,7 @@ _NO_SPAWN_RE = re.compile(
 # undistinguished, that permission wall reads as "opencode cannot fan out" and latches
 # the capability off forever, so the one fix that would work is never attempted.
 _DENIED_RE = re.compile(
-    r"^\s*subagents\s*:\s*none\b.*\b(denied|refus|not\s+permitted|permission)",
+    r"^\s*subagents\s*:\s*none\b.*\b(denied|refus|not\s+permitted|permission|prohibit|forbid|disabled)",
     re.IGNORECASE | re.MULTILINE,
 )
 _DECLINED_RE = re.compile(

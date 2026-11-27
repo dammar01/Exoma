@@ -387,6 +387,14 @@ def _test_agy_precision_read_slice():
         counter = json.loads((rt / "delegated.reads").read_text(encoding="utf-8"))
         assert_true(counter.get("count") == 1 and os.path.isfile(rt / "delegated.reads"),
                     "the slice used one of the precision reads")
+        long_res = rt.parent / "logs" / "p1" / "result.json"
+        long_res.parent.mkdir(parents=True, exist_ok=True)
+        long_res.write_text("x\n" * 500, encoding="utf-8")
+        assert_true(
+            wp.preflight_refusal("read", str(long_res), "", {"command": "analyze", "phase": "returned", "generation": "g1"}, whole) is None
+            and wp.preflight_refusal("read", str(long_res), "", {"command": "analyze", "phase": "running", "generation": "g1"}, whole) == "preflight",
+            "completed session result.json (>200 lines) passes shared preflight_refusal while active running stays gated",
+        )
 
 
 def _test_codex_grant():
