@@ -98,8 +98,25 @@ def claim(project_root, session_id: str) -> None:
     request = request_path(project_root, session_id)
     claimed = claimed_path(project_root, session_id)
     claimed.unlink(missing_ok=True)
+    runtime_dir = workflow_paths(Path(project_root), session_id)["runtime_dir"]
+    for stale in runtime_dir.glob("verify-tests-checkpoint.*.json"):
+        stale.unlink(missing_ok=True)
     if request.is_file():
         request.replace(claimed)
+
+
+def _job_checkpoint_path(project_root, session_id: str, job_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(job_id))
+    return workflow_paths(Path(project_root), session_id)["runtime_dir"] / f"verify-tests-checkpoint.{safe}.json"
+
+
+def clear_job_checkpoint(project_root, session_id: str, job_id: str | None) -> None:
+    if not project_root or not session_id or not job_id:
+        return
+    try:
+        _job_checkpoint_path(project_root, session_id, job_id).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 # The job whose worker is running this verify; None for a direct `main.run` (harnesses, sim).
@@ -382,9 +399,12 @@ def _store_output(project_root, session_id, outcome: dict, stdout, stderr) -> No
             dir=directory, delete=False,
         ) as handle:
             path = Path(handle.name)
-            json.dump({"version": 1, "status": outcome["status"],
+            payload = {"version": 1, "status": outcome["status"],
                        "exit_code": outcome.get("exit_code"), "output": metadata,
-                       **streams}, handle, ensure_ascii=False)
+                       **streams}
+            if outcome.get("pipe_incomplete"):
+                payload["pipe_incomplete"] = True
+            json.dump(payload, handle, ensure_ascii=False)
             handle.write("\n")
         outcome["log_ref"] = str(path.resolve())
     except (OSError, ValueError) as exc:
@@ -471,6 +491,7 @@ def run_tests(
                 outcomes.append({"command": command, "status": "refused", "detail": detail, "record_error": detail})
                 continue
         stdout, stderr = "", ""
+        drain_status = {}
         try:
             # Bounded and tree-killed: a runner whose worker outlives it must not hang verify.
             code, stdout, stderr = osutil.run_bounded(
@@ -480,6 +501,7 @@ def run_tests(
                 env=_test_environment(os.environ),
                 on_tick=lambda _elapsed: _beat(on_progress, run_started, **progress),
                 tick_seconds=HEARTBEAT_SECONDS,
+                drain_status=drain_status,
             )
             if code is None:
                 outcome = {"command": command, "status": "timeout", "detail": f"over {timeout} s"}
@@ -488,6 +510,8 @@ def run_tests(
                 outcome = {"command": command, "status": status, "exit_code": code}
         except (OSError, ValueError) as exc:  # ValueError: an argument Popen will not pass
             outcome = {"command": command, "status": "error", "detail": redact(str(exc))[0][:200]}
+        if drain_status.get("pipe_incomplete"):
+            outcome["pipe_incomplete"] = True
         outcome["seconds"] = round(time.monotonic() - started, 1)
         _store_output(project_root, session_id, outcome, stdout, stderr)
         if marker is not None:
@@ -621,14 +645,57 @@ def _merge_lines(content: str, add: dict[str, list[str]]) -> str:
     return before + sep + merged + (digest_sep + tail if digest_sep else "")
 
 
+def _restore_job_checkpoint(project_root, session_id: str, job_id: str, current: dict, result: dict) -> bool:
+    """Restore runtime test results saved before `_consume` if a worker crashed before `verify_checkpoint`."""
+    try:
+        snapshot = read_json_file(_job_checkpoint_path(project_root, session_id, job_id))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(snapshot, dict) or snapshot.get("version") != 1 or snapshot.get("job_id") != job_id:
+        return False
+    runtime_tests = snapshot.get("runtime_tests")
+    merge_add = snapshot.get("merge_add")
+    if not isinstance(runtime_tests, dict) or not isinstance(merge_add, dict):
+        return False
+    gaps = list(snapshot.get("gaps") or [])
+    if snapshot.get("selected"):
+        if snapshot.get("execution_id") != current.get("execution_id"):
+            runtime_tests["stale_execution"] = True
+        orig_fp = snapshot.get("fingerprint")
+        coverage = runtime_tests.get("coverage")
+        if orig_fp is not None and _identity(project_root) != orig_fp and isinstance(coverage, dict):
+            coverage["inputs_changed"] = True
+            for row in coverage.get("obligations", []):
+                row["status"] = "open"
+                gap = f"{RUNTIME_GAP_PREFIX} coverage {row['id']} remains unverified"
+                if row.get("due") == "verify" and gap not in gaps:
+                    gaps.append(gap)
+            changed_gap = "tests: selection inputs changed during verification"
+            if changed_gap not in gaps:
+                gaps.append(changed_gap)
+    result["content"] = _merge_lines(result.get("content") or "", merge_add)
+    if gaps:
+        result["content"] = _merge_lines(result["content"], {"checks_run": [], "blocking_findings": [],
+                                                              "not_verified": gaps})
+    result.setdefault("meta", {})["runtime_tests"] = runtime_tests
+    if claimed_path(project_root, session_id).is_file():
+        _consume(project_root, session_id)
+    return True
+
+
 def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict:
     """Run the requested tests and write their results into a delegated verify result.
 
     `on_progress` is the delegated call's progress callback: the provider has finished, so
     these beats are the only thing keeping the job from reading as stalled while tests run.
     """
-    request = read_request(project_root, session_id)
     current = execution.current_execution(project_root, session_id) or {}
+    active_job = _JOB.get()
+    if active_job is not None and _restore_job_checkpoint(
+        project_root, session_id, active_job, current, result
+    ):
+        return result
+    request = read_request(project_root, session_id)
     selected = bool(request and "selection" in request)
     # Reuse and selection inspect the same inputs. Sample inside the ledger's
     # consistency checks, then sample again after each fresh test that could edit them.
@@ -662,8 +729,10 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
         else []
     )
     record_error = "; ".join(o["record_error"] for o in outcomes if o.get("record_error"))
-    result["content"] = merge(result.get("content") or "", request, outcomes)
+    merge_add = _findings(request, outcomes)
+    result["content"] = _merge_lines(result.get("content") or "", merge_add)
     coverage = None
+    gaps = []
     if selection is not None and not execution.selection_error(selection, current.get("execution_id")):
         bound = bool(request and "selection" in request)
         changed = bound and any(after != fingerprint for after in samples)
@@ -679,28 +748,49 @@ def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict
         if gaps:
             result["content"] = _merge_lines(result["content"], {"checks_run": [], "blocking_findings": [],
                                                                   "not_verified": gaps})
-    # Consumed only now that its results are in the result. Renaming on read lost the
-    # request when the worker died while the tests ran: the recovered run of the same job
-    # found none and reported "no test request". A death between here and the result being
-    # saved still loses it; that recovered run reports the gap (incomplete), never a pass.
-    if request is not None:
-        _consume(project_root, session_id)
-    meta = result.setdefault("meta", {})
-    meta["runtime_tests"] = {
+    runtime_tests = {
         "requested": request is not None and not request.get("invalid"),
         "reason": (request or {}).get("reason"),
         "outcomes": [{k: v for k, v in o.items() if k != "tail"} for o in outcomes],
         "reused": sum(1 for o in outcomes if o.get("reused")),
         "seconds": round(sum(o.get("seconds") or 0 for o in outcomes), 1),
     }
-    if record_error:
-        meta["runtime_tests"]["record_error"] = record_error
     if coverage is not None:
         coverage["selection_input"] = fingerprint
-        meta["runtime_tests"]["coverage"] = coverage
-    meta["runtime_tests"]["coverage_status"] = "assessed" if coverage else "unknown"
+        runtime_tests["coverage"] = coverage
+    runtime_tests["coverage_status"] = "assessed" if coverage else "unknown"
     if (request or {}).get("stale_execution"):
-        meta["runtime_tests"]["stale_execution"] = True
+        runtime_tests["stale_execution"] = True
+    # Save a durable job-bound snapshot before consuming tests.claimed.json so a crash
+    # between consumption and complete_verify_round recovers outcomes without rerunning.
+    consume_now = request is not None
+    if request is not None and active_job is not None:
+        snapshot_runtime = json.loads(json.dumps(runtime_tests))
+        if record_error:
+            snapshot_runtime["record_error"] = record_error
+        snapshot = {
+            "version": 1,
+            "job_id": active_job,
+            "selected": selected,
+            "execution_id": current.get("execution_id"),
+            "fingerprint": fingerprint,
+            "merge_add": merge_add,
+            "gaps": gaps,
+            "runtime_tests": snapshot_runtime,
+        }
+        try:
+            atomic_write_text(_job_checkpoint_path(project_root, session_id, active_job),
+                              json.dumps(snapshot, ensure_ascii=False))
+        except OSError as exc:
+            snapshot_error = f"runtime checkpoint not stored: {type(exc).__name__}"
+            record_error = f"{record_error}; {snapshot_error}" if record_error else snapshot_error
+            consume_now = False
+    if record_error:
+        runtime_tests["record_error"] = record_error
+    if consume_now:
+        _consume(project_root, session_id)
+    meta = result.setdefault("meta", {})
+    meta["runtime_tests"] = runtime_tests
     return result
 
 

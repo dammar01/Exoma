@@ -1398,6 +1398,8 @@ def _check_a_new_job_never_reruns_an_old_request() -> None:
 
     _check_submit_claims_only_for_a_new_job()
     _check_failed_provider_call_does_not_feed_the_next_job()
+    _check_pre_checkpoint_crash_recovery()
+    _check_pipe_incomplete_diagnostic()
 
 
 class _FailThenReviewAdapter:
@@ -1491,6 +1493,116 @@ def _check_submit_claims_only_for_a_new_job() -> None:
                     "a failed claim never launches a worker against an earlier selection or strands a job")
     finally:
         main.JOB_MANAGER, main._spawn_worker = original_manager, original_spawn
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_pre_checkpoint_crash_recovery() -> None:
+    """Crash between _consume() and complete_verify_round() recovers outcomes without rerunning commands."""
+    import subprocess
+    from exoma.core.jobs.job_manager import JobManager
+    from exoma.core.runtime import execution
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} counter.py"])
+    try:
+        for args in (["init", "-q"], ["config", "user.name", "Test"], ["config", "user.email", "t@example.invalid"]):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console())
+        (root / ".gitignore").write_text(".workflow/\ncount.txt\n", encoding="utf-8")
+        (root / "counter.py").write_text(
+            "from pathlib import Path\np = Path('count.txt')\np.write_text((p.read_text() if p.exists() else '') + 'x')\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True, **no_console())
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=root, check=True, capture_output=True, **no_console())
+
+        command = f"{python} counter.py"
+        selection = {"version": 1, "execution_id": "exec-1", "tier": "targeted", "reason": "counter check",
+                     "obligations": [{"id": "ob-1", "due": "verify", "behavior": "count once", "commands": [command]}]}
+        state_file = execution._runtime_file(root, "s1", execution.EXECUTION_FILE)
+        state = {"execution_id": "exec-1", "status": "implemented", "selection": selection}
+        execution._write(state_file, state)
+        fp = verify_tests._identity(root)
+        _request(root, {"commands": [command], "reason": "r", "selection": selection, "selection_input": fp})
+
+        jobs = JobManager(root / ".workflow/jobs")
+        job = jobs.create_job("verify", "crash recovery", "s1", str(root), None)
+        jid = job["job_id"]
+        jobs.mark_running(jid)
+        verify_tests.claim(root, "s1")
+        with verify_tests.job(jid):
+            first, first_verdict = _verify(root)
+        assert_true(first_verdict["verdict"] == "pass" and (root / "count.txt").read_text() == "x",
+                    f"command must execute exactly once on initial run: {first_verdict}")
+        assert_true(not verify_tests.claimed_path(root, "s1").exists(), "claim consumed after snapshot")
+        snap = verify_tests._job_checkpoint_path(root, "s1", jid)
+        assert_true(snap.is_file(), "pre-checkpoint runtime snapshot persisted")
+
+        with verify_tests.job(jid):
+            recovered, rec_verdict = _verify(root)
+        assert_true(rec_verdict["verdict"] == "pass" and recovered["meta"]["runtime_tests"]["requested"],
+                    f"recovery restores runtime tests instead of reporting missing request: {rec_verdict}")
+        assert_true((root / "count.txt").read_text() == "x", "recovery must not rerun allowlisted command")
+
+        (root / "drift.txt").write_text("edited", encoding="utf-8")
+        with verify_tests.job(jid):
+            drifted, drift_verdict = _verify(root)
+        assert_true(drifted["meta"]["runtime_tests"]["coverage"]["inputs_changed"] is True
+                    and drift_verdict["verdict"] == "incomplete",
+                    f"drifted tree during recovery must fail closed: {drift_verdict}")
+
+        (root / "drift.txt").unlink()
+        jobs.complete_verify_round(jid, job["recovery_attempt"], first)
+        assert_true(not snap.exists(), "complete_verify_round removes pre-checkpoint snapshot")
+
+        # Also cover interruption AFTER snapshot write and BEFORE _consume() finishes.
+        from unittest.mock import patch
+        _request(root, {"commands": [command], "reason": "r2", "selection": selection, "selection_input": fp})
+        job2 = jobs.create_job("verify", "pre-consume crash", "s1", str(root), None)
+        jid2 = job2["job_id"]
+        jobs.mark_running(jid2)
+        verify_tests.claim(root, "s1")
+        with patch.object(verify_tests, "_consume", side_effect=RuntimeError("crash before consume")):
+            try:
+                with verify_tests.job(jid2):
+                    _verify(root)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("pre-consume crash was not exercised")
+        assert_true(verify_tests.claimed_path(root, "s1").is_file(), "claim still present before _consume")
+        assert_true(verify_tests._job_checkpoint_path(root, "s1", jid2).is_file(), "snapshot persisted before _consume")
+        assert_true((root / "count.txt").read_text() == "xx", "initial run executed once")
+        with verify_tests.job(jid2):
+            pre_rec, pre_verdict = _verify(root)
+        assert_true(pre_verdict["verdict"] == "pass" and pre_rec["meta"]["runtime_tests"]["requested"],
+                    f"recovery with surviving claim restores snapshot: {pre_verdict}")
+        assert_true((root / "count.txt").read_text() == "xx", "recovery with surviving claim does not rerun command")
+        assert_true(not verify_tests.claimed_path(root, "s1").exists(), "recovery consumes leftover claim")
+        jobs.complete_verify_round(jid2, job2["recovery_attempt"], pre_rec)
+        assert_true(not verify_tests._job_checkpoint_path(root, "s1", jid2).exists(),
+                    "complete_verify_round removes pre-consume snapshot")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_pipe_incomplete_diagnostic() -> None:
+    """Incomplete pipe draining marks run_bounded drain_status and saved diagnostic metadata."""
+    from unittest.mock import patch
+    from exoma.utils import osutil
+
+    python = f'"{sys.executable}"'
+    root = _workspace([f"{python} -c"])
+    try:
+        drain = {}
+        with patch.object(osutil, "_join_readers", return_value=False):
+            code, _, _ = osutil.run_bounded([sys.executable, "-c", "print('ok')"], 5, drain_status=drain)
+            assert_true(code == 0 and drain.get("pipe_incomplete") is True,
+                        f"drain_status records incomplete pipe drain: {drain}")
+            outcomes = verify_tests.run_tests(root, {"commands": [f"{python} -c pass"]}, session_id="s1")
+        assert_true(outcomes[0].get("pipe_incomplete") is True, f"outcome flags pipe_incomplete: {outcomes}")
+        saved = json.loads(Path(outcomes[0]["log_ref"]).read_text(encoding="utf-8"))
+        assert_true(saved.get("pipe_incomplete") is True, f"diagnostic artifact records pipe_incomplete: {saved}")
+    finally:
         shutil.rmtree(root, ignore_errors=True)
 
 

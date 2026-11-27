@@ -212,10 +212,13 @@ def check_assertions(root, execution, coverage, outcomes=(), fingerprint=None):
     # worker checkpoints it. Recovery need not reopen a mutable diagnostic file.
     for outcome in outcomes:
         outcome.pop("case_observation", None)
+        outcome.pop("case_ambiguous", None)
         if "EXOMA_CASE_V1 " in outcome.get("tail", ""):
             case = _case_observation(root, outcome, fingerprint)
             if case:
                 outcome["case_observation"] = case
+            else:
+                outcome["case_ambiguous"] = True
     for item, row in zip(coverage["selection"]["obligations"], coverage["obligations"]):
         if not item.get("assertion"):
             continue
@@ -299,6 +302,7 @@ def _case_observation(root, outcome, fingerprint):
         record = json.loads(data)
         if (record["version"] != 1 or record["status"] != outcome["status"]
                 or record["exit_code"] != outcome["exit_code"] or record["output"] != outcome["log_output"]
+                or outcome.get("pipe_incomplete") or record.get("pipe_incomplete")
                 or any(s["truncated"] for s in record["output"].values())):
             return None
         line, = (line for line in record["stdout"].splitlines() if line.startswith("EXOMA_CASE_V1 "))
@@ -363,6 +367,8 @@ def _closure_reason(finding, row, assertion, commands, fresh, covered, retry_gap
     if oid not in covered:
         return "obligation_open"
     expected = finding.get("first_case") or link.get("case")
+    if not expected and finding.get("case_ambiguous"):
+        return "case_evidence_missing"
     if expected and (expected["command"] not in fresh or expected["assertion"] != assertion
                      or not _same_case(expected, cases.get(expected["command"]))):
         return "case_evidence_missing"
@@ -408,12 +414,22 @@ def publish(root, execution, pin, result):
               for o in outcomes]
     handled_failures = set()
     cases = {}
+    ambiguous_cases = set()
     if fingerprint and pin.get("input") == fingerprint and not coverage.get("inputs_changed"):
         for outcome in outcomes:
             command = outcome["command"]
             # Repeated invocations in one round cannot identify a unique observation.
-            case = outcome.get("case_observation") if _observed(outcome, fingerprint) else None
-            cases[command] = None if command in cases else case
+            is_observed = _observed(outcome, fingerprint)
+            case = outcome.get("case_observation") if is_observed else None
+            if (outcome.get("case_ambiguous") and not outcome.get("reused")
+                    and (outcome.get("fingerprint") == fingerprint or outcome.get("pipe_incomplete"))):
+                ambiguous_cases.add(command)
+            if command in cases:
+                if cases[command] is not None or case is not None:
+                    ambiguous_cases.add(command)
+                cases[command] = None
+            else:
+                cases[command] = case
 
     def attachment(finding, row):
         oid, command = _string(row, "obligation"), _string(row, "command")
@@ -578,6 +594,8 @@ def publish(root, execution, pin, result):
         finding = create("Runtime check " + command + " " + check["status"], "unknown", oid, check)
         if case:
             finding["first_case"] = case
+        elif command in ambiguous_cases:
+            finding["case_ambiguous"] = True
         if candidates:
             events[-1]["possible_prior_ids"] = candidates
     record = {**pin, "digest": report_hash, "at": now_iso(), "selection_input": fingerprint,

@@ -1000,14 +1000,29 @@ def run_worker(job_id: str) -> dict:
                                   next_action="Collect the result of the current attempt.")
         elif output.get("ok"):
             finished = _main().JOB_MANAGER.complete_job(job_id, output)
+            if job.get("command") == "verify":
+                try:
+                    verify_tests.clear_job_checkpoint(detect_project_root(job.get("work_dir")), job["session_id"], job_id)
+                except ValueError:
+                    pass
         else:
             finished = _main().JOB_MANAGER.fail_job(
                 job_id, output.get("content") or "worker failed", output=output
             )
+            if job.get("command") == "verify":
+                try:
+                    verify_tests.clear_job_checkpoint(detect_project_root(job.get("work_dir")), job["session_id"], job_id)
+                except ValueError:
+                    pass
         if isinstance(finished, dict) and finished.get("cancellation"):
             raise JobCancellation()
         return output
     except JobCancellation:
+        if job.get("command") == "verify":
+            try:
+                verify_tests.clear_job_checkpoint(detect_project_root(job.get("work_dir")), job["session_id"], job_id)
+            except ValueError:
+                pass
         cleanup = {"ok": False, "reason": "worker_ownership_unavailable"}
         if owner:
             try:

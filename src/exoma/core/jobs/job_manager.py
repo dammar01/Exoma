@@ -563,6 +563,12 @@ class JobManager:
                 checkpoint = {"attempt": attempt, "output": output, "digest": verify_followup.digest(output)}
                 job["verify_checkpoint"] = checkpoint
                 self._save(job, durable=True)
+                try:
+                    from exoma.core.evidence import verify_tests
+
+                    verify_tests.clear_job_checkpoint(detect_project_root(job.get("work_dir")), job["session_id"], job_id)
+                except ValueError:
+                    pass
             if (not isinstance(checkpoint, dict) or not isinstance(checkpoint.get("output"), dict)
                     or checkpoint.get("attempt", attempt) != attempt
                     or verify_followup.digest(checkpoint["output"]) != checkpoint.get("digest")):

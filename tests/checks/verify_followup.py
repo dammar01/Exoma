@@ -22,6 +22,7 @@ def _test_verify_followup():
     _check_publication()
     _check_retry_and_recurrence()
     _check_first_failure_handoffs()
+    _check_ambiguous_case_and_assertion_controls()
 
 
 def _check_first_failure_handoffs():
@@ -770,4 +771,189 @@ def _check_competing_legacy_attachments(before, proposal, alternative):
         assert new["id"] not in (first_id, second_id)
         prior, _ = alternative([padded], legacy=True)
         assert prior["attachment"]["source"] == "current_observation"
+
+
+def _check_ambiguous_case_and_assertion_controls():
+    import subprocess
+    from exoma import cli
+    from exoma.core.evidence import verify_tests
+    from exoma.core.provider.executor import Executor
+    from exoma.core.runtime.state import ensure_workflow_workspace
+    from exoma.core.workspace.workspace_paths import workflow_paths
+    from tools.maintain.verify_followup_eval import COMMAND, FIXTURE, REVIEW, Replay, write_json
+
+    with TemporaryDirectory() as temp, patch.object(cli, "EXECUTOR", Executor(adapter=Replay())):
+        with patch.dict(os.environ, {"PYTHONDONTWRITEBYTECODE": "1"}):
+            root = Path(temp)
+            ensure_workflow_workspace(root)
+            paths = workflow_paths(root)
+            config = json.loads(paths["config"].read_text(encoding="utf-8"))
+            config["commands"].update(verify_mode="delegated", verify_test_commands=[COMMAND])
+            write_json(paths["config"], config)
+            write_json(root / ".workflow/second_agent.json",
+                       {"provider": "codex", "provider_command": "codex", "default_model": "fixture"})
+            (root / ".gitignore").write_text(".workflow/\n__pycache__/\n", encoding="utf-8")
+            source = (FIXTURE / "pricing.py").read_text(encoding="utf-8")
+            (root / "pricing.py").write_text(source.replace("max(0, value)", "value"), encoding="utf-8")
+            (root / "helpers.py").write_text("def check_clamp(fn):\n    assert fn(-2) == 0\n", encoding="utf-8")
+            (root / "check_quantity.py").write_text(
+                'import json\nfrom pricing import quantity\nfrom helpers import check_clamp\n'
+                'try:\n    check_clamp(quantity)\n'
+                'except AssertionError:\n    status = "failed"\nelse:\n    status = "passed"\n'
+                'print("EXOMA_CASE_V1 " + json.dumps({"id":"negative-two","assertion":"check_quantity.py:5","status":status}))\n'
+                'raise SystemExit(int(status == "failed"))\n', encoding="utf-8")
+            for args in (["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c",
+                         "user.email=f@example.invalid", "commit", "-qm", "init"]):
+                subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+            # 1. Duplicate same-command invocations in round 1 must mark ambiguity and block closure.
+            session = "dup-case"
+            eid = "dup-exec"
+            ref = "check_quantity.py:5"
+            selection = {"version": 1, "execution_id": eid, "tier": "targeted", "reason": "dup check",
+                         "obligations": [{"id": "quantity", "due": "verify", "behavior": "clamp negative",
+                                          "commands": [COMMAND], "assertion": ref}]}
+            state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
+            execution._write(state, {"execution_id": eid, "status": "implemented", "selection": selection})
+
+            def run_verify(commands, rows, blocker=False):
+                prepared = cli.run("verify-prepare", "", session, str(root))["meta"]
+                write_json(Path(prepared["request"]["path"]),
+                           {"commands": commands, "selection": selection, "selection_input": prepared["selection_input"]})
+                cli.EXECUTOR.adapter.report = "\n".join(
+                    ["[FOLLOWUP_V1]", *(json.dumps(r) for r in rows),
+                     REVIEW.format(verdict="NEEDS FIX" if blocker else "DONE",
+                                   finding="high|introduced|in_scope — bug [pricing.py:3]" if blocker else "none")]
+                )
+                res = cli.run("verify", "check pricing", session, str(root), model="fixture")
+                assert res["ok"], res
+                return res["meta"]
+
+            first = run_verify([COMMAND, COMMAND], [])["verify_followup"]
+            fid = first["events"][0]["id"]
+            finding = execution.current_execution(root, session)["finding_history"]["findings"][fid]
+            assert "first_case" not in finding and finding.get("case_ambiguous") is True, finding
+            (root / "pricing.py").write_text(source, encoding="utf-8")
+            second = run_verify([COMMAND], [{"id": fid, "status": "resolved", "diagnosis": "fixed clamp",
+                                             "strategy": "rerun unique case", "obligation": "quantity", "evidence": ref}])
+            assert second["verify_followup"]["open_count"] == 2
+            assert {e["id"]: e["reason_code"] for e in second["verify_followup"]["events"]}[fid] == "case_evidence_missing"
+            assert execution.current_execution(root, session)["finding_history"]["findings"][fid]["disposition"] == "open"
+
+            # 2. Same-command unique case across rounds without attach creates a new open ID with possible_prior_ids.
+            session2 = "no-attach-repeat"
+            execution._write(execution._runtime_file(root, session2, execution.EXECUTION_FILE),
+                             {"execution_id": eid, "status": "implemented", "selection": selection})
+            (root / "pricing.py").write_text(source.replace("max(0, value)", "value"), encoding="utf-8")
+            p1 = cli.run("verify-prepare", "", session2, str(root))["meta"]
+            write_json(Path(p1["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p1["selection_input"]})
+            cli.EXECUTOR.adapter.report = REVIEW.format(verdict="DONE", finding="none")
+            r1 = cli.run("verify", "round 1", session2, str(root), model="fixture")["meta"]["verify_followup"]
+            f_orig = r1["events"][0]["id"]
+            p2 = cli.run("verify-prepare", "", session2, str(root))["meta"]
+            write_json(Path(p2["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p2["selection_input"]})
+            r2 = cli.run("verify", "round 2", session2, str(root), model="fixture")["meta"]["verify_followup"]
+            repeat_events = [e for e in r2["events"] if e.get("status") == "new"]
+            assert len(repeat_events) == 1 and repeat_events[0]["id"] != f_orig
+            assert f_orig in repeat_events[0].get("possible_prior_ids", []), repeat_events
+
+            # 3. Assertion controls: helper-changed keeps strict receipt unchanged; comment-only edit blocks under strict rule.
+            session3 = "assertion-controls"
+            state3 = execution._runtime_file(root, session3, execution.EXECUTION_FILE)
+            execution._write(state3, {"execution_id": eid, "status": "implemented", "selection": selection})
+            p3 = cli.run("verify-prepare", "", session3, str(root))["meta"]
+            write_json(Path(p3["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p3["selection_input"]})
+            r3_1 = cli.run("verify", "helper broken", session3, str(root), model="fixture")["meta"]["verify_followup"]
+            f_helper = r3_1["events"][0]["id"]
+            # Weaken helper while assertion file stays byte-identical and pricing stays broken.
+            (root / "helpers.py").write_text("def check_clamp(fn):\n    return None\n", encoding="utf-8")
+            p3_2 = cli.run("verify-prepare", "", session3, str(root))["meta"]
+            write_json(Path(p3_2["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p3_2["selection_input"]})
+            # Reviewer sees pricing still broken and reports present -> finding remains open despite green helper.
+            cli.EXECUTOR.adapter.report = "\n".join([
+                "[FOLLOWUP_V1]",
+                json.dumps({"id": f_helper, "status": "present", "diagnosis": "helper weakened while pricing still broken",
+                            "strategy": "keep open", "blocker": 1}),
+                REVIEW.format(verdict="NEEDS FIX", finding="high|introduced|in_scope — clamp broken [pricing.py:3]"),
+            ])
+            r3_2 = cli.run("verify", "helper weakened", session3, str(root), model="fixture")["meta"]["verify_followup"]
+            assert r3_2["open_count"] == 1 and r3_2["events"][0]["reason_code"] == "blocker_linked"
+            # Comment-only edit on check_quantity.py still triggers strict assertion_unmatched.
+            (root / "helpers.py").write_text("def check_clamp(fn):\n    assert fn(-2) == 0\n", encoding="utf-8")
+            (root / "pricing.py").write_text(source, encoding="utf-8")
+            orig_text = (root / "check_quantity.py").read_text(encoding="utf-8")
+            (root / "check_quantity.py").write_text("# comment-only edit\n" + orig_text, encoding="utf-8")
+            p3_3 = cli.run("verify-prepare", "", session3, str(root))["meta"]
+            write_json(Path(p3_3["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p3_3["selection_input"]})
+            cli.EXECUTOR.adapter.report = "\n".join([
+                "[FOLLOWUP_V1]",
+                json.dumps({"id": f_helper, "status": "resolved", "diagnosis": "fixed clamp",
+                            "strategy": "rerun", "obligation": "quantity", "evidence": "check_quantity.py:6"}),
+                REVIEW.format(verdict="DONE", finding="none"),
+            ])
+            r3_3 = cli.run("verify", "comment edit", session3, str(root), model="fixture")["meta"]["verify_followup"]
+            assert r3_3["events"][0]["reason_code"] == "assertion_unmatched"
+
+            # 4. Pipe-incomplete and pre-extraction log deletion must not yield a valid case_observation.
+            (root / "check_quantity.py").write_text(orig_text, encoding="utf-8")
+            out_log = root / ".workflow" / "data" / "sessions" / "pipe-test" / "verify" / "test-output" / "test-1.json"
+            out_log.parent.mkdir(parents=True, exist_ok=True)
+            meta_out = {"stdout": {"captured_bytes": 100, "redacted_bytes": 100, "stored_bytes": 100,
+                                   "omitted_bytes": 0, "truncated": False, "redactions": []},
+                        "stderr": {"captured_bytes": 0, "redacted_bytes": 0, "stored_bytes": 0,
+                                   "omitted_bytes": 0, "truncated": False, "redactions": []}}
+            case_line = 'EXOMA_CASE_V1 {"id":"negative-two","assertion":"check_quantity.py:5","status":"failed"}'
+            out_log.write_text(json.dumps({"version": 1, "status": "failed", "exit_code": 1,
+                                           "output": meta_out, "stdout": case_line + "\n", "stderr": "",
+                                           "pipe_incomplete": True}), encoding="utf-8")
+            fp = verify_tests._identity(root)
+            outcome_pipe = {"command": COMMAND, "status": "failed", "exit_code": 1, "log_ref": str(out_log),
+                            "log_output": meta_out, "fingerprint": fp, "tail": case_line, "pipe_incomplete": True}
+            cov = {"selection": {"obligations": []}, "obligations": [], "inputs_changed": False}
+            follow.check_assertions(root, {}, cov, [outcome_pipe], fp)
+            assert "case_observation" not in outcome_pipe and outcome_pipe.get("case_ambiguous") is True
+            out_log.unlink()
+            outcome_deleted = {"command": COMMAND, "status": "failed", "exit_code": 1, "log_ref": str(out_log),
+                               "log_output": meta_out, "fingerprint": fp, "tail": case_line}
+            follow.check_assertions(root, {}, cov, [outcome_deleted], fp)
+            assert "case_observation" not in outcome_deleted and outcome_deleted.get("case_ambiguous") is True
+
+            # 5. Missing log_ref (diagnostic storage failure) while EXOMA_CASE_V1 was emitted must block closure.
+            session4 = "missing-log-ref"
+            execution._write(execution._runtime_file(root, session4, execution.EXECUTION_FILE),
+                             {"execution_id": eid, "status": "implemented", "selection": selection})
+            (root / "pricing.py").write_text(source.replace("max(0, value)", "value"), encoding="utf-8")
+            p4_1 = cli.run("verify-prepare", "", session4, str(root))["meta"]
+            write_json(Path(p4_1["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p4_1["selection_input"]})
+            cli.EXECUTOR.adapter.report = REVIEW.format(verdict="DONE", finding="none")
+            orig_store = verify_tests._store_output
+            def fail_store(proj, sid, outcome, stdout, stderr):
+                orig_store(proj, sid, outcome, stdout, stderr)
+                outcome.pop("log_ref", None)
+                outcome["log_error"] = "diagnostic artifact not stored (OSError)"
+            with patch.object(verify_tests, "_store_output", side_effect=fail_store):
+                r4_1 = cli.run("verify", "missing log", session4, str(root), model="fixture")["meta"]["verify_followup"]
+            fid_missing = r4_1["events"][0]["id"]
+            f_missing = execution.current_execution(root, session4)["finding_history"]["findings"][fid_missing]
+            assert f_missing.get("case_ambiguous") is True and "first_case" not in f_missing, f_missing
+            (root / "pricing.py").write_text(source, encoding="utf-8")
+            p4_2 = cli.run("verify-prepare", "", session4, str(root))["meta"]
+            write_json(Path(p4_2["request"]["path"]),
+                       {"commands": [COMMAND], "selection": selection, "selection_input": p4_2["selection_input"]})
+            cli.EXECUTOR.adapter.report = "\n".join([
+                "[FOLLOWUP_V1]",
+                json.dumps({"id": fid_missing, "status": "resolved", "diagnosis": "fixed clamp",
+                            "strategy": "rerun", "repeat_reason": "rerun with log available",
+                            "obligation": "quantity", "evidence": ref}),
+                REVIEW.format(verdict="DONE", finding="none"),
+            ])
+            r4_2 = cli.run("verify", "close missing log", session4, str(root), model="fixture")["meta"]["verify_followup"]
+            assert r4_2["events"][0]["reason_code"] == "case_evidence_missing" and r4_2["open_count"] == 1, r4_2["events"]
+
 

@@ -821,6 +821,7 @@ def run_bounded(
     *,
     inherit_output: bool = False,
     env: dict[str, str] | None = None,
+    drain_status: dict | None = None,
 ) -> tuple[int | None, str, str]:
     """Run `args` to completion or `timeout`; (returncode, stdout, stderr). None = timed out.
 
@@ -892,6 +893,8 @@ def run_bounded(
                 except Exception:
                     pass
                 next_tick += tick_seconds
+        if drain_status is not None:
+            drain_status["pipe_incomplete"] = False
         if timed_out:
             if descendants is not None:
                 descendants.sample()
@@ -899,7 +902,8 @@ def run_bounded(
             terminate_tree(proc)
             if descendants is not None:
                 descendants.terminate()
-            _join_readers(readers, drain_seconds)
+            if not _join_readers(readers, drain_seconds) and drain_status is not None:
+                drain_status["pipe_incomplete"] = True
             return None, text(out_chunks), text(err_chunks)
         if inherit_output:
             # No pipes to drain, but an exited child may still have live descendants.
@@ -908,7 +912,8 @@ def run_bounded(
             # Exited, but something it started still holds a pipe: kill it, then give the
             # readers a moment to see EOF. One outside the tree keeps its pipe; given up on.
             _kill_leftovers(proc, job, descendants)
-            _join_readers(readers, drain_seconds)
+            if not _join_readers(readers, drain_seconds) and drain_status is not None:
+                drain_status["pipe_incomplete"] = True
         return proc.returncode, text(out_chunks), text(err_chunks)
     except BaseException:
         if descendants is not None:
