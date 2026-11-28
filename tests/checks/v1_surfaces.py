@@ -304,7 +304,7 @@ def _test_opencode_host_install() -> None:
         home = Path(tmp)
         env = _env(home)
         result = subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"],
-                                cwd=home, env=env, text=True, capture_output=True, timeout=120, **no_console())
+                                cwd=home, env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120, **no_console())
         assert_true(result.returncode == 0, "opencode install succeeds: " + result.stdout[-800:] + result.stderr[-500:])
         oc = home / ".config" / "opencode"
         for rel in ("plugins/exoma.js", "exoma/CONTRACT.md", "exoma/hooks/opencode-host.py",
@@ -333,7 +333,7 @@ def _test_opencode_host_install() -> None:
         assert_true(not claude_md.exists() or "WORKFLOW-SECOND-AGENT" not in claude_md.read_text(encoding="utf-8"),
                     "the claude second-agent contract never lands in ~/.claude/CLAUDE.md")
         checked = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
-                                 text=True, capture_output=True, timeout=60, **no_console())
+                                 text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60, **no_console())
         assert_true(checked.returncode == 0, "opencode install passes --check: " + checked.stdout[-800:])
 
         # doctor sees a complete OpenCode host, and names a missing command file.
@@ -362,14 +362,14 @@ def _test_opencode_host_install() -> None:
         saved_plan = plan_command.read_text(encoding="utf-8")
         plan_command.write_text(saved_plan + "\nlocal edit\n", encoding="utf-8")
         drifted = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
-                                 text=True, capture_output=True, timeout=60, **no_console())
+                                 text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60, **no_console())
         plan_command.write_text(saved_plan, encoding="utf-8")
         assert_true(drifted.returncode != 0 and "DRIFTED hosts/opencode/commands/exoma-plan.md" in drifted.stdout,
                     "--check reports an edited OpenCode command: " + drifted.stdout[-800:])
 
         # Dropping the host takes Exoma's OpenCode files back out, the provider block stays.
         subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--provider", "codex"], cwd=home,
-                       env=env, text=True, capture_output=True, timeout=120, **no_console())
+                       env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120, **no_console())
         assert_true(not (oc / "plugins" / "exoma.js").exists(), "a host no longer chosen loses its plugin")
         assert_true(not list((oc / "commands").glob("exoma-*.md")) if (oc / "commands").is_dir() else True,
                     "a host no longer chosen loses its commands")
@@ -379,11 +379,11 @@ def _test_opencode_host_install() -> None:
 
         # --uninstall takes the OpenCode host out whole: commands, plugin and block.
         reinstalled = subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"],
-                                     cwd=home, env=env, text=True, capture_output=True, timeout=120, **no_console())
+                                     cwd=home, env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120, **no_console())
         assert_true(reinstalled.returncode == 0 and (oc / "commands" / "exoma-plan.md").is_file(),
                     "the OpenCode host installs again: " + reinstalled.stdout[-600:])
         removed = subprocess.run([sys.executable, "-m", "exoma.install", "--uninstall", "--apply"], cwd=home,
-                                 env=env, text=True, capture_output=True, timeout=120, **no_console())
+                                 env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120, **no_console())
         left = sorted(p.name for p in (oc / "commands").glob("exoma-*.md")) if (oc / "commands").is_dir() else []
         assert_true(removed.returncode == 0 and not left,
                     f"--uninstall removes the OpenCode commands: left={left} " + removed.stdout[-600:])
@@ -394,11 +394,11 @@ def _test_opencode_host_install() -> None:
 
         # An edited plugin survives the prune, and then the hook it calls must survive too.
         subprocess.run([sys.executable, "-m", "exoma.install", "opencode", "--provider", "codex"], cwd=home,
-                       env=env, text=True, capture_output=True, timeout=120, **no_console())
+                       env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120, **no_console())
         plugin = oc / "plugins" / "exoma.js"
         plugin.write_text(plugin.read_text(encoding="utf-8") + "\n// local tweak\n", encoding="utf-8")
         dropped = subprocess.run([sys.executable, "-m", "exoma.install", "claude", "--provider", "codex"], cwd=home,
-                                 env=env, text=True, capture_output=True, timeout=120, **no_console())
+                                 env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120, **no_console())
         assert_true(plugin.is_file() and (oc / "exoma" / "hooks" / "opencode-host.py").is_file(),
                     "an edited plugin keeps the hook it calls")
         assert_true("was edited since Exoma installed it" in dropped.stdout,

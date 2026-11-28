@@ -773,7 +773,7 @@ def _test_codex_host_install():
         env["PYTHONPATH"] = str(REPO / "src")
         result = subprocess.run([sys.executable, "-m", "exoma.install", "codex",
                                  "--provider", "codex"], cwd=home, env=env, text=True, capture_output=True,
-                                timeout=60, **no_console())
+                                stdin=subprocess.DEVNULL, timeout=60, **no_console())
         assert_true(result.returncode == 0, "public Codex install succeeds: " + result.stdout[-500:] + result.stderr[-500:])
         codex = home / ".codex"
         assert_true((codex / "hooks.json").is_file() and (codex / "AGENTS.md").is_file(),
@@ -784,7 +784,7 @@ def _test_codex_host_install():
                     and "WORKFLOW-SECOND-AGENT" in (codex / "AGENTS.md").read_text(encoding="utf-8"),
                     "public install supports Codex as host and second agent together")
         checked = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
-                                 text=True, capture_output=True, timeout=30, **no_console())
+                                 text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, **no_console())
         assert_true(checked.returncode == 0, "public install passes --check: " + checked.stdout[-500:])
         skill_path = codex / "skills/exoma-analyze/SKILL.md"
         installed_skill = skill_path.read_text(encoding="utf-8")
@@ -795,23 +795,23 @@ def _test_codex_host_install():
         agents.write_text("User-owned instructions.\n" + agents.read_text(encoding="utf-8"), encoding="utf-8")
         for _ in range(2):
             refreshed = subprocess.run([sys.executable, "-m", "exoma.install", "--no-input"], cwd=home, env=env,
-                                       text=True, capture_output=True, timeout=60, **no_console())
+                                       text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60, **no_console())
             assert_true(refreshed.returncode == 0, "flagless refresh preserves Codex selection: " + refreshed.stdout[-500:])
             assert_true(skill_path.read_text(encoding="utf-8") == installed_skill,
                         "refresh repairs a stale payload and is idempotent")
             assert_true(agents.read_text(encoding="utf-8").startswith("User-owned instructions."),
                         "refresh preserves text outside managed instruction blocks")
         retired = subprocess.run([sys.executable, "-m", "exoma.install", "both", "--dry-run"], cwd=home, env=env,
-                                 text=True, capture_output=True, timeout=30, **no_console())
+                                 text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, **no_console())
         assert_true(retired.returncode == 2, "the 0.x `both` host choice is gone in 1.0")
         legacy = subprocess.run([sys.executable, "-m", "exoma.install", "--dry-run", "--host", "codex"], cwd=home,
-                                env=env, text=True, capture_output=True, timeout=30, **no_console())
+                                env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, **no_console())
         assert_true(legacy.returncode == 0 and "hosts:  codex" in legacy.stdout and "--host is deprecated" in legacy.stdout,
                     "--host still names a host, with a deprecation notice: " + legacy.stdout[-500:])
         # A lost mode file: a flagless install still finds Codex through its hooks.
         (home / ".claude" / ".workflow-install-mode.json").unlink()
         flagless = subprocess.run([sys.executable, "-m", "exoma.install", "--dry-run"], cwd=home, env=env,
-                                  text=True, capture_output=True, timeout=30, **no_console())
+                                  text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, **no_console())
         assert_true(flagless.returncode == 0 and "hosts:  claude, codex" in flagless.stdout,
                     "a flagless install infers Codex when the mode file is lost: " + flagless.stdout[-500:])
         config = codex / "config.toml"
@@ -831,7 +831,7 @@ def _test_codex_host_install():
                     "doctor infers a lost host choice without recreating any config")
         checked_missing = subprocess.run([sys.executable, "-m", "exoma.install", "--check"],
                                          cwd=home, env=env, text=True, capture_output=True,
-                                         timeout=30, **no_console())
+                                         stdin=subprocess.DEVNULL, timeout=30, **no_console())
         assert_true(checked_missing.returncode == 1 and "Auto-review context: missing" in checked_missing.stdout,
                     "doctor and installer-check agree when Codex context and install-mode are missing")
         config.write_bytes(original_config)
@@ -839,11 +839,11 @@ def _test_codex_host_install():
         (codex / "hooks.json").write_text("{bad", encoding="utf-8")
         subprocess.run([sys.executable, "-m", "exoma.install", "codex",
                         "--provider", "codex"], cwd=home, env=env, text=True, capture_output=True,
-                       timeout=60, **no_console())
+                       stdin=subprocess.DEVNULL, timeout=60, **no_console())
         assert_true("EXOMA-CODEX-HOST" not in (codex / "AGENTS.md").read_text(encoding="utf-8"),
                     "a refused hooks.json withdraws the Codex host block")
         refused = subprocess.run([sys.executable, "-m", "exoma.install", "--check"], cwd=home, env=env,
-                                 text=True, capture_output=True, timeout=30, **no_console())
+                                 text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30, **no_console())
         assert_true(f"DRIFTED {base.CODEX_HOST_HOOKS}" in refused.stdout
                     and base.CODEX_HOST_INSTRUCTIONS not in refused.stdout,
                     "--check reports the refused hooks, not the withdrawn block: " + refused.stdout[-800:])

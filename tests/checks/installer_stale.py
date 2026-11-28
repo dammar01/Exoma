@@ -600,13 +600,15 @@ def _check_clean_legacy_exact_match() -> None:
                 claude_md.write_bytes(original)
                 before_dirs = set(backups.iterdir())
                 if rollback_failure:
-                    assert base.run_clean_legacy(apply=True) == 0
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        assert base.run_clean_legacy(apply=True) == 0
                 def interrupted_save(src, dst, displaced):
                     claude_md.write_bytes(post_check_save)
                     return orig_replace_preserving(src, dst, displaced)
                 module = rollback if rollback_failure else base
                 with patch.object(_osutil, "replace_preserving_displaced", interrupted_save), \
-                        patch.object(module, "_save_displaced_conflict", side_effect=OSError("backup unavailable")):
+                        patch.object(module, "_save_displaced_conflict", side_effect=OSError("backup unavailable")), \
+                        contextlib.redirect_stdout(io.StringIO()):
                     if rollback_failure:
                         assert rollback._run_rollback(None, True) == 2
                     else:
@@ -619,7 +621,8 @@ def _check_clean_legacy_exact_match() -> None:
                 capture, = claude_md.parent.glob("CLAUDE.md.*.displaced")
                 assert capture.read_bytes() == post_check_save
                 if not rollback_failure:
-                    assert rollback._run_rollback(None, True) == 2
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        assert rollback._run_rollback(None, True) == 2
                     assert capture.read_bytes() == post_check_save
                 capture.unlink()
                 for backup in set(backups.iterdir()) - before_dirs:
@@ -630,7 +633,8 @@ def _check_clean_legacy_exact_match() -> None:
                 claude_md.write_bytes(original)
                 before_dirs = set(backups.iterdir())
                 if rollback_failure:
-                    assert base.run_clean_legacy(apply=True) == 0
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        assert base.run_clean_legacy(apply=True) == 0
                 captures = []
                 def partial_exchange(src, dst, displaced):
                     staged_bytes = src.read_bytes()
@@ -638,7 +642,8 @@ def _check_clean_legacy_exact_match() -> None:
                     dst.write_bytes(staged_bytes)
                     captures.append(src)
                     raise _osutil.ReplacementInterrupted(src, PermissionError("capture rename failed"))
-                with patch.object(_osutil, "replace_preserving_displaced", partial_exchange):
+                with patch.object(_osutil, "replace_preserving_displaced", partial_exchange), \
+                        contextlib.redirect_stdout(io.StringIO()):
                     if rollback_failure:
                         assert rollback._run_rollback(None, True) == 2
                     else:

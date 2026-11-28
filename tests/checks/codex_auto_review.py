@@ -311,7 +311,8 @@ def _orchestration():
         def run(*args, expected=0):
             result = subprocess.run([sys.executable, '-m', 'exoma.install', *args],
                                     env=env, cwd=home, capture_output=True, text=True,
-                                    encoding='utf-8', errors='replace', timeout=90, **no_console())
+                                    stdin=subprocess.DEVNULL, encoding='utf-8', errors='replace',
+                                    timeout=90, **no_console())
             assert_true(result.returncode == expected,
                         (f'{result.stdout[-1200:]} {result.stderr[-400:]} installer {args}: '
                          f'rc={result.returncode}, expected={expected}')

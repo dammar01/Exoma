@@ -64,7 +64,8 @@ def _test_package_artifacts_dispatch() -> None:
                 patch.object(sys.modules[__name__], "_check_package_artifacts", smoke), \
                 patch("tools.maintain.gen_manifest.main", return_value=manifest_code), \
                 patch.dict(runner["SUITES"], {"scenario": (scenario, "default dispatch control")}), \
-                contextlib.redirect_stdout(output):
+                contextlib.redirect_stdout(output), \
+                contextlib.redirect_stderr(io.StringIO()):
             code = runner["main"]()
         return code, smoke, scenario, output.getvalue()
 
