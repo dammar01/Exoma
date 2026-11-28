@@ -189,6 +189,8 @@ def _scope_entry_error(entry) -> str | None:
         return f"files: {entry!r} must be relative to the project root"
     if ".." in pure.parts:
         return f"files: {entry!r} must not climb out of the project root"
+    if pure.parts and pure.parts[0].lower() == ".workflow":
+        return f"files: {entry!r} cannot target .workflow/ internal runtime state"
     return None
 
 
@@ -249,6 +251,9 @@ def validate_plan(doc) -> list[str]:
         if problem:
             errors.append(problem)
 
+    if decision == "clarify":
+        if not [q for q in questions if q.strip()]:
+            errors.append("decision: clarify needs at least one non-empty open question")
     if decision == "proceed":
         # The mechanical decision rule, enforced where it can no longer be talked past.
         if questions:
@@ -473,6 +478,12 @@ def end_execution(project_root: Path, session_id: str, *, expected=_UNSPECIFIED,
         execution["assertion_baselines"] = selection_assertions(project_root, selection)
     end_tree = _tree(project_root)
     changed = _changed(project_root, execution.get("begin_tree"), end_tree)
+    if changed is not None and not changed:
+        return {
+            "ok": False,
+            "reason": "no_changes",
+            "error": "no repository changes since execute-begin (changed_files is empty)",
+        }
     scope = execution.get("scope") or []
     execution.update(
         status=STATUS_IMPLEMENTED,

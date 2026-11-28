@@ -111,6 +111,7 @@ ERROR_TYPES = {
     "execute_plan_not_proceed",
     "execute_not_approved",
     "execution_not_active",
+    "execution_no_changes",
     # `run.sh test` (core/evidence/verify_tests.run_and_record): no command given, no
     # allowlist to run one under, or a command that did not pass.
     "test_input_invalid",
@@ -331,9 +332,13 @@ _BRACKET_REF = re.compile(r"\[([^\[\]]+)\]")
 _REF_SOURCE = r"(?:proof|proxy|ref|source|src|evidence|external)"
 _REF_ATOM = re.compile(
     rf"""^(?:{_REF_SOURCE}\s*:\s*)?              # optional source prefix
-        [^\s\[\]<>:]+(?:[\\/][^\s\[\]<>:]+)*     # path segments
-        \.[A-Za-z0-9_]{{1,12}}                   # extension — a bare word is not a path
-        (?:[:#]L?\d+(?:[-:]L?\d+)?)?             # optional :line, :start-end, #Lnn
+        (?:
+            (?:[A-Za-z]:[\\/]|[/\\])?[^\s\[\]<>:/\\]+(?:[\\/][^\s\[\]<>:/\\]+)*\.[A-Za-z0-9_]{{1,12}}  # file with extension
+            (?:[:#]L?\d+(?:[-:]L?\d+)?)?
+            |
+            (?:[A-Za-z]:[\\/]|[/\\])?[^\s\[\]<>:/\\]+(?:[\\/][^\s\[\]<>:/\\]+)+                        # extensionless path with separator
+            (?:[:#]L?\d+(?:[-:]L?\d+)?)
+        )
         $""",
     re.VERBOSE | re.IGNORECASE,
 )
@@ -626,6 +631,7 @@ _VERIFY_SECTION_NAMES = (
     "checks_run",
     "not_verified",
 )
+_OPTIONAL_VERIFY_SECTION_NAMES = ("supporting_gaps",)
 # Whole phrases only. `tidak ada` or `no` followed by any word would also take "tidak ada
 # validasi untuk X" and "no check on X", which are findings.
 _NONE_WORD = re.compile(
@@ -761,7 +767,7 @@ def _section_items(content: str, name: str) -> list[str]:
     inline = match.group(1).strip()
     if inline and not inline.startswith("#"):
         items.append(inline.lstrip("-").strip())
-    section_heads = {*_VERIFY_SECTION_NAMES, "confidence", "verdict"}
+    section_heads = {*_VERIFY_SECTION_NAMES, *_OPTIONAL_VERIFY_SECTION_NAMES, "confidence", "verdict"}
     for line in (content or "")[match.end() :].splitlines():
         stripped = line.strip()
         if not stripped:
@@ -852,6 +858,7 @@ def validate_verification_contract(content: str) -> dict:
     gaps = _meaningful_items(sections["not_verified"])
     runtime_gaps = [item for item in gaps if item.lower().startswith(RUNTIME_GAP_PREFIX)]
     declared_gaps = [item for item in gaps if item not in runtime_gaps]
+    supporting_gaps = _meaningful_items(_section_items(verification_body, "supporting_gaps"))
 
     for section_name, items in sections.items():
         if section_name != "checks_run" and not items:
@@ -965,6 +972,7 @@ def validate_verification_contract(content: str) -> dict:
         "blocking_findings": len(dict.fromkeys(effective_blocking)),
         "checks_run": len(checks),
         "not_verified": len(gaps),
+        "supporting_gaps": len(supporting_gaps),
         "warnings": warnings,
     }
 

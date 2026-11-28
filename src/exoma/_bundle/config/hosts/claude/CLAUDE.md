@@ -123,7 +123,7 @@ On failure → REQUIRED:
 Auto-fallback to local without asking the user = FORBIDDEN.
 
 ### Command registry
-LOCAL:     {{CMD:execute}} -y {{CMD:init}} {{CMD:upgrade}} {{CMD:doctor}} {{CMD:sweep}} {{CMD:commit}} {{CMD:memory}} {{CMD:caveman}} {{CMD:local}} {{CMD:provider}} {{CMD:promote}} {{CMD:help}}
+LOCAL:     {{CMD:execute}} -y {{CMD:init}} {{CMD:upgrade}} {{CMD:doctor}} {{CMD:sweep}} {{CMD:commit}} {{CMD:memory}} {{CMD:caveman}} {{CMD:local}} {{CMD:provider}} {{CMD:promote}} {{CMD:fanout}} {{CMD:help}}
 DELEGATED: {{CMD:explore}} {{CMD:plan}} {{CMD:analyze}} {{CMD:verify}} {{CMD:verify-browser}}
 Each skill's full definition = a standalone file `{{SKILL_PATH}}` (opened when "{{CMD_PREFIX}}name" is invoked). This contract is DELIBERATELY only orchestrator + registry — skill bodies are NOT embedded here (saves tokens per turn; single source in skills/).
 <!-- AUTO-INTENT:START -->

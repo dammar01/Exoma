@@ -50,25 +50,34 @@ def _context(message, event):
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}
 
 
-def session_start(payload):
-    sid = payload.get("session_id")
-    root = _root(payload.get("cwd"))
-    source = str(payload.get("source") or "startup")
+def _bind(sid, cwd, source="startup"):
+    root = _root(cwd)
     if not sid or root is None:
-        return {}
+        return None, False
     known = _bound(sid)
     reused = source in {"resume", "compact"} and known is not None and Path(known["cwd"]).resolve() == root
     if reused:
-        main_id = known["main_session_id"]
-    else:
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S%f")[:17]
-        main_id = "main_%s_%s_%04x" % (root.name or "root", stamp, random.getrandbits(16))
-        path = _entry_path(sid)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_name(path.name + ".%d.tmp" % os.getpid())
-        temp.write_text(json.dumps({"main_session_id": main_id, "cwd": str(root), "host": "codex"}), encoding="utf-8")
-        os.replace(temp, path)
-    context = wp.session_binding(main_id, str(root), source, reused, _profile())
+        return known, True
+    if source == "lazy" and known is not None and Path(known["cwd"]).resolve() == root:
+        return known, True
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S%f")[:17]
+    main_id = "main_%s_%s_%04x" % (root.name or "root", stamp, random.getrandbits(16))
+    entry = {"main_session_id": main_id, "cwd": str(root), "host": "codex"}
+    path = _entry_path(sid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".%d.tmp" % os.getpid())
+    temp.write_text(json.dumps(entry), encoding="utf-8")
+    os.replace(temp, path)
+    return entry, False
+
+
+def session_start(payload):
+    sid = payload.get("session_id")
+    source = str(payload.get("source") or "startup")
+    entry, reused = _bind(sid, payload.get("cwd"), source=source)
+    if not entry:
+        return {}
+    context = wp.session_binding(entry["main_session_id"], entry["cwd"], source, reused, _profile())
     context += ("\n[EXOMA CODEX HOST] Read ~/.codex/exoma/CONTRACT.md before workflow work. "
                 "Use $exoma-<command> skills for workflow commands.")
     return _context(context, "SessionStart")
@@ -90,13 +99,24 @@ def _normalize_skill_mentions(prompt):
 
 
 def user_prompt_submit(payload):
-    entry = _bound(payload.get("session_id"))
+    sid = payload.get("session_id")
+    entry = _bound(sid)
+    lazy_context = None
     if not entry:
-        return {}
+        entry, reused = _bind(sid, payload.get("cwd"), source="lazy")
+        if not entry:
+            return {}
+        if not reused:
+            lazy_context = (
+                wp.session_binding(entry["main_session_id"], entry["cwd"], "lazy", False, _profile())
+                + "\n[EXOMA CODEX HOST] Read ~/.codex/exoma/CONTRACT.md before workflow work. "
+                "Use $exoma-<command> skills for workflow commands."
+            )
     root, main_id = entry["cwd"], entry["main_session_id"]
     raw = str(payload.get("prompt") or "")
     text = _normalize_skill_mentions(raw)
     rt = wp.runtime_dir(root, main_id)
+    wp.clear_verify_turn(rt)
     provenance = {"host": "codex", "session_id": payload.get("session_id"), "turn_id": payload.get("turn_id")}
     # Without a prompt source, execute stays anchored; commit accepts direct requests too.
     wp.record_approvals(text, rt, True, provenance)
@@ -104,12 +124,13 @@ def user_prompt_submit(payload):
     if not isinstance(intent, dict):
         # A missing or broken map must not keep a previous turn's delegation armed.
         wp.set_delegated_marker(None, rt, provenance)
-        return {}
+        return _context(lazy_context, "UserPromptSubmit") if lazy_context else {}
     resolved = wp.explicit_command(text, intent.get("prefix_regex"))
     hinted = None if resolved or _profile().get("auto_intent") is False else wp.nl_command(text, intent)
     wp.set_delegated_marker(resolved, rt, {**provenance, "prompt_excerpt": raw[:160]})
     hint = wp.intent_hint(hinted, root, main_id, wp.runner_command(root, _profile()), _profile()) if hinted else None
-    return _context(hint, "UserPromptSubmit") if hint else {}
+    combined = "\n\n".join(part for part in (lazy_context, hint) if part)
+    return _context(combined, "UserPromptSubmit") if combined else {}
 
 
 def _profile():
@@ -152,7 +173,10 @@ def _shell_precision_read(command):
 
 
 def pre_tool_use(payload):
-    entry = _bound(payload.get("session_id"))
+    sid = payload.get("session_id")
+    entry = _bound(sid)
+    if not entry:
+        entry, _ = _bind(sid, payload.get("cwd"), source="lazy")
     if not entry:
         return {}
     root, main_id = entry["cwd"], entry["main_session_id"]
@@ -229,6 +253,8 @@ def pre_tool_use(payload):
         elif refusal_key == "session_binding":
             refusal = (refusal_key, "Use exactly --session '%s' from the authoritative binding; "
                        "missing, default, duplicate or different session arguments are refused." % main_id)
+        elif refusal_key == "verify_readonly":
+            refusal = (refusal_key, "Verification is read-only: repository writes are blocked while verify is active.")
         elif refusal_key and marker.get("generation"):
             refusal = (refusal_key, wp.collection_guidance(marker, wp.runner_command(root, _profile()), main_id))
         elif refusal_key:
@@ -236,7 +262,11 @@ def pre_tool_use(payload):
                        % (wp.format_command(marker.get("command"), _profile()), wp.runner_command(root, _profile()),
                           marker.get("command"), main_id))
     if refusal is None and tool in {"Bash", "exec_command", "functions.exec_command"}:
+        refusal = wp.verify_turn_refusal(command, rt, {"root": root, "home": str(Path.home()), "is_bash": _is_bash})
+    if refusal is None and tool in {"Bash", "exec_command", "functions.exec_command"}:
         refusal = wp.commit_refusal(command, rt, {"root": root, "home": str(Path.home()), "is_bash": _is_bash})
+    if refusal is None and tool in {"Bash", "exec_command", "functions.exec_command"}:
+        refusal = wp.verify_shell_refusal(command, rt, {"root": root, "home": str(Path.home()), "is_bash": _is_bash})
     if refusal is None:
         for target in paths:
             refusal = wp.write_refusal(tool, target, str(payload.get("cwd") or root), root, policy, rt,

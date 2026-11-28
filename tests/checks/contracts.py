@@ -663,6 +663,8 @@ def _anchor_scan_reads_past_the_stored_prefix() -> None:
             drive: drive,
             "(" + drive + ")": drive,
             "E:/w/r.py:9": "E:/w/r.py:9",
+            "src/app/(dashboard)/dokumentasi/page.tsx:1": "src/app/(dashboard)/dokumentasi/page.tsx:1",
+            ".git/HEAD:1": ".git/HEAD:1",
         }
         found = {s: (m.group(0) if (m := _FILELINE.search(s)) else None) for s in shapes}
         assert_true(

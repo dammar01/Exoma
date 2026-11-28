@@ -253,7 +253,10 @@ def pre_tool_use(payload):
             refusal = (refusal_key, "Delegate /.%s first, in the foreground with a long timeout: %s %s --session '%s' --task '<task>'"
                        % (marker.get("command"), wp.runner_command(root, profile), marker.get("command"), main_id))
     if refusal is None and tool in SHELL_TOOLS:
-        refusal = wp.commit_refusal(command, rt, {"root": root, "home": str(Path.home()), "is_bash": _is_bash})
+        shell_ctx = {"root": root, "home": str(Path.home()), "is_bash": _is_bash}
+        refusal = (wp.verify_turn_refusal(command, rt, shell_ctx)
+                   or wp.commit_refusal(command, rt, shell_ctx)
+                   or wp.verify_shell_refusal(command, rt, shell_ctx))
     if refusal is None:
         for target in paths:
             refusal = wp.write_refusal(tool, target, cwd, root, policy, rt, host_dirs=(str(_home()),))

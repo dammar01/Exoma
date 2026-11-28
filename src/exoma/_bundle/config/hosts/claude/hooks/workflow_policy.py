@@ -278,6 +278,68 @@ def commit_refusal(command, rt_dir, ctx=None):
     return None
 
 
+_READONLY_SHELL_VERBS = frozenset((
+    "rg", "grep", "cat", "head", "tail", "type", "get-content", "gc",
+    "ls", "dir", "get-childitem", "select-string", "wc", "pwd", "which", "where",
+))
+_READONLY_GIT_SUBCOMMANDS = frozenset(("status", "diff", "log", "show", "rev-parse", "ls-files", "grep"))
+_UNSAFE_READONLY_FLAGS = frozenset(("--pre", "--pre-glob", "--hostname-bin", "--exec", "--output", "-o"))
+
+
+def _has_unsafe_flag(tokens, blocked=_UNSAFE_READONLY_FLAGS):
+    for tok in tokens:
+        if tok == "--":
+            break
+        if tok.startswith("-") and tok.split("=", 1)[0].lower() in blocked:
+            return True
+    return False
+
+
+def _verify_failed_execution(rt_dir):
+    execution = read_json(os.path.join(rt_dir, "execution.json"))
+    if execution and execution.get("status") == "implemented" and execution.get("verification") == "fail":
+        return execution
+    return None
+
+
+def verify_shell_refusal(command, rt_dir, ctx):
+    """(rule, message) blocking shell mutations after failed verify until a new execution opens."""
+    if not rt_dir or not ctx or not _verify_failed_execution(rt_dir):
+        return None
+    root, home, is_bash = ctx["root"], ctx["home"], ctx["is_bash"]
+    raw = (command or "").strip()
+    inv = runner_invocation(raw, root, home, is_bash)
+    if inv and not inv.get("invalid") and not inv.get("malformed") and inv.get("command") in _RECOVERY_RUNNER_ACTIONS:
+        return None
+    cd = _CD_THEN.fullmatch(raw)
+    if cd and inside_root(cd.group(1) if cd.group(1) is not None else cd.group(2), root, home):
+        raw = cd.group(3)
+    runner_cmd = raw[2:].lstrip() if raw.startswith("& ") else raw
+    runner_words = plain_words(runner_cmd)
+    if runner_words is not None:
+        idx = 1 if is_bash(runner_words[0]) else 0
+        if idx < len(runner_words) and same_path(local_path(runner_words[idx], home),
+                                                 os.path.join(root, ".workflow", "inspect.sh"), root):
+            return None
+    words = plain_words(raw)
+    if words is not None:
+        verb = os.path.basename(words[0]).lower()
+        if verb.endswith(".exe"):
+            verb = verb[:-4]
+        if verb in _READONLY_SHELL_VERBS and not _has_unsafe_flag(words[1:]):
+            return None
+        if verb == "git":
+            tokens = list(words[1:])
+            if len(tokens) >= 2 and tokens[0] == "-C" and inside_root(tokens[1], root, home):
+                tokens = tokens[2:]
+            if tokens and tokens[0] in _READONLY_GIT_SUBCOMMANDS and not _has_unsafe_flag(tokens[1:], frozenset(("--output", "--ext-diff"))):
+                return None
+    return "verify_failed_readonly", (
+        "Shell command blocked after verification failed without opening a new execution.\n"
+        "Record a revised plan and run /.execute -y (execute-begin) before modifying repository files or running mutating commands."
+    )
+
+
 def write_refusal(tool, target, cwd, root, pol, rt_dir, host_dirs=()):
     """(rule, message) when a write to `target` breaks the root or scope rule, else None.
 
@@ -302,6 +364,11 @@ def write_refusal(tool, target, cwd, root, pol, rt_dir, host_dirs=()):
     relative = os.path.relpath(norm(target), norm(root)).replace("\\", "/")
     if relative == ".workflow" or relative.startswith(".workflow/"):
         return None
+    if _verify_failed_execution(rt_dir):
+        return "verify_failed_readonly", (
+            "'%s' writes to %s after verification failed without opening a new execution.\n"
+            "Record a revised plan and run /.execute -y (execute-begin) before editing repository files."
+        ) % (tool, relative)
     execution = read_json(os.path.join(rt_dir, "execution.json"))
     if not execution or execution.get("status") != "active":
         return None
@@ -704,6 +771,10 @@ def runner_call(words, root, home, is_bash):
 DELEGATION_CONTROLS = frozenset(("delegate-select", "delegate-result", "delegate-ack", "delegate-cancel", "delegate-abort"))
 SESSION_COMMANDS = DELEGATION_CONTROLS | frozenset(("explore", "plan", "analyze", "verify", "verify-browser", "sweep",
                               "plan-record", "execute-begin", "execute-end", "test", "verify-prepare"))
+_RECOVERY_RUNNER_ACTIONS = DELEGATION_CONTROLS | frozenset((
+    "plan-record", "execute-begin", "explore", "plan", "analyze",
+    "sweep", "doctor", "inspect", "session-init", "verify-prepare", "verify", "verify-browser",
+))
 
 
 def _leading_tokens(line, max_tokens=3, allow_double_quotes=False):
@@ -810,6 +881,38 @@ def runner_invocation(command, root, home, is_bash):
     return result
 
 
+def clear_verify_turn(rt_dir):
+    if not rt_dir:
+        return
+    try:
+        os.remove(os.path.join(rt_dir, "verify-turn.json"))
+    except OSError:
+        pass
+
+
+def verify_turn_refusal(command, rt_dir, ctx):
+    """Block double verify-prepare / verify replay in the same user turn."""
+    if not rt_dir or not ctx:
+        return None
+    line = (command or "").strip()
+    if line.startswith("& "):
+        line = line[2:].lstrip()
+    parsed = runner_invocation(line, ctx["root"], ctx["home"], ctx["is_bash"])
+    if not parsed or parsed.get("invalid") or parsed.get("malformed"):
+        return None
+    action = parsed.get("command")
+    if action not in {"verify-prepare", "verify", "verify-browser"}:
+        return None
+    path = os.path.join(rt_dir, "verify-turn.json")
+    state = read_json(path) or {}
+    if state.get("dispatched"):
+        return "verify_replay", (
+            "Verification already ran in this turn (%s cannot be replayed after verify). "
+            "Start a new turn or open a new execution before re-verifying." % action
+        )
+    return None
+
+
 def runner_session_refusal(command, ctx):
     expected = ctx.get("expected_session")
     if not expected:
@@ -910,7 +1013,13 @@ def preflight_refusal(kind, target, command, marker, ctx):
     if kind == "write":
         if runner_file(target or "", root):
             return "runner_write"
-        return "escape_write" if escape_file(target or "", root) else None
+        if escape_file(target or "", root):
+            return "escape_write"
+        if cmd in {"verify", "verify-browser"} and target and inside_root(target, root, home):
+            rel = os.path.relpath(norm(target), norm(root)).replace("\\", "/")
+            if rel != ".workflow" and not rel.startswith(".workflow/"):
+                return "verify_readonly"
+        return None
     if kind == "shell":
         command = command or ""
         cd = _CD_THEN.fullmatch(command)
@@ -1375,6 +1484,7 @@ def set_delegated_marker(resolved, rt_dir, provenance):
         state = collection_state(rt_dir)
         if state and state["phase"] not in {"aborted", "collected"}:
             return
+        clear_verify_turn(rt_dir)
         if resolved:
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=rt_dir, delete=False) as f:
                 staged = f.name
@@ -1398,7 +1508,7 @@ def format_command(name, profile=None):
 
 
 def format_guidance(message, profile=None):
-    return re.sub(r"(?<![\w/~])/\.(analyze|caveman|commit|doctor|execute|explore|help|init|local|memory|plan|promote|provider|sweep|upgrade|verify-browser|verify)\b",
+    return re.sub(r"(?<![\w/~])/\.(analyze|caveman|commit|doctor|execute|explore|fanout|help|init|local|memory|plan|promote|provider|sweep|upgrade|verify-browser|verify)\b",
                   lambda m: format_command(m.group(1), profile), message)
 
 

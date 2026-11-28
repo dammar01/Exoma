@@ -1757,6 +1757,11 @@ class Executor:
         fact_stats: dict = {}
         graph_leads = None
         fanout = False
+        fanout_requested = False
+        stripped_task = (task or "").lstrip()
+        if stripped_task[:8].upper() == "[FANOUT]":
+            fanout_requested = True
+            task = stripped_task[8:].lstrip()
         if graph_leads_enabled(project_root):
             graph_leads, self._graph_status, self._graph_ms = graph_leads_for_call(
                 project_root, task
@@ -1774,7 +1779,8 @@ class Executor:
                 if f.get("file")
             ] or None
             fanout = (
-                subagent_fanout_enabled(project_root)
+                fanout_requested
+                and subagent_fanout_enabled(project_root)
                 and fanout_capability(project_root) is not False
             )
             # Promoted knowledge rides the same roles as facts. Wrapped broadly because

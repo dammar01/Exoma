@@ -82,7 +82,10 @@ LINE_PROXIMITY = 3
 # letter must also START a word: without that lookbehind a label before the path lent its
 # last letter as a drive, so `proof:core/x.py:200` became `f:core/x.py:200` and
 # `proxy:core/a.py:5` became `y:core/a.py:5` — real files reported as uncertified.
-_FILELINE = re.compile(r"((?:(?<![A-Za-z0-9_])[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
+_PATH_SEG = r"(?:[A-Za-z0-9_.-]|\([A-Za-z0-9_.-]+\))+"
+_FILELINE = re.compile(
+    rf"((?:(?<![A-Za-z0-9_])[A-Za-z]:[/\\]?)?(?:(?=[A-Za-z0-9_./\\()-]*[A-Za-z_])(?:{_PATH_SEG}[/\\])+{_PATH_SEG}(?:\.[A-Za-z0-9_]+)?|{_PATH_SEG}\.[A-Za-z0-9_]+)):(\d+)"
+)
 _CATEGORY = re.compile(r"^\[(config|pattern|invariant)\]", re.IGNORECASE)
 _WORD = re.compile(r"[a-z0-9_]+")
 # "X is cached" and "X is not cached" share almost every word — high similarity, opposite

@@ -599,9 +599,28 @@ def _test_evidence_reuse() -> None:
                 f"the contract parser and the fact store read one pattern the same way: "
                 f"{evidence_contract.split_claim(bare)['refs']}",
             )
+            route_and_dot = "see [src/app/(dashboard)/dokumentasi/page.tsx:1] and [.git/HEAD:1]"
+            assert_true(
+                evidence_contract.split_claim(route_and_dot)["refs"]
+                == ["src/app/(dashboard)/dokumentasi/page.tsx:1", ".git/HEAD:1"]
+                and [m.group(0) for m in _FILELINE.finditer(route_and_dot)]
+                == ["src/app/(dashboard)/dokumentasi/page.tsx:1", ".git/HEAD:1"],
+                f"route-group parens and extensionless dotfiles are extracted as anchors: "
+                f"{evidence_contract.split_claim(route_and_dot)['refs']}",
+            )
             assert_true(
                 evidence_contract.split_claim("a ratio 3:14 of runs")["refs"] == [],
                 "and neither of them turns prose into an anchor",
+            )
+            import time as _time
+            long_seg = "../" + "-".join(["evidence"] * 40) + "/missing_extension_and_line"
+            long_slashes = "/".join(["seg"] * 80)
+            t_start = _time.monotonic()
+            assert_true(
+                list(_FILELINE.finditer(long_seg)) == []
+                and evidence_contract._REF_ATOM.match(long_slashes) is None
+                and _time.monotonic() - t_start < 0.25,
+                "anchor regexes must reject long non-matching inputs in linear time",
             )
         finally:
             outside.unlink(missing_ok=True)

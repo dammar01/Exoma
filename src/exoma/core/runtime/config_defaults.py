@@ -82,12 +82,9 @@ def default_policies() -> dict:
         # ~/.claude. The user adds a path here once they have approved writing there.
         "write_allowed_outside_root": [],
         # --- runtime-consumed (core/prompt/prompt_builder.py) ---
-        # ask second_agent to spawn one sub-agent per graph cluster (or per role slice
-        # when there is no graph). ON: a delegated call that reads the codebase serially
-        # is the slow path, and the fan-out instruction is what makes the second agent
-        # use the parallel tools it already has. It does cost more quota per call and
-        # produces a larger response — set false to go back to a single serial reader.
-        "subagent_fanout_enabled": True,
+        # opt-in via policies.subagent_fanout_enabled and the dedicated /.fanout skill.
+        # Defaults OFF so explore/plan/analyze stay a single serial reader unless enabled.
+        "subagent_fanout_enabled": False,
     }
 
 def default_e2e() -> dict:
@@ -373,20 +370,15 @@ def knowledge_relevant_limit(project_root: Path) -> int:
 
 
 def subagent_fanout_enabled(project_root: Path) -> bool:
-    """policies.subagent_fanout_enabled. Defaults to ON.
-
-    An unreadable config falls back to the default rather than to off: the previous
-    fail-closed behaviour meant a malformed config silently downgraded every call to a
-    serial read, with nothing in the output saying so.
-    """
+    """policies.subagent_fanout_enabled. Defaults to OFF."""
     try:
         config = read_json_file(workflow_paths(project_root)["config"])
     except (OSError, ValueError):
-        return True
+        return False
     policies = config.get("policies")
     if not isinstance(policies, dict):
-        return True
-    return bool(policies.get("subagent_fanout_enabled", True))
+        return False
+    return bool(policies.get("subagent_fanout_enabled", False))
 
 def default_config(project_root: Path, agent_workflow_path: str | None = None) -> dict:
     project_name = project_root.name

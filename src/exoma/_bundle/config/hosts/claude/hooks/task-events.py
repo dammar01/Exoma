@@ -30,7 +30,7 @@ else:
 
 LOCAL_SKILLS = {
     "execute", "init", "upgrade", "doctor", "sweep", "commit",
-    "memory", "caveman", "local", "provider", "promote", "help",
+    "memory", "caveman", "local", "provider", "promote", "fanout", "help",
 }
 SKILL_PROMPT = re.compile(r"^\s*/\.([\w-]+)")
 EVENT_VERSION = 2

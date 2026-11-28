@@ -52,6 +52,9 @@ def _plan_is_checked_mechanically() -> None:
         "an option with no cost": _plan(options=[{"name": "A", "minus": "", "recommended": True}]),
         "scope outside the root": _plan(files=["../other/x.py"]),
         "absolute scope": _plan(files=["E:/elsewhere/x.py"]),
+        "workflow scope": _plan(files=[".workflow/data/sessions/s1/runtime/notes.md"]),
+        "empty clarify": _plan(decision="clarify", open_questions=[], files=[]),
+        "blank clarify": _plan(decision="clarify", open_questions=["   "], files=[]),
         "no decision": _plan(decision="maybe"),
     }
     for label, doc in cases.items():
@@ -193,6 +196,11 @@ def _execution_tracks_its_own_edits() -> None:
         begun = execution.begin_execution(root, session)["execution"]
         assert_true(begun["begin_tree"] and [c["path"] for c in begun["changed_since_plan"]] == ["between.py"],
                     f"an edit between plan and execute-begin is named: {begun}")
+        no_changes = execution.end_execution(root, session)
+        assert_true(
+            not no_changes["ok"] and no_changes.get("reason") == "no_changes",
+            f"zero-change execution on a Git tree must not close as implemented: {no_changes}",
+        )
 
         (root / "src" / "x.py").write_text("x = 2\n", encoding="utf-8")
         (root / "src" / "new.py").write_text("n = 1\n", encoding="utf-8")

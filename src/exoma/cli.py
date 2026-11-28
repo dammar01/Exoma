@@ -130,6 +130,51 @@ def resolve_session_id(
     return new_id
 
 
+def _is_registered_session(project_root: Path, session_id: str) -> bool:
+    """True when `session_id` has a registered project session dir or host binding."""
+    if not session_id or session_id == "default":
+        return False
+    if workflow_paths(project_root, session_id)["session_dir"].is_dir():
+        return True
+    home = Path(os.environ.get("EXOMA_HOME") or os.environ.get("AGENT_HOME") or Path.home())
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path(os.environ.get("AGENT_HOME") or Path.home()) / ".codex"))
+    binding_dirs = (
+        codex_home / "exoma" / "sessions",
+        home / ".config" / "opencode" / "exoma" / "sessions",
+        home / ".gemini" / "antigravity-cli" / "exoma" / "sessions",
+        Path.home() / ".codex" / "exoma" / "sessions",
+        Path.home() / ".config" / "opencode" / "exoma" / "sessions",
+        Path.home() / ".gemini" / "antigravity-cli" / "exoma" / "sessions",
+    )
+    for directory in binding_dirs:
+        try:
+            if not directory.is_dir():
+                continue
+            candidates = list(directory.glob("*.json"))
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and data.get("main_session_id") == session_id:
+                return True
+    for reg_path in (home / ".claude" / "session_registry.json", Path.home() / ".claude" / "session_registry.json"):
+        try:
+            if not reg_path.is_file():
+                continue
+            reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(reg, dict) and any(
+            isinstance(entry, dict) and entry.get("main_session_id") == session_id
+            for entry in reg.values()
+        ):
+            return True
+    return False
+
+
 def _cached_session_still_current(session_id: str, cache_root) -> bool:
     """Whether a cached "default" session may still claim new work.
 
@@ -426,6 +471,9 @@ def _execution_command(command: str, project_root: Path, session_id: str, task: 
         if ended.get("reason") == "selection_invalid":
             return make_error("test_input_invalid", ended["error"],
                               next_action="Correct the selection for the active execution and retry execute-end.")
+        if ended.get("reason") == "no_changes":
+            return make_error("execution_no_changes", ended["error"],
+                              next_action="Make planned edits inside scope before closing execution, or record a new plan.")
         return make_error(
             "execution_not_active",
             ended["error"],
@@ -618,6 +666,19 @@ def run(
         from exoma.core.provider import provider_select
         return provider_select.run(project_root, task)
 
+    if normalized_command == "session-init":
+        from exoma.core.runtime.config_defaults import default_state
+        from exoma.core.workspace.workspace_paths import ensure_valid_json_or_create
+
+        paths = workflow_paths(project_root, session_id)
+        ensure_valid_json_or_create(paths["state"], lambda: {**default_state(project_root), "session": {"id": session_id}})
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "content": f"session {session_id} registered",
+            "meta": {"command": "session-init", "session_id": session_id, "registered": True},
+        }
+
     if normalized_command == "test":
         return _test_command(project_root, session_id, task, main_host)
 
@@ -667,6 +728,15 @@ def run(
         verification_execution = execution.execution_identity(current)
         worker_round = verify_followup.active()
         pin = None
+        if (normalized_command in ("verify", "verify-browser") and worker_round is None
+                and current and current.get("status") == execution.STATUS_IMPLEMENTED
+                and current.get("verification") == "fail"):
+            drifted = execution._changed(project_root, current.get("end_tree"), execution._tree(project_root))
+            if drifted:
+                return execution.reject_verification(
+                    {},
+                    "repository changed after a failed verify without a new execution; run plan-record and /.execute -y before re-verifying",
+                )
         if normalized_command == "verify":
             admitted = verify_followup.admission(project_root, current, (worker_round or {}).get("round_id"))
             pin = admitted if admitted and "round_id" in admitted else None
@@ -712,6 +782,18 @@ def run(
                 execution.record_verification(project_root, session_id, output, expected=verification_execution, pin=pin)
             except (OSError, ValueError) as exc:
                 execution.reject_verification(output, f"{type(exc).__name__}: {exc}")
+        if (normalized_command in ("verify", "verify-browser") and worker_round is None
+                and (output.get("meta") or {}).get("checked") != "pre_bootstrap"
+                and (output.get("meta") or {}).get("error_type") not in ("model_unset", "runtime_lock", "recursion_refused")):
+            try:
+                rt_dir = workflow_paths(project_root, session_id)["runtime_dir"]
+                rt_dir.mkdir(parents=True, exist_ok=True)
+                (rt_dir / "verify-turn.json").write_text(
+                    json.dumps({"dispatched": True, "command": normalized_command}),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
         try:
             provider_sessions.record_run(session, command)
         except (OSError, ValueError) as exc:
@@ -818,6 +900,7 @@ COMMANDS = (
     "clean",
     "inspect",
     "provider",
+    "session-init",
     "promote-verify",
     "promote-validate",
     "promote-write",
@@ -1054,6 +1137,21 @@ Examples
     effective_session = resolve_session_id(
         args.session, fresh=args.fresh_session, project_root=work_dir
     )
+    if (
+        args.command in SESSION_REQUIRED
+        and args.command != "session-init"
+        and args.session != "default"
+        and not (
+            os.environ.get("EXOMA_ALLOW_DEFAULT_SESSION")
+            or os.environ.get("AI_PROXY_ALLOW_DEFAULT_SESSION")
+        )
+        and not _is_registered_session(detect_project_root(work_dir), effective_session)
+    ):
+        raise SystemExit(
+            f"unregistered --session {effective_session!r} for {args.command}: "
+            "pass MAIN_SESSION_ID from [SESSION BINDING], run `session-init` first, "
+            "or set EXOMA_ALLOW_DEFAULT_SESSION=1."
+        )
     allow_reuse = not args.fresh_session
     from exoma._bundle.config.hosts.claude.hooks import workflow_policy as gate
     if args.command in gate.DELEGATION_CONTROLS:

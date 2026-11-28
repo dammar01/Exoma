@@ -192,6 +192,18 @@ try:
         sys.stderr.write("[PRE-FLIGHT GATE] " + wp.escape_write_message(tool_name, target) + "\n")
         sys.exit(2)
 
+    if kind == "shell" and not env_local and not os.path.isfile(local_flag):
+        verify_refusal = wp.verify_turn_refusal(
+            str(ti.get("command") or ""),
+            runtime_dir,
+            {"root": root, "home": home, "is_bash": lambda word: word in ("bash", "bash.exe")},
+        )
+        if verify_refusal:
+            rule_name, msg = verify_refusal
+            _log_block(rule_name)
+            sys.stderr.write("[PRE-FLIGHT GATE] " + msg + "\n")
+            sys.exit(2)
+
     marker_obj = wp.delegation_marker(runtime_dir)
     if not marker_obj:
         if not os.path.isfile(marker):

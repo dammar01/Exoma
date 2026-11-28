@@ -1316,15 +1316,44 @@ confidence: high — all requested checks ran
             "output with no subagents line must not register as fan-out",
         )
 
-        # Fan-out defaults to on, including when config is unreadable.
+        # Fan-out defaults to off, including when config is unreadable.
         assert_true(
-            subagent_fanout_enabled(temp_root) is True,
-            "fan-out must default to on",
+            subagent_fanout_enabled(temp_root) is False,
+            "fan-out must default to off",
         )
         assert_true(
-            subagent_fanout_enabled(temp_root / "does-not-exist") is True,
-            "an unreadable config must fall back to the default, not to off",
+            subagent_fanout_enabled(temp_root / "does-not-exist") is False,
+            "an unreadable config must fall back to off",
         )
+        # Even when policies.subagent_fanout_enabled is True, standard explore stays single-worker;
+        # only the /.fanout prefix ([FANOUT]) activates fan-out prompts and strips the marker.
+        cfg_file = temp_root / ".workflow" / "config.json"
+        original_cfg = cfg_file.read_text(encoding="utf-8")
+        try:
+            cfg_data = json.loads(original_cfg)
+            cfg_data.setdefault("policies", {})["subagent_fanout_enabled"] = True
+            cfg_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+            plain_call = main.run(
+                "explore", "inspect fanout plain", "fanout-optin", work_dir=work_dir, allow_reuse=False
+            )
+            assert_true(plain_call["ok"], f"plain explore must succeed: {plain_call}")
+            assert_true(
+                "FAN-OUT call" not in fake_opencode.calls[-1]["prompt"],
+                "standard explore must remain single-worker even when subagent_fanout_enabled is True",
+            )
+            optin_call = main.run(
+                "explore", "[FANOUT] inspect fanout optin", "fanout-optin", work_dir=work_dir, allow_reuse=False
+            )
+            assert_true(optin_call["ok"], f"[FANOUT] explore must succeed: {optin_call}")
+            optin_prompt = fake_opencode.calls[-1]["prompt"]
+            assert_true(
+                "FAN-OUT call" in optin_prompt
+                and "[FANOUT]" not in optin_prompt
+                and "inspect fanout optin" in optin_prompt,
+                "/.fanout marker must enable fan-out prompt and be stripped from forwarded task",
+            )
+        finally:
+            cfg_file.write_text(original_cfg, encoding="utf-8")
 
         # Fresh init uses the example config; null delegates model selection to OpenCode.
         import json as _json

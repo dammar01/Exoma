@@ -76,6 +76,16 @@ def local_checks(report: Report) -> None:
         )
 
         code, out = _run_cli(
+            "--command", "session-init", "--session", "e2e-local", "--work-dir", str(project), "--pretty"
+        )
+        reg = _json_from(out) or {}
+        report.check(
+            "session-init registers e2e session",
+            code == 0 and reg.get("ok") is True,
+            f"rc={code}",
+        )
+
+        code, out = _run_cli(
             "--command",
             "sweep",
             "--session",

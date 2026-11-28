@@ -369,7 +369,8 @@ def _check_prepare_unicode_git_path() -> None:
             before = set(objects.rglob("*"))
             proc = subprocess.run([sys.executable, "-X", "utf8=0", "-m", "exoma", "--command", "verify-prepare",
                                    "--work-dir", str(root), "--session", "unicode-path"],
-                                  cwd=root, env=env, capture_output=True, timeout=60, **no_console())
+                                  cwd=root, env={**env, "EXOMA_ALLOW_DEFAULT_SESSION": "1"},
+                                  capture_output=True, timeout=60, **no_console())
             assert_true(proc.returncode == 0, f"verify-prepare in {name!a}: {proc.stderr[-1500:]!r}")
             result = json.loads(proc.stdout)
             identity = result["meta"]["selection_input"]
@@ -412,6 +413,7 @@ def _check_worker_selection() -> None:
                 "with pathlib.Path('.workflow/test-observed').open('a') as log: log.write('x')\n", encoding="utf-8")
             subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console())
             env = {**os.environ, "EXOMA_HOME": str(home / "data"), "CODEX_HOME": str(home),
+                   "EXOMA_ALLOW_DEFAULT_SESSION": "1",
                    "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}
 
             def cli(*args, code=0):
@@ -590,6 +592,17 @@ def _check_selection_roundtrip() -> None:
         _request(root, {"selection": extended, "selection_input": verify_tests.prepare(root, "s1")["meta"]["selection_input"],
                         "commands": [target, failed]})
         assert_true(_verify(root)[1]["verdict"] == "fail", "a detected defect still blocks alongside an open gap")
+        execution.record_plan(root, "s2", _plan())
+        _token(root, "s2")
+        cli.run("execute-begin", "", "s2", str(root))
+        (root / "tracked.py").write_text("v = 1\n", encoding="utf-8")
+        cli.run("execute-end", "", "s2", str(root))
+        execution.record_verification(root, "s2", {"ok": True, "meta": {"verdict": "fail"}})
+        (root / "drift_after_fail.py").write_text("value = 2\n", encoding="utf-8")
+        for blocked_cmd in ("verify", "verify-browser"):
+            blocked = cli.run(blocked_cmd, "recheck", "s2", str(root))
+            assert_true(not blocked["ok"] and blocked["meta"].get("reason") == "verification_publication_rejected",
+                        f"{blocked_cmd} must reject repo drift after failed verify: {blocked}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -776,6 +789,18 @@ def _check_runtime_gaps_exit_nonzero() -> None:
         and {w["kind"] for w in verdict["warnings"]} == {"verification_gap"}
         and verify_exit_status(verdict["verdict"], verdict) == 0,
         f"an agent-declared gap alone keeps exit 0: {verdict}",
+    )
+    supporting = _REVIEW.replace(
+        "not_verified:\n- none",
+        "not_verified:\n- none\nsupporting_gaps:\n- Actual browser rendering unavailable in headless container",
+    )
+    supporting_verdict = validate_verification_contract(supporting)
+    assert_true(
+        supporting_verdict["verdict"] == "pass"
+        and supporting_verdict["supporting_gaps"] == 1
+        and not supporting_verdict["warnings"]
+        and verify_exit_status(supporting_verdict["verdict"], supporting_verdict) == 0,
+        f"supporting external gaps allow DONE + pass: {supporting_verdict}",
     )
 
 

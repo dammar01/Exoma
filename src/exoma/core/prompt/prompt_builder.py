@@ -442,6 +442,7 @@ def build_prompt(
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
                 "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
                 "- tests: do NOT run test runners or suites — verify by reading and tracing; the runtime runs the tests main_agent chose for this change and adds their result to your verdict, so do not list unrun tests under not_verified",
+                "- supporting external/runtime checks unavailable in this environment (actual browser rendering, live DB/model metadata, production scheduler/side effects) go in `supporting_gaps:`, NOT `not_verified:`",
                 *(
                     [
                         "- [E2E EVIDENCE] above is runtime fact from a local browser run, not a claim to re-verify: judge whether its claims cover the change, whether a `pass` rests on assertions strong enough to catch the regression, and give each app-origin failure a temporal `origin` from the code and git scope; keep `app|harness|unknown` out of the `origin` tag",
@@ -556,7 +557,7 @@ def _exploration_format() -> list[str]:
         "- <list or none>",
         "",
         "grounded:",
-        "- <claim + file:line> (only claims backed by code you read)",
+        "- <claim + file:line> (only claims backed by code you read; never put meta/process/sidecar notes here — use scope_covered)",
         "",
         "durable_facts:",
         "- [config|pattern|invariant] <fact that persists across code changes> [file:line] | none",
@@ -670,7 +671,10 @@ def _verification_format() -> list[str]:
         "- <command executed / file read / scenario traced + outcome>",
         "",
         "not_verified:",
-        "- <area or claim you could NOT check + the reason> | none",
+        "- <code/test area in this workspace you could NOT check + reason> | none",
+        "",
+        "supporting_gaps:",
+        "- <external/supporting env check unavailable here (browser rendering, live DB, scheduler) + reason> | none",
         "",
         "confidence: low | medium | high — <reason>",
     ]
@@ -727,7 +731,7 @@ def _reasoning_format() -> list[str]:
         # one asked for a bare `claim + file:line` — and the anchor extractor only ever
         # read brackets, so the section the contract defines BY its evidence was the one
         # section whose evidence never reached `meta.claims[].refs`.
-        "- <claim> [file:line] (WAJIB evidence; no file:line → do not put here)",
+        "- <claim> [file:line] (WAJIB evidence; no file:line → do not put here; put meta/process/sidecar notes in scope_covered)",
         "",
         "durable_facts:",
         "- [config|pattern|invariant] <fact that persists across code changes> [file:line] | none",

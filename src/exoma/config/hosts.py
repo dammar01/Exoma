@@ -205,7 +205,7 @@ _HOST_SECTION = re.compile(
 RULE_MARKER = re.compile(r"<!--\s*rule:(?P<id>[a-z0-9_.-]+)\s*-->")
 PLACEHOLDERS = ("{{RUNNER}}", "{{SHELL_TOOL}}", "{{DELEGATED_RUN}}", "{{ASK_USER}}", "{{SKILL_PATH}}",
                 "{{CMD_PREFIX}}", "{{HOST_CONFIG}}", "{{MAIN_HOST_OPTION}}")
-COMMAND_IDS = frozenset(("analyze", "caveman", "commit", "doctor", "execute", "explore", "help", "init",
+COMMAND_IDS = frozenset(("analyze", "caveman", "commit", "doctor", "execute", "explore", "fanout", "help", "init",
                          "local", "memory", "plan", "promote", "provider", "sweep", "upgrade", "verify", "verify-browser"))
 COMMAND_TOKEN = re.compile(r"\{\{CMD:([a-z][a-z0-9_-]*)\}\}")
 SKILL_REF_TOKEN = re.compile(r"\{\{SKILL_REF:([a-z][a-z0-9_-]*)/([a-z0-9_.-]+\.md)\}\}")

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from exoma.core.evidence import verify_followup as follow
 from exoma.core.jobs.job_manager import JobManager
 from exoma.core.runtime import execution
+from tests.checks.support import no_console
 
 
 def _test_verify_followup():
@@ -804,7 +805,7 @@ def _check_ambiguous_case_and_assertion_controls():
                 'raise SystemExit(int(status == "failed"))\n', encoding="utf-8")
             for args in (["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c",
                          "user.email=f@example.invalid", "commit", "-qm", "init"]):
-                subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+                subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console())
 
             # 1. Duplicate same-command invocations in round 1 must mark ambiguity and block closure.
             session = "dup-case"

@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "5e7606754e0d0a9f15918121fb47f4a2ffeda64d0c3727422a98321085e0752d",
-      "bytes": 27776,
+      "sha256": "08a4904bb1bf0ac58bb15594f8881145e3e5694a1bb2f54141061d185f4c4fd3",
+      "bytes": 27791,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -51,6 +51,13 @@
       "path": "hosts/claude/skills/explore.md",
       "sha256": "85af08e2f308d7ce634a409a6e246ece86a8320cabd969410df3544a4160e6a5",
       "bytes": 1721,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "hosts/claude/skills/fanout.md",
+      "sha256": "8ff892f61d601a09422244d2d716393c17a930fd5d629608b20bfe788df16842",
+      "bytes": 1295,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -188,6 +195,13 @@
       "component": "prompt_bundle"
     },
     {
+      "path": "hosts/claude/commands/.fanout.md",
+      "sha256": "92458f018c1cd655a4dc5bd235d348d1065ebbbaf294261eab8d11c9ecd562d2",
+      "bytes": 274,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
       "path": "hosts/claude/commands/.help.md",
       "sha256": "2a26186ed622f852c6e4989323c5805cc7ef131ef06aab1a101db2c6ba1d413e",
       "bytes": 145,
@@ -266,15 +280,15 @@
     },
     {
       "path": "hosts/claude/hooks/agy-host.py",
-      "sha256": "9309f3242d91511916576a4fbf6608a4ee21eb3dc05a3e15ef90473c21835b94",
-      "bytes": 18516,
+      "sha256": "a21ecc308cd0d32f2cb16b68d16bc89569d5e480ecd5bde2e52f7df44c210760",
+      "bytes": 18687,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "hosts/claude/hooks/execution-gate.py",
-      "sha256": "580cf61657b07d10a62eeba93c9bb462e363f899225b6b5bdfc73077f4667f06",
-      "bytes": 8528,
+      "sha256": "ca6ac3ba4016cdf6dc6d4e47ce0322c87d4da1c6b3afe7daaf2b0e654930493f",
+      "bytes": 8628,
       "merge": "replace",
       "component": "runtime"
     },
@@ -308,8 +322,8 @@
     },
     {
       "path": "hosts/claude/hooks/intent-gate-check.py",
-      "sha256": "0d4bf2f196296c7e08f1f9aa78be4481cf8b0861b005a326aae6d68edc86b1db",
-      "bytes": 13498,
+      "sha256": "3aa51a717795fa2c09d0741de033932c5b5ac8ba71e5c827d7094b1da6c6134e",
+      "bytes": 13991,
       "merge": "replace",
       "component": "runtime"
     },
@@ -371,8 +385,8 @@
     },
     {
       "path": "hosts/claude/hooks/task-events.py",
-      "sha256": "5086b1e9dc9bb981fa50a1481dab0767a6325233a7ce371e4ec72dcb5b8b59b8",
-      "bytes": 30198,
+      "sha256": "a09a2d25a83c8f6274b8cdcd3e12aa5539c0b3223b485eade7df8c51436f6738",
+      "bytes": 30208,
       "merge": "replace",
       "component": "runtime"
     },
@@ -413,8 +427,8 @@
     },
     {
       "path": "hosts/claude/hooks/workflow_policy.py",
-      "sha256": "e2f6c37c113f45006fab43b106d4f8ad6a04bf3aaefaa402e49a36e1a42fec1f",
-      "bytes": 66002,
+      "sha256": "0076a07512d0be672a92a173ba94b97fc1f3f8d2386e6c83eb12af50077ef46b",
+      "bytes": 70887,
       "merge": "replace",
       "component": "runtime"
     },
@@ -532,8 +546,8 @@
     },
     {
       "path": "hosts/codex/codex-host.py",
-      "sha256": "1ab57688ef9d922db8fb48883e00c4088a311fa36dc15a0d22d3aedbda100d4e",
-      "bytes": 14318,
+      "sha256": "bc3ce2cfdee24430c052f130fbd272f4fbea818d2507b087af3fbca1b2e46fae",
+      "bytes": 15893,
       "merge": "replace",
       "component": "runtime"
     },
@@ -560,8 +574,8 @@
     },
     {
       "path": "hosts/opencode/opencode-host.py",
-      "sha256": "7b6f985db880a35e490306f5824ad4adf7ed56ee780778220943c6e5459d8f57",
-      "bytes": 13415,
+      "sha256": "2e6e20bae8d07ba203fba80c8f7191e992db8f196339654573183d4f22d0bf0b",
+      "bytes": 13586,
       "merge": "replace",
       "component": "runtime"
     },

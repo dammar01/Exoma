@@ -647,6 +647,8 @@ def _test_init_upgrade_and_session_guard() -> None:
                     "the migrated runner prepares verification using preserved policy overrides")
         config_path.write_text(before_same_version_config, encoding="utf-8")
 
+        assert_true(run("session-init", "--session", "presentation-test").returncode == 0,
+                    "session-init registers an explicit session for runner calls")
         presented = run("execute-begin", "--session", "presentation-test", "--main-host", "codex")
         presentation = json.loads(presented.stdout)
         assert_true("$exoma-plan" in presentation["meta"]["next_action"],
@@ -671,6 +673,8 @@ def _test_init_upgrade_and_session_guard() -> None:
             "print('opaque /.plan {{CMD:unknown}}')\nraise SystemExit(1)\n", encoding="utf-8")
         literal_command = test_prefix + " --expect /.plan --template {{CMD:unknown}}"
         try:
+            assert_true(run("session-init", "--session", "opaque-test").returncode == 0,
+                        "session-init registers opaque-test session")
             failed_test = run("test", "--session", "opaque-test", "--main-host", "codex", "--task", literal_command)
             failed_payload = json.loads(failed_test.stdout)
             assert_true(not failed_payload["ok"] and "opaque /.plan {{CMD:unknown}}" in failed_payload["content"],

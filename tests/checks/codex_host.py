@@ -232,6 +232,140 @@ def _test_codex_host_contract():
         assert_true(fresh["hookSpecificOutput"]["additionalContext"].split("MAIN_SESSION_ID=")[1].splitlines()[0]
                     != main, "clear starts a new Exoma main session")
 
+        # Issue 7 + 8 regressions: skipped SessionStart lazy binding, verify write/replay locks, and CLI session gate
+        lazy_sid = "codex-skipped-session-start"
+        lazy_prompt = _hook(home, "UserPromptSubmit", {"session_id": lazy_sid, "cwd": str(root),
+                                                       "turn_id": "lazy-1", "prompt": "$exoma-verify check"})
+        lazy_ctx = lazy_prompt["hookSpecificOutput"]["additionalContext"]
+        lazy_main = lazy_ctx.split("MAIN_SESSION_ID=")[1].splitlines()[0]
+        assert_true("MAIN_SESSION_ID=" in lazy_ctx, f"UserPromptSubmit binds lazily when SessionStart skipped: {lazy_ctx}")
+        blocked_verify_edit = _hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                                         "tool_name": "Edit", "tool_input": {"file_path": str(small)}})
+        assert_true(blocked_verify_edit.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    f"repo write is denied during armed verify: {blocked_verify_edit}")
+        verify_cmd = f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' verify --session '{lazy_main}' --task 'check'"
+        prep_cmd = f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' verify-prepare --session '{lazy_main}'"
+        assert_true(_hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                               "tool_name": "exec_command", "tool_input": {"cmd": prep_cmd}}) == {},
+                    "first verify-prepare in turn passes")
+        assert_true(_hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                               "tool_name": "exec_command", "tool_input": {"cmd": verify_cmd}}) == {},
+                    "first verify in turn passes")
+        lazy_rt = root / ".workflow" / "data" / "sessions" / lazy_main / "runtime"
+        assert_true(not (lazy_rt / "verify-turn.json").exists(),
+                    "PreToolUse hook inspection remains read-only until cli executes verify")
+        (lazy_rt / "verify-turn.json").write_text(json.dumps({"dispatched": True, "command": "verify"}), encoding="utf-8")
+        replay_prepare = _hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                                    "tool_name": "exec_command", "tool_input": {"cmd": prep_cmd}})
+        assert_true(replay_prepare.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    f"second verify-prepare in the same turn is denied: {replay_prepare}")
+        (lazy_rt / "delegated.marker").unlink(missing_ok=True)
+        (lazy_rt / "execution.json").write_text(json.dumps({"status": "implemented", "verification": "fail"}), encoding="utf-8")
+        blocked_after_fail = _hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                                        "tool_name": "Edit", "tool_input": {"file_path": str(small)}})
+        assert_true(blocked_after_fail.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                    f"repo write after failed verify is denied until new execution: {blocked_after_fail}")
+        for mut_cmd in (
+            "echo x > README.md",
+            "python -c 'open(\"x\",\"w\")'",
+            "rg --pre=touch README.md",
+            "rg --pre touch README.md",
+            f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' test --session '{lazy_main}' --task 'pytest'",
+            f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' clean --session '{lazy_main}'",
+            f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' promote-write --session '{lazy_main}' --task 'p.json'",
+        ):
+            blocked_shell = _hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                                       "tool_name": "exec_command", "tool_input": {"cmd": mut_cmd}})
+            assert_true(blocked_shell.get("hookSpecificOutput", {}).get("permissionDecision") == "deny",
+                        f"mutating shell after failed verify is denied ({mut_cmd}): {blocked_shell}")
+        plan_cmd = f"{runner_prefix()} '{(root / '.workflow' / 'run.sh').as_posix()}' plan-record --session '{lazy_main}' --task 'p.json'"
+        inspect_cmd = f"{runner_prefix()} '{(root / '.workflow' / 'inspect.sh').as_posix()}' --session '{lazy_main}'"
+        for ro_cmd in ("git status", "rg TODO .", plan_cmd, inspect_cmd):
+            allowed_shell = _hook(home, "PreToolUse", {"session_id": lazy_sid, "cwd": str(root),
+                                                       "tool_name": "exec_command", "tool_input": {"cmd": ro_cmd}})
+            assert_true(allowed_shell == {}, f"read-only/runner shell passes during failed-verify lock ({ro_cmd}): {allowed_shell}")
+
+        hooks_dir = REPO / "src" / "exoma" / "_bundle" / "config" / "hosts" / "claude" / "hooks"
+        if str(hooks_dir) not in sys.path:
+            sys.path.insert(0, str(hooks_dir))
+        import workflow_policy as wp
+
+        assert_true(wp.format_guidance("Use /.fanout explore x", {"host": "codex"}) == "Use $exoma-fanout explore x",
+                    "format_guidance translates /.fanout for native hosts")
+        # Replay guard + turn reset across workflow_policy and Claude intent-gate-check
+        wp.set_delegated_marker(None, str(lazy_rt), {"source": "test"})
+        assert_true(not (lazy_rt / "verify-turn.json").exists(), "set_delegated_marker clears prior verify-turn.json")
+        reg_file = home / ".claude" / "session_registry.json"
+        reg_file.parent.mkdir(parents=True, exist_ok=True)
+        reg_file.write_text(json.dumps({"claude-replay-sid": {"main_session_id": lazy_main, "cwd": str(root)}}), encoding="utf-8")
+        claude_env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+        bash_verify = f"bash '{(root / '.workflow' / 'run.sh').as_posix()}' verify --session '{lazy_main}' --task 'check'"
+        bash_prep = f"bash '{(root / '.workflow' / 'run.sh').as_posix()}' verify-prepare --session '{lazy_main}'"
+        for dispatched, expected_rc in ((False, 0), (True, 2)):
+            if dispatched:
+                (lazy_rt / "verify-turn.json").write_text(json.dumps({"dispatched": True, "command": "verify"}), encoding="utf-8")
+            else:
+                wp.clear_verify_turn(str(lazy_rt))
+            for tool_cmd in (bash_verify, bash_prep):
+                payload_json = json.dumps({"session_id": "claude-replay-sid", "cwd": str(root),
+                                           "tool_name": "Bash", "tool_input": {"command": tool_cmd}})
+                proc = subprocess.run(
+                    [sys.executable, str(hooks_dir / "intent-gate-check.py")],
+                    input=payload_json, text=True, capture_output=True,
+                    env={**claude_env, "CLAUDE_HOOK_RAW": payload_json},
+                    timeout=15, **no_console(),
+                )
+                assert_true(proc.returncode == expected_rc,
+                            f"intent-gate-check verify replay check (dispatched={dispatched}, {tool_cmd}): rc={proc.returncode} {proc.stderr}")
+        wp.clear_verify_turn(str(lazy_rt))
+        # Verify openCode and Agy hooks also wire verify_turn_refusal and verify_shell_refusal,
+        # and Claude execution-gate blocks shell mutations after failed verify.
+        opencode_src = (REPO / "src" / "exoma" / "_bundle" / "config" / "hosts" / "opencode" / "opencode-host.py").read_text(encoding="utf-8")
+        agy_src = (hooks_dir / "agy-host.py").read_text(encoding="utf-8")
+        assert_true("verify_turn_refusal" in opencode_src and "verify_shell_refusal" in opencode_src
+                    and "verify_turn_refusal" in agy_src and "verify_shell_refusal" in agy_src,
+                    "opencode-host and agy-host wire same-turn verify replay and failed-verify shell guards")
+        for eg_cmd, expected_rc in (("echo x > README.md", 2), ("rg --pre=touch README.md", 2), ("git status", 0)):
+            eg_json = json.dumps({"session_id": "claude-replay-sid", "cwd": str(root),
+                                  "tool_name": "Bash", "tool_input": {"command": eg_cmd}})
+            eg_proc = subprocess.run(
+                [sys.executable, str(hooks_dir / "execution-gate.py")],
+                input=eg_json, text=True, capture_output=True,
+                env={**claude_env, "CLAUDE_HOOK_RAW": eg_json},
+                timeout=15, **no_console(),
+            )
+            assert_true(eg_proc.returncode == expected_rc,
+                        f"execution-gate failed-verify shell check ({eg_cmd}): rc={eg_proc.returncode} {eg_proc.stderr}")
+
+        env_cli = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+                   "EXOMA_HOME": str(home / "exoma-data"), "CODEX_HOME": str(home / ".codex"),
+                   "PYTHONPATH": str(REPO / "src")}
+        for var in ("EXOMA_ALLOW_DEFAULT_SESSION", "AI_PROXY_ALLOW_DEFAULT_SESSION"):
+            env_cli.pop(var, None)
+        bad_cli = subprocess.run([sys.executable, "-m", "exoma", "--command", "verify-prepare",
+                                  "--work-dir", str(root), "--session", "invented_session_123"],
+                                 cwd=root, env=env_cli, capture_output=True, text=True, timeout=30, **no_console())
+        assert_true(bad_cli.returncode != 0 and "unregistered --session" in bad_cli.stderr,
+                    f"CLI rejects invented unregistered session ID: rc={bad_cli.returncode} {bad_cli.stderr!r}")
+        bad_sweep = subprocess.run([sys.executable, "-m", "exoma", "--command", "sweep",
+                                    "--work-dir", str(root), "--session", "invented_session_123"],
+                                   cwd=root, env=env_cli, capture_output=True, text=True, timeout=30, **no_console())
+        assert_true(bad_sweep.returncode != 0 and "unregistered --session" in bad_sweep.stderr,
+                    f"CLI rejects unregistered session ID for sweep: rc={bad_sweep.returncode} {bad_sweep.stderr!r}")
+        bound_cli = subprocess.run([sys.executable, "-m", "exoma", "--command", "verify-prepare",
+                                    "--work-dir", str(root), "--session", lazy_main],
+                                   cwd=root, env=env_cli, capture_output=True, text=True, timeout=30, **no_console())
+        assert_true(bound_cli.returncode == 0, f"CLI accepts host-bound session ID: {bound_cli.stderr}")
+        reg_cli = subprocess.run([sys.executable, "-m", "exoma", "--command", "session-init",
+                                  "--work-dir", str(root), "--session", "ci_registered_1"],
+                                 cwd=root, env=env_cli, capture_output=True, text=True, timeout=30, **no_console())
+        assert_true(reg_cli.returncode == 0 and json.loads(reg_cli.stdout)["meta"]["registered"] is True,
+                    f"session-init registers explicit automation session: {reg_cli.stdout} {reg_cli.stderr}")
+        ok_cli = subprocess.run([sys.executable, "-m", "exoma", "--command", "verify-prepare",
+                                 "--work-dir", str(root), "--session", "ci_registered_1"],
+                                cwd=root, env=env_cli, capture_output=True, text=True, timeout=30, **no_console())
+        assert_true(ok_cli.returncode == 0, f"CLI accepts session registered by session-init: {ok_cli.stderr}")
+
     # The provider must set its process role even when the parent Codex host did not.
     from exoma.adapters.providers.codex_adapter import CodexAdapter
     from exoma.adapters.providers import codex_adapter
