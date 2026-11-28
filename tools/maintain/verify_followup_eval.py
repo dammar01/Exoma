@@ -239,7 +239,7 @@ def drive(root, case, mode, model):
                 follow[-1].update(evidence="check_quantity.py:4", equivalence="Checks the same input.")
         if "verify_followup" in prepared and finding == A and not follow:
             follow.append({"blocker": 1, "obligation": "quantity"})
-        section = "[FOLLOWUP_V1]\n" + "\n".join(json.dumps(row) for row in follow) + "\n" if follow else ""
+        section = "[FOLLOWUP]\n" + "\n".join(json.dumps(row) for row in follow) + "\n" if follow else ""
         replay.report = section + REVIEW.format(verdict="NEEDS FIX" if finding else "DONE",
                                                 finding=f"{TAG} — {finding}" if finding else "none")
         usage_path = paths["usage_stream"]

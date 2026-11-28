@@ -116,9 +116,9 @@ def handoff(root, session_id, current, request):
 
 def rows(content):
     before, marker, _ = content.partition("[VERIFICATION]")
-    if not marker or len(before) > MAX_BLOCK + 1024 or before.count("[FOLLOWUP_V1]") != 1:
+    if not marker or len(before) > MAX_BLOCK + 1024 or before.count("[FOLLOWUP]") != 1:
         return []
-    block = before.split("[FOLLOWUP_V1]", 1)[1].strip()
+    block = before.split("[FOLLOWUP]", 1)[1].strip()
     if len(block) > MAX_BLOCK:
         return []
     try:

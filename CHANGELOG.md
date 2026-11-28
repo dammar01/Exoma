@@ -11,6 +11,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 1.3.0 (candidate) | [docs/releases/v1.3.0.md](docs/releases/v1.3.0.md) | Execution-scoped verification follow-up (`[FOLLOWUP]`), explicit `/.fanout` opt-in, runtime thread/pointer hardening, and 4-host workflow/session gates |
 | 1.2.3 (candidate) | [docs/releases/v1.2.3.md](docs/releases/v1.2.3.md) | Update from ordinary directories, clean stale jobs by process identity, and find CLI commands by purpose |
 | 1.2.2 (candidate) | [docs/releases/v1.2.2.md](docs/releases/v1.2.2.md) | Preserve concurrent edits during installer recovery and improve gate diagnostics, browser references and session retention reporting |
 | 1.2.1 | [docs/releases/v1.2.1.md](docs/releases/v1.2.1.md) | `exoma jobs clean-stale` previews stale jobs and can release matching locks after a verified Windows reboot while preserving job history |

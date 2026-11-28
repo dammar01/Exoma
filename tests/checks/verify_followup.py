@@ -81,7 +81,7 @@ def _check_retry_and_recurrence():
                 coverage_status = "covered" if status == "passed" else "open"
             coverage = {"selection": {"obligations": [obligation]}, "selection_input": fingerprint,
                         "obligations": [{"id": "quantity", "status": coverage_status}]}
-            result = {"content": "[FOLLOWUP_V1]\n" + "\n".join(json.dumps(r) for r in replies) + "\n[VERIFICATION]",
+            result = {"content": "[FOLLOWUP]\n" + "\n".join(json.dumps(r) for r in replies) + "\n[VERIFICATION]",
                       "meta": {"review_observations": {"blockers": blockers}, "runtime_tests": {
                           "coverage": coverage, "outcomes": [{"command": command, "status": status,
                           "log_ref": log_ref, "fingerprint": fingerprint, "reused": reused}] if command else []}}}
@@ -201,7 +201,7 @@ def _check_late_attachment(root):
                                                       "selection_input": prepared["selection_input"]})
         report = REVIEW.format(verdict="NEEDS FIX" if blocker else "DONE",
                                finding=TAG + " independent total defect at pricing.py:8" if blocker else "none")
-        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP_V1]", *(json.dumps(row) for row in rows), report])
+        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP]", *(json.dumps(row) for row in rows), report])
         result = cli.run("verify", "check pricing cases", session, str(root), model="fixture")
         assert result["ok"], result
         return result["meta"]
@@ -238,7 +238,7 @@ def _check_late_attachment(root):
             runtime["coverage"]["selection"]["obligations"].append(dict(item, id="other"))
         if other_case:
             runtime["outcomes"][0]["case_observation"]["id"] = "different-trigger"
-        content = "\n".join(["[FOLLOWUP_V1]", *(json.dumps(r) for r in rows), "[VERIFICATION]"])
+        content = "\n".join(["[FOLLOWUP]", *(json.dumps(r) for r in rows), "[VERIFICATION]"])
         result = {"content": content, "meta": {"runtime_tests": runtime, "review_observations": {"blockers": []}}}
         pin = follow.bind_current(root, snapshot)
         assert follow.publish(root, snapshot, pin, result)
@@ -279,7 +279,7 @@ def _check_late_attachment(root):
         runtime = deepcopy(last["runtime_tests"])
         if alter_case:
             runtime["outcomes"][0]["case_observation"]["id"] = "other-passing-case"
-        result = {"content": "[FOLLOWUP_V1]\n" + json.dumps(resolved) + "\n[VERIFICATION]",
+        result = {"content": "[FOLLOWUP]\n" + json.dumps(resolved) + "\n[VERIFICATION]",
                   "meta": {"runtime_tests": runtime}}
         follow.publish(root, snapshot, follow.bind_current(root, snapshot), result)
         assert attached["disposition"] == "open" and attached["last_reason_code"] == expected
@@ -292,7 +292,7 @@ def _check_attachment_recovery(root, session, before, published, proposal):
     state = execution._runtime_file(root, session, execution.EXECUTION_FILE)
     meta = deepcopy(published)
     meta.pop("verify_followup")
-    payload = {"ok": True, "meta": meta, "content": "[FOLLOWUP_V1]\n" + json.dumps(proposal) + "\n[VERIFICATION]"}
+    payload = {"ok": True, "meta": meta, "content": "[FOLLOWUP]\n" + json.dumps(proposal) + "\n[VERIFICATION]"}
     for stale in (True, False):
         execution._write(state, before)
         job = jobs.create_job("verify", "attachment recovery", session, str(root), None)
@@ -360,7 +360,7 @@ def _check_initially_bound_case(root):
         prepared = cli.run("verify-prepare", "", session, str(root))["meta"]
         write_json(Path(prepared["request"]["path"]), {"commands": [COMMAND], "selection": selection,
                                                       "selection_input": prepared["selection_input"]})
-        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP_V1]", *(json.dumps(row) for row in rows),
+        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP]", *(json.dumps(row) for row in rows),
                                                 REVIEW.format(verdict="DONE", finding="none")])
         result = cli.run("verify", "review quantity cases", session, str(root), model="fixture")
         assert result["ok"], result
@@ -402,7 +402,7 @@ def _check_green_with_open_finding(root):
     for replies, status, reason in (([], "unchecked", "followup_missing"),
                                    ([row, row], "unchecked", "followup_ambiguous"),
                                    ([row], "nonreproduced", "reported_nonreproduced")):
-        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP_V1]", *replies, REVIEW.format(verdict="DONE", finding="none")])
+        cli.EXECUTOR.adapter.report = "\n".join(["[FOLLOWUP]", *replies, REVIEW.format(verdict="DONE", finding="none")])
         write_json(Path(prepared["request"]["path"]), {"commands": [COMMAND], "selection": prepared["execution_selection"],
                                                       "selection_input": prepared["selection_input"]})
         result = cli.run("verify", "Check repaired quantity", SESSION, str(root), model="fixture")
@@ -751,7 +751,7 @@ def _check_publication():
         with patch.object(jobs, "liveness", return_value=DEAD):
             assert jobs.get_result(jid)["output"]["meta"]["verdict"] == "pass"
         assert published["last_verify_job"] == jid and execution.current_execution(root, session) == published
-        assert follow.rows("[FOLLOWUP_V1]\n{}\ninvalid\n[VERIFICATION]") == []
+        assert follow.rows("[FOLLOWUP]\n{}\ninvalid\n[VERIFICATION]") == []
         assert follow.assertion_receipt(root, "../escape:1") is None
 
 
@@ -822,7 +822,7 @@ def _check_ambiguous_case_and_assertion_controls():
                 write_json(Path(prepared["request"]["path"]),
                            {"commands": commands, "selection": selection, "selection_input": prepared["selection_input"]})
                 cli.EXECUTOR.adapter.report = "\n".join(
-                    ["[FOLLOWUP_V1]", *(json.dumps(r) for r in rows),
+                    ["[FOLLOWUP]", *(json.dumps(r) for r in rows),
                      REVIEW.format(verdict="NEEDS FIX" if blocker else "DONE",
                                    finding="high|introduced|in_scope — bug [pricing.py:3]" if blocker else "none")]
                 )
@@ -876,7 +876,7 @@ def _check_ambiguous_case_and_assertion_controls():
                        {"commands": [COMMAND], "selection": selection, "selection_input": p3_2["selection_input"]})
             # Reviewer sees pricing still broken and reports present -> finding remains open despite green helper.
             cli.EXECUTOR.adapter.report = "\n".join([
-                "[FOLLOWUP_V1]",
+                "[FOLLOWUP]",
                 json.dumps({"id": f_helper, "status": "present", "diagnosis": "helper weakened while pricing still broken",
                             "strategy": "keep open", "blocker": 1}),
                 REVIEW.format(verdict="NEEDS FIX", finding="high|introduced|in_scope — clamp broken [pricing.py:3]"),
@@ -892,7 +892,7 @@ def _check_ambiguous_case_and_assertion_controls():
             write_json(Path(p3_3["request"]["path"]),
                        {"commands": [COMMAND], "selection": selection, "selection_input": p3_3["selection_input"]})
             cli.EXECUTOR.adapter.report = "\n".join([
-                "[FOLLOWUP_V1]",
+                "[FOLLOWUP]",
                 json.dumps({"id": f_helper, "status": "resolved", "diagnosis": "fixed clamp",
                             "strategy": "rerun", "obligation": "quantity", "evidence": "check_quantity.py:6"}),
                 REVIEW.format(verdict="DONE", finding="none"),
@@ -948,7 +948,7 @@ def _check_ambiguous_case_and_assertion_controls():
             write_json(Path(p4_2["request"]["path"]),
                        {"commands": [COMMAND], "selection": selection, "selection_input": p4_2["selection_input"]})
             cli.EXECUTOR.adapter.report = "\n".join([
-                "[FOLLOWUP_V1]",
+                "[FOLLOWUP]",
                 json.dumps({"id": fid_missing, "status": "resolved", "diagnosis": "fixed clamp",
                             "strategy": "rerun", "repeat_reason": "rerun with log available",
                             "obligation": "quantity", "evidence": ref}),

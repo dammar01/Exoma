@@ -1,4 +1,4 @@
-# Exoma v1.2.3
+# Exoma v1.3.0
 
 Standalone orchestration runtime for a two-agent workflow, installed as the `exoma` Python
 package and CLI. No third-party dependencies. Forked from agent-workflow 3.9.0.
@@ -118,7 +118,7 @@ git --version
 
 ---
 
-## Install (v1.2.3)
+## Install (v1.3.0)
 
 ### New team member — full sequence from scratch
 
@@ -1460,7 +1460,7 @@ The following keys actually change the Python runtime's (or a shipped hook's) be
 | `policies.enforcement` | `"hybrid"` | the `execution-gate` / `status-guard` hooks: `hybrid` blocks the deterministic gates and warns on an `[EXECUTION RESULT]` that claims more than not_run, `warn` only reports, `off` disables both |
 | `policies.write_allowed_outside_root` | `[]` | paths outside the project root a Write/Edit may land in, beyond the temp dir and `~/.claude` |
 | `policies.graph_leads_enabled` | `true` | inject a shortlist from `graphify-out/graph.json` |
-| `policies.subagent_fanout_enabled` | `true` | request fan-out for the exploration/reasoning roles |
+| `policies.subagent_fanout_enabled` | `false` | request fan-out for the exploration/reasoning roles (explicit `/.fanout` opt-in) |
 | `policies.production_branch` | `"main"` | the only branch where `promote-write` will write. Promoted knowledge describes what is live; a hypothesis from a feature branch must not enter the shared repo carrying that authority |
 | `policies.knowledge_dir` | `"docs/project-knowledge"` | location of knowledge documents, relative to the project root; an absolute path, `..`, or a symlink resolving outside the root is refused (`knowledge_path_escape`). The only workflow artifact that is **tracked in Git** — its whole value lies in being shareable |
 | `policies.knowledge_relevant_limit` | `3` | maximum knowledge documents included in one delegated prompt. `0` turns off the knowledge sidecar |
@@ -1603,7 +1603,7 @@ gpt-6-luna low`) skips the picker. A payload without `|` is split on spaces — 
 provider, model id, or effort contains a space — and is then validated exactly like the
 `provider|model|effort|routes` payload.
 
-Reliability keys (v1.2.3):
+Reliability keys (v1.3.0):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -1626,11 +1626,11 @@ are no longer written; their values come from `EXOMA_JOB_MAX_RUNTIME_SECONDS`, t
 The upgrade to the `data/` layout (introduced in agent-workflow 3.6.0) drops retired keys from `config.json`; before that, `doctor` flags them
 `retired — never read` and they are safe to delete manually.
 
-### Sub-agent fan-out (default ON)
+### Sub-agent fan-out (default OFF; opt-in via `/.fanout`)
 
-`policies.subagent_fanout_enabled` applies to `explore`, `plan`, and `analyze`. `verify` keeps using a single reviewer so the whole diff is seen as one change.
+`policies.subagent_fanout_enabled` applies to `explore`, `plan`, and `analyze` when invoked via `/.fanout` (default `false`; standard `explore`/`plan`/`analyze` calls stay single-worker even when enabled). `verify` keeps using a single reviewer so the whole diff is seen as one change.
 
-Upgrade preserves the existing value. An old workspace that already stores `false` stays disabled until you change it yourself.
+Upgrade preserves an existing stored value; workspaces without an override inherit the `false` default.
 
 When active, the prompt carries the `[EVIDENCE_SIDECARS]` anchor; the fan-out clusters live in
 `.workflow/data/sessions/<id>/runtime/leads.json` so they do not inflate the prompt:
@@ -1841,7 +1841,7 @@ in the following table.
 | `closure_accepted` | All closure conditions were met. |
 
 `followup_missing` means the runtime found no usable row for this finding ID.
-Check the entire `[FOLLOWUP_V1]` block even if the ID appears in it. One invalid
+Check the entire `[FOLLOWUP]` block even if the ID appears in it. One invalid
 JSON line causes the parser to discard every row in the block. In a valid block,
 multiple rows with the same finding ID produce `followup_ambiguous`.
 A review reporting `nonreproduced` or `unchecked`
@@ -1873,7 +1873,7 @@ assertion, and the marker in the captured output tail. An ordinary suite can
 continue to run without case reporting. Matching command names alone produces
 advisory `possible_prior_ids` on a new runtime finding.
 
-In a subsequent round a reviewer can propose this optional `[FOLLOWUP_V1]` row:
+In a subsequent round a reviewer can propose this optional `[FOLLOWUP]` row:
 
 ```json
 {"status":"attach","id":"<offered finding ID>","execution_id":"<current execution ID>","obligation":"quantity","command":"python -B check_quantity.py","case":"negative-two","evidence":"check_quantity.py:4","diagnosis":"The original and current checks exercise quantity(-2) and expect zero."}
@@ -2457,7 +2457,7 @@ session's lock is released, and the new request is processed as a new job. A job
 recovering (has no worker PID yet) and a worker that is alive or stalled are never taken over.
 An identical request still uses the recovery path above.
 
-### Liveness worker (v1.2.3)
+### Liveness worker (v1.3.0)
 
 A live PID does **not** mean it is working. The worker therefore reports a heartbeat together with the age of the output stream, and the job is classified into three states:
 

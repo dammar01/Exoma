@@ -459,7 +459,7 @@ def build_prompt(
                 "",
                 *([f"Read {runtime_dir}/{followup_file} for prior blocker IDs and planned checks.",
                    "First review the new diff and callers for independent defects. Then assess each prior ID.",
-                   "Immediately before [VERIFICATION], emit [FOLLOWUP_V1] and one JSON object per line.",
+                   "Immediately before [VERIFICATION], emit [FOLLOWUP] and one JSON object per line.",
                    'Prior row keys: id, status (present/resolved/nonreproduced/unchecked), diagnosis, strategy, '
                    'evidence (current assertion file:line), obligation (exact ID), repeat_reason if repeating.',
                    'For a still-present finding include blocker (1-based index in current blocking_findings). '

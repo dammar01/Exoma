@@ -551,7 +551,7 @@ references, recent resolved findings and planned checks. Open findings beyond th
 stay open and rotate into later reviews. Runtime tests run after the review. The result
 exposes the reviewer's blockers separately from the merged verdict.
 
-The optional `[FOLLOWUP_V1]` block carries one JSON object per line before `[VERIFICATION]`.
+The optional `[FOLLOWUP]` block carries one JSON object per line before `[VERIFICATION]`.
 A reviewer associates a new blocker with a behavior using its one-based blocker index and
 selection obligation ID. For an existing finding the reviewer echoes the exact ID and
 explains the diagnosis, strategy, current evidence and outcome. Missing, duplicate or
