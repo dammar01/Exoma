@@ -988,7 +988,10 @@ def run_worker(job_id: str) -> dict:
                 )
         _beat({"phase": "finishing"})
         if owner:
-            owner.cleanup()
+            try:
+                owner.cleanup()
+            except Exception as cleanup_exc:
+                return _main().JOB_MANAGER.retain_worker_cleanup(job_id, str(cleanup_exc))
             _main().JOB_MANAGER.confirm_worker_cleanup(job_id)
         output.setdefault("meta", {}).setdefault("job_id", job_id)
         if pin:

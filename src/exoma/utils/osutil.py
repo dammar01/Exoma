@@ -1097,7 +1097,7 @@ def process_identity(pid: int | None) -> str | None:
             ["ps", "-o", "lstart=", "-p", str(pid)],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=5,
             check=False,
             **hidden_run_kwargs(),
         )

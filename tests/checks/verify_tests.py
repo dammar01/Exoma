@@ -420,7 +420,22 @@ def _check_worker_selection() -> None:
                 proc = subprocess.run([sys.executable, "-m", "exoma", "--work-dir", str(root),
                                        "--session", session, *args], env=env, cwd=root, capture_output=True,
                                       encoding="utf-8", errors="replace", timeout=90, **no_console())
-                assert_true(proc.returncode == code, f"{args}: {proc.stdout[-2000:]} {proc.stderr[-500:]}")
+                if proc.returncode != code:
+                    detail = f"{args}: rc={proc.returncode} {proc.stdout[-2000:]} {proc.stderr[-500:]}"
+                    try:
+                        payload = json.loads(proc.stdout)
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        out_path = payload.get("output_path")
+                        if out_path and Path(out_path).is_file():
+                            detail += f"\nresult.json: {Path(out_path).read_text(encoding='utf-8', errors='replace')[-2000:]}"
+                        job_id = (payload.get("meta") or {}).get("job_id")
+                        if job_id:
+                            log_file = home / "data" / "jobs" / "logs" / f"{job_id}.log"
+                            if log_file.is_file():
+                                detail += f"\nworker.log: {log_file.read_text(encoding='utf-8', errors='replace')[-2000:]}"
+                    raise AssertionError(detail)
                 return json.loads(proc.stdout)
 
             selection = {"version": 1, "execution_id": None, "tier": "targeted", "reason": "check worker",

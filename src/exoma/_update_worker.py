@@ -891,7 +891,14 @@ class DescendantOwner:
                 raise OSError(ctypes.get_errno(), "cannot adopt orphaned update descendants")
             self.baseline = None
         else:
-            self.baseline = self.inventory()
+            for attempt in range(3):
+                try:
+                    self.baseline = self.inventory()
+                    break
+                except OSError as exc:
+                    if "generation conflict" not in str(exc) or attempt == 2:
+                        raise
+                    time.sleep(0.02)
 
     @staticmethod
     def inventory():
@@ -951,123 +958,138 @@ class DescendantOwner:
                 result.diagnostics_unavailable = True
         return result
 
-    def cleanup(self):
-        if not self.subreaper:
-            current = self.inventory()
-            def lineage(row):
-                return (isinstance(row, dict) and type(row.get("uniqueid")) is int
-                        and 0 < row["uniqueid"] < 2 ** 64 and type(row.get("parent_uniqueid")) is int
-                        and 0 <= row["parent_uniqueid"] < 2 ** 64 and row["uniqueid"] != row["parent_uniqueid"])
-            def unchanged(pid):
-                if lineage(current.get(pid)) and lineage(self.baseline.get(pid)):
-                    return current[pid]["uniqueid"] == self.baseline[pid]["uniqueid"]
-                if sys.platform == "darwin" and not all(
-                        type(snapshot.get(pid, {}).get("created")) is int and 0 < snapshot[pid]["created"] < 2 ** 64
-                        for snapshot in (current, self.baseline)):
-                    return False  # Coarse ps timestamps cannot prove a Darwin lifetime.
-                return pid in current and pid in self.baseline and (
-                    current[pid]["created"] == self.baseline[pid]["created"])
-            def outside_baseline(pid):
-                seen = set()
-                while pid in self.baseline and pid not in seen:
-                    if pid == os.getpid():
-                        return False
-                    if pid == 1:
-                        return True
-                    seen.add(pid)
-                    pid = self.baseline[pid]["parent"]
-                return False
-            # A birth edge to launchd is proof; an adoptive PPID of 1 is not.
-            root = self.baseline.get(os.getpid())
-            foreign_ids = {row["uniqueid"] for pid, row in self.baseline.items()
-                           if lineage(row) and outside_baseline(pid)} if lineage(root) else set()
-            edges, versions, conflicts, possible_owned = {}, {}, set(), set()
-            root_sample = root if lineage(root) else current.get(os.getpid())
-            if lineage(root_sample):
-                possible_owned.add(root_sample["uniqueid"])
-            raw_edges = []
-            for snapshot in (self.baseline, current):
-                for pid, row in snapshot.items():
-                    if lineage(row):
-                        raw_edges.append((row["uniqueid"], row["parent_uniqueid"]))
-                        version, parent_version = row.get("version"), row.get("parent_version")
-                        if type(version) is int and 0 < version < 2 ** 32:
-                            versions.setdefault(row["uniqueid"], set()).add(version)
-                        if type(parent_version) is not int or not 0 < parent_version < 2 ** 32:
-                            continue
-                        edge = (pid, row["parent_uniqueid"], parent_version)
-                        previous = edges.get(row["uniqueid"])
-                        if previous and (previous[0] != pid or previous[2] != parent_version):
-                            conflicts.add(row["uniqueid"])
-                        edges[row["uniqueid"]] = edge
-            # Native evidence of possible ownership vetoes the PPID fallback
-            # even when an old kernel/query cannot provide a parent version.
-            while True:
-                children = {child for child, parent in raw_edges if parent in possible_owned}
-                if children <= possible_owned:
-                    break
-                possible_owned.update(children)
-            for uniqueid in conflicts:
-                edges.pop(uniqueid, None)
-                foreign_ids.discard(uniqueid)
-            def birth_foreign(pid):
-                row = current.get(pid)
-                if not lineage(row):
-                    return None
-                if row["uniqueid"] in possible_owned:
+    def _unconfirmed_descendants(self, current):
+        def lineage(row):
+            return (isinstance(row, dict) and type(row.get("uniqueid")) is int
+                    and 0 < row["uniqueid"] < 2 ** 64 and type(row.get("parent_uniqueid")) is int
+                    and 0 <= row["parent_uniqueid"] < 2 ** 64 and row["uniqueid"] != row["parent_uniqueid"])
+        def unchanged(pid):
+            if lineage(current.get(pid)) and lineage(self.baseline.get(pid)):
+                return current[pid]["uniqueid"] == self.baseline[pid]["uniqueid"]
+            if sys.platform == "darwin" and not all(
+                    type(snapshot.get(pid, {}).get("created")) is int and 0 < snapshot[pid]["created"] < 2 ** 64
+                    for snapshot in (current, self.baseline)):
+                return False  # Coarse ps timestamps cannot prove a Darwin lifetime.
+            return pid in current and pid in self.baseline and (
+                current[pid]["created"] == self.baseline[pid]["created"])
+        def outside_baseline(pid):
+            seen = set()
+            while pid in self.baseline and pid not in seen:
+                if pid == os.getpid():
                     return False
-                parent = current.get(row.get("parent")) if type(row.get("parent")) is int else None
-                contradiction = lineage(parent) and row["parent_uniqueid"] != parent["uniqueid"]
-                if not foreign_ids:
-                    return False if contradiction else None
-                uniqueid, seen = row["uniqueid"], set()
-                if uniqueid in conflicts:
+                if pid == 1:
+                    return True
+                seen.add(pid)
+                pid = self.baseline[pid]["parent"]
+            return False
+        # A birth edge to launchd is proof; an adoptive PPID of 1 is not.
+        root = self.baseline.get(os.getpid())
+        foreign_ids = {row["uniqueid"] for pid, row in self.baseline.items()
+                       if lineage(row) and outside_baseline(pid)} if lineage(root) else set()
+        edges, versions, conflicts, possible_owned = {}, {}, set(), set()
+        root_sample = root if lineage(root) else current.get(os.getpid())
+        if lineage(root_sample):
+            possible_owned.add(root_sample["uniqueid"])
+        raw_edges = []
+        for snapshot in (self.baseline, current):
+            for pid, row in snapshot.items():
+                if lineage(row):
+                    raw_edges.append((row["uniqueid"], row["parent_uniqueid"]))
+                    version, parent_version = row.get("version"), row.get("parent_version")
+                    if type(version) is int and 0 < version < 2 ** 32:
+                        versions.setdefault(row["uniqueid"], set()).add(version)
+                    if type(parent_version) is not int or not 0 < parent_version < 2 ** 32:
+                        continue
+                    edge = (pid, row["parent_uniqueid"], parent_version)
+                    previous = edges.get(row["uniqueid"])
+                    if previous and (previous[0] != pid or previous[2] != parent_version):
+                        conflicts.add(row["uniqueid"])
+                    edges[row["uniqueid"]] = edge
+        # Native evidence of possible ownership vetoes the PPID fallback
+        # even when an old kernel/query cannot provide a parent version.
+        while True:
+            children = {child for child, parent in raw_edges if parent in possible_owned}
+            if children <= possible_owned:
+                break
+            possible_owned.update(children)
+        for uniqueid in conflicts:
+            edges.pop(uniqueid, None)
+            foreign_ids.discard(uniqueid)
+        def birth_foreign(pid):
+            row = current.get(pid)
+            if not lineage(row):
+                return None
+            if row["uniqueid"] in possible_owned:
+                return False
+            parent = current.get(row.get("parent")) if type(row.get("parent")) is int else None
+            contradiction = lineage(parent) and row["parent_uniqueid"] != parent["uniqueid"]
+            if not foreign_ids:
+                return False if contradiction else None
+            uniqueid, seen = row["uniqueid"], set()
+            if uniqueid in conflicts:
+                return False
+            if uniqueid in foreign_ids:
+                return True  # This lifetime already existed outside the guardian.
+            if uniqueid not in edges:
+                return False if contradiction else None
+            while uniqueid not in seen:
+                if uniqueid == root["uniqueid"]:
                     return False
                 if uniqueid in foreign_ids:
-                    return True  # This lifetime already existed outside the guardian.
+                    return True
                 if uniqueid not in edges:
-                    return False if contradiction else None
-                while uniqueid not in seen:
-                    if uniqueid == root["uniqueid"]:
-                        return False
-                    if uniqueid in foreign_ids:
-                        return True
-                    if uniqueid not in edges:
-                        return False
-                    seen.add(uniqueid)
-                    _, parent, parent_version = edges[uniqueid]
-                    if parent == root["uniqueid"]:
-                        return False
-                    if parent_version not in versions.get(parent, set()):
-                        return False  # An adoptive parent after exec is not birth proof.
-                    uniqueid = parent
-                return False
-            def foreign(pid):
+                    return False
+                seen.add(uniqueid)
+                _, parent, parent_version = edges[uniqueid]
+                if parent == root["uniqueid"]:
+                    return False
+                if parent_version not in versions.get(parent, set()):
+                    return False  # An adoptive parent after exec is not birth proof.
+                uniqueid = parent
+            return False
+        def foreign(pid):
+            proof = birth_foreign(pid)
+            if proof is not None:
+                return proof
+            seen = set()
+            while pid in current and pid not in seen:
+                if pid in {0, 1, os.getpid()}:
+                    return False  # An adoptive root is never fallback foreign proof.
                 proof = birth_foreign(pid)
                 if proof is not None:
                     return proof
-                seen = set()
-                while pid in current and pid not in seen:
-                    if pid in {0, 1, os.getpid()}:
-                        return False  # An adoptive root is never fallback foreign proof.
-                    proof = birth_foreign(pid)
-                    if proof is not None:
-                        return proof
-                    # A surviving parent that predated our stage and is outside
-                    # our guardian proves foreign ancestry. PID 1 is excluded:
-                    # escaped descendants may already have been reparented to it.
-                    if unchanged(pid):
-                        return True
-                    seen.add(pid)
-                    pid = current[pid]["parent"]
-                return False
-            remaining = [pid for pid in current if pid != os.getpid() and not unchanged(pid) and not foreign(pid)]
-            if remaining:
+                # A surviving parent that predated our stage and is outside
+                # our guardian proves foreign ancestry. PID 1 is excluded:
+                # escaped descendants may already have been reparented to it.
+                if unchanged(pid):
+                    return True
+                seen.add(pid)
+                pid = current[pid]["parent"]
+            return False
+        return [pid for pid in current if pid != os.getpid() and not unchanged(pid) and not foreign(pid)]
+
+    def cleanup(self):
+        if not self.subreaper:
+            previous = None
+            for attempt in range(4):
                 try:
-                    self.diagnostics = _ancestry_diagnostics(self.baseline, current, remaining)
-                except Exception:
-                    self.diagnostics = {"unavailable": True, "reason": "projection_failed"}
-                raise OSError("descendant ancestry cannot be confirmed: " + repr(sorted(remaining)))
+                    current = self.inventory()
+                except OSError as exc:
+                    if "generation conflict" not in str(exc) or attempt == 3:
+                        raise
+                    time.sleep(0.05)
+                    continue
+                remaining = self._unconfirmed_descendants(current)
+                if not remaining:
+                    return
+                if attempt == 3 or current is previous:
+                    try:
+                        self.diagnostics = _ancestry_diagnostics(self.baseline, current, remaining)
+                    except Exception:
+                        self.diagnostics = {"unavailable": True, "reason": "projection_failed"}
+                    raise OSError("descendant ancestry cannot be confirmed: " + repr(sorted(remaining)))
+                previous = current
+                time.sleep(0.05)
             return
         # Every orphan, including setsid/double-fork children, is adopted by this
         # guardian. Do not reap a live generation before signalling it: waitable

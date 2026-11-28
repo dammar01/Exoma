@@ -1475,6 +1475,21 @@ def _check_worker_terminal_inventory(root):
                 pass
             else:
                 raise AssertionError("uncertain native inventory allowed package mutation")
+    transient = {**baseline, foreign + 1: {"created": 4, "parent": 1, "status": 2}}
+    settled = dict(baseline)
+    manager = JobManager(root / "native-cleanup-transient")
+    job = manager.create_job("analyze", "task", "native-transient", str(root), None)
+    observations = iter([baseline, transient, settled])
+    posix_os = SimpleNamespace(**{**vars(os), "name": "posix"})
+    with patch.object(main, "JOB_MANAGER", manager), \
+         patch.object(main, "run", return_value={"ok": True, "content": "ordinary completion"}), \
+         patch.object(job_manager, "os", posix_os), \
+         patch.object(native.sys, "platform", "darwin"), \
+         patch.object(native.DescendantOwner, "inventory", side_effect=lambda: next(observations, settled)), \
+         patch.dict(os.environ, {"WORKFLOW_JOB_WORKER": job["job_id"]}):
+        result = job_lifecycle.run_worker(job["job_id"])
+    assert_true(result["ok"] and manager.get_job(job["job_id"])["status"] == "completed",
+                f"transient unattributable process settles within cleanup retries: {result}")
 
 
 def _check_worker_cleanup_uncertainty(root):
@@ -1485,6 +1500,17 @@ def _check_worker_cleanup_uncertainty(root):
     from exoma.core.runtime import upgrade
     (root / ".workflow").mkdir(exist_ok=True)
     manager = JobManager(root / "cleanup-jobs")
+    # A post-run cleanup failure must retain cleanup_pending rather than retrying into worker_crashed.
+    flaky_owner = MagicMock()
+    flaky_owner.cleanup.side_effect = [OSError("single-shot cleanup failure"), None]
+    flaky_job = manager.create_job("analyze", "task", "cleanup-single-shot", str(root), None)
+    with patch.object(main, "JOB_MANAGER", manager), \
+         patch.object(main, "run", return_value={"ok": True, "content": "ordinary completion"}), \
+         patch.object(job_lifecycle, "WorkerOwnership", return_value=flaky_owner), \
+         patch.dict(os.environ, {"WORKFLOW_JOB_WORKER": flaky_job["job_id"]}):
+        flaky_result = job_lifecycle.run_worker(flaky_job["job_id"])
+    assert_true(flaky_result["meta"]["error_type"] == "cleanup_pending" and flaky_owner.cleanup.call_count == 1,
+                f"post-run cleanup error never becomes worker_crashed: {flaky_result}")
     for crashes in (False, True):
         session = "cleanup-crash" if crashes else "cleanup-normal"
         job = manager.create_job("analyze", "task", session, str(root), None)
