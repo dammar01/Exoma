@@ -41,7 +41,7 @@ it again. Every installer flag, target file and hook is listed in the
 
 The reference setup uses Claude Code as host and Codex as second agent. Choose OpenCode
 when the second agent must be prevented from reading project secret files. Host and
-second-agent choices are independent; Codex or Agy can also serve in either role.
+second-agent choices are independent; Claude Code, Agy, Codex, or OpenCode can serve in either role.
 
 ## Install on a machine (once)
 
@@ -119,7 +119,7 @@ apply only to calls the workflow makes; using codex or opencode directly is unaf
 
 ## Enable it in a project (once per project, per person)
 
-Open the primary agent you installed (Claude Code, Agy, or Codex) in the project and run
+Open the primary agent you installed (Claude Code, Agy, Codex, or OpenCode) in the project and run
 the host's init skill:
 
 ```text

@@ -10,7 +10,7 @@ the package, `src/exoma/` in the repository.
 
 Two roles, strictly separated:
 
-- **main_agent** — the agent you use (Claude Code, Codex, Cursor, etc.). Orchestrator, user interface, and the **only** one allowed to write files.
+- **main_agent** — the agent you use (Claude Code, Agy, Codex CLI, or OpenCode). Orchestrator, user interface, and the **only** one allowed to write files.
 - **second_agent** — the selected provider (OpenCode, Codex, Agy, or Claude Code), a **read-only** evidence gatherer by role. Not the final answer. Only OpenCode enforces that boundary; each provider's write boundary differs, see [Security](security.md).
 
 Terms: `main_agent` and `second_agent` are the identifiers the runtime, hooks, skills and

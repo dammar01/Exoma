@@ -79,12 +79,14 @@ Exoma is grounded in five principles (explained in full in **[docs/philosophy.md
   (`evidence.jsonl`), and manually promoted Git-tracked project knowledge
   (`docs/project-knowledge/`, checked for validity and branch applicability).
 - **Deterministic runtime & coordination:** detached async jobs with heartbeats and bounded
-  recovery, per-session isolation and locks, provider routing across 4 hosts and 4 secondary
-  providers, secret redaction, and response-contract validation.
+  recovery, per-session isolation and locks (`session-init`), provider routing across 4 hosts and 4
+  secondary providers, compact `result.json` pointers, optional explicit `/.fanout` opt-in, secret
+  redaction, and response-contract validation.
 - **Execution & verification governance:** recorded plans (`plan-record`), user-approved
   execution scope (`execute-begin` / `execute-end` with Git tree snapshots), allowlisted
-  runtime test execution with input-fingerprinted test reuse, and derived verification verdicts
-  that keep *planned*, *implemented*, and *verified* distinct.
+  runtime test execution with input-fingerprinted test reuse, execution-scoped `[FOLLOWUP]`
+  finding tracking across verification rounds, and derived verification verdicts that keep
+  *planned*, *implemented*, and *verified* distinct.
 - **Browser verification & bounded experience:** `verify-browser` 3-stage pipeline (draft →
   supervised Playwright player → review), 4-origin failure classification (`app`, `harness`,
   `scenario`, `unknown`), and origin-scoped browser experience (`.workflow/data/e2e-knowledge.jsonl`,
@@ -113,9 +115,9 @@ primary:      [INTENT] explore — location question
 
 | Command | Type | Purpose |
 | --- | --- | --- |
-| `init` / `upgrade` / `doctor` | local | Set up `.workflow/`, refresh after updates, check readiness |
+| `init` / `upgrade` / `doctor` / `session-init` | local | Set up `.workflow/`, refresh after updates, check readiness, register sessions |
 | `sweep` / `clean` | local | Inspect working-tree changes / prune old jobs, facts, sessions |
-| `explore` / `analyze` / `plan` | delegated | Map code, investigate causes, gather planning evidence |
+| `explore` / `analyze` / `plan` | delegated | Map code, investigate causes, gather planning evidence (opt-in `/.fanout`) |
 | `verify` / `verify-browser` | delegated | Verify changes with review + runtime tests / real Playwright run |
 | `promote-*` | local | Turn verified evidence into Git-tracked `docs/project-knowledge/` |
 

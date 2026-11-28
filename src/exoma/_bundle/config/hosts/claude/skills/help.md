@@ -26,6 +26,7 @@ DELEGATED (1-call .workflow/run script → second_agent):
   {{CMD:explore}} <hint>  evidence gathering
   {{CMD:plan}} <task>     evidence + structured plan
   {{CMD:analyze}} <topic> deep analysis | --local: main_agent local mode
+  {{CMD:fanout}} <explore|analyze|plan> <task>  parallel sub-agent fan-out (opt-in via subagent_fanout_enabled)
   {{CMD:verify}}          3-step verification (automatic when the policy enables it)
   {{CMD:verify-browser}}  verification through a real browser (draft → run → review)
 

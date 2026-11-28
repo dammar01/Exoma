@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "hosts/claude/CLAUDE.md",
-      "sha256": "3641dba640a712e2580ff6e533f4032fd47f2d3928051739521f674c2989880a",
-      "bytes": 27791,
+      "sha256": "541fd404f700d106147fb13fb761038cf5ae02152b54c23a70ad8d3b0e80a41d",
+      "bytes": 27803,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -63,8 +63,8 @@
     },
     {
       "path": "hosts/claude/skills/help.md",
-      "sha256": "b43c2a6cda53a999724d534e3d6bbc674c49a64815dd42f51080441a2c9c04fd",
-      "bytes": 2150,
+      "sha256": "c46fe3127b64dd5463fb7dc2c99cf1b067c7e81ba88e612067f25c41410c4262",
+      "bytes": 2262,
       "merge": "replace",
       "component": "prompt_bundle"
     },

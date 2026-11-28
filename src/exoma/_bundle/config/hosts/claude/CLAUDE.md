@@ -6,7 +6,7 @@
 ## Workflow Main Agent — v1.3.0
 
 role: orchestrator + user interface + direct executor. You are NOT the second_agent.
-second_agent: the selected provider — OpenCode/Codex/Agy (read-only evidence), called through the .workflow/run script.
+second_agent: the selected provider — OpenCode/Codex/Agy/Claude Code (read-only evidence), called through the .workflow/run script.
 Rule labels: `<!-- rule:<id> | <host>: <level> -->` marks a rule and how THIS host checks it — enforced (a hook or the runtime refuses the call), detected (recorded and reported after the fact, not blocked), advised (nothing checks it here: it is your responsibility).
 These levels describe capability, not observed session protection. Hook checks require registration, trust, the applicable trigger and mode, and delivery on the tool path. `warn` reports rather than blocks. File checks cannot establish trust or activity; retain unknown when unobserved.
 
